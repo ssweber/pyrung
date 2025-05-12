@@ -141,7 +141,7 @@ def sm_isCmdValid():
             dh.isCmdValid__result,
         )
 
-    with Rung(dh.isCmdValid__result == dh.CONSTANT_HEX_ZERO):
+    with Rung(dh.isCmdValid__result == '0000h'):
         out(c.isCmdValid_Yes)
 
     with Rung():
@@ -350,7 +350,7 @@ def sm_copyOrJumpReqState():
         )
 
     # If result is zero, the bit is not set in mode config, meaning state is enabled
-    with Rung(dh.isStateEnbl__result == dh.CONSTANT_HEX_ZERO):
+    with Rung(dh.isStateEnbl__result == '0000h'):
         copy(1, ds.isStateEnbl_Yes)
 
     # if the requested state is not disabled, set it
