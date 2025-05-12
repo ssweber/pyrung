@@ -13,6 +13,11 @@ out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fi
 
 
 def main():
+    # Cumulative Timers
+    with Rung():
+        ton(t.A_ModeTimeCurrent_tmr, setpoint=0, unit=Th, elapsed_time=td.A_ModeTimeCurrent_Th)
+        ton(t.A_StateTimeCurrent_tmr, setpoint=0, unit=Tm, elapsed_time=td.A_StateTimeCurrent_Tm)
+    
     # Mode Change
     with Rung(c.C_UnitModeChgRequest):
         copy(1, ds.C_UnitModeChgRequest_ds)
@@ -68,12 +73,22 @@ def main():
 
 @sub
 def sm_modeChange():
+    with Rung(c.C_ProductionMode):
+        copy(1, ds.C_UnitMode, oneshot=True)
+    with Rung(c.C_MaintenanceMode):
+        copy(2, ds.C_UnitMode, oneshot=True)
+    with Rung(c.C_ManualMode):
+        copy(3, ds.C_UnitMode, oneshot=True)
+    with Rung(ds.C_UnitMode != 0):
+        reset(c[1004:1006]) # c.C_ProductionMode:c.C_ManualMode
+    
     with Rung(
         any([c.S_Idle, c.S_Stopped, C.S_Aborted]),
         ds.C_UnitMode >= 1,
         ds.C_UnitMode <= 3,
     ):
         copy(ds.C_UnitMode, ds.S_UnitModeCurrent)
+        copy(0, td.A_ModeTimeCurrent_Th)
 
     # Get the current mode's disabled states configuration
     # Mode configs are stored in DF101-DF104
@@ -359,6 +374,7 @@ def sm_copyOrJumpReqState():
         copy(0, ds.S_StateComplete_ds)
         copy(0, ds.S_StateRequested)
         copy(0, ds.isStateEnbl_Yes)
+        copy(0, td.A_StateTimeCurrent_Tm)
         return
 
     # if not
