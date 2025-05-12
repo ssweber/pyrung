@@ -13,18 +13,44 @@ out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fi
 
 
 def main():
-    """Main program that calls the SFC subroutine when triggered."""
+    # Mode Change
+    with Rung(c.C_UnitModeChgRequest):
+        copy(1, ds.C_UnitModeChgRequest_ds)
+
+    with Rung(ds.C_UnitModeChgRequest_ds == 1):
+        call(sm_modeChange)
+        out(c.S_UnitModeRequested)
+        
+    # `State Complete` State Change
     with Rung(ds.S_StateComplete_ds == 1):
         out(c.S_StateComplete)
-    with Rung(ds.C_CmdChgRequest_ds == 1):
-        out(c.C_CmdChgRequest)
-    with Rung(c.C_CmdChgRequest, ds.C_CntrCmd >= 1, ds.C_CntrCmd <= 10):
+    with Rung(c.S_StateComplete):
+        call(setStateRequested)
+        
+    # `Control Command` State Change
+    with Rung():
+        call(sm_mapCmd2Val())
+        
+    with Rung(c.C_CmdChgRequest):
+        copy(1, ds.C_CmdChgRequest_ds, oneshot=True)
+    
+    with Rung(c.C_CmdChgRequest):
+        copy(1, ds.C_CmdChgRequest_ds, True)
+        
+    with Rung(ds.C_CmdChgRequest_ds == 1, ds.C_CntrCmd >= 1, ds.C_CntrCmd <= 10):
         call(sm_isCmdValid)
+        reset(c.C_CmdChgRequest)
 
-    with Rung(any([c.isCmdValid_Yes, c.S_StateComplete])):
+    with Rung(c.isCmdValid_Yes):
         copy(0, ds.C_CmdChgRequest_ds)
         reset(c.isCmdValid_Yes)
-        call(sm_setStateRequested)
+        call(sm_ctrlCmd2StateRequest)
+        
+    with Rung(ds.C_CtrlCmd != 0, ds.C_CmdChgRequest_ds != 0):
+        copy(0, ds.C_CtrlCmd)
+        copy(0, ds.C_CmdChgRequest_ds)
+        
+    # Finalize Either State Change Request
 
     with Rung(ds.S_StateRequested != 0):
         copy(0, ds.sm__loopindex, oneshot=True)
@@ -32,13 +58,6 @@ def main():
 
     with Rung():
         call(sm_mapVal2State)
-
-    with Rung(ds.C_UnitModeChgRequest_ds == 1):
-        out(c.C_UnitModeChgRequest)
-        out(c.S_UnitModeRequested)
-
-    with Rung(c.S_UnitModeRequested):
-        call(sm_ModeChange)
 
     with Rung(c.S_UnitModeRequested):
         copy(0, ds.C_UnitModeChgRequest_ds)
@@ -48,7 +67,7 @@ def main():
 
 
 @sub
-def sm_ModeChange():
+def sm_modeChange():
     with Rung(
         any([c.S_Idle, c.S_Stopped, C.S_Aborted]),
         ds.C_UnitMode >= 1,
@@ -64,6 +83,8 @@ def sm_ModeChange():
         copy(df[ds.isStateEnbl__modecfg_idx], dh.A_CurDisabledStates)
     with Rung():
         copy(0, ds.C_UnitModeChgRequest_ds)
+        copy(0, ds.C_UnitMode)
+        reset(c.C_UnitModeChgRequest)
     with Rung():
         return
 
@@ -125,68 +146,83 @@ def sm_isCmdValid():
 
     with Rung():
         return
+    
+@sub
+def sm_mapCmd2Val():
+    # Map int values to coils
+    with Rung(c.C_Reset):
+        copy(1, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Start):
+        copy(2, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Stop):
+        copy(3, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Hold):
+        copy(4, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Unhold):
+        copy(5, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Suspend):
+        copy(6, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Unsuspend):
+        copy(7, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Abort):
+        copy(8, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Clear):
+        copy(9, ds.C_CntrlCmd, oneshot=True)
+    with Rung(c.C_Complete):
+        copy(10, ds.C_CntrlCmd, oneshot=True)
 
+    # reset bits
+    with Rung():
+        reset(c[1007:1016]) # c.C_Reset:c.C_Complete
 
 @sub
-def sm_setStateRequested():
-    # Map int values to coils
-    with Rung(ds.C_CntrlCmd == 1):
-        out(c.C_Reset)
-    with Rung(ds.C_CntrlCmd == 2):
-        out(c.C_Start)
-    with Rung(ds.C_CntrlCmd == 3):
-        out(c.C_Stop)
-    with Rung(ds.C_CntrlCmd == 4):
-        out(c.C_Hold)
-    with Rung(ds.C_CntrlCmd == 5):
-        out(c.C_Unhold)
-    with Rung(ds.C_CntrlCmd == 6):
-        out(c.C_Suspend)
-    with Rung(ds.C_CntrlCmd == 7):
-        out(c.C_Unsuspend)
-    with Rung(ds.C_CntrlCmd == 8):
-        out(c.C_Abort)
-    with Rung(ds.C_CntrlCmd == 9):
-        out(c.C_Clear)
-    with Rung(ds.C_CntrlCmd == 10):
-        out(c.C_Complete)
-
-    # now based on the command & current state, copy appropriate S_StateRequested
-    with Rung(c.C_Start, c.S_Idle):
+def sm_ctrlCmd2StateRequest():
+    # THIS ORDER TO MATCH DIAGRAMIN ON PG 27 of ISA-TR88.00.02-2022
+    
+    # Start
+    with Rung(ds.C_CntrlCmd == 2, c.S_Idle):
         copy(ds.sm_RefStarting, ds.S_StateRequested)
 
+    # Reset
     with Rung(
-        c.C_Reset,
+        ds.C_CntrlCmd == 1,
         any([c.S_Completed, c.S_Stopped]),
     ):
         copy(ds.sm_RefResetting, ds.S_StateRequested)
 
+    # Hold
     with Rung(
-        c.C_Hold,
+        ds.C_CntrlCmd == 4,
         any([c.S_Execute, c.S_Suspended]),
     ):
         copy(ds.sm_RefHolding, ds.S_StateRequested)
 
-    with Rung(c.C_Unhold, c.S_Held):
+    # Unhold
+    with Rung(ds.C_CntrlCmd == 5, c.S_Held):
         copy(ds.sm_RefUnholding, ds.S_StateRequested)
 
-    with Rung(c.C_Suspend, c.S_Execute):
+    # Suspend
+    with Rung(ds.C_CntrlCmd == 6, c.S_Execute):
         copy(ds.sm_RefSuspending, ds.S_StateRequested)
 
-    with Rung(c.C_Unsuspend, c.S_Suspended):
+    # Unsuspend
+    with Rung(ds.C_CntrlCmd == 7, c.S_Suspended):
         copy(ds.sm_RefUnsuspending, ds.S_StateRequested)
 
+    # Complete
     with Rung(
-        c.C_Complete,
+        ds.C_CntrlCmd == 10,
         any([c.S_Execute, c.S_Held, c.S_Suspended]),
     ):
         copy(ds.sm_RefCompleting, ds.S_StateRequested)
 
-    with Rung(c.C_Clear, c.S_Aborted):
+    # Clear
+    with Rung(ds.C_CntrlCmd == 9, c.S_Aborted):
         copy(ds.sm_RefClearing, ds.S_StateRequested)
 
+    # Stop
     with Rung(
-        c.C_Stop,
+        ds.C_CntrlCmd == 3,
         any(
             [
                 c.S_Idle,
@@ -205,8 +241,9 @@ def sm_setStateRequested():
     ):
         copy(ds.sm_RefStopping, ds.S_StateRequested)
 
+    # Abort
     with Rung(
-        c.C_Abort,
+        ds.C_CntrlCmd == 8,
         any(
             [
                 c.S_Idle,
@@ -228,42 +265,50 @@ def sm_setStateRequested():
     ):
         copy(ds.sm_RefAborting, ds.S_StateRequested)
 
+    with Rung():
+        reset(c.isCmdValid_Yes)
+        
+    with Rung():
+        return
+
+@sub
+def sm_stateComplete2Request():
+    # THIS ORDER TO MATCH DIAGRAMIN ON PG 27 of ISA-TR88.00.02-2022
+
     # Now for StateComplete
-    with Rung(c.S_StateComplete):
-        with Rung(c.S_Starting):
-            copy(ds.sm_RefExecute, ds.S_StateRequested)
+    with Rung(c.S_Starting):
+        copy(ds.sm_RefExecute, ds.S_StateRequested)
 
-        with Rung(c.S_Completing):
-            copy(ds.sm_RefCompleted, ds.S_StateRequested)
+    with Rung(c.S_Completing):
+        copy(ds.sm_RefCompleted, ds.S_StateRequested)
 
-        with Rung(c.S_Resetting):
-            copy(ds.sm_RefIdle, ds.S_StateRequested)
+    with Rung(c.S_Resetting):
+        copy(ds.sm_RefIdle, ds.S_StateRequested)
 
-        with Rung(c.S_Holding):
-            copy(ds.sm_RefHeld, ds.S_StateRequested)
+    with Rung(c.S_Holding):
+        copy(ds.sm_RefHeld, ds.S_StateRequested)
 
-        with Rung(c.S_Unholding):
-            copy(ds.sm_RefExecute, ds.S_StateRequested)
+    with Rung(c.S_Unholding):
+        copy(ds.sm_RefExecute, ds.S_StateRequested)
 
-        with Rung(c.S_Suspending):
-            copy(ds.sm_RefSuspended, ds.S_StateRequested)
+    with Rung(c.S_Suspending):
+        copy(ds.sm_RefSuspended, ds.S_StateRequested)
 
-        with Rung(c.S_Unsuspending):
-            copy(ds.sm_RefExecute, ds.S_StateRequested)
+    with Rung(c.S_Unsuspending):
+        copy(ds.sm_RefExecute, ds.S_StateRequested)
 
-        with Rung(c.S_Stopping):
-            copy(ds.sm_RefStopped, ds.S_StateRequested)
+    with Rung(c.S_Stopping):
+        copy(ds.sm_RefStopped, ds.S_StateRequested)
 
-        with Rung(c.S_Aborting):
-            copy(ds.sm_RefAborted, ds.S_StateRequested)
+    with Rung(c.S_Aborting):
+        copy(ds.sm_RefAborted, ds.S_StateRequested)
 
-        with Rung(c.S_Clearing):
-            copy(ds.sm_RefStopped, ds.S_StateRequested)
+    with Rung(c.S_Clearing):
+        copy(ds.sm_RefStopped, ds.S_StateRequested)
 
     with Rung():
         copy(0, ds.S_StateComplete_ds)
-        copy(0, ds.C_CmdChgRequest_ds)
-        reset(c.isCmdValid_Yes)
+        reset(c.S_StateComplete)
 
     with Rung():
         return
