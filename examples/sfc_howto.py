@@ -1,14 +1,14 @@
-from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, sub
+from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, Rung
 
 # fmt: off
 # Get address references
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt = Addresses.get()
 
 # Get condition functions
-nc, re, fe, all, any = Conditions.get()
+nc, re, fe = Conditions.get()
 
 # Get action functions
-out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math_decimal, math_hex, call, next_loop, end = Actions.get()
+out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math, math_hex, call, for_loop, next_loop, end = Actions.get()
 # fmt: on
 
 """
@@ -33,7 +33,7 @@ The ODD step convention provides two critical benefits:
 
 
 HOW TO USE THIS TEMPLATE:
-1. Rename all instances of 'subName' to your actual subroutine name
+1. Rename all instances of 'SubName' to your actual subroutine name
 2. Define your step logic in SECTION 2 only
 3. For each step (using ODD numbers only):
    - Create a step action rung with condition: if ds.yourName_CurStep == stepNumber
@@ -56,35 +56,34 @@ if ds.yourName_CurStep == X:
 # SFC IMPLEMENTATION STANDARD VARIABLE NAMING CONVENTIONS
 #############################################################################
 # The following variables should be defined for each SFC subroutine:
-# subName_xCall - ds     # External trigger to call the SFC
-# subName_xInit - ds     # External trigger to initialize the SFC
-# subName_xReset - ds    # External trigger to reset the SFC
-# subName_xPause - ds    # External trigger to pause the SFC
-# subName_Error - ds     # Flag indicating an error has occurred
-# subName_ErrorStep - ds # Step where the error occurred
-# subName_EnableLimit - ds # Enable time limit checking
-# subName_Limit_Ts - ds  # Time limit for steps in Ts (second) units
-# subName_ResetTmr - ds  # Reset timer flag
-# subName_Trans - ds     # Transition flag
-# subName_CurStep - ds   # Current step number
-# subName_StoredStep - ds # Previous step number
-# subName__x - ds       # Internal execution flag
-# subName__init - ds    # Internal initialization flag
-# subName__ValStepIsOdd - ds # Flag indicating if current step is odd
+# SubName_xCall - ds     # External trigger to call the SFC
+# SubName_xInit - ds     # External trigger to initialize the SFC
+# SubName_xReset - ds    # External trigger to reset the SFC
+# SubName_xPause - ds    # External trigger to pause the SFC
+# SubName_Error - ds     # Flag indicating an error has occurred
+# SubName_ErrorStep - ds # Step where the error occurred
+# SubName_EnableLimit - ds # Enable time limit checking
+# SubName_Limit_Ts - ds  # Time limit for steps in Ts (second) units
+# SubName_ResetTmr - ds  # Reset timer flag
+# SubName_Trans - ds     # Transition flag
+# SubName_CurStep - ds   # Current step number
+# SubName_StoredStep - ds # Previous step number
+# SubName__x - ds       # Internal execution flag
+# SubName__init - ds    # Internal initialization flag
+# SubName__ValStepIsOdd - ds # Flag indicating if current step is odd
 
 
 def main():
     """Main program that calls the SFC subroutine when triggered."""
-    with Rung(ds.subName_xCall == 1, ds.subName_xPause != 1):
-        copy(1, ds.subName__x)
-    with Rung(ds.subName__x == 1):
-        call(subName)
+    with Rung(ds.SubName_xCall == 1, ds.SubName_xPause != 1):
+        copy(1, ds.SubName__x)
+    with Rung(ds.SubName__x == 1):
+        call(SubName)
 
     with Rung():
         end()
 
 
-@sub
 def subRoutine1():
     """
     SFC Implementation Template
@@ -111,39 +110,39 @@ def subRoutine1():
     with Rung():
         # CODESYS: step.x. Variable of type Bool which is true while Step is Active
         # ClickPlc. c bit
-        set(c.subName_x)
+        set(c.SubName_x)
 
     # Shared Resets for Init and Pause
-    with Rung(any([ds.subName_xInit == 1, ds.subName_xReset == 1])):
-        copy(0, ds.subName_init)  # Reset init flag
-        copy(0, td.subName_t)  # Reset timer value
-        copy(0, td.subName_CurStep_t)  # Reset timer value
+    with Rung(any([ds.SubName_xInit == 1, ds.SubName_xReset == 1])):
+        copy(0, ds.SubName_init)  # Reset init flag
+        copy(0, td.SubName_t)  # Reset timer value
+        copy(0, td.SubName_CurStep_t)  # Reset timer value
         # Set initial step to 1 (first odd number)
-        copy_fill(1, ds[subName_CurStep:subName_StoredStep])
+        copy_fill(1, ds[SubName_CurStep:SubName_StoredStep])
 
     # Built-in timer for step timeout detection
-    with Rung(ds.subName_xCall == 1):
+    with Rung(ds.SubName_xCall == 1):
         rton(
-            t.subName_tmr,
-            setpoint=ds.subName_Limit_Ts,
+            t.SubName_tmr,
+            setpoint=ds.SubName_Limit_Ts,
             unit=Ts,
-            reset=lambda: ds.subName_ResetTmr == 1,
+            reset=lambda: ds.SubName_ResetTmr == 1,
         )
 
     # Reset the timer reset flag after it's been processed
-    with Rung(ds.subName_ResetTmr == 1):
-        copy(0, ds.subName_ResetTmr)
+    with Rung(ds.SubName_ResetTmr == 1):
+        copy(0, ds.SubName_ResetTmr)
 
     # Error detection - If step exceeds time limit
-    with Rung(td.subName_t >= ds.subName_Limit_Ts, ds.subName_EnableLimit == 1):
+    with Rung(td.SubName_t >= ds.SubName_Limit_Ts, ds.SubName_EnableLimit == 1):
         # Set Error flag
-        copy(1, ds.subName_Error)
+        copy(1, ds.SubName_Error)
         # Store the step where the error occurred
-        copy(ds.subName_CurStep, ds.subName_ErrorStep)
+        copy(ds.SubName_CurStep, ds.SubName_ErrorStep)
 
     # Synchronize current and stored step
-    with Rung(ds.subName_CurStep != ds.subName_StoredStep):
-        copy(ds.subName_CurStep, ds.subName_StoredStep)
+    with Rung(ds.SubName_CurStep != ds.SubName_StoredStep):
+        copy(ds.SubName_CurStep, ds.SubName_StoredStep)
 
     # ==============================================================================#
     # SECTION 2: STEP IMPLEMENTATION SECTION - MODIFY THIS SECTION ONLY
@@ -186,17 +185,17 @@ def subRoutine1():
     """
 
     # Step 1: Initialization (first odd step)
-    with Rung(ds.subName_CurStep == 1):
+    with Rung(ds.SubName_CurStep == 1):
         # Initial step logic here
         pass
 
     # Transition 1→3: Auto-transition after initialization
-    with Rung(ds.subName_CurStep == 1):
+    with Rung(ds.SubName_CurStep == 1):
         # Always transition from initialization step
-        copy(1, ds.subName_Trans)  # Will advance to step 3
+        copy(1, ds.SubName_Trans)  # Will advance to step 3
 
     # Step 3: Example step with one-shot timer (second odd step)
-    with Rung(ds.subName_CurStep == 3):
+    with Rung(ds.SubName_CurStep == 3):
         # Start a one-shot timer
         ton(t.step3_timer, 2000, Tms)
 
@@ -209,10 +208,10 @@ def subRoutine1():
 
     # Transition 3→5: Move to next step when timer completes
     with Rung(t.step3_timer):
-        copy(1, ds.subName_Trans)  # Will advance to step 5
+        copy(1, ds.SubName_Trans)  # Will advance to step 5
 
     # Step 5: Example step with one-time operation
-    with Rung(ds.subName_CurStep == 5):
+    with Rung(ds.SubName_CurStep == 5):
         # This one-time operation will execute only once when entering step 5
         copy(1, ds.one_time_operation_complete, oneshot=True)
 
@@ -228,38 +227,36 @@ def subRoutine1():
     # ==============================================================================
 
     # Pause functionality
-    with Rung(ds.subName_xPause == 1):
+    with Rung(ds.SubName_xPause == 1):
         # Add any actions needed for safe pausing (e.g., shutdown pumps)
         # Example: reset(c.Rotate1)
         pass
 
     with Rung(
-        ds.subName_xPause == 1,
+        ds.SubName_xPause == 1,
         # Add your custom pause requirements here
         # Example: nc(c.Rotate1Sensor),
     ):
-        copy(0, ds.subName__x)
+        copy(0, ds.SubName__x)
 
     # Shutdown functionality
-    with Rung(ds.subName_xCall == 0):
+    with Rung(ds.SubName_xCall == 0):
         # Add any actions needed for safe shutdown (e.g., shutdown pumps)
         # Example: reset(c.Rotate1)
         pass
 
     # Standard shutdown procedure
     with Rung(
-        ds.subName_xCall == 0,
+        ds.SubName_xCall == 0,
         # Add your custom shutdown requirements here
         # Example: nc(c.Rotate1Sensor),
     ):
-        copy(0, ds[subName_init:subName_ErrorStep])
-        copy(0, td.subName_t)  # Reset timer
-        copy(0, td.subName_CurStep_t)  # Reset timer
-        copy_fill(
-            0, ds[subName__ResetTmr:subName__ValStepIsOdd]
-        )  # which sets ds.subName__x to 0
-        copy(0, ds.subName__x)
-        reset(c.subName_x)
+        copy(0, ds[SubName_init:SubName_ErrorStep])
+        copy(0, td.SubName_t)  # Reset timer
+        copy(0, td.SubName_CurStep_t)  # Reset timer
+        copy_fill(0, ds[SubName__ResetTmr:SubName__ValStepIsOdd])  # which sets ds.SubName__x to 0
+        copy(0, ds.SubName__x)
+        reset(c.SubName_x)
         return
 
     # ==============================================================================#
@@ -267,38 +264,38 @@ def subRoutine1():
     # ==============================================================================#
 
     # Reset handling - xReset is self-clearing
-    with Rung(ds.subName_xReset == 1):
-        copy(0, ds.subName_xReset)
+    with Rung(ds.SubName_xReset == 1):
+        copy(0, ds.SubName_xReset)
 
     # Check if current step is odd
     with Rung():
-        math_decimal("df.subName_CurStep MOD 2", ds.subName__ValStepIsOdd)
+        math("df.SubName_CurStep MOD 2", ds.SubName__ValStepIsOdd)
 
     # EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION
     # This stays ABOVE incrementing CurStep
     # If we detect an even step number (either from normal transition or manual intervention),
     # we immediately increment to the next odd step without executing any step logic.
     # This provides a safe "neutral zone" when manually changing step numbers.
-    with Rung(ds.subName__ValStepIsOdd != 1):  # If step is even
-        math_decimal("<ds.subName_CurStep> + 1", ds.subName_CurStep)  # Make it odd
+    with Rung(ds.SubName__ValStepIsOdd != 1):  # If step is even
+        math("<ds.SubName_CurStep> + 1", ds.SubName_CurStep)  # Make it odd
         # The brief pass through the even step number causes:
         # 1. All one-shot timers to reset
         # 2. All rising/falling edge detections to reset
         # 3. Any one-time operations to be ready for the next time
 
     # Step advancement when transition is triggered
-    with Rung(ds.subName_Trans == 1):
+    with Rung(ds.SubName_Trans == 1):
         # Add 1 to current step to get next step (which will be even, triggering resets)
-        math_decimal("ds.subName_CurStep + 1", ds.subName_CurStep)
-        copy(0, ds.subName_Trans)  # Reset transition flag
+        math("ds.SubName_CurStep + 1", ds.SubName_CurStep)
+        copy(0, ds.SubName_Trans)  # Reset transition flag
 
     # Built-in timer for step duration tracking
-    with Rung(ds.subName_CurStep == ds.subName_StoredStep):
-        ton(t.subName_CurStep_tmr, setpoint=0, unit=Ts)
+    with Rung(ds.SubName_CurStep == ds.SubName_StoredStep):
+        ton(t.SubName_CurStep_tmr, setpoint=0, unit=Ts)
 
     # Mark initialization complete after first step
-    with Rung(ds.subName_CurStep == 2):  # It will be 2 (even)
-        copy(1, ds.subName__init)
+    with Rung(ds.SubName_CurStep == 2):  # It will be 2 (even)
+        copy(1, ds.SubName__init)
 
     # Return from subroutine
     with Rung():

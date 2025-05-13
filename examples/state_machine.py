@@ -1,14 +1,14 @@
-from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, sub
+from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, Rung
 
 # fmt: off
 # Get address references
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt = Addresses.get()
 
 # Get condition functions
-nc, re, fe, all, any = Conditions.get()
+nc, re, fe = Conditions.get()
 
 # Get action functions
-out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math_decimal, math_hex, call, next_loop, end = Actions.get()
+out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math, math_hex, call, for_loop, next_loop, end = Actions.get()
 # fmt: on
 
 
@@ -17,52 +17,52 @@ def main():
     with Rung():
         ton(t.A_ModeTimeCurrent_tmr, setpoint=0, unit=Th, elapsed_time=td.A_ModeTimeCurrent_Th)
         ton(t.A_StateTimeCurrent_tmr, setpoint=0, unit=Tm, elapsed_time=td.A_StateTimeCurrent_Tm)
-    
+
     # Mode Change
     with Rung(c.C_UnitModeChgRequest):
         copy(1, ds.C_UnitModeChgRequest_ds)
 
     with Rung(ds.C_UnitModeChgRequest_ds == 1):
-        call(sm_modeChange)
+        call(ModeChange)
         out(c.S_UnitModeRequested)
-        
+
     # `State Complete` State Change
     with Rung(ds.S_StateComplete_ds == 1):
         out(c.S_StateComplete)
     with Rung(c.S_StateComplete):
-        call(setStateRequested)
-        
+        call(sm_StateComplete2Request)
+
     # `Control Command` State Change
     with Rung():
-        call(sm_mapCmd2Val())
-        
+        call(sm_MapCmd2Val)
+
     with Rung(c.C_CmdChgRequest):
         copy(1, ds.C_CmdChgRequest_ds, oneshot=True)
-    
+
     with Rung(c.C_CmdChgRequest):
         copy(1, ds.C_CmdChgRequest_ds, True)
-        
+
     with Rung(ds.C_CmdChgRequest_ds == 1, ds.C_CntrCmd >= 1, ds.C_CntrCmd <= 10):
-        call(sm_isCmdValid)
+        call(sm_IsCmdValid)
         reset(c.C_CmdChgRequest)
 
-    with Rung(c.isCmdValid_Yes):
+    with Rung(c.IsCmdValid_Yes):
         copy(0, ds.C_CmdChgRequest_ds)
-        reset(c.isCmdValid_Yes)
-        call(sm_ctrlCmd2StateRequest)
-        
+        reset(c.IsCmdValid_Yes)
+        call(sm_CtrlCmd2StateRequest)
+
     with Rung(ds.C_CtrlCmd != 0, ds.C_CmdChgRequest_ds != 0):
         copy(0, ds.C_CtrlCmd)
         copy(0, ds.C_CmdChgRequest_ds)
-        
+
     # Finalize Either State Change Request
 
     with Rung(ds.S_StateRequested != 0):
         copy(0, ds.sm__loopindex, oneshot=True)
-        call(sm_copyOrJumpReqState)
+        call(sm_CopyOrJumpReqState)
 
     with Rung():
-        call(sm_mapVal2State)
+        call(sm_MapVal2State)
 
     with Rung(c.S_UnitModeRequested):
         copy(0, ds.C_UnitModeChgRequest_ds)
@@ -71,8 +71,75 @@ def main():
         end()
 
 
-@sub
-def sm_modeChange():
+def sm_ExampleAlarmRecording():
+    pass
+    # A_StopReason_ID	DS	DS31
+    # A_StopReason_SubID	DS	DS32
+    # A_StopReason_StepID	DS	DS33
+    # A_StopReason_Value	DS	DS34
+    # A_StopReason_Categor	DS	DS35
+    # A_StopReason_Date	DS	DS36
+    # A_StopReason_Time	DS	DS37
+    # A_StopReason_AckDate	DS	DS38
+    # A_StopReason_AckTime	DS	DS39
+    # DS3001	DS3100		A_Alm[#]_	ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None		Alarm group tags, 10 tags per group
+
+    # Example of how to record an alarm
+    #
+    # First check if Stop Reason is not already set
+    # with Rung(ds.A_StopReason_ID == 0):
+    #     # Now copy values into Stop Reason
+    #     copy(1, ds.A_StopReason_ID)
+    #     copy(2, ds.A_StopReason_SubID)
+    #     copy(3, ds.A_StopReason_StepID)
+    #     copy(4, ds.A_StopReason_Value)
+    #     copy(5, ds.A_StopReason_Categor)
+    #     copy(df.now_YYMMDD, ds.A_StopReason_Date)
+    #     copy(df.now_HHMMSS, ds.A_StopReason_Time)
+
+    # Also move active alarm to the next alarm in the group
+    # with Rung():
+    # copy_block(ds[3001:3090], ds[3011:3100]) # move active alarms down one
+    # with Rung():
+    #     copy(1, ds.Alarm1_ID)
+    #     copy(2, ds.Alarm1_SubID)
+    #     copy(3, ds.Alarm1_StepID)
+    #     copy(4, ds.Alarm1_Value)
+    #     copy(5, ds.Alarm1_Categor)
+    #     copy(df.now_YYMMDD, ds.Alarm1_Date)
+    #     copy(df.now_HHMMSS, ds.Alarm1_Time)
+
+
+def AlarmHistory():
+    # DS3501	DS4000		UnitName_A_AlmHist[#]_	ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None		Alarm History
+
+    with Rung():
+        ds.almmgr__idx = 1
+
+    with Rung():
+        for_loop(10)
+
+    with Rung():
+        ton(t.almmgr_tmr, setpoint=0, unit=Tms, elapsed_time=td.almmgr_t)
+        math(lambda: (ds.almmgr__idx * 10) + 2091, ds.almmgr__start_idx)
+        math(lambda: (ds.almmgr__idx * 10) + 3000, ds.almmgr__end_idx)
+        copy(ds[ds.almmgr__start_idx], ds.almmgr__is_alm)
+
+    with Rung(ds.almmgr__is_alm != 0):
+        copy_block(ds[3001:3990], ds[3011:4000])  # shift them down
+        copy_block(ds[ds.almmgr__start_idx : ds.almmgr__end_idx], ds[3001:3010])  # insert it
+        copy(df.now_YYMMDD, ds.AlmHist1_AckDate)
+        copy(df.now_HHMMSS, ds.AlmHist1_AckTime)
+
+    with Rung():
+        math(lambda: ds.almmgr__idx + 1, ds.almmgr__idx)
+        next_loop()  # Next instruction indicates the end of a For Next loop
+
+    with Rung():
+        return
+
+
+def ModeChange():
     with Rung(c.C_ProductionMode):
         copy(1, ds.C_UnitMode, oneshot=True)
     with Rung(c.C_MaintenanceMode):
@@ -80,8 +147,8 @@ def sm_modeChange():
     with Rung(c.C_ManualMode):
         copy(3, ds.C_UnitMode, oneshot=True)
     with Rung(ds.C_UnitMode != 0):
-        reset(c[1004:1006]) # c.C_ProductionMode:c.C_ManualMode
-    
+        reset(c[1004:1006])  # c.C_ProductionMode:c.C_ManualMode
+
     with Rung(
         any([c.S_Idle, c.S_Stopped, C.S_Aborted]),
         ds.C_UnitMode >= 1,
@@ -93,9 +160,9 @@ def sm_modeChange():
     # Get the current mode's disabled states configuration
     # Mode configs are stored in DF101-DF104
     with Rung():
-        math_decimal(lambda: 200 + ds.S_UnitModeCurrent, ds.isStateEnbl__modecfg_idx)
+        math(lambda: 200 + ds.S_UnitModeCurrent, ds.IsStateEnbl__modecfg_idx)
     with Rung():
-        copy(df[ds.isStateEnbl__modecfg_idx], dh.A_CurDisabledStates)
+        copy(df[ds.IsStateEnbl__modecfg_idx], dh.A_CurDisabledStates)
     with Rung():
         copy(0, ds.C_UnitModeChgRequest_ds)
         copy(0, ds.C_UnitMode)
@@ -141,29 +208,28 @@ def sm_modeChange():
 # dh = hex16 (for bitmask)
 
 
-@sub
-def sm_isCmdValid():
+def sm_IsCmdValid():
     # set base to use as pointer
     with Rung():
-        math_decimal(lambda: 100 + ds.C_CntrlCmd, ds.isCmdValid__dh_base)
+        math(lambda: 100 + ds.C_CntrlCmd, ds.IsCmdValid__dh_base)
     with Rung():
-        copy(dh[ds.isCmdValid__dh_base], dh.isCmdValid__cmd)
+        copy(dh[ds.IsCmdValid__dh_base], dh.IsCmdValid__cmd)
     with Rung():
-        copy(dh[ds.S_StateCurrent], dh.isCmdValid__allowed_mask)
+        copy(dh[ds.S_StateCurrent], dh.IsCmdValid__allowed_mask)
     with Rung():
         math_hex(
-            lambda: dh.isCmdValid__cmd & dh.isCmdValid__allowed_mask,
-            dh.isCmdValid__result,
+            lambda: dh.IsCmdValid__cmd & dh.IsCmdValid__allowed_mask,
+            dh.IsCmdValid__result,
         )
 
-    with Rung(dh.isCmdValid__result == '0000h'):
-        out(c.isCmdValid_Yes)
+    with Rung(dh.IsCmdValid__result == "0000h"):
+        out(c.IsCmdValid_Yes)
 
     with Rung():
         return
-    
-@sub
-def sm_mapCmd2Val():
+
+
+def sm_MapCmd2Val():
     # Map int values to coils
     with Rung(c.C_Reset):
         copy(1, ds.C_CntrlCmd, oneshot=True)
@@ -188,12 +254,12 @@ def sm_mapCmd2Val():
 
     # reset bits
     with Rung():
-        reset(c[1007:1016]) # c.C_Reset:c.C_Complete
+        reset(c[1007:1016])  # c.C_Reset:c.C_Complete
 
-@sub
-def sm_ctrlCmd2StateRequest():
+
+def sm_CtrlCmd2StateRequest():
     # THIS ORDER TO MATCH DIAGRAMIN ON PG 27 of ISA-TR88.00.02-2022
-    
+
     # Start
     with Rung(ds.C_CntrlCmd == 2, c.S_Idle):
         copy(ds.sm_RefStarting, ds.S_StateRequested)
@@ -281,13 +347,13 @@ def sm_ctrlCmd2StateRequest():
         copy(ds.sm_RefAborting, ds.S_StateRequested)
 
     with Rung():
-        reset(c.isCmdValid_Yes)
-        
+        reset(c.IsCmdValid_Yes)
+
     with Rung():
         return
 
-@sub
-def sm_stateComplete2Request():
+
+def sm_StateComplete2Request():
     # THIS ORDER TO MATCH DIAGRAMIN ON PG 27 of ISA-TR88.00.02-2022
 
     # Now for StateComplete
@@ -329,12 +395,11 @@ def sm_stateComplete2Request():
         return
 
 
-@sub
-def sm_copyOrJumpReqState():
+def sm_CopyOrJumpReqState():
     # State has been requested
     # Now we look at currently disabled states and see if we need to jump
     with Rung():
-        math_decimal(lambda: ds.sm__loopindex + 1, ds.sm__loopindex)
+        math(lambda: ds.sm__loopindex + 1, ds.sm__loopindex)
 
     with Rung(ds.sm__loopindex > 10):
         copy(9, ds.S_StateRequested)  # goto Aborted state
@@ -347,39 +412,39 @@ def sm_copyOrJumpReqState():
         ds.S_StateRequested == 6,
         ds.S_StateRequested == 9,
     ):
-        copy(1, ds.isStateEnbl_Yes)
+        copy(1, ds.IsStateEnbl_Yes)
 
     # Calculate the bit mask for the requested state
     # We'll store state bit masks in DH301-DH317 (where DH300 is reserved)
     with Rung():
-        math_decimal(lambda: 300 + ds.S_StateRequested, ds.isStateEnbl__mask_idx)
+        math(lambda: 300 + ds.S_StateRequested, ds.IsStateEnbl__mask_idx)
     with Rung():
-        copy(dh[ds.isStateEnbl__mask_idx], dh.isStateEnbl__statemask)
+        copy(dh[ds.IsStateEnbl__mask_idx], dh.IsStateEnbl__statemask)
 
     # Check if state is disabled by ANDing the state mask with mode config
     # If result is non-zero, state is disabled
     with Rung():
         math_hex(
-            lambda: dh.isStateEnbl__statemask & dh.A_CurDisabledStates,
-            dh.isStateEnbl__result,
+            lambda: dh.IsStateEnbl__statemask & dh.A_CurDisabledStates,
+            dh.IsStateEnbl__result,
         )
 
     # If result is zero, the bit is not set in mode config, meaning state is enabled
-    with Rung(dh.isStateEnbl__result == '0000h'):
-        copy(1, ds.isStateEnbl_Yes)
+    with Rung(dh.IsStateEnbl__result == "0000h"):
+        copy(1, ds.IsStateEnbl_Yes)
 
     # if the requested state is not disabled, set it
-    with Rung(ds.isStateEnbl_Yes == 1):
+    with Rung(ds.IsStateEnbl_Yes == 1):
         copy(ds.S_StateRequested, ds.S_StateCurrent)
         copy(0, ds.S_StateComplete_ds)
         copy(0, ds.S_StateRequested)
-        copy(0, ds.isStateEnbl_Yes)
+        copy(0, ds.IsStateEnbl_Yes)
         copy(0, td.A_StateTimeCurrent_Tm)
         return
 
     # if not
     with Rung():
-        math_decimal(lambda: ds.S_StateRequested + 120, ds.sm__jump_target_ds_idx)
+        math(lambda: ds.S_StateRequested + 120, ds.sm__jump_target_ds_idx)
     with Rung():
         copy(ds[ds.sm__jump_target_ds_idx], ds.sm__where2jump)
     with Rung(ds.sm__where2jump != 0):
@@ -390,8 +455,7 @@ def sm_copyOrJumpReqState():
         return
 
 
-@sub
-def sm_mapVal2State():
+def sm_MapVal2State():
     # write out outputs
     with Rung(ds.S_StateCurrent == 1):
         out(c.S_Clearing)

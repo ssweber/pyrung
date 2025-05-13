@@ -56,24 +56,16 @@ class Address:
         return self.name
 
     def __add__(self, other):
-        return Expression(
-            f"{self.name} + {other.name if hasattr(other, 'name') else other}"
-        )
+        return Expression(f"{self.name} + {other.name if hasattr(other, 'name') else other}")
 
     def __sub__(self, other):
-        return Expression(
-            f"{self.name} - {other.name if hasattr(other, 'name') else other}"
-        )
+        return Expression(f"{self.name} - {other.name if hasattr(other, 'name') else other}")
 
     def __mul__(self, other):
-        return Expression(
-            f"{self.name} * {other.name if hasattr(other, 'name') else other}"
-        )
+        return Expression(f"{self.name} * {other.name if hasattr(other, 'name') else other}")
 
     def __truediv__(self, other):
-        return Expression(
-            f"{self.name} / {other.name if hasattr(other, 'name') else other}"
-        )
+        return Expression(f"{self.name} / {other.name if hasattr(other, 'name') else other}")
 
 
 class Expression:
@@ -262,7 +254,9 @@ class Actions:
         def copy_unpack(source, destination_range, oneshot=False, options=None):
             """Separates data from a single source register into multiple destinations"""
             if oneshot and options:
-                return f"copy_unpack({source}, {destination_range}, oneshot=True, options={options})"
+                return (
+                    f"copy_unpack({source}, {destination_range}, oneshot=True, options={options})"
+                )
             elif oneshot:
                 return f"copy_unpack({source}, {destination_range}, oneshot=True)"
             elif options:

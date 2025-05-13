@@ -26,9 +26,7 @@ class PLCDataTypeValidator:
                 raise ValueError(f"INT value must be a number, got {type(value)}")
             int_value = int(value)
             if int_value < -32768 or int_value > 32767:
-                raise ValueError(
-                    f"INT value must be between -32768 and 32767, got {value}"
-                )
+                raise ValueError(f"INT value must be between -32768 and 32767, got {value}")
             return int_value
 
         elif data_type == PLCDataType.INT2:
@@ -67,9 +65,7 @@ class PLCDataTypeValidator:
             elif isinstance(value, int):
                 int_value = value
             else:
-                raise ValueError(
-                    f"HEX value must be a string or integer, got {type(value)}"
-                )
+                raise ValueError(f"HEX value must be a string or integer, got {type(value)}")
 
             if int_value < 0 or int_value > 0xFFFF:
                 raise ValueError(f"HEX value must be between 0 and FFFF, got {value}")
@@ -79,9 +75,7 @@ class PLCDataTypeValidator:
             if isinstance(value, int):
                 # Allow integers for ASCII values
                 if value < 0 or value > 255:
-                    raise ValueError(
-                        f"ASCII value must be between 0 and 255, got {value}"
-                    )
+                    raise ValueError(f"ASCII value must be between 0 and 255, got {value}")
                 return chr(value)
             elif not isinstance(value, str):
                 raise ValueError(f"TXT value must be a string, got {type(value)}")
@@ -231,9 +225,7 @@ class PLCReference:
     def set_value(self, value):
         """Set the value for this reference"""
         try:
-            validated_value = PLCDataTypeValidator.validate(
-                value, self.device.data_type
-            )
+            validated_value = PLCDataTypeValidator.validate(value, self.device.data_type)
 
             # Look up the address this name is mapped to, if any
             for addr, ref in self.device._refs.items():
@@ -476,10 +468,7 @@ class Rung:
 
         # For outputs that weren't touched by any instruction or need to be turned off
         for key, target in self.outputs.items():
-            if (
-                isinstance(target, PLCReference)
-                and target.device.data_type == PLCDataType.BIT
-            ):
+            if isinstance(target, PLCReference) and target.device.data_type == PLCDataType.BIT:
                 if not self.chain_active:
                     # Turn off all outputs if rung is not active
                     target.set_value(0)
@@ -523,9 +512,7 @@ def math_decimal(expression_func, target):
     """Evaluate a math expression function and store the result"""
     if Rung._rung_stack:
         current_rung = Rung._rung_stack[-1]
-        current_rung.instructions.append(
-            MathDecimalInstruction(expression_func, target)
-        )
+        current_rung.instructions.append(MathDecimalInstruction(expression_func, target))
     return target
 
 
@@ -604,9 +591,7 @@ def test_nested():
     with Rung(ds.Step == 2):
         out(y.Buzzer)  # This should be on when Step is 2, regardless of AutoMode
         with Rung(c.AutoMode):
-            out(
-                y.NestedLight
-            )  # This should only be on when both Step is 2 AND AutoMode is on
+            out(y.NestedLight)  # This should only be on when both Step is 2 AND AutoMode is on
 
 
 def test_multiple_ops():

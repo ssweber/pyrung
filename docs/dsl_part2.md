@@ -68,7 +68,7 @@ Solves hexadecimal formulas with support for:
 
 ## Advanced Program Control Instructions
 
-- `for _ in range(loops):` - Starts a For-Next loop to execute code multiple times in one scan
+- `for_loop(loops)` - Starts a For-Next loop to execute code multiple times in one scan
 - `next_loop()` - Next instruction that marks the end of a For-Next loop
 
 **Notes:**
@@ -100,17 +100,16 @@ def main():
         copy(0, ds.AlarmExtent)
 
     with Rung(c.UpdateAlarmHistory):
-        for _ in range(ds.MaxAlarms):
-            pass  # All logic between this and next_loop will be repeated
+        for_loop(ds.MaxAlarms) # All logic between this and next_loop will be repeated
 
         # will loop ds.MaxAlarms times
         with Rung():
-            math_decimal(lambda: ds.AlarmBase + ds.AlarmIndex, ds.CurrentAlarmAddr)
-            math_decimal(lambda: ds.AlarmHistoryBase + ds.AlarmIndex, ds.HistoryAddr)
+            math(lambda: ds.AlarmBase + ds.AlarmIndex, ds.CurrentAlarmAddr)
+            math(lambda: ds.AlarmHistoryBase + ds.AlarmIndex, ds.HistoryAddr)
             copy(ds[ds.CurrentAlarmAddr], ds[ds.HistoryAddr])
             # Todo, replace this example below. Pointers not allowed in math
-#             math_decimal(lambda: ds.AlarmExtent + ds[ds.CurrentAlarmAddr], ds.AlarmExtent)
-            math_decimal(lambda: ds.AlarmIndex + 1, ds.AlarmIndex)
+#             math(lambda: ds.AlarmExtent + ds[ds.CurrentAlarmAddr], ds.AlarmExtent)
+            math(lambda: ds.AlarmIndex + 1, ds.AlarmIndex)
 
         with Rung():
             next_loop()  # Next instruction indicates the end of a For Next loop

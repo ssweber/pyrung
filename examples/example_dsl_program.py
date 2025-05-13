@@ -1,14 +1,14 @@
-from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, sub
+from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, Rung
 
 # fmt: off
 # Get address references
 x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt = Addresses.get()
 
 # Get condition functions
-no, nc, re, fe, all, any, eq, ne, lt, le, gt, ge = Conditions.get()
+nc, re, fe = Conditions.get()
 
 # Get action functions
-out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math_decimal, math_hex, call, next_loop, end = Actions.get()
+out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math, math_hex, call, for_loop, next_loop, end = Actions.get()
 # fmt: on
 
 
@@ -46,7 +46,7 @@ def main():
 
     # Math operations
     with Rung():
-        math_decimal("ds.RawValue * 100 / 4095", df.ScaledValue)
+        math("ds.RawValue * 100 / 4095", df.ScaledValue)
 
     # Program control
     with Rung(ds.OperationMode == 1):
@@ -62,7 +62,6 @@ def main():
         end()
 
 
-@sub
 def auto_mode():
     # Simple subroutine example
     with Rung(re(c.CycleStart)):
