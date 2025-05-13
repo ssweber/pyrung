@@ -114,25 +114,46 @@ def AlarmHistory():
     # DS3501	DS4000		UnitName_A_AlmHist[#]_	ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None		Alarm History
 
     with Rung():
-        ds.almmgr__idx = 1
+        ds.almhis__idx = 1
 
     with Rung():
         for_loop(10)
 
     with Rung():
-        ton(t.almmgr_tmr, setpoint=0, unit=Tms, elapsed_time=td.almmgr_t)
-        math(lambda: (ds.almmgr__idx * 10) + 2091, ds.almmgr__start_idx)
-        math(lambda: (ds.almmgr__idx * 10) + 3000, ds.almmgr__end_idx)
-        copy(ds[ds.almmgr__start_idx], ds.almmgr__is_alm)
+        ton(t.almhis__tmr, setpoint=0, unit=Tms, elapsed_time=td.almhis__t_Tms)
+        math(lambda: (ds.almhis__idx * 10) + 2991, ds.almhis__start_idx)
+        copy(ds[ds.almhis__start_idx], ds.almhis__is_alm)
 
-    with Rung(ds.almmgr__is_alm != 0):
-        copy_block(ds[3001:3990], ds[3011:4000])  # shift them down
-        copy_block(ds[ds.almmgr__start_idx : ds.almmgr__end_idx], ds[3001:3010])  # insert it
+    with Rung(ds.almhis__is_alm != 0):
+        copy_block(ds[3501:3990], ds[3511:4000])  # shift them down
+    with Rung(ds.almhis__is_alm != 0):
+        # Handle all 10 possible cases with separate if statements
+        if ds.almhis__idx == 1:
+            copy_block(ds[3001:3010], ds[3501:3510])
+        if ds.almhis__idx == 2:
+            copy_block(ds[3011:3020], ds[3501:3510])
+        if ds.almhis__idx == 3:
+            copy_block(ds[3021:3030], ds[3501:3510])
+        if ds.almhis__idx == 4:
+            copy_block(ds[3031:3040], ds[3501:3510])
+        if ds.almhis__idx == 5:
+            copy_block(ds[3041:3050], ds[3501:3510])
+        if ds.almhis__idx == 6:
+            copy_block(ds[3051:3060], ds[3501:3510])
+        if ds.almhis__idx == 7:
+            copy_block(ds[3061:3070], ds[3501:3510])
+        if ds.almhis__idx == 8:
+            copy_block(ds[3071:3080], ds[3501:3510])
+        if ds.almhis__idx == 9:
+            copy_block(ds[3081:3090], ds[3501:3510])
+        if ds.almhis__idx == 10:
+            copy_block(ds[3091:310], ds[3501:3510])
+    with Rung(ds.almhis__is_alm != 0):
         copy(df.now_YYMMDD, ds.AlmHist1_AckDate)
         copy(df.now_HHMMSS, ds.AlmHist1_AckTime)
 
     with Rung():
-        math(lambda: ds.almmgr__idx + 1, ds.almmgr__idx)
+        math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
         next_loop()  # Next instruction indicates the end of a For Next loop
 
     with Rung():
