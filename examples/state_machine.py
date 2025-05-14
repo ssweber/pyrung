@@ -66,6 +66,12 @@ def main():
 
     with Rung(c.S_UnitModeRequested):
         copy(0, ds.C_UnitModeChgRequest_ds)
+        
+    # AckAlarms (temporary)
+    
+    with Rung(ds.C_AckAlarms == 1):
+        copy(1, ds.almhis__idx = 1, oneshot=True)
+        call(AlarmHistory)
 
     with Rung():
         end()
@@ -73,15 +79,15 @@ def main():
 
 def sm_ExampleAlarmRecording():
     pass
-    # A_StopReason_ID    DD  DD31
-    # A_StopReason_SubID DD  DD32
-    # A_StopReason_StepID DD  DD33
-    # A_StopReason_Value DD  DD34
-    # A_StopReason_Categor DD DD35
-    # A_StopReason_Date  DD  DD36
-    # A_StopReason_Time  DD  DD37
-    # A_StopReason_AckDate DD DD38
-    # A_StopReason_AckTime DD DD39
+    # A_StopReason_ID    DD  DD11
+    # A_StopReason_SubID DD  DD12
+    # A_StopReason_StepID DD  DD13
+    # A_StopReason_Value DD  DD14
+    # A_StopReason_Categor DD DD15
+    # A_StopReason_Date  DD  DD16
+    # A_StopReason_Time  DD  DD17
+    # A_StopReason_AckDate DD DD18
+    # A_StopReason_AckTime DD DD19
     # DD101-DD200        A_Alm[#]_  ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None  Alarm group tags, 10 tags per group
 
     # Example of how to record an alarm
@@ -115,16 +121,19 @@ def AlarmHistory():
     # DD101-DD200 for current Alm[#] records (10 values per alarm, 10 active alarms)
 
     with Rung():
-        ds.almhis__idx = 1
-
-    with Rung():
-        for_loop(10)
-
-    with Rung():
         ton(t.almhis__tmr, setpoint=0, unit=Tms, elapsed_time=td.almhis__t_Tms)
-        math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
-        copy(dd[ds.almhis__start_idx], dd.almhis__is_alm)
+        
+    with Rung(ds.almhis__idx > 10):
+        copy(0, ds.C_AckAlarms)
+        return
 
+    # Example Alm1_Id (then 2, 3, etc)
+    with Rung():       
+        math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
+    with Rung():
+        copy(dd[ds.almhis__start_idx], dd.almhis__is_alm)
+    
+    # if alarm
     with Rung(dd.almhis__is_alm != 0):
         copy_block(dd[501:990], dd[511:1000])  # shift alarm history down one slot
     with Rung(dd.almhis__is_alm != 0):
@@ -150,10 +159,8 @@ def AlarmHistory():
         if ds.almhis__idx == 10:
             copy_block(dd[191:200], dd[501:510])
     with Rung(dd.almhis__is_alm != 0):
-        copy(df.now_YYMMDD, dd.AlmHist1_Date)
-        copy(df.now_HHMMSS, dd.AlmHist1_Time)
-        copy(0, dd.AlmHist1_AckDate)  # Clear acknowledgment date/time
-        copy(0, dd.AlmHist1_AckTime)
+        copy(dd.now_YYMMDD, dd.AlmHist1_Date) # dd[508]
+        copy(dd.now_HHMMSS, dd.AlmHist1_Time) # dd[509]
 
     with Rung():
         math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
