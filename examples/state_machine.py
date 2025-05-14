@@ -174,7 +174,7 @@ def ModeChange():
         reset(c[1004:1006])  # c.C_ProductionMode:c.C_ManualMode
 
     with Rung(
-        any([c.S_Idle, c.S_Stopped, C.S_Aborted]),
+        any([c.S_Idle, c.S_Stopped, c.S_Aborted]),
         ds.C_UnitMode >= 1,
         ds.C_UnitMode <= 3,
     ):
