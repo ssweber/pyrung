@@ -73,45 +73,46 @@ def main():
 
 def sm_ExampleAlarmRecording():
     pass
-    # A_StopReason_ID	DS	DS31
-    # A_StopReason_SubID	DS	DS32
-    # A_StopReason_StepID	DS	DS33
-    # A_StopReason_Value	DS	DS34
-    # A_StopReason_Categor	DS	DS35
-    # A_StopReason_Date	DS	DS36
-    # A_StopReason_Time	DS	DS37
-    # A_StopReason_AckDate	DS	DS38
-    # A_StopReason_AckTime	DS	DS39
-    # DS3001	DS3100		A_Alm[#]_	ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None		Alarm group tags, 10 tags per group
+    # A_StopReason_ID    DD  DD31
+    # A_StopReason_SubID DD  DD32
+    # A_StopReason_StepID DD  DD33
+    # A_StopReason_Value DD  DD34
+    # A_StopReason_Categor DD DD35
+    # A_StopReason_Date  DD  DD36
+    # A_StopReason_Time  DD  DD37
+    # A_StopReason_AckDate DD DD38
+    # A_StopReason_AckTime DD DD39
+    # DD101-DD200        A_Alm[#]_  ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None  Alarm group tags, 10 tags per group
 
     # Example of how to record an alarm
     #
     # First check if Stop Reason is not already set
-    # with Rung(ds.A_StopReason_ID == 0):
+    # with Rung(dd.A_StopReason_ID == 0):
     #     # Now copy values into Stop Reason
-    #     copy(1, ds.A_StopReason_ID)
-    #     copy(2, ds.A_StopReason_SubID)
-    #     copy(3, ds.A_StopReason_StepID)
-    #     copy(4, ds.A_StopReason_Value)
-    #     copy(5, ds.A_StopReason_Categor)
-    #     copy(df.now_YYMMDD, ds.A_StopReason_Date)
-    #     copy(df.now_HHMMSS, ds.A_StopReason_Time)
+    #     copy(1, dd.A_StopReason_ID)
+    #     copy(2, dd.A_StopReason_SubID)
+    #     copy(3, dd.A_StopReason_StepID)
+    #     copy(4, dd.A_StopReason_Value)
+    #     copy(5, dd.A_StopReason_Categor)
+    #     copy(df.now_YYMMDD, dd.A_StopReason_Date)
+    #     copy(df.now_HHMMSS, dd.A_StopReason_Time)
 
     # Also move active alarm to the next alarm in the group
     # with Rung():
-    # copy_block(ds[3001:3090], ds[3011:3100]) # move active alarms down one
+    # copy_block(dd[101:190], dd[111:200]) # move active alarms down one
     # with Rung():
-    #     copy(1, ds.Alarm1_ID)
-    #     copy(2, ds.Alarm1_SubID)
-    #     copy(3, ds.Alarm1_StepID)
-    #     copy(4, ds.Alarm1_Value)
-    #     copy(5, ds.Alarm1_Categor)
-    #     copy(df.now_YYMMDD, ds.Alarm1_Date)
-    #     copy(df.now_HHMMSS, ds.Alarm1_Time)
+    #     copy(1, dd.Alarm1_ID)
+    #     copy(2, dd.Alarm1_SubID)
+    #     copy(3, dd.Alarm1_StepID)
+    #     copy(4, dd.Alarm1_Value)
+    #     copy(5, dd.Alarm1_Categor)
+    #     copy(df.now_YYMMDD, dd.Alarm1_Date)
+    #     copy(df.now_HHMMSS, dd.Alarm1_Time)
 
 
 def AlarmHistory():
-    # DS3501	DS4000		UnitName_A_AlmHist[#]_	ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None		Alarm History
+    # DD501-DD1000 for AlmHist[#] records (10 values per alarm, 50 alarms in history)
+    # DD101-DD200 for current Alm[#] records (10 values per alarm, 10 active alarms)
 
     with Rung():
         ds.almhis__idx = 1
@@ -121,36 +122,38 @@ def AlarmHistory():
 
     with Rung():
         ton(t.almhis__tmr, setpoint=0, unit=Tms, elapsed_time=td.almhis__t_Tms)
-        math(lambda: (ds.almhis__idx * 10) + 2991, ds.almhis__start_idx)
-        copy(ds[ds.almhis__start_idx], ds.almhis__is_alm)
+        math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
+        copy(dd[ds.almhis__start_idx], dd.almhis__is_alm)
 
-    with Rung(ds.almhis__is_alm != 0):
-        copy_block(ds[3501:3990], ds[3511:4000])  # shift them down
-    with Rung(ds.almhis__is_alm != 0):
+    with Rung(dd.almhis__is_alm != 0):
+        copy_block(dd[501:990], dd[511:1000])  # shift alarm history down one slot
+    with Rung(dd.almhis__is_alm != 0):
         # Handle all 10 possible cases with separate if statements
         if ds.almhis__idx == 1:
-            copy_block(ds[3001:3010], ds[3501:3510])
+            copy_block(dd[101:110], dd[501:510])
         if ds.almhis__idx == 2:
-            copy_block(ds[3011:3020], ds[3501:3510])
+            copy_block(dd[111:120], dd[501:510])
         if ds.almhis__idx == 3:
-            copy_block(ds[3021:3030], ds[3501:3510])
+            copy_block(dd[121:130], dd[501:510])
         if ds.almhis__idx == 4:
-            copy_block(ds[3031:3040], ds[3501:3510])
+            copy_block(dd[131:140], dd[501:510])
         if ds.almhis__idx == 5:
-            copy_block(ds[3041:3050], ds[3501:3510])
+            copy_block(dd[141:150], dd[501:510])
         if ds.almhis__idx == 6:
-            copy_block(ds[3051:3060], ds[3501:3510])
+            copy_block(dd[151:160], dd[501:510])
         if ds.almhis__idx == 7:
-            copy_block(ds[3061:3070], ds[3501:3510])
+            copy_block(dd[161:170], dd[501:510])
         if ds.almhis__idx == 8:
-            copy_block(ds[3071:3080], ds[3501:3510])
+            copy_block(dd[171:180], dd[501:510])
         if ds.almhis__idx == 9:
-            copy_block(ds[3081:3090], ds[3501:3510])
+            copy_block(dd[181:190], dd[501:510])
         if ds.almhis__idx == 10:
-            copy_block(ds[3091:310], ds[3501:3510])
-    with Rung(ds.almhis__is_alm != 0):
-        copy(df.now_YYMMDD, ds.AlmHist1_AckDate)
-        copy(df.now_HHMMSS, ds.AlmHist1_AckTime)
+            copy_block(dd[191:200], dd[501:510])
+    with Rung(dd.almhis__is_alm != 0):
+        copy(df.now_YYMMDD, dd.AlmHist1_Date)
+        copy(df.now_HHMMSS, dd.AlmHist1_Time)
+        copy(0, dd.AlmHist1_AckDate)  # Clear acknowledgment date/time
+        copy(0, dd.AlmHist1_AckTime)
 
     with Rung():
         math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
