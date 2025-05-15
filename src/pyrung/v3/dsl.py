@@ -124,9 +124,6 @@ class RungContextManager(Rung):
         if not plc:
             raise RuntimeError("No active PLC context")
         
-        # Get parent rung's active status
-        parent_chain_active = plc.program.get_parent_chain_active()
-        
         # Add this rung to the main program or as a child to the current rung
         current_rung = plc.program.get_current_rung()
         if current_rung:
@@ -135,13 +132,8 @@ class RungContextManager(Rung):
         else:
             plc.program.main_program.add_rung(self)
         
-        # Evaluate this rung
-        context = PLCExecutionContext(plc.memory)
-        self.is_active = self.evaluate_conditions(context)
-        self.chain_active = parent_chain_active and self.is_active
-        
-        # Push to stack
-        plc.program.push_rung_context(self, self.chain_active)
+        # Push to stack for DSL functions to use
+        plc.program.push_rung_context(self)
         
         return self
     
@@ -149,15 +141,6 @@ class RungContextManager(Rung):
         plc = get_current_plc()
         if not plc:
             raise RuntimeError("No active PLC context")
-        
-        # Execute instructions if rung chain is active
-        if self.chain_active:
-            context = PLCExecutionContext(plc.memory)
-            self.execute_instructions(context)
-        else:
-            # Handle outputs for non-active rung
-            context = PLCExecutionContext(plc.memory)
-            self.handle_outputs_on_rung_false(context)
         
         # Remove from stack
         plc.program.pop_rung_context()

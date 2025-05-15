@@ -36,8 +36,6 @@ class Rung:
         self.chain_active = False  # Is this rung and all its parents active?
         self.instructions: List[Instruction] = []  # Instructions to execute
         self.coil_outputs: Set[PLCVariable] = set()  # Variables affected by out()
-        self.latched_outputs: Set[PLCVariable] = set()  # Variables affected by set()
-        self.copied_outputs: Set[PLCVariable] = set()  # Variables that are copy() destinations
         self.parent_rung = None  # Parent rung if nested
         self.child_rungs: List[Rung] = []  # Child rungs (nested rungs)
         
@@ -115,26 +113,20 @@ class PLCProgram:
     def __init__(self):
         self.main_program = ProgramBlock("main")
         self.subroutines: Dict[str, ProgramBlock] = {}
-        self._current_rung_context_stack: List[Tuple[Rung, bool]] = []  # (rung, parent_chain_active)
+        self._current_rung_context_stack: List[Rung] = []
 
     def get_current_rung(self) -> Optional[Rung]:
-        """Get the current rung being executed"""
+        """Get the current rung being defined"""
         if not self._current_rung_context_stack:
             return None
-        return self._current_rung_context_stack[-1][0]
+        return self._current_rung_context_stack[-1]
 
-    def get_parent_chain_active(self) -> bool:
-        """Get whether the parent chain is active"""
-        if not self._current_rung_context_stack:
-            return True  # returns `True` if the context stack is empty (i.e., for a top-level rung)
-        return self._current_rung_context_stack[-1][1]
-
-    def push_rung_context(self, rung: Rung, chain_active: bool):
-        """Push a rung context to the stack"""
-        self._current_rung_context_stack.append((rung, chain_active))
+    def push_rung_context(self, rung: Rung):
+        """Push a rung context to the stack (for program definition)"""
+        self._current_rung_context_stack.append(rung)
 
     def pop_rung_context(self):
         """Pop a rung context from the stack"""
         if self._current_rung_context_stack:
             return self._current_rung_context_stack.pop()
-        return None, False
+        return None

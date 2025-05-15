@@ -1,4 +1,4 @@
-from typing import Dict, Optional, List, Any, Callable, Union, Set
+from typing import Dict, Optional, List, Any, Callable, Union, Set, Tuple
 
 # Import our classes
 from memory_model import (
@@ -62,14 +62,15 @@ class PLC:
 
     def _execute_program_block(self, program_block: ProgramBlock, context: PLCExecutionContext):
         """Execute a program block (main or subroutine)"""
-        # Clear the rung stack
-        self.program._current_rung_context_stack = []
+        # Create a new execution stack separate from the definition stack
+        execution_stack = []
         
         # Execute each rung
         for rung in program_block.rungs:
-            self._execute_rung(rung, context)
+            self._execute_rung(rung, context, execution_stack)
 
-    def _execute_rung(self, rung: Rung, context: PLCExecutionContext, parent_chain_active: bool = True):
+    def _execute_rung(self, rung: Rung, context: PLCExecutionContext, 
+                     execution_stack: List[Tuple[Rung, bool]], parent_chain_active: bool = True):
         """Execute a single rung and its child rungs"""
         # Evaluate rung conditions
         rung.is_active = rung.evaluate_conditions(context)
@@ -77,8 +78,8 @@ class PLC:
         # Determine if the whole chain is active
         rung.chain_active = parent_chain_active and rung.is_active
         
-        # Push this rung to the context stack
-        self.program.push_rung_context(rung, rung.chain_active)
+        # Push this rung to the execution stack
+        execution_stack.append((rung, rung.chain_active))
         
         # Execute instructions if rung is active
         if rung.chain_active:
@@ -86,12 +87,12 @@ class PLC:
             
             # Execute all child rungs if this rung is active
             for child_rung in rung.child_rungs:
-                self._execute_rung(child_rung, context, rung.chain_active)
+                self._execute_rung(child_rung, context, execution_stack, rung.chain_active)
         else:
             rung.handle_outputs_on_rung_false(context)
         
-        # Pop this rung from the stack
-        self.program.pop_rung_context()
+        # Pop this rung from the execution stack
+        execution_stack.pop()
 
 
 # Global current PLC instance

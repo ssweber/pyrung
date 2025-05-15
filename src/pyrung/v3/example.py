@@ -41,12 +41,15 @@ def test_nested_rungs():
     # Define the program with nested rungs
     def program():
         with Rung():  # Unconditional rung
-            out(y.Light)
-            with Rung(re(c.AutoMode)):  # Nested rung that depends on AutoMode
+            set(y.Light)
+            with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
     
-    # Run the program directly
+    # Define the program structure (without execution)
     program()
+    
+    # Initial scan - now all execution happens here
+    plc.scan()
     
     # Print state - Light should be ON, NestedLight should be OFF
     print("Initial run:")
