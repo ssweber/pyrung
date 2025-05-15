@@ -28,69 +28,51 @@ def setup_plc():
     
     return plc
 
-def main_program(plc):
-    """Main PLC program logic using the refactored DSL"""
-    # Create local references to avoid plc. prefix
-    x = plc.x
-    y = plc.y
-    c = plc.c
-    ds = plc.ds
-    
-    # Simple rung - output turns on light
-    with Rung():
-        out(y.Light)
-        with Rung(c.AutoMode):
-            out(y.NestedLight)
-
-def print_plc_state(plc):
-    """Display the current state of key PLC variables"""
-    # Create local references to avoid plc. prefix
-    x = plc.x
-    y = plc.y
-    c = plc.c
-    ds = plc.ds
-    
-    print("\nPLC State:")
-    print(f"x.Button = {x.Button.get_value()}")
-    print(f"x.EmergencyStop = {x.EmergencyStop.get_value()}")
-    print(f"y.Light = {y.Light.get_value()}")
-    print(f"y.Indicator = {y.Indicator.get_value()}")
-    print(f"y.Buzzer = {y.Buzzer.get_value()}")
-    print(f"y.NestedLight = {y.NestedLight.get_value()}")
-    print(f"c.AutoMode = {c.AutoMode.get_value()}")
-    print(f"c.SystemRunning = {c.SystemRunning.get_value()}")
-    print(f"c.AlarmActive = {c.AlarmActive.get_value()}")
-    print(f"ds.Step = {ds.Step.get_value()}")
-    print(f"ds.Counter = {ds.Counter.get_value()}")
-    print(f"ds.Timer = {ds.Timer.get_value()}")
-
-def run_example():
-    """Run the example PLC program"""
-    # Initialize PLC
+def test_nested_rungs():
+    """Test the nested rung functionality"""
     plc = setup_plc()
-    
-    # Create local references to avoid plc. prefix
     x = plc.x
+    y = plc.y
     c = plc.c
-    ds = plc.ds
-       
+    
     # Set initial values
     c.AutoMode.set_value(0)  # Auto mode off initially
-       
-    # Print initial state
-    print("Initial State:")
-    print_plc_state(plc)
     
-    # Execute the program once
-    print("\nRunning first scan...")
-    main_program(plc)
-    print_plc_state(plc)
+    # Define the program with nested rungs
+    def program():
+        with Rung():  # Unconditional rung
+            out(y.Light)
+            with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
+                out(y.NestedLight)
     
-    # Execute the program again to show progression
-    print("\nRunning second scan...")
-    c.AutoMode.set_value(1)  # Turn on
+    # Run the program directly
+    program()
+    
+    # Print state - Light should be ON, NestedLight should be OFF
+    print("Initial run:")
+    print(f"Light = {y.Light.get_value()}")
+    print(f"NestedLight = {y.NestedLight.get_value()}")
+    print(f"AutoMode = {c.AutoMode.get_value()}")
+    
+    # Turn on AutoMode and run scan
+    c.AutoMode.set_value(1)
     plc.scan()
-    print_plc_state(plc)
+    
+    # Print state - Now both should be ON
+    print("\nAfter setting AutoMode and scanning:")
+    print(f"Light = {y.Light.get_value()}")
+    print(f"NestedLight = {y.NestedLight.get_value()}")
+    print(f"AutoMode = {c.AutoMode.get_value()}")
+    
+    # Turn off AutoMode and run scan again
+    c.AutoMode.set_value(0)
+    plc.scan()
+    
+    # Print state - NestedLight should now be OFF
+    print("\nAfter turning off AutoMode and scanning:")
+    print(f"Light = {y.Light.get_value()}")
+    print(f"NestedLight = {y.NestedLight.get_value()}")
+    print(f"AutoMode = {c.AutoMode.get_value()}")
 
 if __name__ == "__main__":
-    run_example()
+    test_nested_rungs()

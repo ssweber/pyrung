@@ -8,7 +8,7 @@ from memory_model import PLCVariable, PLCExecutionContext
 from datatypes import BitType
 
 class Rung:
-    def __init__(self, *conditions: Union[Condition, bool, 'PLCVariable']): # Allow PLCVariable in type hint
+    def __init__(self, *conditions: Union[Condition, bool, 'PLCVariable']):
         """Initialize a rung with its conditions"""
         
         processed_conditions_for_init: List[Union[Condition, bool]] = []
@@ -39,6 +39,7 @@ class Rung:
         self.latched_outputs: Set[PLCVariable] = set()  # Variables affected by set()
         self.copied_outputs: Set[PLCVariable] = set()  # Variables that are copy() destinations
         self.parent_rung = None  # Parent rung if nested
+        self.child_rungs: List[Rung] = []  # Child rungs (nested rungs)
         
     def evaluate_conditions(self, context: PLCExecutionContext) -> bool:
         """Evaluate all conditions for this rung"""
@@ -89,6 +90,11 @@ class Rung:
     def add_copied_output(self, variable: PLCVariable):
         """Register a variable as a copy destination"""
         self.copied_outputs.add(variable)
+        
+    def add_child_rung(self, rung: 'Rung'):
+        """Add a child rung to this rung"""
+        self.child_rungs.append(rung)
+        rung.parent_rung = self
 
 
 class ProgramBlock:

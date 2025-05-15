@@ -70,7 +70,7 @@ class PLC:
             self._execute_rung(rung, context)
 
     def _execute_rung(self, rung: Rung, context: PLCExecutionContext, parent_chain_active: bool = True):
-        """Execute a single rung"""
+        """Execute a single rung and its child rungs"""
         # Evaluate rung conditions
         rung.is_active = rung.evaluate_conditions(context)
         
@@ -83,6 +83,10 @@ class PLC:
         # Execute instructions if rung is active
         if rung.chain_active:
             rung.execute_instructions(context)
+            
+            # Execute all child rungs if this rung is active
+            for child_rung in rung.child_rungs:
+                self._execute_rung(child_rung, context, rung.chain_active)
         else:
             rung.handle_outputs_on_rung_false(context)
         

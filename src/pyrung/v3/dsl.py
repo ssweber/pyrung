@@ -113,7 +113,6 @@ def math_decimal(expression_func: Callable[[], Any], target: PLCVariable, onesho
     
     return target
 
-# Rung Context Manager
 class RungContextManager(Rung):
     """Context manager wrapper for Rung to handle enter/exit"""
     
@@ -128,10 +127,11 @@ class RungContextManager(Rung):
         # Get parent rung's active status
         parent_chain_active = plc.program.get_parent_chain_active()
         
-        # Add this rung to the main program
+        # Add this rung to the main program or as a child to the current rung
         current_rung = plc.program.get_current_rung()
         if current_rung:
             self.parent_rung = current_rung
+            current_rung.add_child_rung(self)
         else:
             plc.program.main_program.add_rung(self)
         
