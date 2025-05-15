@@ -1,6 +1,5 @@
 # Import the main modules
-from plc import PLC
-from dsl import Rung, out, nc, copy, reset, math_decimal, re, fe, latch
+from pyrung import PLC, Rung, out, nc, copy, reset, math_decimal, re, fe, latch
 
 def setup_plc():
     """Initialize the PLC and define nicknames"""
