@@ -1,6 +1,6 @@
 # Import the main modules
 from plc import PLC
-from dsl import Rung, out, nc, copy, reset, math_decimal, re, fe, set_instr as set
+from dsl import Rung, out, nc, copy, reset, math_decimal, re, fe, latch
 
 def setup_plc():
     """Initialize the PLC and define nicknames"""
@@ -42,7 +42,7 @@ def test_nested_rungs():
     # Define the program with nested rungs
     def program():
         with Rung():  # Unconditional rung
-            set(y.Light)
+            latch(y.Light)
             with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
                 copy(1, ds.Step, oneshot=True)

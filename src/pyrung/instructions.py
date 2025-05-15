@@ -61,7 +61,7 @@ class OutInstruction(OneShotCapableInstruction):
         return f"OUT({self.target}{oneshot_str})"
 
 
-class SetInstruction(Instruction):
+class LatchInstruction(Instruction):
     """Latch Coil Instruction (SET)"""
     
     def __init__(self, target: 'PLCVariable'):

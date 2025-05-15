@@ -4,7 +4,7 @@ from typing import Any, Callable, Union, List, Optional, Set
 from plc import PLC, get_current_plc
 from memory_model import PLCExecutionContext, PLCVariable
 from conditions import BitCondition, NormallyClosedCondition, RisingEdgeCondition, FallingEdgeCondition
-from instructions import OutInstruction, SetInstruction, ResetInstruction, CopyInstruction, MathInstruction
+from instructions import OutInstruction, LatchInstruction, ResetInstruction, CopyInstruction, MathInstruction
 from program import Rung
 
 # Add this to dsl.py at the top after imports
@@ -53,10 +53,10 @@ def out(target: PLCVariable, oneshot: bool = False, *, plc=None, current_rung=No
     return target
 
 @requires_rung_context
-def set_instr(target: PLCVariable, *, plc=None, current_rung=None):
+def latch(target: PLCVariable, *, plc=None, current_rung=None):
     """Create a latch coil instruction"""
     # Create and add the instruction
-    instruction = SetInstruction(target)
+    instruction = LatchInstruction(target)
     current_rung.add_instruction(instruction)
 
     return target

@@ -10,7 +10,7 @@ from conditions import (
     RisingEdgeCondition, FallingEdgeCondition
 )
 from instructions import (
-    Instruction, OutInstruction, SetInstruction, 
+    Instruction, OutInstruction, LatchInstruction, 
     ResetInstruction, CopyInstruction, MathInstruction
 )
 from program import Rung, ProgramBlock, PLCProgram
