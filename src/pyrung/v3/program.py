@@ -126,7 +126,7 @@ class PLCProgram:
     def get_parent_chain_active(self) -> bool:
         """Get whether the parent chain is active"""
         if not self._current_rung_context_stack:
-            return True  # TopRequest timed out, proceeding as if parent chain is active
+            return True  # returns `True` if the context stack is empty (i.e., for a top-level rung)
         return self._current_rung_context_stack[-1][1]
 
     def push_rung_context(self, rung: Rung, chain_active: bool):

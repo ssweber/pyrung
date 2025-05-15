@@ -32,12 +32,6 @@ class ComparisonCondition(Condition):
         rhs_val = self.rhs.get_value() if hasattr(self.rhs, 'get_value') else self.rhs
         return self.op(lhs_val, rhs_val)
 
-    def __bool__(self):
-        """For immediate evaluation if needed"""
-        lhs_val = self.lhs.get_value()
-        rhs_val = self.rhs.get_value() if hasattr(self.rhs, 'get_value') else self.rhs
-        return self.op(lhs_val, rhs_val)
-
     def __str__(self):
         """String representation of the condition"""
         op_name = self.op.__name__
@@ -59,10 +53,6 @@ class BitCondition(Condition):
         """Return true if the bit is on (1)"""
         return bool(self.variable.get_value())
 
-    def __bool__(self):
-        """For immediate evaluation if needed"""
-        return bool(self.variable.get_value())
-
     def __str__(self):
         return f"XIC({self.variable})"
 
@@ -79,10 +69,6 @@ class NormallyClosedCondition(Condition):
 
     def evaluate(self, context: 'PLCExecutionContext') -> bool:
         """Return true if the bit is off (0)"""
-        return not bool(self.variable.get_value())
-
-    def __bool__(self):
-        """For immediate evaluation if needed"""
         return not bool(self.variable.get_value())
 
     def __str__(self):
@@ -104,12 +90,6 @@ class RisingEdgeCondition(Condition):
         previous_val = bool(self.variable.get_previous_value())
         return current_val and not previous_val
 
-    def __bool__(self):
-        """For immediate evaluation if needed"""
-        current_val = bool(self.variable.get_value())
-        previous_val = bool(self.variable.get_previous_value())
-        return current_val and not previous_val
-
     def __str__(self):
         return f"ONS({self.variable})"
 
@@ -125,12 +105,6 @@ class FallingEdgeCondition(Condition):
 
     def evaluate(self, context: 'PLCExecutionContext') -> bool:
         """Return true only on transition from on to off"""
-        current_val = bool(self.variable.get_value())
-        previous_val = bool(self.variable.get_previous_value())
-        return not current_val and previous_val
-
-    def __bool__(self):
-        """For immediate evaluation if needed"""
         current_val = bool(self.variable.get_value())
         previous_val = bool(self.variable.get_previous_value())
         return not current_val and previous_val

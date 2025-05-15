@@ -42,7 +42,7 @@ def test_nested_rungs():
     def program():
         with Rung():  # Unconditional rung
             out(y.Light)
-            with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
+            with Rung(re(c.AutoMode)):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
     
     # Run the program directly
