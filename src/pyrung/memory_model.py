@@ -8,9 +8,10 @@ from datatypes import BitType, IntType, Int2Type, FloatType, HexType, TxtType, D
 # Canonical address representation
 Address = str
 
+
 class PLCMemory:
     """Centralized storage for all PLC data values"""
-    
+
     def __init__(self):
         self._data: Dict[Address, Any] = {}
         self._previous_scan_data: Dict[Address, Any] = {}  # For edge detection
@@ -31,17 +32,19 @@ class PLCMemory:
         """Called at the end of a PLC scan to update previous values"""
         self._previous_scan_data = self._data.copy()
 
+
 class PLCExecutionContext:
     """Context for instruction execution and condition evaluation"""
-    
+
     def __init__(self, memory: PLCMemory):
         self.memory = memory
         # Could also store current rung status, etc.
 
+
 class PLCVariable:
     """Represents a variable in the PLC system"""
-    
-    def __init__(self, address: Address, address_type: 'AddressType', plc_memory: PLCMemory):
+
+    def __init__(self, address: Address, address_type: "AddressType", plc_memory: PLCMemory):
         self.address = address
         self.address_type = address_type
         self.plc_memory = plc_memory
@@ -49,10 +52,7 @@ class PLCVariable:
 
     def get_value(self) -> Any:
         """Get the current value of this variable"""
-        return self.plc_memory.read(
-            self.address, 
-            self.address_type.data_type_def.default_value()
-        )
+        return self.plc_memory.read(self.address, self.address_type.data_type_def.default_value())
 
     def set_value(self, value: Any):
         """Set the value of this variable"""
@@ -62,8 +62,7 @@ class PLCVariable:
     def get_previous_value(self) -> Any:
         """Get the value from the previous scan cycle"""
         return self.plc_memory.get_previous_value(
-            self.address, 
-            self.address_type.data_type_def.default_value()
+            self.address, self.address_type.data_type_def.default_value()
         )
 
     def _check_op_allowed(self, op_name: str):
@@ -74,81 +73,86 @@ class PLCVariable:
                 f"{self.address_type.data_type_def.__class__.__name__} at "
                 f"{self.address_type.name}{self.address}"
             )
-        
+
     # Comparison operators
     def __eq__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('==')
+
+        self._check_op_allowed("==")
         return ComparisonCondition(self, operator.eq, other)
 
     def __ne__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('!=')
+
+        self._check_op_allowed("!=")
         return ComparisonCondition(self, operator.ne, other)
 
     def __lt__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('<')
+
+        self._check_op_allowed("<")
         return ComparisonCondition(self, operator.lt, other)
 
     def __le__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('<=')
+
+        self._check_op_allowed("<=")
         return ComparisonCondition(self, operator.le, other)
 
     def __gt__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('>')
+
+        self._check_op_allowed(">")
         return ComparisonCondition(self, operator.gt, other)
 
     def __ge__(self, other):
         from conditions import ComparisonCondition
-        self._check_op_allowed('>=')
+
+        self._check_op_allowed(">=")
         return ComparisonCondition(self, operator.ge, other)
-    
+
     def __hash__(self):
         """Make PLCVariable instances hashable based on their address."""
         return hash(self.address)
 
-
     # Boolean conversion for use in Python if statements
     def __bool__(self) -> bool:
-        self._check_op_allowed('bool')
+        self._check_op_allowed("bool")
         return bool(self.get_value())
 
     # Arithmetic operators
     def __add__(self, other):
-        self._check_op_allowed('+')
+        self._check_op_allowed("+")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() + oval
 
     def __sub__(self, other):
-        self._check_op_allowed('-')
+        self._check_op_allowed("-")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() - oval
 
     def __mul__(self, other):
-        self._check_op_allowed('*')
+        self._check_op_allowed("*")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() * oval
 
     def __truediv__(self, other):
-        self._check_op_allowed('/')
+        self._check_op_allowed("/")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() / oval
 
     def __floordiv__(self, other):
-        self._check_op_allowed('//')
+        self._check_op_allowed("//")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() // oval
 
     def __mod__(self, other):
-        self._check_op_allowed('%')
+        self._check_op_allowed("%")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() % oval
 
     def __pow__(self, other):
-        self._check_op_allowed('**')
+        self._check_op_allowed("**")
         oval = other.get_value() if isinstance(other, PLCVariable) else other
         return self.get_value() ** oval
 
@@ -162,13 +166,18 @@ class PLCVariable:
         return f"PLCVariable(address='{self.address}', type='{self.address_type.name}', nickname='{self.nickname}')"
 
 
-
 class AddressType(ABC):
     """Base class for different PLC address types (X, Y, DS, etc.)"""
-    
-    def __init__(self, name: str, data_type_def: DataTypeDefinition,
-                 start_addr: int, end_addr: int, plc_memory: PLCMemory,
-                 is_retentive: bool = False):
+
+    def __init__(
+        self,
+        name: str,
+        data_type_def: DataTypeDefinition,
+        start_addr: int,
+        end_addr: int,
+        plc_memory: PLCMemory,
+        is_retentive: bool = False,
+    ):
         self.name = name  # e.g., "X", "Y", "DS"
         self.data_type_def = data_type_def
         self.start_addr = start_addr
@@ -189,14 +198,16 @@ class AddressType(ABC):
             if key in self._nicknames:
                 return self._nicknames[key]
             # Try to interpret as direct address
-            if key.startswith(self.name) and key[len(self.name):].isdigit():
-                index = int(key[len(self.name):])
+            if key.startswith(self.name) and key[len(self.name) :].isdigit():
+                index = int(key[len(self.name) :])
                 if self.start_addr <= index <= self.end_addr:
                     return key
             raise KeyError(f"Nickname or address '{key}' not defined for {self.name}")
         elif isinstance(key, int):
             if not (self.start_addr <= key <= self.end_addr):
-                raise IndexError(f"Address {self.name}{key} out of range ({self.start_addr}-{self.end_addr})")
+                raise IndexError(
+                    f"Address {self.name}{key} out of range ({self.start_addr}-{self.end_addr})"
+                )
             return self._make_address_str(key)
         raise TypeError(f"Invalid key type for address: {key}")
 
@@ -218,8 +229,13 @@ class AddressType(ABC):
         address_str = self._parse_key(key)
         if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
             # Assigning a nickname
-            if nickname_or_value in self._nicknames and self._nicknames[nickname_or_value] != address_str:
-                raise ValueError(f"Nickname '{nickname_or_value}' already assigned to {self._nicknames[nickname_or_value]}")
+            if (
+                nickname_or_value in self._nicknames
+                and self._nicknames[nickname_or_value] != address_str
+            ):
+                raise ValueError(
+                    f"Nickname '{nickname_or_value}' already assigned to {self._nicknames[nickname_or_value]}"
+                )
             # Ensure the variable object exists for this address
             if address_str not in self._variables:
                 self._variables[address_str] = PLCVariable(address_str, self, self.plc_memory)
@@ -250,7 +266,7 @@ class AddressType(ABC):
 
 class XBank(AddressType):
     """Input Bits (X addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("X", BitType(), 1, 816, plc_memory, is_retentive=False)
 
@@ -261,7 +277,7 @@ class XBank(AddressType):
 
 class YBank(AddressType):
     """Output Bits (Y addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("Y", BitType(), 1, 816, plc_memory, is_retentive=False)
 
@@ -273,10 +289,12 @@ class YBank(AddressType):
 
 class CBank(AddressType):
     """Control Bits (C addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("C", BitType(), 1, 2000, plc_memory, is_retentive=False)
-        self._latched_addresses: Set[Address] = set()  # Track which C bits were set and shouldn't auto-reset
+        self._latched_addresses: Set[Address] = (
+            set()
+        )  # Track which C bits were set and shouldn't auto-reset
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -290,7 +308,7 @@ class CBank(AddressType):
 
 class DSBank(AddressType):
     """Data Store Integers (DS addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("DS", IntType(), 1, 4500, plc_memory, is_retentive=True)
 
@@ -301,7 +319,7 @@ class DSBank(AddressType):
 
 class DDBank(AddressType):
     """Double Data Integers (DD addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("DD", Int2Type(), 1, 1000, plc_memory, is_retentive=True)
 
@@ -312,7 +330,7 @@ class DDBank(AddressType):
 
 class DFBank(AddressType):
     """Float Data (DF addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("DF", FloatType(), 1, 500, plc_memory, is_retentive=True)
 
@@ -323,7 +341,7 @@ class DFBank(AddressType):
 
 class DHBank(AddressType):
     """Hex Data (DH addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("DH", HexType(), 1, 500, plc_memory, is_retentive=True)
 
@@ -334,7 +352,7 @@ class DHBank(AddressType):
 
 class TXTBank(AddressType):
     """Text Character Data (TXT addresses)"""
-    
+
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("TXT", TxtType(), 1, 500, plc_memory, is_retentive=True)
 

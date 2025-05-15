@@ -66,11 +66,11 @@ def main():
 
     with Rung(c.S_UnitModeRequested):
         copy(0, ds.C_UnitModeChgRequest_ds)
-        
+
     # AckAlarms (temporary)
-    
+
     with Rung(ds.C_AckAlarms == 1):
-        copy(1, ds.almhis__idx = 1, oneshot=True)
+        copy(1, ds.almhis__idx, oneshot=True)
         call(AlarmHistory)
 
     with Rung():
@@ -122,17 +122,17 @@ def AlarmHistory():
 
     with Rung():
         ton(t.almhis__tmr, setpoint=0, unit=Tms, elapsed_time=td.almhis__t_Tms)
-        
+
     with Rung(ds.almhis__idx > 10):
         copy(0, ds.C_AckAlarms)
         return
 
     # Example Alm1_Id (then 2, 3, etc)
-    with Rung():       
+    with Rung():
         math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
     with Rung():
         copy(dd[ds.almhis__start_idx], dd.almhis__is_alm)
-    
+
     # if alarm
     with Rung(dd.almhis__is_alm != 0):
         copy_block(dd[501:990], dd[511:1000])  # shift alarm history down one slot
@@ -159,8 +159,8 @@ def AlarmHistory():
         if ds.almhis__idx == 10:
             copy_block(dd[191:200], dd[501:510])
     with Rung(dd.almhis__is_alm != 0):
-        copy(dd.now_YYMMDD, dd.AlmHist1_Date) # dd[508]
-        copy(dd.now_HHMMSS, dd.AlmHist1_Time) # dd[509]
+        copy(dd.now_YYMMDD, dd.AlmHist1_Date)  # dd[508]
+        copy(dd.now_HHMMSS, dd.AlmHist1_Time)  # dd[509]
 
     with Rung():
         math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
