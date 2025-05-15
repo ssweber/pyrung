@@ -597,8 +597,8 @@ def test_nested():
 def test_multiple_ops():
     """Test multiple operations in a single rung"""
     with Rung(ds.Step == 2):
-        copy(1, ds.Step)  # First set to 1
-        math_decimal(lambda: ds.Step + 1, ds.Step)  # Then add 1 to get 2
+        copy(5, ds.Step)  # First set to 1
+        math_decimal(lambda: ds.Step + 10, ds.Step)  # Then add 1 to get 2
         out(y.Indicator)  # Should be on if the rung is active
 
 
