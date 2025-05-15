@@ -34,6 +34,7 @@ def test_nested_rungs():
     x = plc.x
     y = plc.y
     c = plc.c
+    ds = plc.ds
     
     # Set initial values
     c.AutoMode.set_value(0)  # Auto mode off initially
@@ -44,6 +45,7 @@ def test_nested_rungs():
             set(y.Light)
             with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
+                copy(1, ds.Step, oneshot=True)
     
     # Define the program structure (without execution)
     program()
@@ -56,6 +58,7 @@ def test_nested_rungs():
     print(f"Light = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
+    print(f"Step = {ds.Step.get_value()}")
     
     # Turn on AutoMode and run scan
     c.AutoMode.set_value(1)
@@ -66,6 +69,7 @@ def test_nested_rungs():
     print(f"Light = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
+    print(f"Step = {ds.Step.get_value()}")
     
     # Turn off AutoMode and run scan again
     c.AutoMode.set_value(0)
@@ -76,6 +80,7 @@ def test_nested_rungs():
     print(f"Light = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
+    print(f"Step = {ds.Step.get_value()}")
 
 if __name__ == "__main__":
     test_nested_rungs()
