@@ -7,6 +7,25 @@ from conditions import BitCondition, NormallyClosedCondition, RisingEdgeConditio
 from instructions import OutInstruction, SetInstruction, ResetInstruction, CopyInstruction, MathInstruction
 from program import Rung
 
+# Add this to dsl.py at the top after imports
+def requires_rung_context(func):
+    """Decorator that ensures a function is called within an active rung context."""
+    def wrapper(*args, **kwargs):
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError(f"{func.__name__}() called with no active PLC context")
+        
+        current_rung = plc.program.get_current_rung()
+        if not current_rung:
+            raise RuntimeError(f"{func.__name__}() called outside of a Rung context")
+        
+        # Add plc and current_rung as keyword arguments
+        kwargs['plc'] = plc
+        kwargs['current_rung'] = current_rung
+        
+        return func(*args, **kwargs)
+    return wrapper
+
 # DSL Functions
 
 def nc(variable: PLCVariable):
@@ -21,16 +40,9 @@ def fe(variable: PLCVariable):
     """Create a falling edge detection"""
     return FallingEdgeCondition(variable)
 
-def out(target: PLCVariable, oneshot: bool = False):
+@requires_rung_context
+def out(target: PLCVariable, oneshot: bool = False, *, plc=None, current_rung=None):
     """Create an output coil instruction"""
-    plc = get_current_plc()
-    if not plc:
-        raise RuntimeError("No active PLC context")
-    
-    current_rung = plc.program.get_current_rung()
-    if not current_rung:
-        raise RuntimeError("out() called outside of a Rung context")
-    
     # Create and add the instruction
     instruction = OutInstruction(target, oneshot)
     current_rung.add_instruction(instruction)
@@ -40,34 +52,18 @@ def out(target: PLCVariable, oneshot: bool = False):
     
     return target
 
-def set_instr(target: PLCVariable):
+@requires_rung_context
+def set_instr(target: PLCVariable, *, plc=None, current_rung=None):
     """Create a latch coil instruction"""
-    plc = get_current_plc()
-    if not plc:
-        raise RuntimeError("No active PLC context")
-    
-    current_rung = plc.program.get_current_rung()
-    if not current_rung:
-        raise RuntimeError("set() called outside of a Rung context")
-    
     # Create and add the instruction
     instruction = SetInstruction(target)
     current_rung.add_instruction(instruction)
-    
-    # Register this variable as latched (not auto-reset)
-    current_rung.add_latched_output(target)
-    
+
     return target
 
-def reset(target: PLCVariable):
+@requires_rung_context
+def reset(target: PLCVariable, *, plc=None, current_rung=None):
     """Create an unlatch coil instruction"""
-    plc = get_current_plc()
-    if not plc:
-        raise RuntimeError("No active PLC context")
-    
-    current_rung = plc.program.get_current_rung()
-    if not current_rung:
-        raise RuntimeError("reset() called outside of a Rung context")
     
     # Create and add the instruction
     instruction = ResetInstruction(target)
@@ -75,41 +71,23 @@ def reset(target: PLCVariable):
     
     return target
 
-def copy(source: Union[PLCVariable, Any], target: PLCVariable, oneshot: bool = False):
+@requires_rung_context
+def copy(source: Union[PLCVariable, Any], target: PLCVariable, oneshot: bool = False, *, plc=None, current_rung=None):
     """Create a copy instruction"""
-    plc = get_current_plc()
-    if not plc:
-        raise RuntimeError("No active PLC context")
-    
-    current_rung = plc.program.get_current_rung()
-    if not current_rung:
-        raise RuntimeError("copy() called outside of a Rung context")
     
     # Create and add the instruction
     instruction = CopyInstruction(source, target, oneshot)
     current_rung.add_instruction(instruction)
     
-    # Register this variable as a copy destination
-    current_rung.add_copied_output(target)
-    
     return target
 
-def math_decimal(expression_func: Callable[[], Any], target: PLCVariable, oneshot: bool = False):
+@requires_rung_context
+def math_decimal(expression_func: Callable[[], Any], target: PLCVariable, oneshot: bool = False, *, plc=None, current_rung=None):
     """Create a math instruction"""
-    plc = get_current_plc()
-    if not plc:
-        raise RuntimeError("No active PLC context")
-    
-    current_rung = plc.program.get_current_rung()
-    if not current_rung:
-        raise RuntimeError("math_decimal() called outside of a Rung context")
     
     # Create and add the instruction
     instruction = MathInstruction(expression_func, target, oneshot)
     current_rung.add_instruction(instruction)
-    
-    # Register this variable as a math destination
-    current_rung.add_copied_output(target)
     
     return target
 

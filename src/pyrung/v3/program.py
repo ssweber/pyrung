@@ -80,14 +80,6 @@ class Rung:
     def add_coil_output(self, variable: PLCVariable):
         """Register a variable as a coil output (affected by out())"""
         self.coil_outputs.add(variable)
-
-    def add_latched_output(self, variable: PLCVariable):
-        """Register a variable as a latched output (affected by set())"""
-        self.latched_outputs.add(variable)
-
-    def add_copied_output(self, variable: PLCVariable):
-        """Register a variable as a copy destination"""
-        self.copied_outputs.add(variable)
         
     def add_child_rung(self, rung: 'Rung'):
         """Add a child rung to this rung"""
