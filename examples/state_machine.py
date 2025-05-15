@@ -123,10 +123,6 @@ def AlarmHistory():
     with Rung():
         ton(t.almhis__tmr, setpoint=0, unit=Tms, elapsed_time=td.almhis__t_Tms)
 
-    with Rung(ds.almhis__idx > 10):
-        copy(0, ds.C_AckAlarms)
-        return
-
     # Example Alm1_Id (then 2, 3, etc)
     with Rung():
         math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
@@ -164,7 +160,9 @@ def AlarmHistory():
 
     with Rung():
         math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
-        next_loop()  # Next instruction indicates the end of a For Next loop
+        
+    with Rung(ds.almhis__idx > 10):
+        copy(0, ds.C_AckAlarms)
 
     with Rung():
         return
