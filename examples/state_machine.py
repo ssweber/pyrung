@@ -13,6 +13,9 @@ out, set, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fi
 
 
 def main():
+    with Rung():
+        call(PLCDateTime)
+    
     # Cumulative Timers
     with Rung():
         ton(t.A_ModeTimeCurrent_tmr, setpoint=0, unit=Th, elapsed_time=td.A_ModeTimeCurrent_Th)
@@ -59,6 +62,7 @@ def main():
 
     with Rung(ds.S_StateRequested != 0):
         copy(0, ds.sm__loopindex, oneshot=True)
+        out(c.S_StateChgInProcess)
         call(sm_CopyOrJumpReqState)
 
     with Rung():
@@ -66,6 +70,16 @@ def main():
 
     with Rung(c.S_UnitModeRequested):
         copy(0, ds.C_UnitModeChgRequest_ds)
+        
+    # Recipe Change
+    with Rung(re(c.C_RecipeChgRequest),any([c.S_Idle, c.S_Stopped, c.S_Aborted]),
+        ds.C_UnitMode >= 1,
+        ds.C_UnitMode <= 3,
+    ),ds.C_SelectedRecipe >= 1, ds.C_SelectedRecipe <= 10:
+        out(c.S_RecipeChgInProcess)
+        
+    with Rung(c.S_RecipeChgInProcess):
+        call(RecipeChange)
 
     # AckAlarms (temporary)
 
@@ -76,18 +90,57 @@ def main():
     with Rung():
         end()
 
+def PLCDateTime():
+    with Rung(sc._1st_SCAN):
+        math(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_FirstScap_YYMMDD ) # dd[19]
+    with Rung(sc._1st_SCAN):
+        math(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_FirstScap_hhmmss) # dd[20]
+    with Rung():
+        math(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_PLCDT_YYMMDD) # dd[17]
+    with Rung():
+        math(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_PLCDT_hhmmss) # dd[18]
+    with Rung():
+        copy(ds[19], dd.A_PLCDT_Year) # dd[11]
+        copy(ds[21], dd.A_PLCDT_Month) # dd[12]
+        copy(ds[22], dd.A_PLCDT_Day) # dd[13]
+        copy(ds[24], dd.A_PLCDT_Hour) # dd[14]
+        copy(ds[25], dd.A_PLCDT_Minute) # dd[15]
+        copy(ds[26], dd.A_PLCDT_Second) # dd[16]
+        
+def RecipeChange():
+    
+    if ds.S_RecipeRequested == 1:
+        copy_block(ds[2501:2550], ds[51:100])
+    if ds.S_RecipeRequested == 2:
+        copy_block(ds[2551:2600], ds[51:100])
+    if ds.S_RecipeRequested == 3:
+        copy_block(ds[2601:2650], ds[51:100])
+    if ds.S_RecipeRequested == 4:
+        copy_block(ds[2651:2700], ds[51:100])
+    if ds.S_RecipeRequested == 5:
+        copy_block(ds[2701:2750], ds[51:100])
+    if ds.S_RecipeRequested == 6:
+        copy_block(ds[2751:2800], ds[51:100])
+    if ds.S_RecipeRequested == 7:
+        copy_block(ds[2801:2850], ds[51:100])
+    if ds.S_RecipeRequested == 8:
+        copy_block(ds[2851:2900], ds[51:100])
+    if ds.S_RecipeRequested == 9:
+        copy_block(ds[2901:2950], ds[51:100])
+    if ds.S_RecipeRequested == 10:
+        copy_block(ds[2951:3000], ds[51:100])
 
 def sm_ExampleAlarmRecording():
     pass
-    # A_StopReason_ID    DD  DD11
-    # A_StopReason_SubID DD  DD12
-    # A_StopReason_StepID DD  DD13
-    # A_StopReason_Value DD  DD14
-    # A_StopReason_Categor DD DD15
-    # A_StopReason_Date  DD  DD16
-    # A_StopReason_Time  DD  DD17
-    # A_StopReason_AckDate DD DD18
-    # A_StopReason_AckTime DD DD19
+    # A_StopReason_ID    DD  DD21
+    # A_StopReason_SubID DD  DD22
+    # A_StopReason_StepID DD  DD23
+    # A_StopReason_Value DD  DD24
+    # A_StopReason_Categor DD DD25
+    # A_StopReason_Date  DD  DD26
+    # A_StopReason_Time  DD  DD27
+    # A_StopReason_AckDate DD DD28
+    # A_StopReason_AckTime DD DD29
     # DD101-DD200        A_Alm[#]_  ID,SubID,StepID,Value,Cat,Date,Time,AckDate,AckTime,None  Alarm group tags, 10 tags per group
 
     # Example of how to record an alarm
