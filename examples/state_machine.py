@@ -169,7 +169,7 @@ def sm_ExampleAlarmRecording():
     #     copy(df.now_HHMMSS, dd.Alarm1_Time)
 
 
-def AlarmHistory():
+def Copy2AlmHis():
     # DD501-DD1000 for AlmHist[#] records (10 values per alarm, 50 alarms in history)
     # DD101-DD200 for current Alm[#] records (10 values per alarm, 10 active alarms)
 
