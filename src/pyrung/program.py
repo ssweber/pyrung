@@ -8,6 +8,68 @@ from memory_model import PLCVariable, PLCExecutionContext
 from datatypes import BitType
 
 
+class Branch:
+    """A parallel logic path within a Rung"""
+
+    def __init__(self, *conditions: Union[Condition, bool, "PLCVariable"]):
+        """Initialize a branch with its conditions"""
+        processed_conditions = []
+        for c_in in conditions:
+            if c_in is True:
+                continue
+            if isinstance(c_in, PLCVariable):
+                if not isinstance(c_in.address_type.data_type_def, BitType):
+                    raise TypeError(
+                        f"Implicit normally open condition for a PLCVariable requires a BIT type, "
+                        f"got {c_in.address_type.data_type_def.__class__.__name__} for {c_in}. "
+                        f"For non-BIT types, use comparison operators (e.g., my_int_var == 10)."
+                    )
+                processed_conditions.append(BitCondition(c_in))
+            else:
+                processed_conditions.append(c_in)
+
+        self.conditions = processed_conditions
+        self.instructions = []
+        self.is_active = False  # Whether conditions evaluated to true
+        self.chain_active = False  # Whether this branch and parent rung are active
+        self.coil_outputs = set()  # Variables affected by out()
+        self.parent_rung = None  # Reference to parent Rung
+
+    def evaluate_conditions(self, context: PLCExecutionContext) -> bool:
+        """Evaluate all conditions for this branch"""
+        if not self.conditions:
+            return True
+
+        for cond in self.conditions:
+            if cond is False:
+                return False
+            if not cond.evaluate(context):
+                return False
+        return True
+
+    def execute_instructions(self, context: PLCExecutionContext):
+        """Execute all instructions in this branch"""
+        for instruction in self.instructions:
+            instruction.execute(context)
+
+    def handle_outputs_on_branch_false(self, context: PLCExecutionContext):
+        """Handle outputs when branch becomes false"""
+        for var in self.coil_outputs:
+            var.address_type.handle_rung_continuity_lost(var, context)
+
+        for instruction in self.instructions:
+            if hasattr(instruction, "reset_oneshot_trigger"):
+                instruction.reset_oneshot_trigger()
+
+    def add_instruction(self, instruction: Instruction):
+        """Add an instruction to this branch"""
+        self.instructions.append(instruction)
+
+    def add_coil_output(self, variable: PLCVariable):
+        """Register a variable as a coil output"""
+        self.coil_outputs.add(variable)
+
+
 class Rung:
     def __init__(self, *conditions: Union[Condition, bool, "PLCVariable"]):
         """Initialize a rung with its conditions"""
@@ -32,13 +94,12 @@ class Rung:
                 # This appends already formed Condition objects or literal False
                 processed_conditions_for_init.append(c_in)
 
-        self.conditions: List[Union[Condition, bool]] = processed_conditions_for_init
+        self.conditions = processed_conditions_for_init
         self.is_active = False  # Is this rung's condition true?
-        self.chain_active = False  # Is this rung and all its parents active?
-        self.instructions: List[Instruction] = []  # Instructions to execute
-        self.coil_outputs: Set[PLCVariable] = set()  # Variables affected by out()
-        self.parent_rung = None  # Parent rung if nested
-        self.child_rungs: List[Rung] = []  # Child rungs (nested rungs)
+        self.chain_active = False  # Is this rung active?
+        self.instructions = []  # Instructions to execute
+        self.coil_outputs = set()  # Variables affected by out()
+        self.branches = []  # Parallel branches within this rung (instead of child_rungs)
 
     def evaluate_conditions(self, context: PLCExecutionContext) -> bool:
         """Evaluate all conditions for this rung"""
@@ -74,9 +135,18 @@ class Rung:
                 instruction.reset_oneshot_trigger()
         # Latched outputs (set instruction) are not reset
 
+        # Additionally handle branches
+        for branch in self.branches:
+            branch.handle_outputs_on_branch_false(context)
+
     def add_instruction(self, instruction: Instruction):
         """Add an instruction to this rung"""
         self.instructions.append(instruction)
+
+    def add_branch(self, branch: Branch):
+        """Add a branch to this rung"""
+        self.branches.append(branch)
+        branch.parent_rung = self
 
     def add_coil_output(self, variable: PLCVariable):
         """Register a variable as a coil output (affected by out())"""
@@ -100,6 +170,13 @@ class ProgramBlock:
         self.rungs.append(rung)
 
 
+class Subroutine(ProgramBlock):
+    """A subroutine block of PLC logic"""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+
+
 class PLCProgram:
     """A complete PLC program"""
 
@@ -107,19 +184,48 @@ class PLCProgram:
         self.main_program = ProgramBlock("main")
         self.subroutines: Dict[str, ProgramBlock] = {}
         self._current_rung_context_stack: List[Rung] = []
+        self._current_branch_context_stack: List[Branch] = []
+        self._current_subroutine_context_stack: List[ProgramBlock] = []
 
+    # Get current contexts
     def get_current_rung(self) -> Optional[Rung]:
-        """Get the current rung being defined"""
         if not self._current_rung_context_stack:
             return None
         return self._current_rung_context_stack[-1]
 
+    def get_current_branch(self) -> Optional[Branch]:
+        if not self._current_branch_context_stack:
+            return None
+        return self._current_branch_context_stack[-1]
+
+    def get_current_subroutine(self) -> Optional[ProgramBlock]:
+        if not self._current_subroutine_context_stack:
+            return None
+        return self._current_subroutine_context_stack[-1]
+
+    # Context stack management for rung
     def push_rung_context(self, rung: Rung):
-        """Push a rung context to the stack (for program definition)"""
         self._current_rung_context_stack.append(rung)
 
     def pop_rung_context(self):
-        """Pop a rung context from the stack"""
         if self._current_rung_context_stack:
             return self._current_rung_context_stack.pop()
+        return None
+
+    # Context stack management for branch
+    def push_branch_context(self, branch: Branch):
+        self._current_branch_context_stack.append(branch)
+
+    def pop_branch_context(self):
+        if self._current_branch_context_stack:
+            return self._current_branch_context_stack.pop()
+        return None
+
+    # Context stack management for subroutine
+    def push_subroutine_context(self, subroutine: ProgramBlock):
+        self._current_subroutine_context_stack.append(subroutine)
+
+    def pop_subroutine_context(self):
+        if self._current_subroutine_context_stack:
+            return self._current_subroutine_context_stack.pop()
         return None

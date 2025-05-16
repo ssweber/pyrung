@@ -1,5 +1,19 @@
 # Import the main modules
-from pyrung import PLC, Rung, out, nc, copy, reset, math_decimal, re, fe, latch
+from pyrung import (
+    PLC,
+    Rung,
+    branch,
+    subroutine,
+    call,
+    out,
+    nc,
+    copy,
+    reset,
+    math_decimal,
+    re,
+    fe,
+    latch,
+)
 
 
 def setup_plc():
@@ -38,15 +52,22 @@ def test_nested_rungs():
     ds = plc.ds
 
     # Set initial values
-    c.AutoMode.set_value(0)  # Auto mode off initially
+    c.AutoMode.set_value(1)  # Auto mode off initially
+    ds.Step.set_value(0)  # Set step to 0
 
     # Define the program with nested rungs
     def program():
-        with Rung():  # Unconditional rung
+        with Rung(ds.Step == 0):
             latch(y.Light)
-            with Rung(c.AutoMode):  # Nested rung that depends on AutoMode
+            with branch(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
                 copy(1, ds.Step, oneshot=True)
+                call("sub")
+            with branch(ds.Step == 1):
+                reset(y.Light)
+        with subroutine("sub"):
+            with Rung(ds.Step == 1):
+                out(c.AlarmActive)
 
     # Define the program structure (without execution)
     program()
@@ -60,9 +81,8 @@ def test_nested_rungs():
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
     print(f"Step = {ds.Step.get_value()}")
+    print(f"AlarmActive = {c.AlarmActive.get_value()}")
 
-    # Turn on AutoMode and run scan
-    c.AutoMode.set_value(1)
     plc.scan()
 
     # Print state - Now both should be ON
@@ -71,6 +91,7 @@ def test_nested_rungs():
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
     print(f"Step = {ds.Step.get_value()}")
+    print(f"AlarmActive = {c.AlarmActive.get_value()}")
 
     # Turn off AutoMode and run scan again
     c.AutoMode.set_value(0)
@@ -82,6 +103,7 @@ def test_nested_rungs():
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
     print(f"Step = {ds.Step.get_value()}")
+    print(f"AlarmActive = {c.AlarmActive.get_value()}")
 
 
 if __name__ == "__main__":

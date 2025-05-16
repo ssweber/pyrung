@@ -1,9 +1,26 @@
 from plc import PLC
-from dsl import Rung, out, latch, reset, copy, math_decimal, nc, re, fe, TimeUnit
+from dsl import (
+    Rung,
+    branch,
+    subroutine,
+    call,
+    out,
+    latch,
+    reset,
+    copy,
+    math_decimal,
+    nc,
+    re,
+    fe,
+    TimeUnit,
+)
 
-__all__ = [
+__all__ = (
     "PLC",
     "Rung",
+    "branch",
+    "subroutine",
+    "call",
     "out",
     "latch",
     "reset",
@@ -13,7 +30,7 @@ __all__ = [
     "re",
     "fe",
     "TimeUnit",
-]
+)
 
 
 def main():

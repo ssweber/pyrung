@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from memory_model import PLCVariable, PLCExecutionContext
 
+from registry import get_current_plc
+
 
 class Instruction(ABC):
     """Base class for all PLC instructions"""
@@ -140,3 +142,27 @@ class MathInstruction(OneShotCapableInstruction):
     def __str__(self):
         oneshot_str = ", oneshot=True" if self.oneshot else ""
         return f"MATH(<expression>, {self.target}{oneshot_str})"
+
+
+class CallInstruction(Instruction):
+    """Call a subroutine"""
+
+    def __init__(self, subroutine_name: str):
+        self.subroutine_name = subroutine_name
+
+    def execute(self, context: "PLCExecutionContext"):
+        """Execute the call by running the subroutine"""
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError("No active PLC context")
+
+        # Get the subroutine
+        subroutine = plc.program.subroutines.get(self.subroutine_name)
+        if not subroutine:
+            raise ValueError(f"Subroutine '{self.subroutine_name}' not found")
+
+        # Execute the subroutine
+        plc._execute_program_block(subroutine, context)
+
+    def __str__(self):
+        return f"CALL({self.subroutine_name})"

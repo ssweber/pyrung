@@ -1,5 +1,8 @@
 from typing import Dict, Optional, List, Any, Callable, Union, Set, Tuple
 
+from registry import register_current_plc
+
+
 # Import our classes
 from memory_model import (
     PLCMemory,
@@ -64,8 +67,8 @@ class PLC:
         # Initialize program
         self.program = PLCProgram()
 
-        # Make this instance the current context
-        _set_current_plc(self)
+        # Register this instance as the current PLC
+        register_current_plc(self)
 
     def scan(self):
         """Execute one scan cycle of the PLC program"""
@@ -78,13 +81,39 @@ class PLC:
         self.memory.end_scan_cycle()
 
     def _execute_program_block(self, program_block: ProgramBlock, context: PLCExecutionContext):
-        """Execute a program block (main or subroutine)"""
-        # Create a new execution stack separate from the definition stack
-        execution_stack = []
-
-        # Execute each rung
+        """Execute a program block (main or subroutine) with two-phase execution model"""
+        # PHASE 1: Evaluate all rung and branch conditions first
         for rung in program_block.rungs:
-            self._execute_rung(rung, context, execution_stack)
+            # Evaluate main rung conditions
+            rung.is_active = rung.evaluate_conditions(context)
+
+            # Evaluate branch conditions (if any)
+            for branch in rung.branches:
+                branch.is_active = branch.evaluate_conditions(context)
+                # Note: We just store evaluation results, no execution yet
+
+        # PHASE 2: Execute instructions for active rungs and branches
+        for rung in program_block.rungs:
+            # Only proceed if rung is active
+            if rung.is_active:
+                rung.chain_active = (
+                    True  # This rung is at program level, so it's always in an active chain
+                )
+                rung.execute_instructions(context)
+
+                # Execute instructions for active branches within this rung
+                for branch in rung.branches:
+                    branch.chain_active = (
+                        branch.is_active
+                    )  # Branch is active if its own conditions are true
+                    if branch.chain_active:
+                        branch.execute_instructions(context)
+                    else:
+                        branch.handle_outputs_on_branch_false(context)
+            else:
+                # Rung is not active
+                rung.chain_active = False
+                rung.handle_outputs_on_rung_false(context)
 
     def _execute_rung(
         self,
@@ -115,18 +144,3 @@ class PLC:
 
         # Pop this rung from the execution stack
         execution_stack.pop()
-
-
-# Global current PLC instance
-_current_plc: Optional[PLC] = None
-
-
-def _set_current_plc(plc: PLC):
-    """Set the current PLC instance"""
-    global _current_plc
-    _current_plc = plc
-
-
-def get_current_plc() -> Optional[PLC]:
-    """Get the current PLC instance"""
-    return _current_plc
