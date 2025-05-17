@@ -11,6 +11,7 @@ from memory_model import (
     XBank,
     YBank,
     CBank,
+    SCBank,
     DSBank,
     DDBank,
     DFBank,
@@ -46,6 +47,7 @@ class PLC:
         self.x = XBank(self.memory)
         self.y = YBank(self.memory)
         self.c = CBank(self.memory)
+        self.sc = SCBank(self.memory)
         self.ds = DSBank(self.memory)
         self.dd = DDBank(self.memory)
         self.df = DFBank(self.memory)
@@ -57,6 +59,7 @@ class PLC:
             "X": self.x,
             "Y": self.y,
             "C": self.c,
+            "SC": self.sc,
             "DS": self.ds,
             "DD": self.dd,
             "DF": self.df,
@@ -92,15 +95,13 @@ class PLC:
                 branch.is_active = branch.evaluate_conditions(context)
                 # Note: We just store evaluation results, no execution yet
 
-        # PHASE 2: Execute instructions for active rungs and branches
-        for rung in program_block.rungs:
             # Only proceed if rung is active
             if rung.is_active:
                 rung.chain_active = (
                     True  # This rung is at program level, so it's always in an active chain
                 )
                 rung.execute_instructions(context)
-
+                # TODO WIP
                 # Execute instructions for active branches within this rung
                 for branch in rung.branches:
                     branch.chain_active = (

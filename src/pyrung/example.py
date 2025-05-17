@@ -52,19 +52,19 @@ def test_nested_rungs():
     ds = plc.ds
 
     # Set initial values
-    c.AutoMode.set_value(1)  # Auto mode off initially
+    c.AutoMode.set_value(1)  # Auto mode on initially
     ds.Step.set_value(0)  # Set step to 0
 
     # Define the program with nested rungs
     def program():
         with Rung(ds.Step == 0):
-            latch(y.Light)
+            out(y.Light)
             with branch(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
                 copy(1, ds.Step, oneshot=True)
                 call("sub")
-            with branch(ds.Step == 1):
-                reset(y.Light)
+        with Rung(ds.Step == 1):
+            reset(y.Light)
         with subroutine("sub"):
             with Rung(ds.Step == 1):
                 out(c.AlarmActive)
@@ -75,7 +75,6 @@ def test_nested_rungs():
     # Initial scan - now all execution happens here
     plc.scan()
 
-    # Print state - Light should be ON, NestedLight should be OFF
     print("Initial run:")
     print(f"Light = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
@@ -85,21 +84,16 @@ def test_nested_rungs():
 
     plc.scan()
 
-    # Print state - Now both should be ON
-    print("\nAfter setting AutoMode and scanning:")
-    print(f"Light = {y.Light.get_value()}")
+    print(f"\nLight = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
     print(f"Step = {ds.Step.get_value()}")
     print(f"AlarmActive = {c.AlarmActive.get_value()}")
 
-    # Turn off AutoMode and run scan again
     c.AutoMode.set_value(0)
     plc.scan()
 
-    # Print state - NestedLight should now be OFF
-    print("\nAfter turning off AutoMode and scanning:")
-    print(f"Light = {y.Light.get_value()}")
+    print(f"\nLight = {y.Light.get_value()}")
     print(f"NestedLight = {y.NestedLight.get_value()}")
     print(f"AutoMode = {c.AutoMode.get_value()}")
     print(f"Step = {ds.Step.get_value()}")

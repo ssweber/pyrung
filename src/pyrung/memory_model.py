@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Union, Optional, Set, Callable, List, Tuple
 import operator  # For comparison operators
 
-# Import datatypes
 from datatypes import BitType, IntType, Int2Type, FloatType, HexType, TxtType, DataTypeDefinition
+from system_nicknames import SYSTEM_CONTROL_NICKNAMES, SYSTEM_DATA_NICKNAMES
+
 
 # Canonical address representation
 Address = str
@@ -280,10 +281,15 @@ class YBank(AddressType):
 
     def __init__(self, plc_memory: PLCMemory):
         super().__init__("Y", BitType(), 1, 816, plc_memory, is_retentive=False)
+        self._latched_addresses: Set[Address] = set()  # Track which Y bits were set with latch()
+
+    def mark_as_latched(self, address: Address):
+        """Mark an address as having been set with a set() instruction"""
+        self._latched_addresses.add(address)
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
-        # Standard behavior for non-retentive outputs: turn OFF if rung is false
-        if not self.is_retentive:
+        # If the bit was set with latch() instruction, don't reset it when rung goes false
+        if not self.is_retentive and variable.address not in self._latched_addresses:
             variable.set_value(self.data_type_def.default_value())  # Sets to 0 for BitType
 
 
@@ -304,6 +310,58 @@ class CBank(AddressType):
         # If the bit was set with set() instruction, don't reset it when rung goes false
         if not self.is_retentive and variable.address not in self._latched_addresses:
             variable.set_value(self.data_type_def.default_value())
+
+
+class SCBank(AddressType):
+    """System Control Relay Bits (SC addresses)"""
+
+    # List of writeable SC bits based on the provided image
+    WRITEABLE_SC_BITS = {50, 51, 53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121}
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__("SC", BitType(), 1, 1000, plc_memory, is_retentive=False)
+        self._latched_addresses: Set[Address] = set()  # Track which SC bits were set with latch()
+
+        # Set default nicknames for writeable bits based on the image
+        self._default_nicknames = SYSTEM_CONTROL_NICKNAMES
+
+        # Set the default nicknames
+        for bit_num, nickname in self._default_nicknames.items():
+            self[bit_num] = nickname
+
+    def mark_as_latched(self, address: Address):
+        """Mark an address as having been set with a set() instruction"""
+        self._latched_addresses.add(address)
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        # If the bit was set with latch() instruction, don't reset it when rung goes false
+        if not self.is_retentive and variable.address not in self._latched_addresses:
+            variable.set_value(self.data_type_def.default_value())  # Sets to 0 for BitType
+
+    def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
+        """
+        Override the default __setitem__ to add write protection for SC bits.
+        If value is str, assign as nickname: sc[50] = "PLC_Mode_Change_to_STOP"
+        If value is data, set the variable's value: sc[50] = True
+        """
+        address_str = self._parse_key(key)
+
+        if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
+            # Assigning a nickname - proceed as normal
+            super().__setitem__(key, nickname_or_value)
+        else:
+            # Setting a value directly - check if this SC bit is writeable
+
+            # Extract the bit number from the address string (e.g., "SC50" -> 50)
+            if address_str.startswith(self.name):
+                bit_num = int(address_str[len(self.name) :])
+                if bit_num not in self.WRITEABLE_SC_BITS:
+                    raise ValueError(f"SC bit {bit_num} is read-only and cannot be written to")
+
+            # If we get here, either the bit is writeable or it wasn't an SC bit format
+            # Proceed with the normal value setting
+            var = self[key]  # Get or create PLCVariable
+            var.set_value(nickname_or_value)
 
 
 class DSBank(AddressType):
