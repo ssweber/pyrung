@@ -108,14 +108,15 @@ Note:
 ## Data Type Compatibility for Copy Instructions
 
 ### Compatible Data Types
-| Data Type | Compatible With | Packing/Unpacking |
-|-----------|-----------------|-------------------|
+| Data Type | Compatible With | Packing/Unpacking | Block, Fill |
+|-----------|-----------------|-------------------|-------------|
 | **int** (DS, TD, CTD, SD) | int, int2, float, hex | DS can pack into DD/DF and unpack into C |
 | **int2** (DD) | int2, int, float, hex | DD can unpack into C/DS/DH |
-| **float** (DF) | float, int, int2, hex | DF can unpack into C/DS |
-| **hex** (XD, YD, DH) | hex, int, int2, float | DH can unpack into C/Y |
+| **float** (DF) | float, int, int2, hex | DF can unpack into C/DS/DH |
+| **hex** (XD, YD, DH) | hex, int, int2, float | DH can pack into DD, unpack into C/Y |
 | **bit** (X, Y, C, T, CT, SC) | All bit types | X/Y/T/CT/SC can pack into DH, C can pack into DS/DD/DF/DH |
-| **txt** (TXT) | txt | Can pack into DS/DD/DF/DH/TD/CTD |
+| **txt** (TXT) | txt | Can pack into DS/DD/DF/DH/TD/CTD/SD | Block-copy into DS/DD/DH/TXT
+You cannot block-copy XD, YD, TD, CTD
 
 ## Search Instruction
 ```python

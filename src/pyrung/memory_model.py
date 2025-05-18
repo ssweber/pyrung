@@ -954,7 +954,7 @@ class DFBank(AddressType):
 
     def can_unpack_to(self, target_bank: "AddressType") -> bool:
         """DF can unpack into C and DS banks"""
-        return isinstance(target_bank, (CBank, DSBank))
+        return isinstance(target_bank, (CBank, DSBank, DHBank))
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DF is retentive by default
@@ -977,6 +977,10 @@ class DHBank(AddressType):
             default_retentive=True,  # DH is retentive by default
             allows_retentive_config=True,  # Allow per-address configuration
         )
+        
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """DS integers can pack into DD and DF banks"""
+        return isinstance(target_bank, DDBank)
 
     def can_unpack_to(self, target_bank: "AddressType") -> bool:
         """DH can unpack into C and Y banks"""
@@ -1103,7 +1107,7 @@ class TXTBank(AddressType):
 
     def can_pack_to(self, target_bank: "AddressType") -> bool:
         """TXT can pack into DS, DD, DF, DH, TD, and CTD banks"""
-        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank, TDBank, CTDBank))
+        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank, TDBank, CTDBank, SDBank))
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # TXT is retentive, so do nothing when rung goes false
