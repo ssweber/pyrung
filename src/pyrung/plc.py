@@ -52,6 +52,7 @@ class PLC:
         self.dd = DDBank(self.memory)
         self.df = DFBank(self.memory)
         self.dh = DHBank(self.memory)
+        self.sd = SDBank(self.memory)
         self.txt = TXTBank(self.memory)
 
         # Add to dictionary for easier access
@@ -64,6 +65,7 @@ class PLC:
             "DD": self.dd,
             "DF": self.df,
             "DH": self.dh,
+            "SD": self.sd,
             "TXT": self.txt,
         }
 

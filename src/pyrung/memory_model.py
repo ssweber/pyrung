@@ -315,7 +315,6 @@ class CBank(AddressType):
 class SCBank(AddressType):
     """System Control Relay Bits (SC addresses)"""
 
-    # List of writeable SC bits based on the provided image
     WRITEABLE_SC_BITS = {50, 51, 53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121}
 
     def __init__(self, plc_memory: PLCMemory):
@@ -406,6 +405,52 @@ class DHBank(AddressType):
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DH is retentive, so do nothing when rung goes false
         pass
+    
+
+class SDBank(AddressType):
+    """System Data Integers (SD addresses)"""
+    
+    WRITEABLE_SD_ADDRESSES = {29, 31, 32, 34, 35, 36, 40, 41, 42, 50, 51, 60, 61, 
+                             106, 107, 108, 112, 113, 114, 140, 141, 142, 143, 144, 145, 
+                             146, 147, 214, 215}
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__("SD", IntType(), 1, 1000, plc_memory, is_retentive=False)
+        
+        # Set default nicknames
+        self._default_nicknames = SYSTEM_DATA_NICKNAMES
+        
+        # Apply the default nicknames
+        for address, nickname in self._default_nicknames.items():
+            self[address] = nickname
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        pass
+        
+    def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
+        """
+        Override the default __setitem__ to add write protection for SD addresses.
+        If value is str, assign as nickname: sd[50] = "Some_Nickname"
+        If value is data, set the variable's value: sd[50] = 1234
+        """
+        address_str = self._parse_key(key)
+
+        if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
+            # Assigning a nickname - proceed as normal
+            super().__setitem__(key, nickname_or_value)
+        else:
+            # Setting a value directly - check if this SD address is writeable
+            
+            # Extract the address number from the address string (e.g., "SD50" -> 50)
+            if address_str.startswith(self.name):
+                addr_num = int(address_str[len(self.name):])
+                if addr_num not in self.WRITEABLE_SD_ADDRESSES:
+                    raise ValueError(f"SD address {addr_num} is read-only and cannot be written to")
+
+            # If we get here, either the address is writeable or it wasn't an SD address format
+            # Proceed with the normal value setting
+            var = self[key]  # Get or create PLCVariable
+            var.set_value(nickname_or_value)
 
 
 class TXTBank(AddressType):
