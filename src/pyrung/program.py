@@ -135,9 +135,7 @@ class Rung:
                 instruction.reset_oneshot_trigger()
         # Latched outputs (set instruction) are not reset
 
-        # Additionally handle branches
-        for branch in self.branches:
-            branch.handle_outputs_on_branch_false(context)
+        # branches are handled explicitly by `PLC._execute_program_block`
 
     def add_instruction(self, instruction: Instruction):
         """Add an instruction to this rung"""
@@ -151,11 +149,6 @@ class Rung:
     def add_coil_output(self, variable: PLCVariable):
         """Register a variable as a coil output (affected by out())"""
         self.coil_outputs.add(variable)
-
-    def add_child_rung(self, rung: "Rung"):
-        """Add a child rung to this rung"""
-        self.child_rungs.append(rung)
-        rung.parent_rung = self
 
 
 class ProgramBlock:

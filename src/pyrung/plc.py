@@ -83,65 +83,49 @@ class PLC:
         # Update previous values for edge detection
         self.memory.end_scan_cycle()
 
-    def _execute_program_block(self, program_block: ProgramBlock, context: PLCExecutionContext):
-        """Execute a program block (main or subroutine) with two-phase execution model"""
-        # PHASE 1: Evaluate all rung and branch conditions first
-        for rung in program_block.rungs:
-            # Evaluate main rung conditions
-            rung.is_active = rung.evaluate_conditions(context)
 
-            # Evaluate branch conditions (if any)
-            for branch in rung.branches:
-                branch.is_active = branch.evaluate_conditions(context)
-                # Note: We just store evaluation results, no execution yet
+def _execute_program_block(self, program_block: ProgramBlock, context: PLCExecutionContext):
+    """Execute a program block (main or subroutine) rung by rung.
 
-            # Only proceed if rung is active
-            if rung.is_active:
-                rung.chain_active = (
-                    True  # This rung is at program level, so it's always in an active chain
-                )
-                rung.execute_instructions(context)
-                # TODO WIP
-                # Execute instructions for active branches within this rung
-                for branch in rung.branches:
-                    branch.chain_active = (
-                        branch.is_active
-                    )  # Branch is active if its own conditions are true
-                    if branch.chain_active:
-                        branch.execute_instructions(context)
-                    else:
-                        branch.handle_outputs_on_branch_false(context)
-            else:
-                # Rung is not active
-                rung.chain_active = False
-                rung.handle_outputs_on_rung_false(context)
+    Each rung execution follows a typical PLC two-phase model:
+    1.  All conditions within the rung (including branches) are evaluated *before* any instructions.
+    2.  Instructions are executed and outputs handled *after* evaluation, based on the condition results.
+    """
 
-    def _execute_rung(
-        self,
-        rung: Rung,
-        context: PLCExecutionContext,
-        execution_stack: List[Tuple[Rung, bool]],
-        parent_chain_active: bool = True,
-    ):
-        """Execute a single rung and its child rungs"""
-        # Evaluate rung conditions
+    # Process each rung sequentially
+    for rung in program_block.rungs:
+        # PHASE 1: Evaluate this Rung and it's branches conditions.
         rung.is_active = rung.evaluate_conditions(context)
 
-        # Determine if the whole chain is active
-        rung.chain_active = parent_chain_active and rung.is_active
+        if rung.is_active:
+            rung.chain_active = True
 
-        # Push this rung to the execution stack
-        execution_stack.append((rung, rung.chain_active))
+            # Evaluate branch conditions (if any) - only done if rung is active
+            for branch in rung.branches:
+                branch.is_active = branch.evaluate_conditions(context)
+                branch.chain_active = (
+                    branch.is_active
+                )  # Branch is active if its own conditions are true
 
-        # Execute instructions if rung is active
-        if rung.chain_active:
+            # PHASE 2: Execute instructions or handle inactive state
+            # Execute rung instructions
             rung.execute_instructions(context)
 
-            # Execute all child rungs if this rung is active
-            for child_rung in rung.child_rungs:
-                self._execute_rung(child_rung, context, execution_stack, rung.chain_active)
+            # Execute active branch instructions
+            for branch in rung.branches:
+                if branch.chain_active:
+                    branch.execute_instructions(context)
+                else:
+                    branch.handle_outputs_on_branch_false(context)
         else:
+            # Rung is not active
+            rung.chain_active = False
+
+            # Handle outputs for the inactive rung
             rung.handle_outputs_on_rung_false(context)
 
-        # Pop this rung from the execution stack
-        execution_stack.pop()
+            # Deactivate all branches when rung is inactive
+            for branch in rung.branches:
+                branch.is_active = False
+                branch.chain_active = False
+                branch.handle_outputs_on_branch_false(context)

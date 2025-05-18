@@ -116,7 +116,7 @@ class PLCVariable:
         """Make PLCVariable instances hashable based on their address."""
         return hash(self.address)
 
-    # Boolean conversion for use in Python if statements
+    # Boolean conversion for use in Rung/Branch statements
     def __bool__(self) -> bool:
         self._check_op_allowed("bool")
         return bool(self.get_value())

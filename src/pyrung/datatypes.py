@@ -53,7 +53,7 @@ class BitType(DataTypeDefinition):
         return 0
 
     def get_allowed_operations(self) -> Set[str]:
-        return {"==", "!=", "bool"}  # Can be compared and used in boolean context
+        return {"bool"}  # Can be used in boolean context
 
 
 class IntType(DataTypeDefinition):
@@ -186,7 +186,7 @@ class TxtType(DataTypeDefinition):
         return str(value)
 
     def default_value(self) -> str:
-        return " "  # Space character as default
+        return ""  # empty as default
 
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!="}  # Typically only equality for single chars in PLC context
