@@ -8,6 +8,10 @@ from pyrung import (
     out,
     nc,
     copy,
+    copy_block,
+    copy_fill,
+    copy_pack,
+    copy_unpack,
     reset,
     math_decimal,
     re,
@@ -52,7 +56,7 @@ def test_nested_rungs():
     ds = plc.ds
 
     # Set initial values
-    c.AutoMode.set_value(1)  # Auto mode on initially
+    c.AutoMode.set_value(0)  # Auto mode on initially
     ds.Step.set_value(0)  # Set step to 0
 
     # Define the program with nested rungs
@@ -61,10 +65,10 @@ def test_nested_rungs():
             out(y.Light)
             with branch(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
-                copy(1, ds.Step, oneshot=True)
+                copy_fill(1, ds.Step, 5, oneshot=True)
                 call("sub")
-        with Rung(ds.Step == 1):
-            reset(y.Light)
+        #         with Rung(ds.Step == 1):
+        #             reset(y.Light)
         with subroutine("sub"):
             with Rung(ds.Step == 1):
                 out(c.AlarmActive)
@@ -90,7 +94,7 @@ def test_nested_rungs():
     print(f"Step = {ds.Step.get_value()}")
     print(f"AlarmActive = {c.AlarmActive.get_value()}")
 
-    c.AutoMode.set_value(0)
+    c.AutoMode.set_value(1)
     plc.scan()
 
     print(f"\nLight = {y.Light.get_value()}")

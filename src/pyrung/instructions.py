@@ -1,12 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Union, List, Optional
 
-# Forward references
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from memory_model import PLCVariable, PLCExecutionContext
-
+from datatypes import BitType, TxtType
+from memory_model import PLCVariable, PLCExecutionContext
 from registry import get_current_plc
 
 
@@ -100,28 +96,393 @@ class ResetInstruction(Instruction):
 
 
 class CopyInstruction(OneShotCapableInstruction):
-    """Copy Instruction (MOV/CPY)"""
+    """Copy Instruction (MOV/CPY) - Single Value Copy"""
 
     def __init__(
         self, source: Union["PLCVariable", Any], target: "PLCVariable", oneshot: bool = False
     ):
         super().__init__(oneshot=oneshot)
+
+        # Validate target is a PLCVariable
+        if not isinstance(target, PLCVariable):
+            raise TypeError(f"Target must be a PLCVariable, got {type(target)}")
+
+        # Store source & target
         self.source = source
         self.target = target
-        # Type compatibility could be validated here
+
+        # Type validation for direct source-to-target compatibility
+        # If source is a PLCVariable, use new compatibility checking methods
+        if isinstance(source, PLCVariable):
+            source.check_copy_allowed(target)
+        else:
+            # For literal values, attempt validation through target's data type
+            try:
+                target.address_type.data_type_def.validate(source)
+            except (ValueError, TypeError) as e:
+                raise TypeError(
+                    f"Source value {source} cannot be converted to target type "
+                    f"{target.address_type.data_type_def.__class__.__name__}: {e}"
+                )
 
     def _perform_action(self, context: "PLCExecutionContext"):
         """Copy the source value to the target"""
-        if hasattr(self.source, "get_value"):
-            value = self.source.get_value()
-        else:
-            value = self.source
-        self.target.set_value(value)
+        try:
+            if isinstance(self.source, PLCVariable):
+                value = self.source.get_value()
+            else:
+                value = self.source
+
+            self.target.set_value(value)
+        except (ValueError, TypeError) as e:
+            # In case runtime value is incompatible with target type
+            plc = get_current_plc()
+            if plc and hasattr(plc, "SC"):
+                plc.SC[44].set_value(1)  # SC44: Address Error
 
     def __str__(self):
         source_str = str(self.source) if not isinstance(self.source, str) else f"'{self.source}'"
-        oneshot_str = ", oneshot=True" if self.oneshot else ""
+        oneshot_str = ", ONS" if self.oneshot else ""
         return f"CPY({source_str}, {self.target}{oneshot_str})"
+
+
+class CopyBlockInstruction(OneShotCapableInstruction):
+    """Copy Block Instruction (CPYBLK) - Copies a range of addresses to consecutive destinations"""
+
+    def __init__(
+        self,
+        source_start: "PLCVariable",
+        dest_start: "PLCVariable",
+        count: int,
+        oneshot: bool = False,
+    ):
+        super().__init__(oneshot=oneshot)
+
+        # Basic parameter validation
+        if not isinstance(source_start, PLCVariable):
+            raise TypeError(f"Source_start must be a PLCVariable, got {type(source_start)}")
+        if not isinstance(dest_start, PLCVariable):
+            raise TypeError(f"Dest_start must be a PLCVariable, got {type(dest_start)}")
+        if not isinstance(count, int) or count <= 0:
+            raise ValueError(f"Count must be a positive integer, got {count}")
+
+        # Type compatibility validation using new method
+        # Since all elements in a bank have the same compatibility, we only need to check once
+        source_start.check_copy_allowed(dest_start)
+
+        # Store parameters
+        self.source_start = source_start
+        self.dest_start = dest_start
+        self.count = count
+
+    def _perform_action(self, context: "PLCExecutionContext"):
+        """Copy multiple consecutive values from source to destination"""
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError("No active PLC context for CopyBlock execution")
+
+        try:
+            # Extract address components for iteration
+            source_bank = self.source_start.address_type
+            source_prefix = source_bank.name
+            source_base_addr = int(self.source_start.address[len(source_prefix) :])
+
+            dest_bank = self.dest_start.address_type
+            dest_prefix = dest_bank.name
+            dest_base_addr = int(self.dest_start.address[len(dest_prefix) :])
+
+            # Perform the block copy
+            for i in range(self.count):
+                # Get current source and destination variables
+                try:
+                    current_source = source_bank[source_base_addr + i]
+                except (IndexError, KeyError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[43].set_value(1)  # SC43: Out of Range
+                    return
+
+                # Get destination variable safely
+                try:
+                    current_dest = dest_bank[dest_base_addr + i]
+                except (IndexError, KeyError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[43].set_value(1)  # SC43: Out of Range
+                    return
+
+                # Get the value from source
+                value = current_source.get_value()
+
+                # Copy to destination
+                try:
+                    current_dest.set_value(value)
+                except (ValueError, TypeError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[44].set_value(1)  # SC44: Address Error
+                    return
+
+        except Exception as e:
+            # General exception handler to prevent PLC program from crashing
+            if plc and hasattr(plc, "SC"):
+                plc.SC[44].set_value(1)  # SC44: Address Error
+
+    def __str__(self):
+        oneshot_str = ", ONS" if self.oneshot else ""
+        return f"CPYBLK({self.source_start}, {self.dest_start}, K{self.count}{oneshot_str})"
+
+
+class CopyFillInstruction(OneShotCapableInstruction):
+    """Copy Fill Instruction (FILL) - Copies a single value to multiple consecutive addresses"""
+
+    def __init__(
+        self,
+        source: Union["PLCVariable", Any],
+        dest_start: "PLCVariable",
+        count: int,
+        oneshot: bool = False,
+    ):
+        super().__init__(oneshot=oneshot)
+
+        # Basic parameter validation
+        if not isinstance(dest_start, PLCVariable):
+            raise TypeError(f"Dest_start must be a PLCVariable, got {type(dest_start)}")
+        if not isinstance(count, int) or count <= 0:
+            raise ValueError(f"Count must be a positive integer, got {count}")
+
+        # Type compatibility validation
+        if isinstance(source, PLCVariable):
+            # If source is a variable, check compatibility with destination
+            source.check_copy_allowed(dest_start)
+        else:
+            # If source is a literal value, try to validate against destination type
+            try:
+                dest_start.address_type.data_type_def.validate(source)
+            except (ValueError, TypeError) as e:
+                raise TypeError(
+                    f"Source value {source} cannot be converted to destination type "
+                    f"{dest_start.address_type.data_type_def.__class__.__name__}: {e}"
+                )
+
+        # Store parameters
+        self.source = source
+        self.dest_start = dest_start
+        self.count = count
+
+    def _perform_action(self, context: "PLCExecutionContext"):
+        """Fill multiple consecutive addresses with the same value"""
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError("No active PLC context for Fill operation")
+
+        # Get the source value once
+        if isinstance(self.source, PLCVariable):
+            try:
+                fill_value = self.source.get_value()
+            except Exception:
+                if plc and hasattr(plc, "SC"):
+                    plc.SC[44].set_value(1)  # SC44: Address Error
+                return
+        else:
+            fill_value = self.source
+
+        try:
+            # Extract destination address components for iteration
+            dest_bank = self.dest_start.address_type
+            dest_prefix = dest_bank.name
+            dest_base_addr = int(self.dest_start.address[len(dest_prefix) :])
+
+            # Perform the fill operation
+            for i in range(self.count):
+                # Get current destination variable
+                try:
+                    current_dest = dest_bank[dest_base_addr + i]
+                except (IndexError, KeyError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[43].set_value(1)  # SC43: Out of Range
+                    return
+
+                # Set the fill value to destination
+                try:
+                    current_dest.set_value(fill_value)
+                except (ValueError, TypeError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[44].set_value(1)  # SC44: Address Error
+                    return
+
+        except Exception as e:
+            # General exception handler to prevent PLC program from crashing
+            if plc and hasattr(plc, "SC"):
+                plc.SC[44].set_value(1)  # SC44: Address Error
+
+    def __str__(self):
+        source_str = str(self.source) if not isinstance(self.source, str) else f"'{self.source}'"
+        oneshot_str = ", ONS" if self.oneshot else ""
+        return f"FILL({source_str}, {self.dest_start}, K{self.count}{oneshot_str})"
+
+
+class CopyPackInstruction(OneShotCapableInstruction):
+    """Copy Pack Instruction (PACK) - Packs bits into a word data type"""
+
+    def __init__(
+        self,
+        source_bit_start: "PLCVariable",
+        dest_word: "PLCVariable",
+        bit_count: int,
+        oneshot: bool = False,
+    ):
+        super().__init__(oneshot=oneshot)
+
+        # Basic parameter validation
+        if not isinstance(source_bit_start, PLCVariable):
+            raise TypeError(f"Source_bit_start must be a PLCVariable, got {type(source_bit_start)}")
+        if not isinstance(dest_word, PLCVariable):
+            raise TypeError(f"Dest_word must be a PLCVariable, got {type(dest_word)}")
+        if not isinstance(bit_count, int) or bit_count <= 0:
+            raise ValueError(f"Bit_count must be a positive integer, got {bit_count}")
+
+        # Use new compatibility checking method
+        source_bit_start.check_pack_allowed(dest_word, bit_count)
+
+        # Store parameters
+        self.source_bit_start = source_bit_start
+        self.dest_word = dest_word
+        self.bit_count = bit_count
+
+    def _perform_action(self, context: "PLCExecutionContext"):
+        """Pack bits into a word"""
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError("No active PLC context for Pack operation")
+
+        try:
+            # Extract source address components for iteration
+            source_bank = self.source_bit_start.address_type
+            source_prefix = source_bank.name
+            source_base_addr = int(self.source_bit_start.address[len(source_prefix) :])
+
+            # Initialize packed value
+            packed_value = 0
+
+            # Read bits and build the packed value
+            for i in range(self.bit_count):
+                try:
+                    # Get current bit
+                    current_bit = source_bank[source_base_addr + i]
+                except (IndexError, KeyError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[43].set_value(1)  # SC43: Out of Range
+                    return
+
+                # Read bit value
+                bit_value = current_bit.get_value()
+
+                # Add to packed value - LSB first (bit 0 is rightmost)
+                # This is a common convention but could be adjusted if MSB first is needed
+                packed_value |= (bit_value & 1) << i
+
+            # Store result in destination word
+            try:
+                self.dest_word.set_value(packed_value)
+            except (ValueError, TypeError):
+                if plc and hasattr(plc, "SC"):
+                    plc.SC[44].set_value(1)  # SC44: Address Error
+
+        except Exception as e:
+            # General exception handler
+            if plc and hasattr(plc, "SC"):
+                plc.SC[44].set_value(1)  # SC44: Address Error
+
+    def __str__(self):
+        oneshot_str = ", ONS" if self.oneshot else ""
+        # Calculate source end address for display
+        source_prefix = self.source_bit_start.address_type.name
+        source_base = int(self.source_bit_start.address[len(source_prefix) :])
+        source_end = f"{source_prefix}{source_base + self.bit_count - 1}"
+
+        return f"PACK({self.source_bit_start} to {source_end}, {self.dest_word}{oneshot_str})"
+
+
+class CopyUnpackInstruction(OneShotCapableInstruction):
+    """Copy Unpack Instruction (UNPACK) - Unpacks word data type into bits"""
+
+    def __init__(
+        self,
+        source_word: "PLCVariable",
+        dest_bit_start: "PLCVariable",
+        bit_count: int,
+        oneshot: bool = False,
+    ):
+        super().__init__(oneshot=oneshot)
+
+        # Basic parameter validation
+        if not isinstance(source_word, PLCVariable):
+            raise TypeError(f"Source_word must be a PLCVariable, got {type(source_word)}")
+        if not isinstance(dest_bit_start, PLCVariable):
+            raise TypeError(f"Dest_bit_start must be a PLCVariable, got {type(dest_bit_start)}")
+        if not isinstance(bit_count, int) or bit_count <= 0:
+            raise ValueError(f"Bit_count must be a positive integer, got {bit_count}")
+
+        # Use new compatibility checking method
+        source_word.check_unpack_allowed(dest_bit_start, bit_count)
+
+        # Store parameters
+        self.source_word = source_word
+        self.dest_bit_start = dest_bit_start
+        self.bit_count = bit_count
+
+    def _perform_action(self, context: "PLCExecutionContext"):
+        """Unpack a word into bits"""
+        plc = get_current_plc()
+        if not plc:
+            raise RuntimeError("No active PLC context for Unpack operation")
+
+        try:
+            # Get source word value
+            try:
+                word_value = self.source_word.get_value()
+            except Exception:
+                if plc and hasattr(plc, "SC"):
+                    plc.SC[44].set_value(1)  # SC44: Address Error
+                return
+
+            # Extract destination address components for iteration
+            dest_bank = self.dest_bit_start.address_type
+            dest_prefix = dest_bank.name
+            dest_base_addr = int(self.dest_bit_start.address[len(dest_prefix) :])
+
+            # Unpack the value into individual bits
+            for i in range(self.bit_count):
+                try:
+                    # Get current destination bit
+                    current_bit = dest_bank[dest_base_addr + i]
+                except (IndexError, KeyError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[43].set_value(1)  # SC43: Out of Range
+                    return
+
+                # Extract bit from word - LSB first (bit 0 is rightmost)
+                bit_value = (word_value >> i) & 1
+
+                # Write bit to destination
+                try:
+                    current_bit.set_value(bit_value)
+                except (ValueError, TypeError):
+                    if plc and hasattr(plc, "SC"):
+                        plc.SC[44].set_value(1)  # SC44: Address Error
+                    return
+
+        except Exception as e:
+            # General exception handler
+            if plc and hasattr(plc, "SC"):
+                plc.SC[44].set_value(1)  # SC44: Address Error
+
+    def __str__(self):
+        oneshot_str = ", ONS" if self.oneshot else ""
+        # Calculate destination end address for display
+        dest_prefix = self.dest_bit_start.address_type.name
+        dest_base = int(self.dest_bit_start.address[len(dest_prefix) :])
+        dest_end = f"{dest_prefix}{dest_base + self.bit_count - 1}"
+
+        return f"UNPACK({self.source_word}, {self.dest_bit_start} to {dest_end}{oneshot_str})"
 
 
 class MathInstruction(OneShotCapableInstruction):

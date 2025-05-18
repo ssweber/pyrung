@@ -1,8 +1,17 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Union, Optional, Set, Callable, List, Tuple
+from typing import Any, Dict, Union, Optional, Set, Callable, List, Tuple, Type
 import operator  # For comparison operators
 
-from datatypes import BitType, IntType, Int2Type, FloatType, HexType, TxtType, DataTypeDefinition
+from datatypes import (
+    BitType,
+    IntType,
+    Int2Type,
+    FloatType,
+    HexType,
+    TxtType,
+    DataTypeDefinition,
+    PLCDataTypeEnum,
+)
 from system_nicknames import SYSTEM_CONTROL_NICKNAMES, SYSTEM_DATA_NICKNAMES
 
 
@@ -42,17 +51,197 @@ class PLCExecutionContext:
         # Could also store current rung status, etc.
 
 
+class AddressType(ABC):
+    """Base class for different PLC address types (X, Y, DS, etc.)"""
+
+    def __init__(
+        self,
+        name: str,
+        data_type_def: DataTypeDefinition,
+        start_addr: int,
+        end_addr: int,
+        plc_memory: PLCMemory,
+        default_retentive: bool = False,
+        allows_retentive_config: bool = True,
+    ):
+        self.name = name  # e.g., "X", "Y", "DS"
+        self.data_type_def = data_type_def
+        self.start_addr = start_addr
+        self.end_addr = end_addr
+        self.size = (end_addr - start_addr) + 1
+        self.plc_memory = plc_memory
+        self.default_retentive = default_retentive
+        self.allows_retentive_config = allows_retentive_config
+
+        self._address_to_nickname: Dict[Address, str] = {}  # Maps addresses to nicknames
+        self._nickname_to_address: Dict[str, Address] = {}  # Maps nicknames to addresses
+        self._variables: Dict[Address, "PLCVariable"] = {}  # Caches PLCVariable instances
+
+        # Per-address configuration storage
+        self._per_address_retentive: Dict[Address, bool] = {}
+        self._per_address_initial_value: Dict[Address, Any] = {}
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """Check if this bank can pack bits/values into the target bank.
+        Default implementation returns False. Subclasses should override as needed."""
+        return False
+
+    def can_unpack_to(self, target_bank: "AddressType") -> bool:
+        """Check if this bank can unpack words into the target bank.
+        Default implementation returns False. Subclasses should override as needed."""
+        return False
+
+    def _make_address_str(self, index: int) -> Address:
+        """Convert an index to a canonical address string"""
+        return f"{self.name}{index}"
+
+    def _parse_key(self, key: Union[int, str]) -> Address:
+        """Parse an index or nickname into a canonical address"""
+        if isinstance(key, str):  # Potentially a nickname
+            if key in self._nickname_to_address:
+                return self._nickname_to_address[key]
+            # Try to interpret as direct address
+            if key.startswith(self.name) and key[len(self.name) :].isdigit():
+                index = int(key[len(self.name) :])
+                if self.start_addr <= index <= self.end_addr:
+                    return key
+            raise KeyError(f"Nickname or address '{key}' not defined for {self.name}")
+        elif isinstance(key, int):
+            if not (self.start_addr <= key <= self.end_addr):
+                raise IndexError(
+                    f"Address {self.name}{key} out of range ({self.start_addr}-{self.end_addr})"
+                )
+            return self._make_address_str(key)
+        raise TypeError(f"Invalid key type for address: {key}")
+
+    def set_address_retentive(self, key: Union[int, str], is_retentive: bool):
+        """Configure retentive status for a specific address"""
+        if not self.allows_retentive_config:
+            raise ValueError(f"Retentive status for {self.name} addresses cannot be configured.")
+        address_str = self._parse_key(key)
+        self._per_address_retentive[address_str] = is_retentive
+        # Update variable if it exists
+        if address_str in self._variables:
+            self._variables[address_str].configure(is_retentive=is_retentive)
+
+    def set_address_initial_value(self, key: Union[int, str], initial_value: Any):
+        """Configure initial value for a specific address"""
+        address_str = self._parse_key(key)
+        validated_value = self.data_type_def.validate(initial_value)
+        self._per_address_initial_value[address_str] = validated_value
+        # Update variable if it exists
+        if address_str in self._variables:
+            self._variables[address_str].configure(initial_value=validated_value)
+
+    def get_address_retentive(self, address_str: Address) -> bool:
+        """Get retentive status for a specific address (with fallback to default)"""
+        return self._per_address_retentive.get(address_str, self.default_retentive)
+
+    def get_address_initial_value(self, address_str: Address) -> Any:
+        """Get initial value for a specific address (with fallback to default)"""
+        return self._per_address_initial_value.get(address_str, self.data_type_def.default_value())
+
+    def __getitem__(self, key: Union[int, str]) -> "PLCVariable":
+        """Access a variable by index or nickname, e.g., x[1] or x['Button']"""
+        address_str = self._parse_key(key)
+        if address_str not in self._variables:
+            # Get the configured or default values for this address
+            is_retentive = self.get_address_retentive(address_str)
+            initial_value = self.get_address_initial_value(address_str)
+
+            # Create the variable with these values
+            var = PLCVariable(
+                address_str,
+                self,
+                self.plc_memory,
+                initial_value=initial_value,
+                is_retentive=is_retentive,
+            )
+
+            # Set nickname if applicable
+            if address_str in self._address_to_nickname:
+                var.nickname = self._address_to_nickname[address_str]
+
+            self._variables[address_str] = var
+
+        return self._variables[address_str]
+
+    def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
+        """
+        If value is str, assign as nickname: x[1] = "Button"
+        If value is data, set the variable's value: x[1] = True
+        """
+        address_str = self._parse_key(key)
+
+        # Determine if this is a nickname assignment or value assignment
+        is_nickname = False
+        if isinstance(nickname_or_value, str):
+            try:
+                # Try to validate as a value
+                self.data_type_def.validate(nickname_or_value)
+            except (ValueError, TypeError):
+                # If validation fails, it's likely a nickname
+                is_nickname = True
+
+            # Special case: don't treat address strings as nicknames (e.g., x[1] = "X1")
+            if nickname_or_value.startswith(self.name):
+                is_nickname = False
+
+            # Check for system nicknames
+            if (
+                hasattr(self, "_default_nicknames")
+                and nickname_or_value in getattr(self, "_default_nicknames", {}).values()
+            ):
+                is_nickname = True
+
+        if is_nickname:
+            # Assigning a nickname
+            if (
+                nickname_or_value in self._nickname_to_address
+                and self._nickname_to_address[nickname_or_value] != address_str
+            ):
+                raise ValueError(
+                    f"Nickname '{nickname_or_value}' already assigned to {self._nickname_to_address[nickname_or_value]}"
+                )
+
+            # Get or create the variable
+            var = self[key]
+            var.nickname = nickname_or_value
+
+            # Update mappings
+            self._address_to_nickname[address_str] = nickname_or_value
+            self._nickname_to_address[nickname_or_value] = address_str
+        else:
+            # Setting a value
+            var = self[key]
+            var.set_value(nickname_or_value)
+
+    def __getattr__(self, name: str) -> "PLCVariable":
+        """Access a variable by nickname via attribute, e.g., x.Button"""
+        if name in self._nickname_to_address:
+            return self[name]  # This will use __getitem__
+        raise AttributeError(f"'{self.name}' address type has no nickname '{name}'")
+
+    @abstractmethod
+    def handle_rung_continuity_lost(self, variable: "PLCVariable", context: PLCExecutionContext):
+        """
+        Defines behavior when a rung controlling an output of this type becomes false.
+        This is triggered by the Rung execution logic.
+        """
+        pass
+
+
 class PLCVariable:
     """Represents a variable in the PLC system"""
 
     def __init__(
         self,
         address: Address,
-        address_type: "AddressType",
+        address_type: AddressType,
         plc_memory: PLCMemory,
-        initial_value: Any = None,  # New parameter
+        initial_value: Any = None,
         is_retentive: Optional[bool] = None,
-    ):  # New parameter
+    ):
         self.address = address
         self.address_type = address_type
         self.plc_memory = plc_memory
@@ -128,6 +317,100 @@ class PLCVariable:
                 f"{self.address_type.data_type_def.__class__.__name__} at "
                 f"{self.address_type.name}{self.address}"
             )
+
+    def check_copy_allowed(self, target_var: "PLCVariable") -> bool:
+        """
+        Check if this variable can be copied to the target variable.
+        Returns True if allowed, otherwise raises TypeError.
+        """
+        # Check basic type compatibility
+        if not self.address_type.data_type_def.is_copy_compatible_with(
+            target_var.address_type.data_type_def
+        ):
+            source_type = self.address_type.data_type_def.__class__.__name__
+            target_type = target_var.address_type.data_type_def.__class__.__name__
+            raise TypeError(f"Incompatible data types for copy: {source_type} to {target_type}")
+        return True
+
+    def check_pack_allowed(self, target_var: "PLCVariable", bit_count: int = 0) -> bool:
+        """
+        Check if this variable can be packed into the target variable.
+        Returns True if allowed, otherwise raises TypeError.
+        """
+        # First check if source is bit or TXT type
+        source_is_bit = isinstance(self.address_type.data_type_def, BitType)
+        source_is_txt = isinstance(self.address_type.data_type_def, TxtType)
+        source_is_int = isinstance(self.address_type.data_type_def, IntType)
+
+        if not (source_is_bit or source_is_txt or source_is_int):
+            raise TypeError(
+                f"Source for pack operation must be a Bit, TXT, or INT type, got "
+                f"{self.address_type.data_type_def.__class__.__name__}"
+            )
+
+        # Check if target is a word type
+        if isinstance(target_var.address_type.data_type_def, BitType):
+            raise TypeError(
+                f"Destination for pack operation must be a word type, not "
+                f"{target_var.address_type.data_type_def.__class__.__name__}"
+            )
+
+        # Check bank-specific rules
+        if not self.address_type.can_pack_to(target_var.address_type):
+            raise TypeError(
+                f"Pack operation not allowed from {self.address_type.name} "
+                f"to {target_var.address_type.name}"
+            )
+
+        # Check bit_count is within limits for destination word size
+        if source_is_bit and bit_count > 0:
+            dest_size_in_bits = 16  # Default for most word types
+            if isinstance(target_var.address_type.data_type_def, Int2Type):
+                dest_size_in_bits = 32
+
+            if bit_count > dest_size_in_bits:
+                raise ValueError(
+                    f"Bit count {bit_count} exceeds the size of destination word ({dest_size_in_bits} bits)"
+                )
+
+        return True
+
+    def check_unpack_allowed(self, target_var: "PLCVariable", bit_count: int = 0) -> bool:
+        """
+        Check if this variable can be unpacked into the target variable.
+        Returns True if allowed, otherwise raises TypeError.
+        """
+        # Check if source is a word type
+        if isinstance(self.address_type.data_type_def, BitType):
+            raise TypeError(
+                f"Source for unpack operation must be a word type, not "
+                f"{self.address_type.data_type_def.__class__.__name__}"
+            )
+
+        # For most unpack operations, the target is a bit type
+        # But for some cases like DD->DS or DF->DS, it's word-to-word
+        is_target_bit = isinstance(target_var.address_type.data_type_def, BitType)
+        is_target_word = not is_target_bit
+
+        # Check bank-specific rules
+        if not self.address_type.can_unpack_to(target_var.address_type):
+            raise TypeError(
+                f"Unpack operation not allowed from {self.address_type.name} "
+                f"to {target_var.address_type.name}"
+            )
+
+        # Check bit_count is within limits for source word size when unpacking to bits
+        if is_target_bit and bit_count > 0:
+            source_size_in_bits = 16  # Default for most word types
+            if isinstance(self.address_type.data_type_def, Int2Type):
+                source_size_in_bits = 32
+
+            if bit_count > source_size_in_bits:
+                raise ValueError(
+                    f"Bit count {bit_count} exceeds the size of source word ({source_size_in_bits} bits)"
+                )
+
+        return True
 
     # Comparison operators
     def __eq__(self, other):
@@ -391,6 +674,9 @@ class AddressType(ABC):
         pass
 
 
+# Now implement the can_pack_to and can_unpack_to methods for each bank
+
+
 class XBank(AddressType):
     """Input Bits (X addresses)"""
 
@@ -401,9 +687,13 @@ class XBank(AddressType):
             1,
             816,
             plc_memory,
-            default_retentive=False,  # X inputs are non-retentive by default
+            default_retentive=False,
             allows_retentive_config=True,  # Allow per-address configuration
         )
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """X bits can pack into DH bank"""
+        return isinstance(target_bank, DHBank)
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # Inputs are not typically "reset" by rung logic, so do nothing
@@ -424,6 +714,10 @@ class YBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
         self._latched_addresses: Set[Address] = set()  # Track which Y bits were set with latch()
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """Y bits can pack into DH bank"""
+        return isinstance(target_bank, DHBank)
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -451,6 +745,10 @@ class CBank(AddressType):
         self._latched_addresses: Set[Address] = (
             set()
         )  # Track which C bits were set and shouldn't auto-reset
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """C bits can pack into DS, DD, DF, and DH banks"""
+        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank))
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -485,6 +783,10 @@ class SCBank(AddressType):
         # Set the default nicknames
         for bit_num, nickname in self._default_nicknames.items():
             self[bit_num] = nickname
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """SC bits can pack into DH bank"""
+        return isinstance(target_bank, DHBank)
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -547,6 +849,10 @@ class TBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """T bits can pack into DH bank"""
+        return isinstance(target_bank, DHBank)
+
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         if not variable.is_retentive:
             variable.set_value(variable.initial_value)
@@ -566,6 +872,10 @@ class CTBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """CT bits can pack into DH bank"""
+        return isinstance(target_bank, DHBank)
+
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         if not variable.is_retentive:
             variable.set_value(variable.initial_value)
@@ -584,6 +894,14 @@ class DSBank(AddressType):
             default_retentive=True,  # DS is retentive by default
             allows_retentive_config=True,  # Allow per-address configuration
         )
+
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """DS integers can pack into DD and DF banks"""
+        return isinstance(target_bank, (DDBank, DFBank))
+
+    def can_unpack_to(self, target_bank: "AddressType") -> bool:
+        """DS can unpack into C bank"""
+        return isinstance(target_bank, CBank)
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DS is typically retentive, so do nothing when rung goes false
@@ -608,6 +926,10 @@ class DDBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
+    def can_unpack_to(self, target_bank: "AddressType") -> bool:
+        """DD can unpack into C, DS, and DH banks"""
+        return isinstance(target_bank, (CBank, DSBank, DHBank))
+
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DD is retentive by default, similar to DS
         if not variable.is_retentive:
@@ -630,6 +952,10 @@ class DFBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
+    def can_unpack_to(self, target_bank: "AddressType") -> bool:
+        """DF can unpack into C and DS banks"""
+        return isinstance(target_bank, (CBank, DSBank))
+
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DF is retentive by default
         if not variable.is_retentive:
@@ -651,6 +977,10 @@ class DHBank(AddressType):
             default_retentive=True,  # DH is retentive by default
             allows_retentive_config=True,  # Allow per-address configuration
         )
+
+    def can_unpack_to(self, target_bank: "AddressType") -> bool:
+        """DH can unpack into C and Y banks"""
+        return isinstance(target_bank, (CBank, YBank))
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DH is retentive by default
@@ -771,12 +1101,13 @@ class TXTBank(AddressType):
             allows_retentive_config=False,  # No per-address configuration for TXT
         )
 
+    def can_pack_to(self, target_bank: "AddressType") -> bool:
+        """TXT can pack into DS, DD, DF, DH, TD, and CTD banks"""
+        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank, TDBank, CTDBank))
+
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # TXT is retentive, so do nothing when rung goes false
         pass
-
-
-# New classes for addresses in your spec that weren't in the original code
 
 
 class TDBank(AddressType):

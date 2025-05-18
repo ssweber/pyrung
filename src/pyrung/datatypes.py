@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Set, Union
+from typing import Any, Set, Union, Type, List
 
 
 class PLCDataTypeEnum(Enum):
@@ -37,6 +37,11 @@ class DataTypeDefinition(ABC):
         """Returns a set of string identifiers for allowed operations, e.g., '==', 'bool', '+'"""
         pass
 
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """Determines if this data type can be copied to another data type.
+        Default is that a type is only compatible with itself. Subclasses should override as needed."""
+        return isinstance(other_type, self.__class__)
+
 
 class BitType(DataTypeDefinition):
     """Definition for binary (bit) data type"""
@@ -54,6 +59,10 @@ class BitType(DataTypeDefinition):
 
     def get_allowed_operations(self) -> Set[str]:
         return {"bool"}  # Can be used in boolean context
+
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """Bit type is only compatible with other bit types"""
+        return isinstance(other_type, BitType)
 
 
 class IntType(DataTypeDefinition):
@@ -81,6 +90,10 @@ class IntType(DataTypeDefinition):
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "//", "%", "**"}
 
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """INT is compatible with INT, INT2, FLOAT, and HEX types"""
+        return isinstance(other_type, (IntType, Int2Type, FloatType, HexType))
+
 
 class Int2Type(DataTypeDefinition):
     """Definition for extended integer (INT2) data type"""
@@ -107,6 +120,10 @@ class Int2Type(DataTypeDefinition):
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "//", "%", "**"}
 
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """INT2 is compatible with INT2, INT, FLOAT, and HEX types"""
+        return isinstance(other_type, (Int2Type, IntType, FloatType, HexType))
+
 
 class FloatType(DataTypeDefinition):
     """Definition for floating point data type"""
@@ -132,6 +149,10 @@ class FloatType(DataTypeDefinition):
 
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!=", "<", "<=", ">", ">=", "+", "-", "*", "/", "**"}
+
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """FLOAT is compatible with FLOAT, INT, INT2, and HEX types"""
+        return isinstance(other_type, (FloatType, IntType, Int2Type, HexType))
 
 
 class HexType(DataTypeDefinition):
@@ -167,6 +188,10 @@ class HexType(DataTypeDefinition):
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!=", "<", "<=", ">", ">=", "&", "|", "^", "<<", ">>"}
 
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """HEX is compatible with HEX, INT, INT2, and FLOAT types"""
+        return isinstance(other_type, (HexType, IntType, Int2Type, FloatType))
+
 
 class TxtType(DataTypeDefinition):
     """Definition for text (character) data type"""
@@ -190,3 +215,7 @@ class TxtType(DataTypeDefinition):
 
     def get_allowed_operations(self) -> Set[str]:
         return {"==", "!="}  # Typically only equality for single chars in PLC context
+
+    def is_copy_compatible_with(self, other_type: "DataTypeDefinition") -> bool:
+        """TXT is only compatible with other TXT types"""
+        return isinstance(other_type, TxtType)

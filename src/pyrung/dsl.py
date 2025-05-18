@@ -16,6 +16,10 @@ from instructions import (
     LatchInstruction,
     ResetInstruction,
     CopyInstruction,
+    CopyBlockInstruction,
+    CopyFillInstruction,
+    CopyPackInstruction,
+    CopyUnpackInstruction,
     MathInstruction,
 )
 from program import Rung, Branch, Subroutine
@@ -111,13 +115,74 @@ def copy(
     plc=None,
     current_context=None,
 ):
-    """Create a copy instruction"""
-
-    # Create and add the instruction
+    """Create a basic copy instruction"""
     instruction = CopyInstruction(source, target, oneshot)
     current_context.add_instruction(instruction)
-
     return target
+
+
+@requires_rung_context_or_branch
+def copy_block(
+    source_start: PLCVariable,
+    dest_start: PLCVariable,
+    count: int,
+    oneshot: bool = False,
+    *,
+    plc=None,
+    current_context=None,
+):
+    """Create a copy block instruction"""
+    instruction = CopyBlockInstruction(source_start, dest_start, count, oneshot)
+    current_context.add_instruction(instruction)
+    return dest_start
+
+
+@requires_rung_context_or_branch
+def copy_fill(
+    source: Union[PLCVariable, Any],
+    dest_start: PLCVariable,
+    count: int,
+    oneshot: bool = False,
+    *,
+    plc=None,
+    current_context=None,
+):
+    """Create a copy fill instruction"""
+    instruction = CopyFillInstruction(source, dest_start, count, oneshot)
+    current_context.add_instruction(instruction)
+    return dest_start
+
+
+@requires_rung_context_or_branch
+def copy_pack(
+    source_bit_start: PLCVariable,
+    dest_word: PLCVariable,
+    bit_count: int,
+    oneshot: bool = False,
+    *,
+    plc=None,
+    current_context=None,
+):
+    """Create a copy pack instruction"""
+    instruction = CopyPackInstruction(source_bit_start, dest_word, bit_count, oneshot)
+    current_context.add_instruction(instruction)
+    return dest_word
+
+
+@requires_rung_context_or_branch
+def copy_unpack(
+    source_word: PLCVariable,
+    dest_bit_start: PLCVariable,
+    bit_count: int,
+    oneshot: bool = False,
+    *,
+    plc=None,
+    current_context=None,
+):
+    """Create a copy unpack instruction"""
+    instruction = CopyUnpackInstruction(source_word, dest_bit_start, bit_count, oneshot)
+    current_context.add_instruction(instruction)
+    return dest_bit_start
 
 
 @requires_rung_context_or_branch
