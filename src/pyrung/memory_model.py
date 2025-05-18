@@ -45,15 +45,48 @@ class PLCExecutionContext:
 class PLCVariable:
     """Represents a variable in the PLC system"""
 
-    def __init__(self, address: Address, address_type: "AddressType", plc_memory: PLCMemory):
+    def __init__(
+        self,
+        address: Address,
+        address_type: "AddressType",
+        plc_memory: PLCMemory,
+        initial_value: Any = None,  # New parameter
+        is_retentive: Optional[bool] = None,
+    ):  # New parameter
         self.address = address
         self.address_type = address_type
         self.plc_memory = plc_memory
         self.nickname: Optional[str] = None
 
+        # Use provided value or get default from data type
+        if initial_value is None:
+            initial_value = self.address_type.data_type_def.default_value()
+
+        # Set initial value (validated)
+        self._initial_value = self.address_type.data_type_def.validate(initial_value)
+
+        # Set retentive status (use bank default if not specified)
+        if is_retentive is None:
+            self._is_retentive = self.address_type.default_retentive
+        else:
+            # Check if this address type allows retentive configuration
+            if (
+                not self.address_type.allows_retentive_config
+                and is_retentive != self.address_type.default_retentive
+            ):
+                raise ValueError(
+                    f"Retentive status for address type {self.address_type.name} "
+                    f"({self.address}) cannot be changed from its default."
+                )
+            self._is_retentive = is_retentive
+
+        # Initialize memory with initial value if not already set
+        if self.plc_memory.read(self.address) is None:
+            self.plc_memory.write(self.address, self._initial_value)
+
     def get_value(self) -> Any:
         """Get the current value of this variable"""
-        return self.plc_memory.read(self.address, self.address_type.data_type_def.default_value())
+        return self.plc_memory.read(self.address, self._initial_value)
 
     def set_value(self, value: Any):
         """Set the value of this variable"""
@@ -62,9 +95,30 @@ class PLCVariable:
 
     def get_previous_value(self) -> Any:
         """Get the value from the previous scan cycle"""
-        return self.plc_memory.get_previous_value(
-            self.address, self.address_type.data_type_def.default_value()
-        )
+        return self.plc_memory.get_previous_value(self.address, self._initial_value)
+
+    @property
+    def is_retentive(self) -> bool:
+        """Get the retentive status of this variable"""
+        return self._is_retentive
+
+    @property
+    def initial_value(self) -> Any:
+        """Get the initial value of this variable"""
+        return self._initial_value
+
+    def configure(self, initial_value: Optional[Any] = None, is_retentive: Optional[bool] = None):
+        """Update the variable's configuration"""
+        if initial_value is not None:
+            self._initial_value = self.address_type.data_type_def.validate(initial_value)
+
+        if is_retentive is not None:
+            if not self.address_type.allows_retentive_config:
+                raise ValueError(
+                    f"Retentive status for address type {self.address_type.name} "
+                    f"({self.address}) cannot be changed."
+                )
+            self._is_retentive = is_retentive
 
     def _check_op_allowed(self, op_name: str):
         """Check if an operation is allowed for this variable's data type"""
@@ -177,7 +231,8 @@ class AddressType(ABC):
         start_addr: int,
         end_addr: int,
         plc_memory: PLCMemory,
-        is_retentive: bool = False,
+        default_retentive: bool = False,
+        allows_retentive_config: bool = True,
     ):
         self.name = name  # e.g., "X", "Y", "DS"
         self.data_type_def = data_type_def
@@ -185,9 +240,16 @@ class AddressType(ABC):
         self.end_addr = end_addr
         self.size = (end_addr - start_addr) + 1
         self.plc_memory = plc_memory
-        self.is_retentive = is_retentive
-        self._nicknames: Dict[str, Address] = {}  # Maps nicknames to addresses
+        self.default_retentive = default_retentive
+        self.allows_retentive_config = allows_retentive_config
+
+        self._address_to_nickname: Dict[Address, str] = {}  # Maps addresses to nicknames
+        self._nickname_to_address: Dict[str, Address] = {}  # Maps nicknames to addresses
         self._variables: Dict[Address, PLCVariable] = {}  # Caches PLCVariable instances
+
+        # Per-address configuration storage
+        self._per_address_retentive: Dict[Address, bool] = {}
+        self._per_address_initial_value: Dict[Address, Any] = {}
 
     def _make_address_str(self, index: int) -> Address:
         """Convert an index to a canonical address string"""
@@ -196,8 +258,8 @@ class AddressType(ABC):
     def _parse_key(self, key: Union[int, str]) -> Address:
         """Parse an index or nickname into a canonical address"""
         if isinstance(key, str):  # Potentially a nickname
-            if key in self._nicknames:
-                return self._nicknames[key]
+            if key in self._nickname_to_address:
+                return self._nickname_to_address[key]
             # Try to interpret as direct address
             if key.startswith(self.name) and key[len(self.name) :].isdigit():
                 index = int(key[len(self.name) :])
@@ -212,14 +274,56 @@ class AddressType(ABC):
             return self._make_address_str(key)
         raise TypeError(f"Invalid key type for address: {key}")
 
+    def set_address_retentive(self, key: Union[int, str], is_retentive: bool):
+        """Configure retentive status for a specific address"""
+        if not self.allows_retentive_config:
+            raise ValueError(f"Retentive status for {self.name} addresses cannot be configured.")
+        address_str = self._parse_key(key)
+        self._per_address_retentive[address_str] = is_retentive
+        # Update variable if it exists
+        if address_str in self._variables:
+            self._variables[address_str].configure(is_retentive=is_retentive)
+
+    def set_address_initial_value(self, key: Union[int, str], initial_value: Any):
+        """Configure initial value for a specific address"""
+        address_str = self._parse_key(key)
+        validated_value = self.data_type_def.validate(initial_value)
+        self._per_address_initial_value[address_str] = validated_value
+        # Update variable if it exists
+        if address_str in self._variables:
+            self._variables[address_str].configure(initial_value=validated_value)
+
+    def get_address_retentive(self, address_str: Address) -> bool:
+        """Get retentive status for a specific address (with fallback to default)"""
+        return self._per_address_retentive.get(address_str, self.default_retentive)
+
+    def get_address_initial_value(self, address_str: Address) -> Any:
+        """Get initial value for a specific address (with fallback to default)"""
+        return self._per_address_initial_value.get(address_str, self.data_type_def.default_value())
+
     def __getitem__(self, key: Union[int, str]) -> PLCVariable:
         """Access a variable by index or nickname, e.g., x[1] or x['Button']"""
         address_str = self._parse_key(key)
         if address_str not in self._variables:
-            var = PLCVariable(address_str, self, self.plc_memory)
-            if isinstance(key, str) and address_str == self._nicknames.get(key):
-                var.nickname = key
+            # Get the configured or default values for this address
+            is_retentive = self.get_address_retentive(address_str)
+            initial_value = self.get_address_initial_value(address_str)
+
+            # Create the variable with these values
+            var = PLCVariable(
+                address_str,
+                self,
+                self.plc_memory,
+                initial_value=initial_value,
+                is_retentive=is_retentive,
+            )
+
+            # Set nickname if applicable
+            if address_str in self._address_to_nickname:
+                var.nickname = self._address_to_nickname[address_str]
+
             self._variables[address_str] = var
+
         return self._variables[address_str]
 
     def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
@@ -228,32 +332,54 @@ class AddressType(ABC):
         If value is data, set the variable's value: x[1] = True
         """
         address_str = self._parse_key(key)
-        if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
+
+        # Determine if this is a nickname assignment or value assignment
+        is_nickname = False
+        if isinstance(nickname_or_value, str):
+            try:
+                # Try to validate as a value
+                self.data_type_def.validate(nickname_or_value)
+            except (ValueError, TypeError):
+                # If validation fails, it's likely a nickname
+                is_nickname = True
+
+            # Special case: don't treat address strings as nicknames (e.g., x[1] = "X1")
+            if nickname_or_value.startswith(self.name):
+                is_nickname = False
+
+            # Check for system nicknames
+            if (
+                hasattr(self, "_default_nicknames")
+                and nickname_or_value in getattr(self, "_default_nicknames", {}).values()
+            ):
+                is_nickname = True
+
+        if is_nickname:
             # Assigning a nickname
             if (
-                nickname_or_value in self._nicknames
-                and self._nicknames[nickname_or_value] != address_str
+                nickname_or_value in self._nickname_to_address
+                and self._nickname_to_address[nickname_or_value] != address_str
             ):
                 raise ValueError(
-                    f"Nickname '{nickname_or_value}' already assigned to {self._nicknames[nickname_or_value]}"
+                    f"Nickname '{nickname_or_value}' already assigned to {self._nickname_to_address[nickname_or_value]}"
                 )
-            # Ensure the variable object exists for this address
-            if address_str not in self._variables:
-                self._variables[address_str] = PLCVariable(address_str, self, self.plc_memory)
-            self._variables[address_str].nickname = nickname_or_value
-            self._nicknames[nickname_or_value] = address_str
-        else:  # Setting a value directly
-            var = self[key]  # Get or create PLCVariable
+
+            # Get or create the variable
+            var = self[key]
+            var.nickname = nickname_or_value
+
+            # Update mappings
+            self._address_to_nickname[address_str] = nickname_or_value
+            self._nickname_to_address[nickname_or_value] = address_str
+        else:
+            # Setting a value
+            var = self[key]
             var.set_value(nickname_or_value)
 
     def __getattr__(self, name: str) -> PLCVariable:
         """Access a variable by nickname via attribute, e.g., x.Button"""
-        if name in self._nicknames:
-            address_str = self._nicknames[name]
-            if address_str not in self._variables:
-                self._variables[address_str] = PLCVariable(address_str, self, self.plc_memory)
-                self._variables[address_str].nickname = name
-            return self._variables[address_str]
+        if name in self._nickname_to_address:
+            return self[name]  # This will use __getitem__
         raise AttributeError(f"'{self.name}' address type has no nickname '{name}'")
 
     @abstractmethod
@@ -269,7 +395,15 @@ class XBank(AddressType):
     """Input Bits (X addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("X", BitType(), 1, 816, plc_memory, is_retentive=False)
+        super().__init__(
+            "X",
+            BitType(),
+            1,
+            816,
+            plc_memory,
+            default_retentive=False,  # X inputs are non-retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # Inputs are not typically "reset" by rung logic, so do nothing
@@ -280,7 +414,15 @@ class YBank(AddressType):
     """Output Bits (Y addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("Y", BitType(), 1, 816, plc_memory, is_retentive=False)
+        super().__init__(
+            "Y",
+            BitType(),
+            1,
+            816,
+            plc_memory,
+            default_retentive=False,  # Y outputs are non-retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
         self._latched_addresses: Set[Address] = set()  # Track which Y bits were set with latch()
 
     def mark_as_latched(self, address: Address):
@@ -289,15 +431,23 @@ class YBank(AddressType):
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # If the bit was set with latch() instruction, don't reset it when rung goes false
-        if not self.is_retentive and variable.address not in self._latched_addresses:
-            variable.set_value(self.data_type_def.default_value())  # Sets to 0 for BitType
+        if not variable.is_retentive and variable.address not in self._latched_addresses:
+            variable.set_value(variable.initial_value)  # Reset to initial value
 
 
 class CBank(AddressType):
     """Control Bits (C addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("C", BitType(), 1, 2000, plc_memory, is_retentive=False)
+        super().__init__(
+            "C",
+            BitType(),
+            1,
+            2000,
+            plc_memory,
+            default_retentive=False,  # C bits are non-retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
         self._latched_addresses: Set[Address] = (
             set()
         )  # Track which C bits were set and shouldn't auto-reset
@@ -308,8 +458,8 @@ class CBank(AddressType):
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # If the bit was set with set() instruction, don't reset it when rung goes false
-        if not self.is_retentive and variable.address not in self._latched_addresses:
-            variable.set_value(self.data_type_def.default_value())
+        if not variable.is_retentive and variable.address not in self._latched_addresses:
+            variable.set_value(variable.initial_value)
 
 
 class SCBank(AddressType):
@@ -318,7 +468,15 @@ class SCBank(AddressType):
     WRITEABLE_SC_BITS = {50, 51, 53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121}
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("SC", BitType(), 1, 1000, plc_memory, is_retentive=False)
+        super().__init__(
+            "SC",
+            BitType(),
+            1,
+            1000,
+            plc_memory,
+            default_retentive=False,  # SC bits are always non-retentive
+            allows_retentive_config=False,  # No per-address configuration for SC bits
+        )
         self._latched_addresses: Set[Address] = set()  # Track which SC bits were set with latch()
 
         # Set default nicknames for writeable bits based on the image
@@ -334,8 +492,8 @@ class SCBank(AddressType):
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # If the bit was set with latch() instruction, don't reset it when rung goes false
-        if not self.is_retentive and variable.address not in self._latched_addresses:
-            variable.set_value(self.data_type_def.default_value())  # Sets to 0 for BitType
+        if not variable.is_retentive and variable.address not in self._latched_addresses:
+            variable.set_value(variable.initial_value)  # Reset to initial value
 
     def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
         """
@@ -345,88 +503,220 @@ class SCBank(AddressType):
         """
         address_str = self._parse_key(key)
 
-        if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
-            # Assigning a nickname - proceed as normal
+        # Check if this is a nickname assignment
+        is_nickname = False
+        if isinstance(nickname_or_value, str):
+            try:
+                self.data_type_def.validate(nickname_or_value)
+            except (ValueError, TypeError):
+                is_nickname = True
+
+            if nickname_or_value.startswith(self.name):
+                is_nickname = False
+
+            if nickname_or_value in self._default_nicknames.values():
+                is_nickname = True
+
+        if is_nickname:
+            # Assigning a nickname - proceed with parent implementation
             super().__setitem__(key, nickname_or_value)
         else:
-            # Setting a value directly - check if this SC bit is writeable
-
-            # Extract the bit number from the address string (e.g., "SC50" -> 50)
+            # Setting a value - check if this SC bit is writeable
             if address_str.startswith(self.name):
                 bit_num = int(address_str[len(self.name) :])
                 if bit_num not in self.WRITEABLE_SC_BITS:
                     raise ValueError(f"SC bit {bit_num} is read-only and cannot be written to")
 
             # If we get here, either the bit is writeable or it wasn't an SC bit format
-            # Proceed with the normal value setting
-            var = self[key]  # Get or create PLCVariable
+            # Create or get the variable and set its value
+            var = self[key]
             var.set_value(nickname_or_value)
+
+
+class TBank(AddressType):
+    """Timer Bits (T addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "T",
+            BitType(),
+            1,
+            500,
+            plc_memory,
+            default_retentive=False,  # T bits are non-retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        if not variable.is_retentive:
+            variable.set_value(variable.initial_value)
+
+
+class CTBank(AddressType):
+    """Counter Bits (CT addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "CT",
+            BitType(),
+            1,
+            250,
+            plc_memory,
+            default_retentive=True,  # CT bits are retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        if not variable.is_retentive:
+            variable.set_value(variable.initial_value)
 
 
 class DSBank(AddressType):
     """Data Store Integers (DS addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("DS", IntType(), 1, 4500, plc_memory, is_retentive=True)
+        super().__init__(
+            "DS",
+            IntType(),
+            1,
+            4500,
+            plc_memory,
+            default_retentive=True,  # DS is retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
-        # DS is retentive, so do nothing when rung goes false
-        pass
+        # DS is typically retentive, so do nothing when rung goes false
+        # If it was configured as non-retentive, we might reset it, but this is less common for data registers
+        if not variable.is_retentive:
+            # We could choose to reset to initial value for non-retentive DS
+            # variable.set_value(variable.initial_value)
+            pass  # For now, do nothing
 
 
 class DDBank(AddressType):
     """Double Data Integers (DD addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("DD", Int2Type(), 1, 1000, plc_memory, is_retentive=True)
+        super().__init__(
+            "DD",
+            Int2Type(),
+            1,
+            1000,
+            plc_memory,
+            default_retentive=True,  # DD is retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
-        # DD is retentive, so do nothing when rung goes false
-        pass
+        # DD is retentive by default, similar to DS
+        if not variable.is_retentive:
+            # Handle non-retentive configuration if needed
+            # variable.set_value(variable.initial_value)
+            pass
 
 
 class DFBank(AddressType):
     """Float Data (DF addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("DF", FloatType(), 1, 500, plc_memory, is_retentive=True)
+        super().__init__(
+            "DF",
+            FloatType(),
+            1,
+            500,
+            plc_memory,
+            default_retentive=True,  # DF is retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
-        # DF is retentive, so do nothing when rung goes false
-        pass
+        # DF is retentive by default
+        if not variable.is_retentive:
+            # Handle non-retentive configuration if needed
+            # variable.set_value(variable.initial_value)
+            pass
 
 
 class DHBank(AddressType):
     """Hex Data (DH addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("DH", HexType(), 1, 500, plc_memory, is_retentive=True)
+        super().__init__(
+            "DH",
+            HexType(),
+            1,
+            500,
+            plc_memory,
+            default_retentive=True,  # DH is retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
-        # DH is retentive, so do nothing when rung goes false
-        pass
-    
+        # DH is retentive by default
+        if not variable.is_retentive:
+            # Handle non-retentive configuration if needed
+            # variable.set_value(variable.initial_value)
+            pass
+
 
 class SDBank(AddressType):
     """System Data Integers (SD addresses)"""
-    
-    WRITEABLE_SD_ADDRESSES = {29, 31, 32, 34, 35, 36, 40, 41, 42, 50, 51, 60, 61, 
-                             106, 107, 108, 112, 113, 114, 140, 141, 142, 143, 144, 145, 
-                             146, 147, 214, 215}
+
+    WRITEABLE_SD_ADDRESSES = {
+        29,
+        31,
+        32,
+        34,
+        35,
+        36,
+        40,
+        41,
+        42,
+        50,
+        51,
+        60,
+        61,
+        106,
+        107,
+        108,
+        112,
+        113,
+        114,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        214,
+        215,
+    }
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("SD", IntType(), 1, 1000, plc_memory, is_retentive=False)
-        
+        super().__init__(
+            "SD",
+            IntType(),
+            1,
+            1000,
+            plc_memory,
+            default_retentive=False,  # SD is always non-retentive
+            allows_retentive_config=False,  # No per-address configuration for SD
+        )
+
         # Set default nicknames
         self._default_nicknames = SYSTEM_DATA_NICKNAMES
-        
+
         # Apply the default nicknames
         for address, nickname in self._default_nicknames.items():
             self[address] = nickname
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        # SD is system data, typically not affected by rung logic
         pass
-        
+
     def __setitem__(self, key: Union[int, str], nickname_or_value: Union[str, Any]):
         """
         Override the default __setitem__ to add write protection for SD addresses.
@@ -435,21 +725,35 @@ class SDBank(AddressType):
         """
         address_str = self._parse_key(key)
 
-        if isinstance(nickname_or_value, str) and not address_str.startswith(nickname_or_value):
-            # Assigning a nickname - proceed as normal
+        # Check if this is a nickname assignment
+        is_nickname = False
+        if isinstance(nickname_or_value, str):
+            try:
+                self.data_type_def.validate(nickname_or_value)
+            except (ValueError, TypeError):
+                is_nickname = True
+
+            if nickname_or_value.startswith(self.name):
+                is_nickname = False
+
+            if (
+                hasattr(self, "_default_nicknames")
+                and nickname_or_value in self._default_nicknames.values()
+            ):
+                is_nickname = True
+
+        if is_nickname:
+            # Assigning a nickname - proceed with parent implementation
             super().__setitem__(key, nickname_or_value)
         else:
-            # Setting a value directly - check if this SD address is writeable
-            
-            # Extract the address number from the address string (e.g., "SD50" -> 50)
+            # Setting a value - check if this SD address is writeable
             if address_str.startswith(self.name):
-                addr_num = int(address_str[len(self.name):])
+                addr_num = int(address_str[len(self.name) :])
                 if addr_num not in self.WRITEABLE_SD_ADDRESSES:
                     raise ValueError(f"SD address {addr_num} is read-only and cannot be written to")
 
             # If we get here, either the address is writeable or it wasn't an SD address format
-            # Proceed with the normal value setting
-            var = self[key]  # Get or create PLCVariable
+            var = self[key]
             var.set_value(nickname_or_value)
 
 
@@ -457,8 +761,95 @@ class TXTBank(AddressType):
     """Text Character Data (TXT addresses)"""
 
     def __init__(self, plc_memory: PLCMemory):
-        super().__init__("TXT", TxtType(), 1, 500, plc_memory, is_retentive=True)
+        super().__init__(
+            "TXT",
+            TxtType(),
+            1,
+            500,
+            plc_memory,
+            default_retentive=True,  # TXT is always retentive
+            allows_retentive_config=False,  # No per-address configuration for TXT
+        )
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # TXT is retentive, so do nothing when rung goes false
+        pass
+
+
+# New classes for addresses in your spec that weren't in the original code
+
+
+class TDBank(AddressType):
+    """Timer Current Values (TD addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "TD",
+            IntType(),
+            1,
+            500,
+            plc_memory,
+            default_retentive=False,  # TD is non-retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        if not variable.is_retentive:
+            variable.set_value(variable.initial_value)
+
+
+class CTDBank(AddressType):
+    """Counter Current Values (CTD addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "CTD",
+            Int2Type(),
+            1,
+            250,
+            plc_memory,
+            default_retentive=True,  # CTD is retentive by default
+            allows_retentive_config=True,  # Allow per-address configuration
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        if not variable.is_retentive:
+            variable.set_value(variable.initial_value)
+
+
+class XDBank(AddressType):
+    """Input Register (XD addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "XD",
+            HexType(),
+            0,
+            8,
+            plc_memory,
+            default_retentive=False,  # XD is always non-retentive
+            allows_retentive_config=False,  # No per-address configuration for XD
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        # Input registers reflect hardware state
+        pass
+
+
+class YDBank(AddressType):
+    """Output Register (YD addresses)"""
+
+    def __init__(self, plc_memory: PLCMemory):
+        super().__init__(
+            "YD",
+            HexType(),
+            0,
+            8,
+            plc_memory,
+            default_retentive=False,  # YD is always non-retentive
+            allows_retentive_config=False,  # No per-address configuration for YD
+        )
+
+    def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
+        # Output registers are handled specially, potentially through hardware interfaces
         pass

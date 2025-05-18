@@ -11,11 +11,18 @@ from memory_model import (
     XBank,
     YBank,
     CBank,
+    TBank,
+    CTBank,
     SCBank,
     DSBank,
     DDBank,
-    DFBank,
     DHBank,
+    DFBank,
+    XDBank,
+    YDBank,
+    TDBank,
+    CTDBank,
+    SDBank,
     TXTBank,
 )
 from conditions import (
@@ -47,11 +54,17 @@ class PLC:
         self.x = XBank(self.memory)
         self.y = YBank(self.memory)
         self.c = CBank(self.memory)
+        self.t = TBank(self.memory)
+        self.ct = CTBank(self.memory)
         self.sc = SCBank(self.memory)
         self.ds = DSBank(self.memory)
         self.dd = DDBank(self.memory)
         self.df = DFBank(self.memory)
         self.dh = DHBank(self.memory)
+        self.xd = XDBank(self.memory)
+        self.yd = YDBank(self.memory)
+        self.td = TDBank(self.memory)
+        self.ctd = CTDBank(self.memory)
         self.sd = SDBank(self.memory)
         self.txt = TXTBank(self.memory)
 
@@ -60,11 +73,17 @@ class PLC:
             "X": self.x,
             "Y": self.y,
             "C": self.c,
+            "T": self.t,
+            "CT": self.ct,
             "SC": self.sc,
             "DS": self.ds,
             "DD": self.dd,
             "DF": self.df,
             "DH": self.dh,
+            "XD": self.xd,
+            "YD": self.yd,
+            "TD": self.td,
+            "CTD": self.ctd,
             "SD": self.sd,
             "TXT": self.txt,
         }
@@ -84,7 +103,6 @@ class PLC:
 
         # Update previous values for edge detection
         self.memory.end_scan_cycle()
-
 
     def _execute_program_block(self, program_block: ProgramBlock, context: PLCExecutionContext):
         """Execute a program block (main or subroutine) rung by rung.
@@ -131,3 +149,19 @@ class PLC:
                     branch.is_active = False
                     branch.chain_active = False
                     branch.handle_outputs_on_branch_false(context)
+
+    def initialize_on_power_up(self):
+        """Initialize memory on power-up or mode transition from STOP to RUN"""
+        for bank_name, bank in self.address_types.items():
+            for i in range(bank.start_addr, bank.end_addr + 1):
+                try:
+                    address_str = bank._make_address_str(i)
+                    # Get the variable (will create it if it doesn't exist)
+                    var = bank[i]
+
+                    # If the variable is non-retentive, reset to initial value
+                    if not var.is_retentive:
+                        var.set_value(var.initial_value)
+                except Exception as e:
+                    # Log error and continue
+                    print(f"Error initializing {bank_name}{i}: {e}")
