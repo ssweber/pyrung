@@ -109,30 +109,30 @@ def reset(target: PLCVariable, *, plc=None, current_context=None):
 @requires_rung_context_or_branch
 def copy(
     source: Union[PLCVariable, Any],
-    target: PLCVariable,
+    dest: PLCVariable,
     oneshot: bool = False,
     *,
     plc=None,
     current_context=None,
 ):
     """Create a basic copy instruction"""
-    instruction = CopyInstruction(source, target, oneshot)
+    instruction = CopyInstruction(source, dest, oneshot)
     current_context.add_instruction(instruction)
-    return target
+    return dest
 
 
 @requires_rung_context_or_branch
 def copy_block(
     source_start: PLCVariable,
+    source_end: PLCVariable,
     dest_start: PLCVariable,
-    count: int,
     oneshot: bool = False,
     *,
     plc=None,
     current_context=None,
 ):
     """Create a copy block instruction"""
-    instruction = CopyBlockInstruction(source_start, dest_start, count, oneshot)
+    instruction = CopyBlockInstruction(source_start, source_end, dest_start, oneshot)
     current_context.add_instruction(instruction)
     return dest_start
 
@@ -141,7 +141,7 @@ def copy_block(
 def copy_fill(
     source: Union[PLCVariable, Any],
     dest_start: PLCVariable,
-    count: int,
+    dest_end: PLCVariable,
     oneshot: bool = False,
     *,
     plc=None,
@@ -155,9 +155,9 @@ def copy_fill(
 
 @requires_rung_context_or_branch
 def copy_pack(
-    source_bit_start: PLCVariable,
-    dest_word: PLCVariable,
-    bit_count: int,
+    source_start: PLCVariable,
+    source_end: PLCVariable,
+    dest: PLCVariable,
     oneshot: bool = False,
     *,
     plc=None,
@@ -172,8 +172,8 @@ def copy_pack(
 @requires_rung_context_or_branch
 def copy_unpack(
     source_word: PLCVariable,
-    dest_bit_start: PLCVariable,
-    bit_count: int,
+    dest_start: PLCVariable,
+    dest_end: PLCVariable,
     oneshot: bool = False,
     *,
     plc=None,

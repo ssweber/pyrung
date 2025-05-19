@@ -65,7 +65,7 @@ def test_nested_rungs():
             out(y.Light)
             with branch(c.AutoMode):  # Nested rung that depends on AutoMode
                 out(y.NestedLight)
-                copy_fill(1, ds.Step, 5, oneshot=True)
+                copy(1, ds.Step, oneshot=True)
                 call("sub")
         #         with Rung(ds.Step == 1):
         #             reset(y.Light)

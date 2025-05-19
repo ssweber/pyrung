@@ -99,17 +99,17 @@ class CopyInstruction(OneShotCapableInstruction):
     """Copy Instruction (MOV/CPY) - Single Value Copy"""
 
     def __init__(
-        self, source: Union["PLCVariable", Any], target: "PLCVariable", oneshot: bool = False
+        self, source: Union["PLCVariable", Any], dest: "PLCVariable", oneshot: bool = False
     ):
         super().__init__(oneshot=oneshot)
 
         # Validate target is a PLCVariable
-        if not isinstance(target, PLCVariable):
+        if not isinstance(dest, PLCVariable):
             raise TypeError(f"Target must be a PLCVariable, got {type(target)}")
 
         # Store source & target
         self.source = source
-        self.target = target
+        self.dest = dest
 
         # Type validation for direct source-to-target compatibility
         # If source is a PLCVariable, use new compatibility checking methods
@@ -118,7 +118,7 @@ class CopyInstruction(OneShotCapableInstruction):
         else:
             # For literal values, attempt validation through target's data type
             try:
-                target.address_type.data_type_def.validate(source)
+                dest.address_type.data_type_def.validate(source)
             except (ValueError, TypeError) as e:
                 raise TypeError(
                     f"Source value {source} cannot be converted to target type "
@@ -133,7 +133,7 @@ class CopyInstruction(OneShotCapableInstruction):
             else:
                 value = self.source
 
-            self.target.set_value(value)
+            self.dest.set_value(value)
         except (ValueError, TypeError) as e:
             # In case runtime value is incompatible with target type
             plc = get_current_plc()
@@ -143,7 +143,7 @@ class CopyInstruction(OneShotCapableInstruction):
     def __str__(self):
         source_str = str(self.source) if not isinstance(self.source, str) else f"'{self.source}'"
         oneshot_str = ", ONS" if self.oneshot else ""
-        return f"CPY({source_str}, {self.target}{oneshot_str})"
+        return f"CPY({source_str}, {self.dest}{oneshot_str})"
 
 
 class CopyBlockInstruction(OneShotCapableInstruction):
