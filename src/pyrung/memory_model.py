@@ -332,86 +332,6 @@ class PLCVariable:
             raise TypeError(f"Incompatible data types for copy: {source_type} to {target_type}")
         return True
 
-    def check_pack_allowed(self, target_var: "PLCVariable", bit_count: int = 0) -> bool:
-        """
-        Check if this variable can be packed into the target variable.
-        Returns True if allowed, otherwise raises TypeError.
-        """
-        # First check if source is bit or TXT type
-        source_is_bit = isinstance(self.address_type.data_type_def, BitType)
-        source_is_txt = isinstance(self.address_type.data_type_def, TxtType)
-        source_is_int = isinstance(self.address_type.data_type_def, IntType)
-
-        if not (source_is_bit or source_is_txt or source_is_int):
-            raise TypeError(
-                f"Source for pack operation must be a Bit, TXT, or INT type, got "
-                f"{self.address_type.data_type_def.__class__.__name__}"
-            )
-
-        # Check if target is a word type
-        if isinstance(target_var.address_type.data_type_def, BitType):
-            raise TypeError(
-                f"Destination for pack operation must be a word type, not "
-                f"{target_var.address_type.data_type_def.__class__.__name__}"
-            )
-
-        # Check bank-specific rules
-        if not self.address_type.can_pack_to(target_var.address_type):
-            raise TypeError(
-                f"Pack operation not allowed from {self.address_type.name} "
-                f"to {target_var.address_type.name}"
-            )
-
-        # Check bit_count is within limits for destination word size
-        if source_is_bit and bit_count > 0:
-            dest_size_in_bits = 16  # Default for most word types
-            if isinstance(target_var.address_type.data_type_def, Int2Type):
-                dest_size_in_bits = 32
-
-            if bit_count > dest_size_in_bits:
-                raise ValueError(
-                    f"Bit count {bit_count} exceeds the size of destination word ({dest_size_in_bits} bits)"
-                )
-
-        return True
-
-    def check_unpack_allowed(self, target_var: "PLCVariable", bit_count: int = 0) -> bool:
-        """
-        Check if this variable can be unpacked into the target variable.
-        Returns True if allowed, otherwise raises TypeError.
-        """
-        # Check if source is a word type
-        if isinstance(self.address_type.data_type_def, BitType):
-            raise TypeError(
-                f"Source for unpack operation must be a word type, not "
-                f"{self.address_type.data_type_def.__class__.__name__}"
-            )
-
-        # For most unpack operations, the target is a bit type
-        # But for some cases like DD->DS or DF->DS, it's word-to-word
-        is_target_bit = isinstance(target_var.address_type.data_type_def, BitType)
-        is_target_word = not is_target_bit
-
-        # Check bank-specific rules
-        if not self.address_type.can_unpack_to(target_var.address_type):
-            raise TypeError(
-                f"Unpack operation not allowed from {self.address_type.name} "
-                f"to {target_var.address_type.name}"
-            )
-
-        # Check bit_count is within limits for source word size when unpacking to bits
-        if is_target_bit and bit_count > 0:
-            source_size_in_bits = 16  # Default for most word types
-            if isinstance(self.address_type.data_type_def, Int2Type):
-                source_size_in_bits = 32
-
-            if bit_count > source_size_in_bits:
-                raise ValueError(
-                    f"Bit count {bit_count} exceeds the size of source word ({source_size_in_bits} bits)"
-                )
-
-        return True
-
     # Comparison operators
     def __eq__(self, other):
         from conditions import ComparisonCondition
@@ -691,10 +611,6 @@ class XBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """X bits can pack into DH bank"""
-        return isinstance(target_bank, DHBank)
-
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # Inputs are not typically "reset" by rung logic, so do nothing
         pass
@@ -714,10 +630,6 @@ class YBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
         self._latched_addresses: Set[Address] = set()  # Track which Y bits were set with latch()
-
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """Y bits can pack into DH bank"""
-        return isinstance(target_bank, DHBank)
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -745,10 +657,6 @@ class CBank(AddressType):
         self._latched_addresses: Set[Address] = (
             set()
         )  # Track which C bits were set and shouldn't auto-reset
-
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """C bits can pack into DS, DD, DF, and DH banks"""
-        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank))
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -783,10 +691,6 @@ class SCBank(AddressType):
         # Set the default nicknames
         for bit_num, nickname in self._default_nicknames.items():
             self[bit_num] = nickname
-
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """SC bits can pack into DH bank"""
-        return isinstance(target_bank, DHBank)
 
     def mark_as_latched(self, address: Address):
         """Mark an address as having been set with a set() instruction"""
@@ -849,10 +753,6 @@ class TBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """T bits can pack into DH bank"""
-        return isinstance(target_bank, DHBank)
-
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         if not variable.is_retentive:
             variable.set_value(variable.initial_value)
@@ -872,10 +772,6 @@ class CTBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """CT bits can pack into DH bank"""
-        return isinstance(target_bank, DHBank)
-
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         if not variable.is_retentive:
             variable.set_value(variable.initial_value)
@@ -894,14 +790,6 @@ class DSBank(AddressType):
             default_retentive=True,  # DS is retentive by default
             allows_retentive_config=True,  # Allow per-address configuration
         )
-
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """DS integers can pack into DD and DF banks"""
-        return isinstance(target_bank, (DDBank, DFBank))
-
-    def can_unpack_to(self, target_bank: "AddressType") -> bool:
-        """DS can unpack into C bank"""
-        return isinstance(target_bank, CBank)
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DS is typically retentive, so do nothing when rung goes false
@@ -926,10 +814,6 @@ class DDBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
-    def can_unpack_to(self, target_bank: "AddressType") -> bool:
-        """DD can unpack into C, DS, and DH banks"""
-        return isinstance(target_bank, (CBank, DSBank, DHBank))
-
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DD is retentive by default, similar to DS
         if not variable.is_retentive:
@@ -952,10 +836,6 @@ class DFBank(AddressType):
             allows_retentive_config=True,  # Allow per-address configuration
         )
 
-    def can_unpack_to(self, target_bank: "AddressType") -> bool:
-        """DF can unpack into C and DS banks"""
-        return isinstance(target_bank, (CBank, DSBank, DHBank))
-
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DF is retentive by default
         if not variable.is_retentive:
@@ -977,14 +857,6 @@ class DHBank(AddressType):
             default_retentive=True,  # DH is retentive by default
             allows_retentive_config=True,  # Allow per-address configuration
         )
-        
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """DS integers can pack into DD and DF banks"""
-        return isinstance(target_bank, DDBank)
-
-    def can_unpack_to(self, target_bank: "AddressType") -> bool:
-        """DH can unpack into C and Y banks"""
-        return isinstance(target_bank, (CBank, YBank))
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # DH is retentive by default
@@ -1104,10 +976,6 @@ class TXTBank(AddressType):
             default_retentive=True,  # TXT is always retentive
             allows_retentive_config=False,  # No per-address configuration for TXT
         )
-
-    def can_pack_to(self, target_bank: "AddressType") -> bool:
-        """TXT can pack into DS, DD, DF, DH, TD, and CTD banks"""
-        return isinstance(target_bank, (DSBank, DDBank, DFBank, DHBank, TDBank, CTDBank, SDBank))
 
     def handle_rung_continuity_lost(self, variable: PLCVariable, context: PLCExecutionContext):
         # TXT is retentive, so do nothing when rung goes false
