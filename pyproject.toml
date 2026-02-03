@@ -137,8 +137,7 @@ root = ["./src", "./tests", "./devtools"]
 
 [tool.ty.src]
 exclude = [
-    "examples/*",
-    "poc/*",
+    "scratchpad/*",
 ]
 
 [tool.ty.rules]
