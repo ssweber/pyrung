@@ -39,6 +39,7 @@ classifiers = [
 # ---- Main dependencies ----
 
 dependencies = [
+    "pyrsistent>=0.20.0",
 ]
 
 
@@ -136,6 +137,8 @@ root = ["./src", "./tests", "./devtools"]
 
 [tool.ty.src]
 exclude = [
+    "examples/*",
+    "poc/*",
 ]
 
 [tool.ty.rules]

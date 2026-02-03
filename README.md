@@ -4,7 +4,7 @@ A Python DSL (Domain Specific Language) for representing and simulating Ladder L
 
 ## Status
 
-PLANNING ONLY * INITIAL COMMIT
+**Proof of Concept** - The core execution engine works, but the library is under active development.
 
 ## Goals
 
@@ -29,3 +29,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 runner.patch({"Button": True})
 runner.step()
 ```
+
+## Documentation
+
+See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.
