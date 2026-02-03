@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(make:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run pytest:*)",
+      "WebFetch(domain:pyrsistent.readthedocs.io)"
+    ]
+  }
+}
