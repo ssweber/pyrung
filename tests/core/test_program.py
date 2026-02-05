@@ -585,3 +585,206 @@ class TestSubroutineAndCall:
         # Main rung executed, subroutine NOT called
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is False
+
+
+class TestSubroutineDecorator:
+    """Test @subroutine('name') decorator syntax."""
+
+    def test_decorator_subroutine_defined_and_called(self):
+        """Decorated subroutine is auto-registered and executed when called."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        Light = Bit("Light")
+        SubLight = Bit("SubLight")
+
+        @subroutine("init")
+        def init_sequence():
+            with Rung():
+                out(SubLight)
+
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+                call(init_sequence)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Button": True, "Light": False, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light"] is True
+        assert runner.current_state.tags["SubLight"] is True
+
+    def test_decorator_subroutine_not_executed_directly(self):
+        """Decorated subroutine rungs are not in the main scan."""
+        from pyrung.core.program import Program, Rung, out, subroutine
+
+        Light = Bit("Light")
+        SubLight = Bit("SubLight")
+
+        @subroutine("my_sub")
+        def my_sub():
+            with Rung():
+                out(SubLight)
+
+        with Program() as logic:
+            with Rung():
+                out(Light)
+
+        # Subroutine was never call()'d, so not registered
+        runner = PLCRunner(logic)
+        runner.patch({"Light": False, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light"] is True
+        assert runner.current_state.tags["SubLight"] is False
+
+    def test_decorator_subroutine_not_called_when_rung_false(self):
+        """Decorated subroutine is not executed when calling rung is false."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        Light = Bit("Light")
+        SubLight = Bit("SubLight")
+
+        @subroutine("my_sub")
+        def my_sub():
+            with Rung():
+                out(SubLight)
+
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+                call(my_sub)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Button": False, "Light": False, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light"] is False
+        assert runner.current_state.tags["SubLight"] is False
+
+    def test_decorator_subroutine_with_conditional_rung(self):
+        """Decorated subroutine rungs have their own conditions."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        Step = Int("Step")
+        Light = Bit("Light")
+        SubLight = Bit("SubLight")
+
+        @subroutine("my_sub")
+        def my_sub():
+            with Rung(Step == 1):
+                out(SubLight)
+
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+                call(my_sub)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Button": True, "Step": 0, "Light": False, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light"] is True
+        assert runner.current_state.tags["SubLight"] is False
+
+        runner.patch({"Step": 1})
+        runner.step()
+
+        assert runner.current_state.tags["SubLight"] is True
+
+    def test_decorator_outside_program_raises(self):
+        """call() with decorated subroutine outside Program raises error."""
+        import pytest
+
+        from pyrung.core.program import Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        Light = Bit("Light")
+
+        @subroutine("my_sub")
+        def my_sub():
+            with Rung():
+                out(Light)
+
+        with pytest.raises(RuntimeError, match="must be used inside a Program"):
+            with Rung(Button):
+                call(my_sub)
+
+    def test_decorator_with_program_decorator(self):
+        """@subroutine works with @program decorator."""
+        from pyrung.core.program import Program, Rung, call, out, program, subroutine
+
+        Button = Bit("Button")
+        SubLight = Bit("SubLight")
+
+        @subroutine("init")
+        def init_sequence():
+            with Rung():
+                out(SubLight)
+
+        @program
+        def my_logic():
+            with Rung(Button):
+                call(init_sequence)
+
+        assert isinstance(my_logic, Program)
+        assert "init" in my_logic.subroutines
+
+        runner = PLCRunner(my_logic)
+        runner.patch({"Button": True, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["SubLight"] is True
+
+    def test_decorator_and_context_manager_coexist(self):
+        """Decorator and context-manager subroutines can coexist."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        Light1 = Bit("Light1")
+        Light2 = Bit("Light2")
+
+        @subroutine("dec_sub")
+        def dec_sub():
+            with Rung():
+                out(Light1)
+
+        with Program() as logic:
+            with Rung(Button):
+                call(dec_sub)
+                call("ctx_sub")
+
+            with subroutine("ctx_sub"):
+                with Rung():
+                    out(Light2)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Button": True, "Light1": False, "Light2": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light1"] is True
+        assert runner.current_state.tags["Light2"] is True
+
+    def test_call_still_accepts_string(self):
+        """Existing string-based call() API is unchanged."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bit("Button")
+        SubLight = Bit("SubLight")
+
+        with Program() as logic:
+            with Rung(Button):
+                call("my_sub")
+
+            with subroutine("my_sub"):
+                with Rung():
+                    out(SubLight)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Button": True, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["SubLight"] is True

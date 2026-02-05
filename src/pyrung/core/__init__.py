@@ -39,6 +39,7 @@ from pyrung.core.memory_bank import (
 from pyrung.core.program import (
     Program,
     Rung,
+    SubroutineFunc,
     any_of,
     blockcopy,
     branch,
@@ -114,6 +115,7 @@ __all__ = [
     # Program structure
     "Program",
     "Rung",
+    "SubroutineFunc",
     "program",
     "branch",
     "subroutine",

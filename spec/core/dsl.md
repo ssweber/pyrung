@@ -84,6 +84,8 @@ with Rung(MainCondition):
 
 ### Subroutines
 
+**Context-manager style** (defined inline within a Program):
+
 ```python
 with subroutine("my_sub"):
     with Rung(Step == 1):
@@ -94,9 +96,29 @@ with Rung(EnableSub):
     call("my_sub")
 ```
 
+**Decorator style** (defined outside, auto-registered on first `call()`):
+
+```python
+@subroutine("init")
+def init_sequence():
+    with Rung():
+        out(SubLight)
+
+with Program() as logic:
+    with Rung(Button):
+        call(init_sequence)   # auto-registers + creates call instruction
+
+# Also works with @program:
+@program
+def my_logic():
+    with Rung(Button):
+        call(init_sequence)
+```
+
 - Subroutines are named groups of rungs.
-- `call()` is an instruction that transfers execution.
-- Subroutines are defined within the `Program` context.
+- `call()` is an instruction that transfers execution. It accepts either a string name or a `SubroutineFunc` (decorated function).
+- Context-manager subroutines are defined within the `Program` context.
+- Decorator subroutines are defined outside and auto-registered with the current Program when first passed to `call()`.
 
 ---
 

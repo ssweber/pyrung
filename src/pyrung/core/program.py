@@ -356,10 +356,11 @@ def any_of(*conditions: Condition | Tag) -> AnyCondition:
     return AnyCondition(*conditions)
 
 
-def call(subroutine_name: str) -> None:
+def call(target: str | SubroutineFunc) -> None:
     """Call a subroutine instruction.
 
     Executes the named subroutine when the rung is true.
+    Accepts either a string name or a @subroutine-decorated function.
 
     Example:
         with Rung(Button):
@@ -368,12 +369,30 @@ def call(subroutine_name: str) -> None:
         with subroutine("init_sequence"):
             with Rung():
                 out(Light)
+
+        # Or with decorator:
+        @subroutine("init")
+        def init_sequence():
+            with Rung():
+                out(Light)
+
+        with Program() as logic:
+            with Rung(Button):
+                call(init_sequence)
     """
     ctx = _require_rung_context("call")
     prog = Program.current()
     if prog is None:
         raise RuntimeError("call() must be used inside a Program context")
-    ctx._rung.add_instruction(CallInstruction(subroutine_name, prog))
+
+    if isinstance(target, SubroutineFunc):
+        name = target.name
+        if name not in prog.subroutines:
+            target._register(prog)
+    else:
+        name = target
+
+    ctx._rung.add_instruction(CallInstruction(name, prog))
 
 
 # ============================================================================
@@ -424,10 +443,54 @@ class Subroutine:
         prog.start_subroutine(self._name)
         return self
 
+    def __call__(self, fn: Callable[[], None]) -> SubroutineFunc:
+        """Use subroutine() as a decorator.
+
+        Example:
+            @subroutine("init")
+            def init_sequence():
+                with Rung():
+                    out(Light)
+        """
+        return SubroutineFunc(self._name, fn)
+
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         prog = Program.current()
         if prog is not None:
             prog.end_subroutine()
+
+
+class SubroutineFunc:
+    """A decorated function that represents a subroutine.
+
+    Created by using @subroutine("name") as a decorator. When passed to call(),
+    auto-registers with the current Program on first use.
+
+    Example:
+        @subroutine("init")
+        def init_sequence():
+            with Rung():
+                out(Light)
+
+        with Program() as logic:
+            with Rung(Button):
+                call(init_sequence)
+    """
+
+    def __init__(self, name: str, fn: Callable[[], None]) -> None:
+        self._name = name
+        self._fn = fn
+
+    @property
+    def name(self) -> str:
+        """The subroutine name."""
+        return self._name
+
+    def _register(self, prog: Program) -> None:
+        """Register this subroutine's rungs with a Program."""
+        prog.start_subroutine(self._name)
+        self._fn()
+        prog.end_subroutine()
 
 
 def subroutine(name: str) -> Subroutine:
