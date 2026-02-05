@@ -14,14 +14,14 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_bank import IndirectTag
+    from pyrung.core.memory_bank import IndirectRef
 
 
-def resolve_tag_or_value_ctx(source: Tag | IndirectTag | Any, ctx: ScanContext) -> Any:
+def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
     """Resolve tag (direct or indirect), expression, or return literal value using ScanContext.
 
     Args:
-        source: Tag, IndirectTag, Expression, or literal value.
+        source: Tag, IndirectRef, IndirectExprRef, Expression, or literal value.
         ctx: ScanContext for resolving values with read-after-write visibility.
 
     Returns:
@@ -29,13 +29,18 @@ def resolve_tag_or_value_ctx(source: Tag | IndirectTag | Any, ctx: ScanContext) 
     """
     # Import here to avoid circular imports
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_bank import IndirectTag as IndirectTagType
+    from pyrung.core.memory_bank import IndirectExprRef
+    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
 
     # Check for Expression first (includes TagExpr)
     if isinstance(source, Expression):
         return source.evaluate(ctx)
-    # Check for IndirectTag
-    if isinstance(source, IndirectTagType):
+    # Check for IndirectExprRef
+    if isinstance(source, IndirectExprRef):
+        resolved_tag = source.resolve_ctx(ctx)
+        return ctx.get_tag(resolved_tag.name, resolved_tag.default)
+    # Check for IndirectRef
+    if isinstance(source, IndirectRefType):
         resolved_tag = source.resolve_ctx(ctx)
         return ctx.get_tag(resolved_tag.name, resolved_tag.default)
     # Check for Tag
@@ -45,21 +50,26 @@ def resolve_tag_or_value_ctx(source: Tag | IndirectTag | Any, ctx: ScanContext) 
     return source
 
 
-def resolve_tag_name_ctx(target: Tag | IndirectTag, ctx: ScanContext) -> str:
+def resolve_tag_name_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> str:
     """Resolve tag to its name (handling indirect) using ScanContext.
 
     Args:
-        target: Tag or IndirectTag to resolve.
-        ctx: ScanContext for resolving indirect tags.
+        target: Tag, IndirectRef, or IndirectExprRef to resolve.
+        ctx: ScanContext for resolving indirect references.
 
     Returns:
         The tag name string.
     """
     # Import here to avoid circular imports
-    from pyrung.core.memory_bank import IndirectTag as IndirectTagType
+    from pyrung.core.memory_bank import IndirectExprRef
+    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
 
-    # Check for IndirectTag first
-    if isinstance(target, IndirectTagType):
+    # Check for IndirectExprRef first
+    if isinstance(target, IndirectExprRef):
+        resolved_tag = target.resolve_ctx(ctx)
+        return resolved_tag.name
+    # Check for IndirectRef
+    if isinstance(target, IndirectRefType):
         resolved_tag = target.resolve_ctx(ctx)
         return resolved_tag.name
     # Regular Tag
@@ -163,12 +173,12 @@ class CopyInstruction(OneShotMixin, Instruction):
     """Copy instruction (CPY/MOV).
 
     Copies a value from source to target.
-    Source can be a literal value, Tag, or IndirectTag.
-    Target can be a Tag or IndirectTag.
+    Source can be a literal value, Tag, or IndirectRef.
+    Target can be a Tag or IndirectRef.
     """
 
     def __init__(
-        self, source: Tag | IndirectTag | Any, target: Tag | IndirectTag, oneshot: bool = False
+        self, source: Tag | IndirectRef | Any, target: Tag | IndirectRef, oneshot: bool = False
     ):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
@@ -178,10 +188,10 @@ class CopyInstruction(OneShotMixin, Instruction):
         if not self.should_execute():
             return
 
-        # Resolve source value (handles Tag, IndirectTag, or literal)
+        # Resolve source value (handles Tag, IndirectRef, or literal)
         value = resolve_tag_or_value_ctx(self.source, ctx)
 
-        # Resolve target name (handles Tag or IndirectTag)
+        # Resolve target name (handles Tag or IndirectRef)
         target_name = resolve_tag_name_ctx(self.target, ctx)
 
         ctx.set_tag(target_name, value)

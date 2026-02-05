@@ -1,20 +1,23 @@
-"""Tests for MemoryBank, MemoryBlock, and IndirectTag.
+"""Tests for Block, BlockRange, IndirectRef, InputBlock, OutputBlock.
 
-Milestone 6: MemoryBank & Pointer Addressing
+Aligned to types.md spec: inclusive bounds, .select(), no Click-specific features.
 """
 
 import pytest
 
 from pyrung.core import (
+    Block,
+    BlockRange,
     Bool,
-    Char,
     Dint,
-    IndirectTag,
+    ImmediateRef,
+    IndirectRef,
+    InputBlock,
+    InputTag,
     Int,
-    MemoryBank,
-    MemoryBlock,
+    OutputBlock,
+    OutputTag,
     Program,
-    Real,
     Rung,
     SystemState,
     Tag,
@@ -22,71 +25,20 @@ from pyrung.core import (
     copy,
     out,
 )
+from pyrung.core.memory_bank import IndirectBlockRange
 from tests.conftest import evaluate_condition, evaluate_program
 
 # =============================================================================
-# TagType Renaming Tests
+# Block Tests (replaces MemoryBank)
 # =============================================================================
 
 
-class TestTagTypeRenaming:
-    """Test IEC 61131-3 naming for TagType."""
-
-    def test_new_names_exist(self):
-        """New IEC 61131-3 names should exist."""
-        assert TagType.BOOL.value == "bool"
-        assert TagType.INT.value == "int"
-        assert TagType.DINT.value == "dint"
-        assert TagType.REAL.value == "real"
-        assert TagType.WORD.value == "word"
-        assert TagType.CHAR.value == "char"
-
-    def test_deprecated_aliases_work(self):
-        """Deprecated aliases should resolve to new names."""
-        assert TagType("bit") == TagType.BOOL
-        assert TagType("int2") == TagType.DINT
-        assert TagType("float") == TagType.REAL
-        assert TagType("hex") == TagType.WORD
-        assert TagType("txt") == TagType.CHAR
-
-    def test_new_helper_functions(self):
-        """New helper functions create correct types."""
-        assert Bool("x").type == TagType.BOOL
-        assert Int("x").type == TagType.INT
-        assert Dint("x").type == TagType.DINT
-        assert Real("x").type == TagType.REAL
-        assert Char("x").type == TagType.CHAR
-
-    def test_deprecated_helper_functions(self):
-        """Deprecated helper functions still work."""
-        from pyrung.core.tag import Bit, Float, Int2, Txt
-
-        assert Bit("x").type == TagType.BOOL
-        assert Int2("x").type == TagType.DINT
-        assert Float("x").type == TagType.REAL
-        assert Txt("x").type == TagType.CHAR
-
-    def test_default_values(self):
-        """Default values are set correctly for each type."""
-        assert Bool("x").default is False
-        assert Int("x").default == 0
-        assert Dint("x").default == 0
-        assert Real("x").default == 0.0
-        assert Tag("x", TagType.WORD).default == 0
-        assert Char("x").default == ""
-
-
-# =============================================================================
-# MemoryBank Tests
-# =============================================================================
-
-
-class TestMemoryBank:
-    """Test MemoryBank factory class."""
+class TestBlock:
+    """Test Block factory class."""
 
     def test_single_tag_access(self):
-        """MemoryBank[addr] returns a Tag with correct properties."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=True)
+        """Block[addr] returns a Tag with correct properties."""
+        DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
         tag = DS[100]
 
         assert isinstance(tag, Tag)
@@ -96,7 +48,7 @@ class TestMemoryBank:
 
     def test_tag_caching(self):
         """Same address returns same Tag instance."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        DS = Block("DS", TagType.INT, 1, 4500)
         tag1 = DS[100]
         tag2 = DS[100]
 
@@ -104,7 +56,7 @@ class TestMemoryBank:
 
     def test_different_addresses_different_tags(self):
         """Different addresses return different Tag instances."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        DS = Block("DS", TagType.INT, 1, 4500)
         tag1 = DS[100]
         tag2 = DS[101]
 
@@ -112,37 +64,43 @@ class TestMemoryBank:
         assert tag1.name == "DS100"
         assert tag2.name == "DS101"
 
-    def test_range_validation_low(self):
-        """Address below range raises ValueError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+    def test_zero_index_raises(self):
+        """Address 0 raises IndexError."""
+        DS = Block("DS", TagType.INT, 1, 4500)
 
-        with pytest.raises(ValueError, match="out of range"):
+        with pytest.raises(IndexError, match="Address 0 is not valid"):
             DS[0]
 
-    def test_range_validation_high(self):
-        """Address above range raises ValueError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+    def test_range_validation_low(self):
+        """Address below range raises IndexError."""
+        DS = Block("DS", TagType.INT, 2, 4500)
 
-        with pytest.raises(ValueError, match="out of range"):
+        with pytest.raises(IndexError, match="out of range"):
+            DS[1]
+
+    def test_range_validation_high(self):
+        """Address above range raises IndexError."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+
+        with pytest.raises(IndexError, match="out of range"):
             DS[4501]
 
     def test_range_boundaries(self):
-        """Boundary addresses work correctly."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """Boundary addresses work correctly (inclusive)."""
+        DS = Block("DS", TagType.INT, 1, 4500)
 
-        # Valid boundaries
         tag_low = DS[1]
         tag_high = DS[4500]
 
         assert tag_low.name == "DS1"
         assert tag_high.name == "DS4500"
 
-    def test_different_bank_types(self):
-        """Different banks have correct types."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
-        C = MemoryBank("C", TagType.BOOL, range(1, 2001))
-        DF = MemoryBank("DF", TagType.REAL, range(1, 501))
+    def test_different_block_types(self):
+        """Different blocks have correct types."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        DD = Block("DD", TagType.DINT, 1, 1000)
+        C = Block("C", TagType.BOOL, 1, 2000)
+        DF = Block("DF", TagType.REAL, 1, 500)
 
         assert DS[1].type == TagType.INT
         assert DD[1].type == TagType.DINT
@@ -150,51 +108,76 @@ class TestMemoryBank:
         assert DF[1].type == TagType.REAL
 
     def test_retentive_default(self):
-        """Non-retentive bank creates non-retentive tags."""
-        C = MemoryBank("C", TagType.BOOL, range(1, 2001), retentive=False)
+        """Non-retentive block creates non-retentive tags."""
+        C = Block("C", TagType.BOOL, 1, 2000, retentive=False)
         assert C[1].retentive is False
 
     def test_retentive_explicit(self):
-        """Retentive bank creates retentive tags."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=True)
+        """Retentive block creates retentive tags."""
+        DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
         assert DS[1].retentive is True
 
+    def test_start_must_be_at_least_1(self):
+        """start < 1 raises ValueError."""
+        with pytest.raises(ValueError, match="start must be >= 1"):
+            Block("DS", TagType.INT, 0, 100)
+
+    def test_end_must_be_ge_start(self):
+        """end < start raises ValueError."""
+        with pytest.raises(ValueError, match="end.*must be >= start"):
+            Block("DS", TagType.INT, 10, 5)
+
+    def test_slice_raises_type_error(self):
+        """Slice syntax raises TypeError directing to .select()."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+
+        with pytest.raises(TypeError, match="Use .select"):
+            DS[100:110]
+
+    def test_repr(self):
+        """Block has useful repr."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        r = repr(DS)
+
+        assert "DS" in r
+        assert "INT" in r
+
 
 # =============================================================================
-# MemoryBlock Tests
+# Select Tests (replaces slice syntax)
 # =============================================================================
 
 
-class TestMemoryBlock:
-    """Test MemoryBlock for block operations."""
+class TestSelect:
+    """Test Block.select() for creating BlockRange."""
 
-    def test_slice_creates_block(self):
-        """MemoryBank[start:stop] creates MemoryBlock."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:110]
+    def test_select_creates_memory_block(self):
+        """select(start, end) creates BlockRange with inclusive bounds."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 109)
 
-        assert isinstance(block, MemoryBlock)
+        assert isinstance(block, BlockRange)
         assert block.start == 100
-        assert block.length == 10
+        assert block.end == 109
 
-    def test_block_length(self):
-        """len(block) returns correct length."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:110]
+    def test_select_length(self):
+        """len(block) returns correct length for inclusive bounds."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 109)
 
         assert len(block) == 10
 
-    def test_block_addresses(self):
-        """block.addresses returns correct range."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:110]
+    def test_select_addresses(self):
+        """block.addresses returns correct range (inclusive)."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 109)
 
         assert block.addresses == range(100, 110)
 
-    def test_block_tags(self):
+    def test_select_tags(self):
         """block.tags() returns list of Tags."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:103]
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 102)
         tags = block.tags()
 
         assert len(tags) == 3
@@ -202,52 +185,100 @@ class TestMemoryBlock:
         assert tags[1].name == "DS101"
         assert tags[2].name == "DS102"
 
-    def test_block_iteration(self):
+    def test_select_iteration(self):
         """Iterating over block yields Tags."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:103]
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 102)
 
         tags = list(block)
         assert len(tags) == 3
         assert all(isinstance(t, Tag) for t in tags)
 
-    def test_block_range_validation(self):
-        """Block with out-of-range addresses raises ValueError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+    def test_select_range_validation(self):
+        """select with out-of-range addresses raises IndexError."""
+        DS = Block("DS", TagType.INT, 1, 4500)
 
-        with pytest.raises(ValueError, match="out of range"):
-            DS[4500:4502]  # 4501 is out of range
+        with pytest.raises(IndexError, match="out of range"):
+            DS.select(4500, 4501)
 
-    def test_block_repr(self):
-        """Block has useful repr."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:110]
+    def test_select_single_address(self):
+        """select(n, n) creates single-address block."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 100)
+
+        assert len(block) == 1
+        tags = block.tags()
+        assert tags[0].name == "DS100"
+
+    def test_select_repr(self):
+        """BlockRange has useful repr."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 109)
 
         assert "DS" in repr(block)
         assert "100" in repr(block)
 
 
+class TestIndirectSelect:
+    """Test Block.select() with Tag/Expression bounds."""
+
+    def test_select_with_tag_bounds(self):
+        """select(Tag, Tag) creates IndirectBlockRange."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        start_tag = Int("Start")
+        end_tag = Int("End")
+
+        block = DS.select(start_tag, end_tag)
+        assert isinstance(block, IndirectBlockRange)
+
+    def test_select_with_mixed_bounds(self):
+        """select(int, Tag) creates IndirectBlockRange."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        end_tag = Int("End")
+
+        block = DS.select(100, end_tag)
+        assert isinstance(block, IndirectBlockRange)
+
+    def test_indirect_memory_block_resolve(self):
+        """IndirectBlockRange resolves to BlockRange at scan time."""
+        from pyrung.core import ScanContext
+
+        DS = Block("DS", TagType.INT, 1, 4500)
+        start_tag = Int("Start")
+        end_tag = Int("End")
+
+        indirect_block = DS.select(start_tag, end_tag)
+        state = SystemState().with_tags({"Start": 100, "End": 105})
+        ctx = ScanContext(state)
+
+        resolved = indirect_block.resolve_ctx(ctx)
+        assert isinstance(resolved, BlockRange)
+        assert resolved.start == 100
+        assert resolved.end == 105
+        assert len(resolved) == 6
+
+
 # =============================================================================
-# IndirectTag Tests
+# IndirectRef Tests (replaces IndirectTag)
 # =============================================================================
 
 
-class TestIndirectTag:
-    """Test IndirectTag for pointer addressing."""
+class TestIndirectRef:
+    """Test IndirectRef for pointer addressing."""
 
     def test_tag_key_creates_indirect(self):
-        """MemoryBank[Tag] creates IndirectTag."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """Block[Tag] creates IndirectRef."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
-        assert isinstance(indirect, IndirectTag)
-        assert indirect.bank is DS
+        assert isinstance(indirect, IndirectRef)
+        assert indirect.block is DS
         assert indirect.pointer is Index
 
     def test_resolve_basic(self):
-        """IndirectTag.resolve() returns correct Tag."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef.resolve() returns correct Tag."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -258,29 +289,29 @@ class TestIndirectTag:
 
     def test_resolve_default_pointer(self):
         """resolve() uses pointer default when not in state."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Tag("Index", TagType.INT, default=50)
         indirect = DS[Index]
 
-        state = SystemState()  # No Index in state
+        state = SystemState()
         resolved = indirect.resolve(state)
 
         assert resolved.name == "DS50"
 
     def test_resolve_out_of_range(self):
-        """resolve() raises ValueError for out-of-range pointer."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """resolve() raises IndexError for out-of-range pointer."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
-        state = SystemState().with_tags({"Index": 5000})  # Out of range
+        state = SystemState().with_tags({"Index": 5000})
 
-        with pytest.raises(ValueError, match="out of range"):
+        with pytest.raises(IndexError, match="out of range"):
             indirect.resolve(state)
 
     def test_indirect_repr(self):
-        """IndirectTag has useful repr."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef has useful repr."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -294,18 +325,17 @@ class TestIndirectTag:
 
 
 class TestIndirectConditions:
-    """Test comparison operators on IndirectTag."""
+    """Test comparison operators on IndirectRef."""
 
     def test_indirect_eq(self):
-        """IndirectTag == value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef == value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
         cond = indirect == 100
         assert hasattr(cond, "evaluate")
 
-        # Test evaluation
         state = SystemState().with_tags({"Index": 50, "DS50": 100})
         assert evaluate_condition(cond, state) is True
 
@@ -313,8 +343,8 @@ class TestIndirectConditions:
         assert evaluate_condition(cond, state) is False
 
     def test_indirect_ne(self):
-        """IndirectTag != value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef != value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -323,8 +353,8 @@ class TestIndirectConditions:
         assert evaluate_condition(cond, state) is True
 
     def test_indirect_lt(self):
-        """IndirectTag < value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef < value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -336,8 +366,8 @@ class TestIndirectConditions:
         assert evaluate_condition(cond, state) is False
 
     def test_indirect_le(self):
-        """IndirectTag <= value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef <= value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -349,8 +379,8 @@ class TestIndirectConditions:
         assert evaluate_condition(cond, state) is False
 
     def test_indirect_gt(self):
-        """IndirectTag > value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef > value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -362,8 +392,8 @@ class TestIndirectConditions:
         assert evaluate_condition(cond, state) is False
 
     def test_indirect_ge(self):
-        """IndirectTag >= value creates condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef >= value creates condition."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
@@ -381,11 +411,11 @@ class TestIndirectConditions:
 
 
 class TestIndirectInstructions:
-    """Test instructions with IndirectTag."""
+    """Test instructions with IndirectRef."""
 
     def test_copy_indirect_source(self):
         """copy(DD[Index], Result) copies from indirect source."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
         Result = Dint("Result")
 
@@ -400,7 +430,7 @@ class TestIndirectInstructions:
 
     def test_copy_indirect_target(self):
         """copy(Value, DD[Index]) copies to indirect target."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
         Value = Dint("Value")
 
@@ -414,8 +444,8 @@ class TestIndirectInstructions:
         assert state.tags["DD100"] == 42
 
     def test_copy_indirect_both(self):
-        """copy(DD[Src], DD[Dst]) copies between indirect tags."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        """copy(DD[Src], DD[Dst]) copies between indirect refs."""
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Src = Int("Src")
         Dst = Int("Dst")
 
@@ -430,7 +460,7 @@ class TestIndirectInstructions:
 
     def test_copy_literal_to_indirect(self):
         """copy(literal, DD[Index]) copies literal to indirect target."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
 
         with Program() as logic:
@@ -444,6 +474,91 @@ class TestIndirectInstructions:
 
 
 # =============================================================================
+# InputBlock Tests
+# =============================================================================
+
+
+class TestInputBlock:
+    """Test InputBlock creates InputTag instances."""
+
+    def test_input_block_creates_input_tags(self):
+        """InputBlock[addr] returns InputTag."""
+        X = InputBlock("X", TagType.BOOL, 1, 100)
+        tag = X[1]
+
+        assert isinstance(tag, InputTag)
+        assert tag.name == "X1"
+        assert tag.type == TagType.BOOL
+
+    def test_input_block_not_retentive(self):
+        """InputBlock tags are always non-retentive."""
+        X = InputBlock("X", TagType.BOOL, 1, 100)
+        tag = X[1]
+
+        assert tag.retentive is False
+
+    def test_input_tag_has_immediate(self):
+        """InputBlock tags have .immediate property."""
+        X = InputBlock("X", TagType.BOOL, 1, 100)
+        tag = X[1]
+        ref = tag.immediate
+
+        assert isinstance(ref, ImmediateRef)
+        assert ref.tag is tag
+
+    def test_input_block_is_block(self):
+        """InputBlock is a subclass of Block."""
+        X = InputBlock("X", TagType.BOOL, 1, 100)
+        assert isinstance(X, Block)
+
+    def test_input_block_caching(self):
+        """InputBlock caches tags like Block."""
+        X = InputBlock("X", TagType.BOOL, 1, 100)
+        tag1 = X[1]
+        tag2 = X[1]
+        assert tag1 is tag2
+
+
+# =============================================================================
+# OutputBlock Tests
+# =============================================================================
+
+
+class TestOutputBlock:
+    """Test OutputBlock creates OutputTag instances."""
+
+    def test_output_block_creates_output_tags(self):
+        """OutputBlock[addr] returns OutputTag."""
+        Y = OutputBlock("Y", TagType.BOOL, 1, 100)
+        tag = Y[1]
+
+        assert isinstance(tag, OutputTag)
+        assert tag.name == "Y1"
+        assert tag.type == TagType.BOOL
+
+    def test_output_block_not_retentive(self):
+        """OutputBlock tags are always non-retentive."""
+        Y = OutputBlock("Y", TagType.BOOL, 1, 100)
+        tag = Y[1]
+
+        assert tag.retentive is False
+
+    def test_output_tag_has_immediate(self):
+        """OutputBlock tags have .immediate property."""
+        Y = OutputBlock("Y", TagType.BOOL, 1, 100)
+        tag = Y[1]
+        ref = tag.immediate
+
+        assert isinstance(ref, ImmediateRef)
+        assert ref.tag is tag
+
+    def test_output_block_is_block(self):
+        """OutputBlock is a subclass of Block."""
+        Y = OutputBlock("Y", TagType.BOOL, 1, 100)
+        assert isinstance(Y, Block)
+
+
+# =============================================================================
 # Integration Tests
 # =============================================================================
 
@@ -453,7 +568,7 @@ class TestIntegration:
 
     def test_indirect_condition_in_rung(self):
         """Rung(DD[Index] > 100) evaluates indirect condition."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
         Flag = Bool("Flag")
 
@@ -473,7 +588,7 @@ class TestIntegration:
 
     def test_pointer_change_between_scans(self):
         """Pointer can change between scans affecting resolved address."""
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001))
+        DD = Block("DD", TagType.DINT, 1, 1000)
         Index = Int("Index")
         Result = Dint("Result")
 
@@ -493,18 +608,14 @@ class TestIntegration:
 
     def test_array_iteration_pattern(self):
         """Indirect addressing enables array-like iteration."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         Sum = Int("Sum")
 
-        # Manually increment index and accumulate
         with Program() as logic:
             with Rung():
-                # In real use, you'd have counter logic here
-                # For test, we just verify indirect access works
                 copy(DS[Index], Sum)
 
-        # Access different array elements by changing Index
         state = SystemState().with_tags({"Index": 10, "DS10": 100})
         state = evaluate_program(logic, state)
         assert state.tags["Sum"] == 100
@@ -513,14 +624,13 @@ class TestIntegration:
         state = evaluate_program(logic, state)
         assert state.tags["Sum"] == 200
 
-    def test_complete_click_style_banks(self):
-        """Define Click-style memory banks."""
-        # Click PLC memory banks
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=True)
-        DD = MemoryBank("DD", TagType.DINT, range(1, 1001), retentive=True)
-        DH = MemoryBank("DH", TagType.WORD, range(1, 501), retentive=True)
-        DF = MemoryBank("DF", TagType.REAL, range(1, 501), retentive=True)
-        C = MemoryBank("C", TagType.BOOL, range(1, 2001))
+    def test_complete_style_blocks(self):
+        """Define typed memory blocks."""
+        DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
+        DD = Block("DD", TagType.DINT, 1, 1000, retentive=True)
+        DH = Block("DH", TagType.WORD, 1, 500, retentive=True)
+        DF = Block("DF", TagType.REAL, 1, 500, retentive=True)
+        C = Block("C", TagType.BOOL, 1, 2000)
 
         # Verify types
         assert DS[1].type == TagType.INT
@@ -544,243 +654,29 @@ class TestEdgeCases:
 
     def test_invalid_key_type(self):
         """Invalid key type raises TypeError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        DS = Block("DS", TagType.INT, 1, 4500)
 
         with pytest.raises(TypeError, match="Invalid key type"):
             DS[3.14]  # float is not a valid key type
 
-    def test_unregistered_nickname_raises_keyerror(self):
-        """Accessing unregistered nickname raises KeyError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        with pytest.raises(KeyError, match="Nickname 'invalid' not registered"):
-            DS["invalid"]
-
     def test_indirect_hash(self):
-        """IndirectTag is hashable."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """IndirectRef is hashable."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
         indirect = DS[Index]
 
-        # Should not raise
         hash(indirect)
 
-        # Can be used in sets
         s = {indirect}
         assert indirect in s
 
-    def test_memory_block_empty_slice(self):
-        """Empty slice creates zero-length block."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        block = DS[100:100]
-
-        assert len(block) == 0
-        assert list(block) == []
-
     def test_indirect_equality_same(self):
-        """Two IndirectTags with same bank and pointer are equal."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
+        """Two IndirectRefs with same block and pointer share attributes."""
+        DS = Block("DS", TagType.INT, 1, 4500)
         Index = Int("Index")
 
         indirect1 = DS[Index]
         indirect2 = DS[Index]
 
-        # Note: == returns IndirectCompareEq condition, not bool
-        # For actual equality comparison, we check attributes
-        assert indirect1.bank == indirect2.bank
+        assert indirect1.block == indirect2.block
         assert indirect1.pointer == indirect2.pointer
-
-    def test_bank_repr(self):
-        """MemoryBank has useful repr."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        r = repr(DS)
-
-        assert "DS" in r
-        assert "INT" in r
-        assert "1" in r
-        assert "4501" in r
-
-
-# =============================================================================
-# Register and Nickname Tests
-# =============================================================================
-
-
-class TestRegister:
-    """Test tag registration with nicknames and configuration."""
-
-    def test_register_basic(self):
-        """Register creates a tag with nickname."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        tag = DS.register("Motor1Speed", 500)
-
-        assert tag.name == "DS500"
-        assert DS.nicknames["Motor1Speed"] == 500
-
-    def test_register_with_initial_value(self):
-        """Register with initial_value sets tag default."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        tag = DS.register("Setpoint", 100, initial_value=1500)
-
-        assert tag.default == 1500
-        assert DS.initial_values[100] == 1500
-
-    def test_register_retentive_override(self):
-        """Register can override bank's retentive default."""
-        # Bank defaults to non-retentive
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=False)
-        tag = DS.register("Counter", 200, retentive=True)
-
-        assert tag.retentive is True
-        assert 200 in DS.retentive_exceptions
-
-    def test_register_retentive_matches_default(self):
-        """Register with retentive matching default doesn't add to exceptions."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=False)
-        tag = DS.register("Counter", 200, retentive=False)
-
-        assert tag.retentive is False
-        assert 200 not in DS.retentive_exceptions
-
-    def test_register_retentive_ignores_initial_value(self):
-        """Retentive tags don't store initial_value."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        # Suppress expected warning for this test
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            DS.register("Counter", 200, initial_value=100, retentive=True)
-
-        # initial_value should not be stored for retentive tags
-        assert 200 not in DS.initial_values
-
-    def test_register_retentive_warns_on_meaningful_initial_value(self):
-        """Warning issued when retentive tag has meaningful initial_value."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        with pytest.warns(UserWarning, match="retentive.*initial_value"):
-            DS.register("Counter", 200, initial_value=100, retentive=True)
-
-    def test_register_retentive_no_warn_on_zero_initial_value(self):
-        """No warning when retentive tag has initial_value=0."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        # Should not warn
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            DS.register("Counter", 200, initial_value=0, retentive=True)
-
-    def test_register_retentive_no_warn_on_empty_string_initial_value(self):
-        """No warning when retentive tag has initial_value=''."""
-        DS = MemoryBank("DS", TagType.CHAR, range(1, 4501))
-
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            DS.register("Text", 200, initial_value="", retentive=True)
-
-    def test_register_out_of_range(self):
-        """Register with out-of-range address raises ValueError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        with pytest.raises(ValueError, match="out of range"):
-            DS.register("Invalid", 5000)
-
-    def test_register_re_registration_clears_cache(self):
-        """Re-registering an address clears the cached tag."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        # First registration
-        tag1 = DS.register("OldName", 100, initial_value=10)
-        assert tag1.default == 10
-
-        # Re-register with different config
-        tag2 = DS.register("NewName", 100, initial_value=20)
-        assert tag2.default == 20
-        assert tag1 is not tag2
-
-
-class TestNicknameAccess:
-    """Test accessing tags by nickname."""
-
-    def test_getitem_string_access(self):
-        """Access tag by nickname via __getitem__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        DS.register("Motor1Speed", 500)
-
-        tag = DS["Motor1Speed"]
-        assert tag.name == "DS500"
-
-    def test_getitem_string_with_spaces(self):
-        """Access tag with spaces in nickname."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        DS.register("Motor 1 Speed", 500)
-
-        tag = DS["Motor 1 Speed"]
-        assert tag.name == "DS500"
-
-    def test_getattr_access(self):
-        """Access tag by nickname via attribute."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-        DS.register("Motor1Speed", 500)
-
-        tag = DS.Motor1Speed
-        assert tag.name == "DS500"
-
-    def test_getattr_unregistered_raises_attributeerror(self):
-        """Accessing unregistered nickname via attr raises AttributeError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        with pytest.raises(AttributeError, match="no nickname 'Unknown'"):
-            _ = DS.Unknown
-
-    def test_getattr_internal_attributes_still_work(self):
-        """Internal attributes like 'name' still work."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501))
-
-        assert DS.name == "DS"
-        assert DS.tag_type == TagType.INT
-        assert DS.retentive is False
-
-
-class TestRetentiveExceptions:
-    """Test retentive_exceptions behavior."""
-
-    def test_bank_default_retentive_false(self):
-        """Non-retentive bank with retentive exceptions."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=False)
-        DS.retentive_exceptions.add(100)
-
-        tag_normal = DS[50]
-        tag_exception = DS[100]
-
-        assert tag_normal.retentive is False
-        assert tag_exception.retentive is True
-
-    def test_bank_default_retentive_true(self):
-        """Retentive bank with non-retentive exceptions."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=True)
-        DS.retentive_exceptions.add(100)
-
-        tag_normal = DS[50]
-        tag_exception = DS[100]
-
-        assert tag_normal.retentive is True
-        assert tag_exception.retentive is False
-
-    def test_initial_value_only_for_non_retentive(self):
-        """initial_values only apply to non-retentive tags."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 4501), retentive=True)
-        DS.initial_values[100] = 999
-        DS.retentive_exceptions.add(100)  # Make 100 non-retentive
-
-        tag_retentive = DS[50]  # Retentive, no initial_value
-        tag_non_retentive = DS[100]  # Non-retentive, has initial_value
-
-        assert tag_retentive.default == 0  # Type default
-        assert tag_non_retentive.default == 999

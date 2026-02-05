@@ -325,6 +325,43 @@ class Tag:
         return ~TagExpr(self)
 
 
+@dataclass(frozen=True)
+class ImmediateRef:
+    """Reference to the immediate (physical) value of an I/O tag.
+
+    Wraps an InputTag or OutputTag to access the physical I/O value
+    directly, bypassing the scan-cycle image table.
+    """
+
+    tag: Tag
+
+
+@dataclass(frozen=True)
+class InputTag(Tag):
+    """Tag representing a physical input.
+
+    InputTags have an .immediate property to access the physical
+    input value directly, bypassing the input image table.
+    """
+
+    @property
+    def immediate(self) -> ImmediateRef:
+        return ImmediateRef(self)
+
+
+@dataclass(frozen=True)
+class OutputTag(Tag):
+    """Tag representing a physical output.
+
+    OutputTags have an .immediate property to access the physical
+    output value directly, bypassing the output image table.
+    """
+
+    @property
+    def immediate(self) -> ImmediateRef:
+        return ImmediateRef(self)
+
+
 def Bool(name: str, retentive: bool = False) -> Tag:
     """Create a BOOL tag (boolean).
 
@@ -363,6 +400,16 @@ def Real(name: str, retentive: bool = True) -> Tag:
         retentive: Whether value survives power cycles. Default True.
     """
     return Tag(name, TagType.REAL, retentive)
+
+
+def Word(name: str, retentive: bool = False) -> Tag:
+    """Create a WORD tag (16-bit unsigned).
+
+    Args:
+        name: Tag name.
+        retentive: Whether value survives power cycles. Default False.
+    """
+    return Tag(name, TagType.WORD, retentive)
 
 
 def Char(name: str, retentive: bool = True) -> Tag:

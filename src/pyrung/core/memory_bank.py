@@ -1,18 +1,17 @@
-"""Memory bank and indirect addressing for typed PLC memory regions.
+"""Block-based memory regions and indirect addressing.
 
-MemoryBank provides factory methods for creating Tags from typed memory regions.
-IndirectTag enables pointer/indirect addressing resolved at runtime.
-MemoryBlock represents contiguous ranges for block operations.
+Block provides factory methods for creating Tags from typed memory regions.
+IndirectRef enables pointer/indirect addressing resolved at runtime.
+BlockRange represents contiguous ranges for block operations.
 """
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import InputTag, OutputTag, Tag, TagType
 
 if TYPE_CHECKING:
     from pyrung.core.condition import (
@@ -27,295 +26,241 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class MemoryBank:
+class Block:
     """Factory for creating Tags from a typed memory region.
 
-    MemoryBank defines a named region of PLC memory with:
+    Block defines a named region of memory with:
     - Consistent type for all addresses
-    - Valid address range
+    - Inclusive address bounds [start, end]
     - Default retentive behavior
-    - Per-address configuration via register()
 
     Attributes:
-        name: Bank prefix (e.g., "DS", "DD", "C").
-        tag_type: TagType for all tags in this bank.
-        addr_range: Valid address range for this bank.
+        name: Block prefix (e.g., "DS", "DD", "C").
+        type: TagType for all tags in this block.
+        start: Inclusive lower bound address.
+        end: Inclusive upper bound address.
         retentive: Default retentive setting for tags. Default False.
-        input_only: If True, tags can be read but not written (X bank).
-        read_only: If True, tags cannot be written at all (SC, SD).
-        initial_values: Per-address initial values (non-retentive tags only).
-        retentive_exceptions: Addresses that differ from bank's retentive default.
-        nicknames: Mapping of tag names to addresses.
     """
 
     name: str
-    tag_type: TagType
-    addr_range: range
+    type: TagType
+    start: int
+    end: int
     retentive: bool = False
-    input_only: bool = False
-    read_only: bool = False
-    initial_values: dict[int, Any] = field(default_factory=dict, repr=False)
-    retentive_exceptions: set[int] = field(default_factory=set, repr=False)
-    nicknames: dict[str, int] = field(default_factory=dict, repr=False)
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
 
-    def register(
-        self,
-        nickname: str,
-        addr: int,
-        *,
-        initial_value: Any = None,
-        retentive: bool | None = None,
-    ) -> Tag:
-        """Register a tag with a nickname and optional configuration.
+    def __post_init__(self):
+        if self.start < 1:
+            raise ValueError(f"start must be >= 1, got {self.start}")
+        if self.end < self.start:
+            raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
+
+    def __getitem__(self, key: int | slice | Tag | Any) -> Tag | IndirectRef | IndirectExprRef:
+        """Access tags by address, pointer tag, or expression.
 
         Args:
-            nickname: Human-readable name for the tag.
-            addr: Address in this memory bank.
-            initial_value: Initial value for non-retentive tags.
-            retentive: Override bank's default retentive setting.
-
-        Returns:
-            The configured Tag.
-
-        Raises:
-            ValueError: If address is out of range.
-
-        Note:
-            Retentive tags cannot have initial values (they retain across power
-            cycles). If both are specified, retentive takes precedence and a
-            warning is issued if initial_value is meaningful (not 0 or "").
-        """
-        if addr not in self.addr_range:
-            raise ValueError(
-                f"Address {addr} out of range for {self.name} bank "
-                f"(valid: {self.addr_range.start}-{self.addr_range.stop - 1})"
-            )
-
-        # Determine effective retentive setting
-        if retentive is not None:
-            is_retentive = retentive
-            # Update exceptions set
-            if retentive != self.retentive:
-                self.retentive_exceptions.add(addr)
-            else:
-                self.retentive_exceptions.discard(addr)
-        else:
-            is_retentive = self._is_retentive(addr)
-
-        # Handle initial_value vs retentive conflict
-        if is_retentive:
-            if initial_value is not None and str(initial_value) not in ("0", ""):
-                warnings.warn(
-                    f"Tag '{nickname}' at {self.name}{addr} is retentive but has "
-                    f"initial_value={initial_value!r}. Retentive takes precedence; "
-                    "initial_value will be ignored.",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            # Clean up: don't store initial_value for retentive addresses
-            self.initial_values.pop(addr, None)
-        else:
-            if initial_value is not None:
-                self.initial_values[addr] = initial_value
-
-        # Register nickname
-        self.nicknames[nickname] = addr
-
-        # Clear cache if tag was already created (re-registration)
-        self._tag_cache.pop(addr, None)
-
-        return self._get_tag(addr)
-
-    def _is_retentive(self, addr: int) -> bool:
-        """Determine if an address is retentive."""
-        if addr in self.retentive_exceptions:
-            return not self.retentive
-        return self.retentive
-
-    def __getitem__(
-        self, key: int | str | slice | Tag
-    ) -> Tag | MemoryBlock | IndirectTag | IndirectExprTag:
-        """Access tags by address, nickname, slice, pointer, or expression.
-
-        Args:
-            key: Address (int), nickname (str), address range (slice),
-                 pointer tag (Tag), or expression for computed address.
+            key: Address (int), pointer tag (Tag), or expression for computed address.
 
         Returns:
             - int: Single Tag (cached)
-            - str: Single Tag looked up by nickname
-            - slice: MemoryBlock for block operations
-            - Tag: IndirectTag for pointer addressing
-            - Expression: IndirectExprTag for computed address (e.g., DS[idx + 1])
+            - Tag: IndirectRef for pointer addressing
+            - Expression: IndirectExprRef for computed address (e.g., DS[idx + 1])
+            - slice: raises TypeError
 
         Raises:
-            ValueError: If address is out of range.
-            KeyError: If nickname is not registered.
-            TypeError: If key type is invalid.
+            IndexError: If int address is 0 or out of range.
+            TypeError: If key is a slice or invalid type.
         """
-        # Import here to avoid circular imports
         from pyrung.core.expression import Expression
 
         if isinstance(key, int):
+            if key == 0:
+                raise IndexError("Address 0 is not valid; addresses start at 1")
+            if key < self.start or key > self.end:
+                raise IndexError(
+                    f"Address {key} out of range for {self.name} block "
+                    f"(valid: {self.start}-{self.end})"
+                )
             return self._get_tag(key)
-        elif isinstance(key, str):
-            return self._get_tag_by_nickname(key)
         elif isinstance(key, slice):
-            return self._get_block(key)
+            raise TypeError("Use .select(start, end) instead of slice syntax")
         elif isinstance(key, Expression):
-            return IndirectExprTag(self, key)
+            return IndirectExprRef(self, key)
         elif isinstance(key, Tag):
-            return IndirectTag(self, key)
+            return IndirectRef(self, key)
         else:
             raise TypeError(
-                f"Invalid key type: {type(key)}. Expected int, str, slice, Tag, or Expression."
+                f"Invalid key type: {type(key).__name__}. Expected int, Tag, or Expression."
             )
 
     def _get_tag(self, addr: int) -> Tag:
         """Get or create a Tag for the given address."""
-        if addr not in self.addr_range:
-            raise ValueError(
-                f"Address {addr} out of range for {self.name} bank "
-                f"(valid: {self.addr_range.start}-{self.addr_range.stop - 1})"
-            )
-
         if addr not in self._tag_cache:
-            is_retentive = self._is_retentive(addr)
-            # Only use initial_value for non-retentive tags
-            default = self.initial_values.get(addr) if not is_retentive else None
             self._tag_cache[addr] = Tag(
                 name=f"{self.name}{addr}",
-                type=self.tag_type,
-                retentive=is_retentive,
-                default=default,
+                type=self.type,
+                retentive=self.retentive,
             )
         return self._tag_cache[addr]
 
-    def _get_tag_by_nickname(self, nickname: str) -> Tag:
-        """Get a Tag by its registered nickname."""
-        if nickname not in self.nicknames:
-            raise KeyError(
-                f"Nickname '{nickname}' not registered in {self.name} bank. "
-                "Use register() to add nicknames or access by address."
-            )
-        return self._get_tag(self.nicknames[nickname])
-
-    def __getattr__(self, name: str) -> Tag:
-        """Access tags by nickname as attributes (e.g., DS.Motor1Speed).
+    def select(
+        self, start: int | Tag | Any, end: int | Tag | Any
+    ) -> BlockRange | IndirectBlockRange:
+        """Select a range of addresses (inclusive bounds).
 
         Args:
-            name: Registered nickname.
+            start: Start address (int, Tag, or Expression).
+            end: End address (int, Tag, or Expression).
 
         Returns:
-            Tag at the nickname's address.
-
-        Raises:
-            AttributeError: If nickname is not registered.
+            BlockRange if both are ints, IndirectBlockRange otherwise.
         """
-        # Avoid infinite recursion for internal attributes
-        if name.startswith("_") or name in (
-            "name",
-            "tag_type",
-            "addr_range",
-            "retentive",
-            "input_only",
-            "read_only",
-            "initial_values",
-            "retentive_exceptions",
-            "nicknames",
-        ):
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-        try:
-            return self._get_tag_by_nickname(name)
-        except KeyError:
-            raise AttributeError(
-                f"'{type(self).__name__}' has no nickname '{name}'. "
-                "Use register() to add nicknames or access by address."
-            ) from None
 
-    def _get_block(self, key: slice) -> MemoryBlock:
-        """Create a MemoryBlock for the given slice."""
-        start = key.start if key.start is not None else self.addr_range.start
-        stop = key.stop if key.stop is not None else self.addr_range.stop
-
-        if start not in self.addr_range:
-            raise ValueError(
-                f"Start address {start} out of range for {self.name} bank "
-                f"(valid: {self.addr_range.start}-{self.addr_range.stop - 1})"
-            )
-        if stop - 1 not in self.addr_range and stop != self.addr_range.stop:
-            raise ValueError(
-                f"End address {stop - 1} out of range for {self.name} bank "
-                f"(valid: {self.addr_range.start}-{self.addr_range.stop - 1})"
-            )
-
-        return MemoryBlock(self, start, stop - start)
+        if isinstance(start, int) and isinstance(end, int):
+            if start < self.start or start > self.end:
+                raise IndexError(
+                    f"Start address {start} out of range for {self.name} block "
+                    f"(valid: {self.start}-{self.end})"
+                )
+            if end < self.start or end > self.end:
+                raise IndexError(
+                    f"End address {end} out of range for {self.name} block "
+                    f"(valid: {self.start}-{self.end})"
+                )
+            return BlockRange(self, start, end)
+        else:
+            return IndirectBlockRange(self, start, end)
 
     def __repr__(self) -> str:
-        return (
-            f"MemoryBank({self.name!r}, {self.tag_type}, "
-            f"range({self.addr_range.start}, {self.addr_range.stop}))"
-        )
+        return f"Block({self.name!r}, {self.type}, {self.start}, {self.end})"
+
+
+@dataclass
+class InputBlock(Block):
+    """Block that creates InputTag instances for physical inputs.
+
+    InputBlock always has retentive=False (inputs are not retentive).
+    """
+
+    def __init__(self, name: str, type: TagType, start: int, end: int):
+        super().__init__(name=name, type=type, start=start, end=end, retentive=False)
+
+    def _get_tag(self, addr: int) -> InputTag:
+        """Get or create an InputTag for the given address."""
+        if addr not in self._tag_cache:
+            self._tag_cache[addr] = InputTag(
+                name=f"{self.name}{addr}",
+                type=self.type,
+                retentive=False,
+            )
+        return self._tag_cache[addr]
+
+
+@dataclass
+class OutputBlock(Block):
+    """Block that creates OutputTag instances for physical outputs.
+
+    OutputBlock always has retentive=False (outputs are not retentive).
+    """
+
+    def __init__(self, name: str, type: TagType, start: int, end: int):
+        super().__init__(name=name, type=type, start=start, end=end, retentive=False)
+
+    def _get_tag(self, addr: int) -> OutputTag:
+        """Get or create an OutputTag for the given address."""
+        if addr not in self._tag_cache:
+            self._tag_cache[addr] = OutputTag(
+                name=f"{self.name}{addr}",
+                type=self.type,
+                retentive=False,
+            )
+        return self._tag_cache[addr]
 
 
 @dataclass(frozen=True)
-class MemoryBlock:
+class BlockRange:
     """Contiguous range of addresses for block operations.
 
-    MemoryBlock represents a slice of a MemoryBank for use in
-    block copy operations (Milestone 7).
-
     Attributes:
-        bank: Source MemoryBank.
-        start: Starting address.
-        length: Number of addresses in block.
+        block: Source Block.
+        start: Starting address (inclusive).
+        end: Ending address (inclusive).
     """
 
-    bank: MemoryBank
+    block: Block
     start: int
-    length: int
+    end: int
 
     @property
     def addresses(self) -> range:
         """Return the range of addresses in this block."""
-        return range(self.start, self.start + self.length)
+        return range(self.start, self.end + 1)
 
     def tags(self) -> list[Tag]:
         """Return list of Tag objects for all addresses in this block."""
-        result: list[Tag] = []
-        for addr in self.addresses:
-            item = self.bank[addr]
-            # Type narrowing: we know _get_tag returns Tag for int keys
-            if isinstance(item, Tag):
-                result.append(item)
-        return result
+        return [self.block[addr] for addr in self.addresses]
 
     def __len__(self) -> int:
-        return self.length
+        return self.end - self.start + 1
 
     def __iter__(self) -> Iterator[Tag]:
         """Iterate over Tags in this block."""
         for addr in self.addresses:
-            yield self.bank[addr]
+            yield self.block[addr]
 
     def __repr__(self) -> str:
-        return f"MemoryBlock({self.bank.name}[{self.start}:{self.start + self.length}])"
+        return f"BlockRange({self.block.name}[{self.start}:{self.end}])"
 
 
 @dataclass(frozen=True)
-class IndirectTag:
+class IndirectBlockRange:
+    """Memory block with runtime-resolved bounds.
+
+    Wraps a Block with start/end that may be Tags or Expressions,
+    resolved at scan time.
+
+    Attributes:
+        block: Source Block.
+        start_expr: Start address (int, Tag, or Expression).
+        end_expr: End address (int, Tag, or Expression).
+    """
+
+    block: Block
+    start_expr: int | Tag | Any
+    end_expr: int | Tag | Any
+
+    def resolve_ctx(self, ctx: ScanContext) -> BlockRange:
+        """Resolve expressions to concrete BlockRange using ScanContext."""
+        start = self._resolve_one(self.start_expr, ctx)
+        end = self._resolve_one(self.end_expr, ctx)
+        return BlockRange(self.block, start, end)
+
+    @staticmethod
+    def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:
+        from pyrung.core.expression import Expression
+
+        if isinstance(expr, int):
+            return expr
+        if isinstance(expr, Expression):
+            return int(expr.evaluate(ctx))
+        if isinstance(expr, Tag):
+            return int(ctx.get_tag(expr.name, expr.default))
+        raise TypeError(f"Cannot resolve {type(expr).__name__} to address")
+
+
+@dataclass(frozen=True)
+class IndirectRef:
     """Tag with runtime-resolved address via pointer.
 
-    IndirectTag wraps a MemoryBank and pointer Tag. The actual
+    IndirectRef wraps a Block and pointer Tag. The actual
     address is resolved from the pointer's value at scan time.
 
     Attributes:
-        bank: MemoryBank to index into.
+        block: Block to index into.
         pointer: Tag whose value determines the address.
     """
 
-    bank: MemoryBank
+    block: Block
     pointer: Tag
 
     def resolve(self, state: SystemState) -> Tag:
@@ -328,14 +273,10 @@ class IndirectTag:
             Concrete Tag at the resolved address.
 
         Raises:
-            ValueError: If resolved address is out of range.
+            IndexError: If resolved address is out of range.
         """
         ptr_value = state.tags.get(self.pointer.name, self.pointer.default)
-        item = self.bank[ptr_value]
-        # Type narrowing: _get_tag returns Tag for int keys
-        if isinstance(item, Tag):
-            return item
-        raise TypeError(f"Expected Tag at address {ptr_value}, got {type(item)}")
+        return self.block[ptr_value]
 
     def resolve_ctx(self, ctx: ScanContext) -> Tag:
         """Resolve pointer value to concrete Tag using ScanContext.
@@ -347,14 +288,10 @@ class IndirectTag:
             Concrete Tag at the resolved address.
 
         Raises:
-            ValueError: If resolved address is out of range.
+            IndexError: If resolved address is out of range.
         """
         ptr_value = ctx.get_tag(self.pointer.name, self.pointer.default)
-        item = self.bank[ptr_value]
-        # Type narrowing: _get_tag returns Tag for int keys
-        if isinstance(item, Tag):
-            return item
-        raise TypeError(f"Expected Tag at address {ptr_value}, got {type(item)}")
+        return self.block[ptr_value]
 
     def __eq__(self, other: object) -> Condition:
         """Create equality comparison condition."""
@@ -393,27 +330,27 @@ class IndirectTag:
         return IndirectCompareGe(self, other)
 
     def __hash__(self) -> int:
-        return hash((id(self.bank), self.pointer.name))
+        return hash((id(self.block), self.pointer.name))
 
     def __repr__(self) -> str:
-        return f"IndirectTag({self.bank.name}[{self.pointer.name}])"
+        return f"IndirectRef({self.block.name}[{self.pointer.name}])"
 
 
 @dataclass(frozen=True)
-class IndirectExprTag:
+class IndirectExprRef:
     """Tag with runtime-resolved address via expression.
 
-    IndirectExprTag wraps a MemoryBank and an Expression. The actual
+    IndirectExprRef wraps a Block and an Expression. The actual
     address is computed from the expression at scan time.
 
     This enables pointer arithmetic like DS[idx + 1] where idx is a Tag.
 
     Attributes:
-        bank: MemoryBank to index into.
+        block: Block to index into.
         expr: Expression whose value determines the address.
     """
 
-    bank: MemoryBank
+    block: Block
     expr: Any  # Expression type - use Any to avoid circular import
 
     def resolve_ctx(self, ctx: ScanContext) -> Tag:
@@ -426,13 +363,10 @@ class IndirectExprTag:
             Concrete Tag at the computed address.
 
         Raises:
-            ValueError: If resolved address is out of range.
+            IndexError: If resolved address is out of range.
         """
         addr = int(self.expr.evaluate(ctx))
-        item = self.bank[addr]
-        if isinstance(item, Tag):
-            return item
-        raise TypeError(f"Expected Tag at address {addr}, got {type(item)}")
+        return self.block[addr]
 
     def __repr__(self) -> str:
-        return f"IndirectExprTag({self.bank.name}[{self.expr}])"
+        return f"IndirectExprRef({self.block.name}[{self.expr}])"

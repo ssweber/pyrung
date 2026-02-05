@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_bank import IndirectTag
+    from pyrung.core.memory_bank import IndirectRef
     from pyrung.core.tag import Tag
 
 
@@ -224,16 +224,16 @@ class FallingEdgeCondition(Condition):
 
 
 class IndirectCompareEq(Condition):
-    """Equality comparison for IndirectTag: indirect_tag == value or indirect_tag == tag."""
+    """Equality comparison for IndirectRef: indirect_ref == value or indirect_ref == tag."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
         from pyrung.core.tag import Tag
 
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         if isinstance(self.value, Tag):
             other_value = ctx.get_tag(self.value.name)
@@ -243,16 +243,16 @@ class IndirectCompareEq(Condition):
 
 
 class IndirectCompareNe(Condition):
-    """Inequality comparison for IndirectTag: indirect_tag != value or indirect_tag != tag."""
+    """Inequality comparison for IndirectRef: indirect_ref != value or indirect_ref != tag."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
         from pyrung.core.tag import Tag
 
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         if isinstance(self.value, Tag):
             other_value = ctx.get_tag(self.value.name)
@@ -262,53 +262,53 @@ class IndirectCompareNe(Condition):
 
 
 class IndirectCompareLt(Condition):
-    """Less-than comparison for IndirectTag: indirect_tag < value."""
+    """Less-than comparison for IndirectRef: indirect_ref < value."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         return tag_value < self.value
 
 
 class IndirectCompareLe(Condition):
-    """Less-than-or-equal comparison for IndirectTag: indirect_tag <= value."""
+    """Less-than-or-equal comparison for IndirectRef: indirect_ref <= value."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         return tag_value <= self.value
 
 
 class IndirectCompareGt(Condition):
-    """Greater-than comparison for IndirectTag: indirect_tag > value."""
+    """Greater-than comparison for IndirectRef: indirect_ref > value."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         return tag_value > self.value
 
 
 class IndirectCompareGe(Condition):
-    """Greater-than-or-equal comparison for IndirectTag: indirect_tag >= value."""
+    """Greater-than-or-equal comparison for IndirectRef: indirect_ref >= value."""
 
-    def __init__(self, indirect_tag: IndirectTag, value: Any):
-        self.indirect_tag = indirect_tag
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        resolved_tag = self.indirect_tag.resolve_ctx(ctx)
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         return tag_value >= self.value
 

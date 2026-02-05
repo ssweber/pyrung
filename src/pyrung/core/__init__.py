@@ -27,7 +27,15 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
-from pyrung.core.memory_bank import IndirectTag, MemoryBank, MemoryBlock
+from pyrung.core.memory_bank import (
+    Block,
+    BlockRange,
+    IndirectBlockRange,
+    IndirectExprRef,
+    IndirectRef,
+    InputBlock,
+    OutputBlock,
+)
 from pyrung.core.program import (
     Program,
     Rung,
@@ -56,12 +64,16 @@ from pyrung.core.tag import (
     Char,
     Dint,
     Float,
+    ImmediateRef,
+    InputTag,
     Int,
     Int2,
+    OutputTag,
     Real,
     Tag,
     TagType,
     Txt,
+    Word,
 )
 from pyrung.core.time_mode import TimeMode, TimeUnit
 
@@ -79,15 +91,23 @@ __all__ = [
     "Dint",
     "Real",
     "Char",
+    "Word",
+    "InputTag",
+    "OutputTag",
+    "ImmediateRef",
     # Tags (deprecated aliases)
     "Bit",
     "Int2",
     "Float",
     "Txt",
-    # Memory banks
-    "MemoryBank",
-    "MemoryBlock",
-    "IndirectTag",
+    # Memory blocks
+    "Block",
+    "InputBlock",
+    "OutputBlock",
+    "BlockRange",
+    "IndirectBlockRange",
+    "IndirectRef",
+    "IndirectExprRef",
     # Program structure
     "Program",
     "Rung",

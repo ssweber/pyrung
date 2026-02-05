@@ -141,6 +141,116 @@ class TestTagEquality:
         assert len(tag_set) == 2  # X1 appears once
 
 
+class TestWordHelper:
+    """Test Word() convenience constructor."""
+
+    def test_word_creates_word_tag(self):
+        """Word() creates a WORD tag."""
+        from pyrung.core import TagType
+        from pyrung.core.tag import Word
+
+        tag = Word("StatusReg")
+        assert tag.name == "StatusReg"
+        assert tag.type == TagType.WORD
+        assert tag.default == 0
+
+    def test_word_default_not_retentive(self):
+        """Word() defaults to non-retentive."""
+        from pyrung.core.tag import Word
+
+        tag = Word("Flags")
+        assert tag.retentive is False
+
+    def test_word_retentive(self):
+        """Word() can be made retentive."""
+        from pyrung.core.tag import Word
+
+        tag = Word("Saved", retentive=True)
+        assert tag.retentive is True
+
+
+class TestInputTag:
+    """Test InputTag subclass."""
+
+    def test_input_tag_is_tag(self):
+        """InputTag is an instance of Tag."""
+        from pyrung.core.tag import InputTag, TagType
+
+        tag = InputTag("X1", TagType.BOOL)
+        assert isinstance(tag, InputTag)
+        from pyrung.core.tag import Tag
+
+        assert isinstance(tag, Tag)
+
+    def test_input_tag_has_immediate(self):
+        """InputTag has .immediate property returning ImmediateRef."""
+        from pyrung.core.tag import ImmediateRef, InputTag, TagType
+
+        tag = InputTag("X1", TagType.BOOL)
+        ref = tag.immediate
+        assert isinstance(ref, ImmediateRef)
+        assert ref.tag is tag
+
+    def test_input_tag_frozen(self):
+        """InputTag is frozen."""
+        from pyrung.core.tag import InputTag, TagType
+
+        tag = InputTag("X1", TagType.BOOL)
+        with pytest.raises(AttributeError):
+            tag.name = "X2"
+
+
+class TestOutputTag:
+    """Test OutputTag subclass."""
+
+    def test_output_tag_is_tag(self):
+        """OutputTag is an instance of Tag."""
+        from pyrung.core.tag import OutputTag, TagType
+
+        tag = OutputTag("Y1", TagType.BOOL)
+        assert isinstance(tag, OutputTag)
+        from pyrung.core.tag import Tag
+
+        assert isinstance(tag, Tag)
+
+    def test_output_tag_has_immediate(self):
+        """OutputTag has .immediate property returning ImmediateRef."""
+        from pyrung.core.tag import ImmediateRef, OutputTag, TagType
+
+        tag = OutputTag("Y1", TagType.BOOL)
+        ref = tag.immediate
+        assert isinstance(ref, ImmediateRef)
+        assert ref.tag is tag
+
+    def test_output_tag_frozen(self):
+        """OutputTag is frozen."""
+        from pyrung.core.tag import OutputTag, TagType
+
+        tag = OutputTag("Y1", TagType.BOOL)
+        with pytest.raises(AttributeError):
+            tag.name = "Y2"
+
+
+class TestImmediateRef:
+    """Test ImmediateRef wrapper."""
+
+    def test_immediate_ref_wraps_tag(self):
+        """ImmediateRef wraps a tag."""
+        from pyrung.core.tag import ImmediateRef, InputTag, TagType
+
+        tag = InputTag("X1", TagType.BOOL)
+        ref = ImmediateRef(tag)
+        assert ref.tag is tag
+
+    def test_plain_tag_no_immediate(self):
+        """Plain Tag does NOT have .immediate."""
+        from pyrung.core.tag import Tag
+
+        tag = Tag("C1")
+        with pytest.raises(AttributeError):
+            tag.immediate  # noqa: B018
+
+
 class TestTagComparison:
     """Test Tag comparison operators create Conditions."""
 

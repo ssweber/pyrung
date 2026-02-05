@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from pyrung.core import Bool, Int, MemoryBank, ScanContext, SystemState, TagType
+from pyrung.core import Block, Bool, Int, ScanContext, SystemState, TagType
 from pyrung.core.condition import Condition
 from tests.conftest import evaluate_condition
 
@@ -21,7 +21,7 @@ class TestBasicArithmetic:
 
     def test_tag_plus_literal(self):
         """DS[1] + 5 creates an expression that evaluates correctly."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] + 5
         state = SystemState().with_tags({"DS1": 10})
         ctx = ScanContext(state)
@@ -29,7 +29,7 @@ class TestBasicArithmetic:
 
     def test_literal_plus_tag(self):
         """5 + DS[1] uses __radd__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 5 + DS[1]
         state = SystemState().with_tags({"DS1": 10})
         ctx = ScanContext(state)
@@ -37,7 +37,7 @@ class TestBasicArithmetic:
 
     def test_tag_plus_tag(self):
         """DS[1] + DS[2] adds two tag values."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] + DS[2]
         state = SystemState().with_tags({"DS1": 10, "DS2": 20})
         ctx = ScanContext(state)
@@ -45,7 +45,7 @@ class TestBasicArithmetic:
 
     def test_tag_minus_literal(self):
         """DS[1] - 5."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] - 5
         state = SystemState().with_tags({"DS1": 10})
         ctx = ScanContext(state)
@@ -53,7 +53,7 @@ class TestBasicArithmetic:
 
     def test_literal_minus_tag(self):
         """100 - DS[1] uses __rsub__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 100 - DS[1]
         state = SystemState().with_tags({"DS1": 30})
         ctx = ScanContext(state)
@@ -61,7 +61,7 @@ class TestBasicArithmetic:
 
     def test_tag_minus_tag(self):
         """DS[1] - DS[2]."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] - DS[2]
         state = SystemState().with_tags({"DS1": 50, "DS2": 20})
         ctx = ScanContext(state)
@@ -69,7 +69,7 @@ class TestBasicArithmetic:
 
     def test_multiplication(self):
         """DS[1] * 2."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] * 2
         state = SystemState().with_tags({"DS1": 7})
         ctx = ScanContext(state)
@@ -77,7 +77,7 @@ class TestBasicArithmetic:
 
     def test_literal_times_tag(self):
         """3 * DS[1] uses __rmul__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 3 * DS[1]
         state = SystemState().with_tags({"DS1": 5})
         ctx = ScanContext(state)
@@ -85,7 +85,7 @@ class TestBasicArithmetic:
 
     def test_division(self):
         """DS[1] / 3 returns float."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] / 3
         state = SystemState().with_tags({"DS1": 10})
         ctx = ScanContext(state)
@@ -93,7 +93,7 @@ class TestBasicArithmetic:
 
     def test_literal_divided_by_tag(self):
         """100 / DS[1] uses __rtruediv__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 100 / DS[1]
         state = SystemState().with_tags({"DS1": 4})
         ctx = ScanContext(state)
@@ -101,7 +101,7 @@ class TestBasicArithmetic:
 
     def test_floor_division(self):
         """DS[1] // 3 returns int."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] // 3
         state = SystemState().with_tags({"DS1": 10})
         ctx = ScanContext(state)
@@ -109,7 +109,7 @@ class TestBasicArithmetic:
 
     def test_literal_floordiv_tag(self):
         """100 // DS[1] uses __rfloordiv__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 100 // DS[1]
         state = SystemState().with_tags({"DS1": 3})
         ctx = ScanContext(state)
@@ -125,7 +125,7 @@ class TestBasicArithmetic:
 
     def test_literal_mod_tag(self):
         """100 % DS[1] uses __rmod__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 100 % DS[1]
         state = SystemState().with_tags({"DS1": 7})
         ctx = ScanContext(state)
@@ -133,7 +133,7 @@ class TestBasicArithmetic:
 
     def test_power(self):
         """DS[1] ** 2."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] ** 2
         state = SystemState().with_tags({"DS1": 5})
         ctx = ScanContext(state)
@@ -141,7 +141,7 @@ class TestBasicArithmetic:
 
     def test_literal_pow_tag(self):
         """2 ** DS[1] uses __rpow__."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = 2 ** DS[1]
         state = SystemState().with_tags({"DS1": 3})
         ctx = ScanContext(state)
@@ -149,7 +149,7 @@ class TestBasicArithmetic:
 
     def test_negation(self):
         """-DS[1]."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = -DS[1]
         state = SystemState().with_tags({"DS1": 42})
         ctx = ScanContext(state)
@@ -157,7 +157,7 @@ class TestBasicArithmetic:
 
     def test_positive(self):
         """+DS[1]."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = +DS[1]
         state = SystemState().with_tags({"DS1": 42})
         ctx = ScanContext(state)
@@ -165,7 +165,7 @@ class TestBasicArithmetic:
 
     def test_abs(self):
         """abs(DS[1])."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = abs(DS[1])
         state = SystemState().with_tags({"DS1": -42})
         ctx = ScanContext(state)
@@ -173,7 +173,7 @@ class TestBasicArithmetic:
 
     def test_complex_expression(self):
         """(DS[1] * 2) + (DS[2] / 3)."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = (DS[1] * 2) + (DS[2] / 3)
         state = SystemState().with_tags({"DS1": 10, "DS2": 30})
         ctx = ScanContext(state)
@@ -181,7 +181,7 @@ class TestBasicArithmetic:
 
     def test_nested_parentheses(self):
         """((DS[1] + DS[2]) * (DS[3] - DS[4])) / DS[5]."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = ((DS[1] + DS[2]) * (DS[3] - DS[4])) / DS[5]
         state = SystemState().with_tags(
             {
@@ -206,28 +206,28 @@ class TestExpressionComparisons:
 
     def test_expression_gt_literal(self):
         """(DS[1] + DS[2]) > 100 returns a Condition."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] + DS[2]
         cond = expr > 100
         assert isinstance(cond, Condition)
 
     def test_expression_gt_evaluates_true(self):
         """(DS[1] + DS[2]) > 100 evaluates True when sum > 100."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] + DS[2]) > 100
         state = SystemState().with_tags({"DS1": 60, "DS2": 50})
         assert evaluate_condition(cond, state) is True
 
     def test_expression_gt_evaluates_false(self):
         """(DS[1] + DS[2]) > 100 evaluates False when sum <= 100."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] + DS[2]) > 100
         state = SystemState().with_tags({"DS1": 40, "DS2": 50})
         assert evaluate_condition(cond, state) is False
 
     def test_expression_ge_literal(self):
         """(DS[1] * 2) >= 100."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] * 2) >= 100
         state = SystemState().with_tags({"DS1": 50})
         assert evaluate_condition(cond, state) is True
@@ -236,14 +236,14 @@ class TestExpressionComparisons:
 
     def test_expression_lt_literal(self):
         """(DS[1] - DS[2]) < 0."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] - DS[2]) < 0
         state = SystemState().with_tags({"DS1": 10, "DS2": 20})
         assert evaluate_condition(cond, state) is True
 
     def test_expression_le_literal(self):
         """(DS[1] / 2) <= 25."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] / 2) <= 25
         state = SystemState().with_tags({"DS1": 50})
         assert evaluate_condition(cond, state) is True
@@ -259,7 +259,7 @@ class TestExpressionComparisons:
 
     def test_expression_ne_literal(self):
         """(DS[1] + 1) != 100."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         cond = (DS[1] + 1) != 100
         state = SystemState().with_tags({"DS1": 50})
         assert evaluate_condition(cond, state) is True
@@ -268,7 +268,7 @@ class TestExpressionComparisons:
 
     def test_expression_le_expression(self):
         """DS[1] <= (High + Band) where both sides are expressions."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         High = Int("High")
         Band = Int("Band")
         cond = DS[1] <= (High + Band)
@@ -279,7 +279,7 @@ class TestExpressionComparisons:
 
     def test_literal_gt_expression(self):
         """100 > (DS[1] + DS[2]) - reversed comparison."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         # Use explicit expression comparison rather than literal on left
         cond = (DS[1] + DS[2]) < 100
         state = SystemState().with_tags({"DS1": 30, "DS2": 40})
@@ -298,7 +298,7 @@ class TestExpressionInRung:
         """with Rung((DS[1] + DS[2]) > 100): out(Alarm)."""
         from pyrung.core import Rung, SystemState, out, program
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         Alarm = Bool("Alarm")
 
         @program
@@ -359,7 +359,7 @@ class TestExpressionInCopy:
         """copy(DS[1] * 2 + Offset, Result)."""
         from pyrung.core import Rung, copy, program
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         Offset = Int("Offset")
         Result = Int("Result")
         Enable = Bool("Enable")
@@ -386,7 +386,7 @@ class TestExpressionInCopy:
         from pyrung.core import Rung, copy, program
         from pyrung.core.expression import sqrt
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         Result = Int("Result")
         Enable = Bool("Enable")
 
@@ -419,7 +419,7 @@ class TestPointerArithmetic:
         """DS[idx + 1] where idx is a Tag - expression in pointer."""
         # This tests using an expression to compute the pointer value
         # The expression evaluates at scan time to determine which tag to access
-        DS = MemoryBank("DS", TagType.INT, range(1, 20))
+        DS = Block("DS", TagType.INT, 1, 19)
         idx = Int("idx")
 
         # Create indirect tag with expression index
@@ -448,7 +448,7 @@ class TestBitwiseOperations:
 
     def test_bitwise_and(self):
         """DH[1] & DH[2]."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = DH[1] & DH[2]
         state = SystemState().with_tags({"DH1": 0b1100, "DH2": 0b1010})
         ctx = ScanContext(state)
@@ -456,7 +456,7 @@ class TestBitwiseOperations:
 
     def test_literal_and_tag(self):
         """0xFF & DH[1]."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = 0xFF & DH[1]
         state = SystemState().with_tags({"DH1": 0x1234})
         ctx = ScanContext(state)
@@ -464,7 +464,7 @@ class TestBitwiseOperations:
 
     def test_bitwise_or(self):
         """DH[1] | DH[2]."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = DH[1] | DH[2]
         state = SystemState().with_tags({"DH1": 0b1100, "DH2": 0b1010})
         ctx = ScanContext(state)
@@ -472,7 +472,7 @@ class TestBitwiseOperations:
 
     def test_bitwise_xor(self):
         """DH[1] ^ DH[2] - XOR (not power in hex mode)."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = DH[1] ^ DH[2]
         state = SystemState().with_tags({"DH1": 0b1100, "DH2": 0b1010})
         ctx = ScanContext(state)
@@ -480,7 +480,7 @@ class TestBitwiseOperations:
 
     def test_left_shift(self):
         """DH[1] << 2."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = DH[1] << 2
         state = SystemState().with_tags({"DH1": 0b0011})
         ctx = ScanContext(state)
@@ -488,7 +488,7 @@ class TestBitwiseOperations:
 
     def test_literal_lshift_tag(self):
         """1 << DH[1]."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = 1 << DH[1]
         state = SystemState().with_tags({"DH1": 4})
         ctx = ScanContext(state)
@@ -496,7 +496,7 @@ class TestBitwiseOperations:
 
     def test_right_shift(self):
         """DH[1] >> 2."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = DH[1] >> 2
         state = SystemState().with_tags({"DH1": 0b1100})
         ctx = ScanContext(state)
@@ -504,7 +504,7 @@ class TestBitwiseOperations:
 
     def test_bitwise_invert(self):
         """~DH[1]."""
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = ~DH[1]
         state = SystemState().with_tags({"DH1": 0x00FF})
         ctx = ScanContext(state)
@@ -524,7 +524,7 @@ class TestMathFunctions:
         """sqrt(DS[1])."""
         from pyrung.core.expression import sqrt
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = sqrt(DS[1])
         state = SystemState().with_tags({"DS1": 16})
         ctx = ScanContext(state)
@@ -636,7 +636,7 @@ class TestMathFunctions:
         """PI value in expressions."""
         from pyrung.core.expression import PI
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         # PI * radius^2 for area
         expr = PI * (DS[1] ** 2)
         state = SystemState().with_tags({"DS1": 2})
@@ -647,7 +647,7 @@ class TestMathFunctions:
         """sqrt(DS[1] ** 2 + DS[2] ** 2) - Pythagorean theorem."""
         from pyrung.core.expression import sqrt
 
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = sqrt(DS[1] ** 2 + DS[2] ** 2)
         state = SystemState().with_tags({"DS1": 3, "DS2": 4})
         ctx = ScanContext(state)
@@ -666,7 +666,7 @@ class TestShiftRotateFunctions:
         """lsh(DH[1], n) - left shift function."""
         from pyrung.core.expression import lsh
 
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = lsh(DH[1], 4)
         state = SystemState().with_tags({"DH1": 0x0F})
         ctx = ScanContext(state)
@@ -676,7 +676,7 @@ class TestShiftRotateFunctions:
         """rsh(DH[1], n) - right shift function."""
         from pyrung.core.expression import rsh
 
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = rsh(DH[1], 4)
         state = SystemState().with_tags({"DH1": 0xF0})
         ctx = ScanContext(state)
@@ -686,7 +686,7 @@ class TestShiftRotateFunctions:
         """lro(DH[1], n) - rotate left (16-bit)."""
         from pyrung.core.expression import lro
 
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = lro(DH[1], 4)
         state = SystemState().with_tags({"DH1": 0xF00F})
         ctx = ScanContext(state)
@@ -697,7 +697,7 @@ class TestShiftRotateFunctions:
         """rro(DH[1], n) - rotate right (16-bit)."""
         from pyrung.core.expression import rro
 
-        DH = MemoryBank("DH", TagType.WORD, range(1, 10))
+        DH = Block("DH", TagType.WORD, 1, 9)
         expr = rro(DH[1], 4)
         state = SystemState().with_tags({"DH1": 0xF00F})
         ctx = ScanContext(state)
@@ -715,7 +715,7 @@ class TestExpressionEdgeCases:
 
     def test_division_by_zero_returns_inf(self):
         """Division by zero returns infinity (like hardware)."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] / DS[2]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
@@ -724,7 +724,7 @@ class TestExpressionEdgeCases:
 
     def test_floor_division_by_zero_raises(self):
         """Floor division by zero raises ZeroDivisionError."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] // DS[2]
         state = SystemState().with_tags({"DS1": 10, "DS2": 0})
         ctx = ScanContext(state)
@@ -733,7 +733,7 @@ class TestExpressionEdgeCases:
 
     def test_expression_with_default_value(self):
         """Expression uses tag's default when not in state."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] + 10
         state = SystemState()  # DS1 not in state, defaults to 0
         ctx = ScanContext(state)
@@ -741,7 +741,7 @@ class TestExpressionEdgeCases:
 
     def test_chained_operations(self):
         """Long chain: a + b - c * d / e."""
-        DS = MemoryBank("DS", TagType.INT, range(1, 10))
+        DS = Block("DS", TagType.INT, 1, 9)
         expr = DS[1] + DS[2] - DS[3] * DS[4] / DS[5]
         state = SystemState().with_tags(
             {
