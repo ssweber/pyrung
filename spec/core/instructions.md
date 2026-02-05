@@ -29,11 +29,11 @@ All instructions are hardware-agnostic. They operate on Tags and Blocks from cor
 | Instruction | Signature | Description |
 |-------------|-----------|-------------|
 | `copy` | `copy(source, dest, oneshot=False)` | Copy single value. Supports pointer addressing. |
-| `blockcopy` | `blockcopy(source_slice, dest_start, oneshot=False)` | Copy contiguous range. Dest length inferred from source. |
-| `fill` | `fill(value, dest_slice, oneshot=False)` | Write constant to every element in range. |
-| `pack_bits` | `pack_bits(bit_slice, dest_word)` | Pack N bits into a Word or Dword. |
+| `blockcopy` | `blockcopy(source_block, dest_start, oneshot=False)` | Copy contiguous range. Dest length inferred from source. `source_block` is a `MemoryBlock` from `.select()`. |
+| `fill` | `fill(value, dest_block, oneshot=False)` | Write constant to every element in range. `dest_block` is a `MemoryBlock` from `.select()`. |
+| `pack_bits` | `pack_bits(bit_block, dest_word)` | Pack N bits into a Word or Dword. `bit_block` from `.select()`. |
 | `pack_words` | `pack_words(hi, lo, dest_dword)` | Pack two Words into a Dword. |
-| `unpack_to_bits` | `unpack_to_bits(source_word, bit_slice)` | Unpack Word/Dword into individual bits. |
+| `unpack_to_bits` | `unpack_to_bits(source_word, bit_block)` | Unpack Word/Dword into individual bits. `bit_block` from `.select()`. |
 | `unpack_to_words` | `unpack_to_words(source_dword, hi, lo)` | Unpack Dword into two Words. |
 
 ### Math
@@ -176,7 +176,7 @@ Direction determined by address order: `start < end` shifts right/up, `start > e
 - **`out` vs `latch`/`reset` semantics:** `out` follows rung power (True when rung is True, False when False). `latch`/`reset` are sticky. Document the state machine clearly, especially for `out` on the same tag from multiple rungs ("last rung wins").
 - **`oneshot` implementation:** Where is the edge-detection state stored? `SystemState.memory`? Keyed how?
 - **`copy` pointer addressing:** Specify exactly what `Block[tag]` means as a source or dest in `copy`. What if the pointer is out of range?
-- **Dynamic block bounds:** `blockcopy(Block[Start:Start+5], dest)` — how is this resolved at runtime? What are the error semantics?
+- **Dynamic block bounds:** `blockcopy(Block.select(Start, Start+5), dest)` — `.select()` with Tag/Expression args returns `IndirectMemoryBlock`, resolved at scan time. Specify error semantics for out-of-range after resolution.
 - **~~Math intermediate precision~~:** Resolved — 32-bit signed with standard two's complement wrap. pyrung uses Python arbitrary precision with truncation on store.
 - **Math expression tree:** How are expressions like `PressureA + PressureB * 10` captured? Operator overloading on Tags returns Expression objects? What's the AST?
 - **`math_obj.to_formula()`:** Conversion to Click Formula Pad format. Specify the output format.

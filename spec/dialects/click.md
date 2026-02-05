@@ -65,14 +65,14 @@ from pyrung.click import TagMap
 mapping = TagMap({
     Valve:      c[1],
     Motor:      y[1],
-    Alarms:     c[101:200],     # Block → hardware slice
+    Alarms:     c.select(101, 200),  # Block → hardware range
     PumpDone:   t[1],
     PumpAcc:    td[1],
 })
 
 # Method-call syntax
 Valve.map_to(c[1])
-Alarms.map_to(c[101:200])
+Alarms.map_to(c.select(101, 200))
 
 # From nickname file
 mapping = TagMap.from_nickname_file("project.csv")
@@ -87,7 +87,7 @@ When a user-defined Block omits the type, it's inferred from the hardware bank i
 
 ```python
 Alarms = Block("Alarms", range(1, 100))        # No type specified
-Alarms.map_to(c[101:200])                       # → Bool inferred from C bank
+Alarms.map_to(c.select(101, 200))                       # → Bool inferred from C bank
 ```
 
 Explicit type always overrides. Retentive default can also be inferred but explicit overrides.

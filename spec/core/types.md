@@ -39,21 +39,61 @@ Block                ← internal memory
 - **Block** is a named, typed, 1-indexed array of tags.
 - `Block[0]` is always `IndexError`. PLC addressing starts at 1.
 - `Block[n]` returns `Tag`. `InputBlock[n]` returns `InputTag`. `OutputBlock[n]` returns `OutputTag`.
-- `Block[n:m]` returns a `Slice` object for block operations (blockcopy, fill, pack).
 - `Block[tag]` returns an `IndirectRef` resolved at runtime (pointer addressing).
+- `Block[expr]` returns an `IndirectExprRef` for computed addresses (e.g., `Block[idx + 1]`).
+- `Block.select(start, end)` returns a `MemoryBlock` for block operations (blockcopy, fill, pack). Both bounds inclusive.
 - `Block.name` + index generates the tag key for `SystemState.tags` (e.g., `"Alarms_3"`).
 
 ### Constructor
 
 ```python
-Block(name: str, type: TagType, indices: range, retentive: bool = False)
-InputBlock(name: str, type: TagType, indices: range)
-OutputBlock(name: str, type: TagType, indices: range)
+Block(name: str, type: TagType, start: int, end: int, retentive: bool = False)
+InputBlock(name: str, type: TagType, start: int, end: int)
+OutputBlock(name: str, type: TagType, start: int, end: int)
 ```
 
-- `indices` must start at 1 or greater. `range(1, 101)` means indices 1–100.
+- `start` and `end` are both **inclusive**. `Block("DS", TagType.INT, 1, 100)` means indices 1–100.
+- `start` must be 1 or greater. PLC addressing starts at 1.
 - `retentive` only applies to `Block`. InputBlock/OutputBlock are never retentive.
 - When type is omitted, it can be inferred at map time (Click dialect feature — see `click.md`).
+
+### .select(start, end)
+
+Selects a contiguous range of tags for block operations.
+
+```python
+Block.select(start: int | Tag | Expression, end: int | Tag | Expression) -> MemoryBlock | IndirectMemoryBlock
+```
+
+- Both bounds are **inclusive**: `DS.select(1, 100)` selects tags 1–100 (100 tags).
+- Symmetrical with the constructor: `Block("DS", INT, 1, 100)` defines 1–100, `DS.select(1, 100)` selects 1–100.
+- When both arguments are `int`, returns a `MemoryBlock` (resolved at definition time).
+- When either argument is a `Tag` or `Expression`, returns an `IndirectMemoryBlock` (resolved at scan time).
+
+```python
+# Static range
+DS.select(1, 100)              # → MemoryBlock, tags 1–100
+
+# Dynamic range via pointer
+DS.select(idx, idx + 10)       # → IndirectMemoryBlock, resolved each scan
+
+# Mixed static/dynamic
+DS.select(1, count)            # → IndirectMemoryBlock
+```
+
+Python's `Block[n:m]` slice syntax is **not supported**. Slice semantics are half-open (`[start, stop)`) which conflicts with PLC's inclusive convention and creates off-by-one traps. `.select()` is explicit and unambiguous.
+
+### IndirectMemoryBlock
+
+Runtime-resolved contiguous range, returned by `.select()` when either bound is dynamic.
+
+```python
+IndirectMemoryBlock.resolve_ctx(ctx: ScanContext) -> MemoryBlock
+```
+
+- Evaluates `start` and `end` expressions against current state.
+- Returns a concrete `MemoryBlock` for the resolved range.
+- Raises `ValueError` if resolved bounds are out of range.
 
 ### IEC 61131-3 Type Constructors
 
@@ -98,7 +138,7 @@ class TagType(Enum):
 - **Tag identity:** How are tags identified in `SystemState.tags`? By name string? By object identity? Collision rules for duplicate names.
 - **Tag name validation:** Core should validate basic rules (non-empty, no whitespace?). Dialect-specific rules (Click's 24-char max, forbidden chars) belong in the dialect validator.
 - **IndirectRef:** Full specification of pointer/indirect addressing. What types are valid as indices? How does resolution work at runtime? Error behavior for out-of-range.
-- **Slice:** Specification of block slicing. What does `Block[3:7]` return? How do blockcopy/fill consume it?
+- ~~**Slice:**~~ Resolved — replaced by `.select(start, end)` with inclusive bounds. No slice syntax on `__getitem__`.
 - **Retentive semantics:** What does `retentive=True` mean in simulation? (Probably: survives a simulated power cycle / `runner.reset()`.)
 - **Operator overloading:** Tags support `==`, `!=`, `<`, `<=`, `>`, `>=` for conditions, and `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^` for math expressions. Specify what these return (Condition objects, Expression objects).
 - **Named attribute access:** `Setpoints.Max_Temp` as alias for `Setpoints["Max Temp"]`. Specify the name-mangling rules (spaces → underscores, etc.).
