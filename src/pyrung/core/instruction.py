@@ -50,6 +50,30 @@ def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) 
     return source
 
 
+def resolve_tag_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> Tag:
+    """Resolve target to a concrete Tag (handling indirect) using ScanContext.
+
+    Args:
+        target: Tag, IndirectRef, or IndirectExprRef to resolve.
+        ctx: ScanContext for resolving indirect references.
+
+    Returns:
+        The resolved Tag (with type info preserved).
+    """
+    # Import here to avoid circular imports
+    from pyrung.core.memory_bank import IndirectExprRef
+    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
+
+    # Check for IndirectExprRef first
+    if isinstance(target, IndirectExprRef):
+        return target.resolve_ctx(ctx)
+    # Check for IndirectRef
+    if isinstance(target, IndirectRefType):
+        return target.resolve_ctx(ctx)
+    # Regular Tag
+    return target
+
+
 def resolve_tag_name_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> str:
     """Resolve tag to its name (handling indirect) using ScanContext.
 
@@ -60,20 +84,7 @@ def resolve_tag_name_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> str:
     Returns:
         The tag name string.
     """
-    # Import here to avoid circular imports
-    from pyrung.core.memory_bank import IndirectExprRef
-    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
-
-    # Check for IndirectExprRef first
-    if isinstance(target, IndirectExprRef):
-        resolved_tag = target.resolve_ctx(ctx)
-        return resolved_tag.name
-    # Check for IndirectRef
-    if isinstance(target, IndirectRefType):
-        resolved_tag = target.resolve_ctx(ctx)
-        return resolved_tag.name
-    # Regular Tag
-    return target.name
+    return resolve_tag_ctx(target, ctx).name
 
 
 class Instruction(ABC):
@@ -215,10 +226,13 @@ class CopyInstruction(OneShotMixin, Instruction):
         # Resolve source value (handles Tag, IndirectRef, or literal)
         value = resolve_tag_or_value_ctx(self.source, ctx)
 
-        # Resolve target name (handles Tag or IndirectRef)
-        target_name = resolve_tag_name_ctx(self.target, ctx)
+        # Resolve target tag (handles Tag or IndirectRef)
+        resolved_target = resolve_tag_ctx(self.target, ctx)
 
-        ctx.set_tag(target_name, value)
+        # Truncate to destination type
+        value = _truncate_to_tag_type(value, resolved_target)
+
+        ctx.set_tag(resolved_target.name, value)
 
 
 class CallInstruction(Instruction):

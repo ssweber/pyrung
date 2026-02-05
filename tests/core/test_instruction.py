@@ -112,6 +112,33 @@ class TestCopyInstruction:
         assert new_state.tags["Target"] == 42
         assert new_state.tags["Source"] == 42  # Source unchanged
 
+    def test_copy_truncates_to_int16(self):
+        """COPY truncates value to destination INT (16-bit signed)."""
+        from pyrung.core.instruction import CopyInstruction
+
+        Target = Int("Target")
+        # 70000 → signed 16-bit: 4464
+        instr = CopyInstruction(source=70000, target=Target)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Target"] == 4464
+
+    def test_copy_truncates_to_dint32(self):
+        """COPY truncates value to destination DINT (32-bit signed)."""
+        from pyrung.core.instruction import CopyInstruction
+        from pyrung.core.tag import Dint
+
+        Target = Dint("Target")
+        # 2^31 wraps to -2147483648
+        instr = CopyInstruction(source=2_147_483_648, target=Target)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Target"] == -2_147_483_648
+
 
 class TestOneShotBehavior:
     """Test one-shot instruction behavior."""
