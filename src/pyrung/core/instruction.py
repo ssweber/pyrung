@@ -97,6 +97,30 @@ class Instruction(ABC):
         return False
 
 
+def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> tuple[list[str], list[Any]]:
+    """Resolve a BlockRange or IndirectBlockRange to tag names and defaults.
+
+    Args:
+        block_range: BlockRange or IndirectBlockRange to resolve.
+        ctx: ScanContext for resolving indirect references.
+
+    Returns:
+        Tuple of (tag_names, defaults) lists.
+    """
+    from pyrung.core.memory_bank import BlockRange, IndirectBlockRange
+
+    if isinstance(block_range, IndirectBlockRange):
+        block_range = block_range.resolve_ctx(ctx)
+
+    if not isinstance(block_range, BlockRange):
+        raise TypeError(
+            f"Expected BlockRange or IndirectBlockRange, got {type(block_range).__name__}"
+        )
+
+    tags = block_range.tags()
+    return [t.name for t in tags], [t.default for t in tags]
+
+
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
 
@@ -590,3 +614,61 @@ class OffDelayInstruction(Instruction):
 
             ctx.set_memory(frac_key, new_frac)
             ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
+
+
+class BlockCopyInstruction(OneShotMixin, Instruction):
+    """Block copy instruction.
+
+    Copies values from a source BlockRange to a destination BlockRange.
+    Both ranges must have the same length.
+
+    Source and dest can be BlockRange or IndirectBlockRange (resolved at scan time).
+    """
+
+    def __init__(self, source: Any, dest: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.source = source
+        self.dest = dest
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        src_names, src_defaults = resolve_block_range_ctx(self.source, ctx)
+        dst_names, _ = resolve_block_range_ctx(self.dest, ctx)
+
+        if len(src_names) != len(dst_names):
+            raise ValueError(
+                f"BlockCopy length mismatch: source has {len(src_names)} elements, "
+                f"dest has {len(dst_names)} elements"
+            )
+
+        updates = {}
+        for src_name, src_default, dst_name in zip(src_names, src_defaults, dst_names, strict=True):
+            updates[dst_name] = ctx.get_tag(src_name, src_default)
+        ctx.set_tags(updates)
+
+
+class FillInstruction(OneShotMixin, Instruction):
+    """Fill instruction.
+
+    Writes a constant value to every element in a destination BlockRange.
+
+    Value can be a literal, Tag, or Expression (resolved once, written to all).
+    Dest can be BlockRange or IndirectBlockRange (resolved at scan time).
+    """
+
+    def __init__(self, value: Any, dest: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.value = value
+        self.dest = dest
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        value = resolve_tag_or_value_ctx(self.value, ctx)
+        dst_names, _ = resolve_block_range_ctx(self.dest, ctx)
+
+        updates = {name: value for name in dst_names}
+        ctx.set_tags(updates)

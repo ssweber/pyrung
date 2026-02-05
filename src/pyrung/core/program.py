@@ -22,10 +22,12 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.instruction import (
+    BlockCopyInstruction,
     CallInstruction,
     CopyInstruction,
     CountDownInstruction,
     CountUpInstruction,
+    FillInstruction,
     LatchInstruction,
     OffDelayInstruction,
     OnDelayInstruction,
@@ -220,6 +222,43 @@ def copy(source: Tag | Any, target: Tag, oneshot: bool = False) -> Tag:
     ctx = _require_rung_context("copy")
     ctx._rung.add_instruction(CopyInstruction(source, target, oneshot))
     return target
+
+
+def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
+    """Block copy instruction.
+
+    Copies values from source BlockRange to dest BlockRange.
+    Both ranges must have the same length.
+
+    Example:
+        with Rung(CopyEnable):
+            blockcopy(DS.select(1, 10), DD.select(1, 10))
+
+    Args:
+        source: Source BlockRange or IndirectBlockRange from .select().
+        dest: Dest BlockRange or IndirectBlockRange from .select().
+        oneshot: If True, execute only once per rung activation.
+    """
+    ctx = _require_rung_context("blockcopy")
+    ctx._rung.add_instruction(BlockCopyInstruction(source, dest, oneshot))
+
+
+def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
+    """Fill instruction.
+
+    Writes a constant value to every element in a BlockRange.
+
+    Example:
+        with Rung(ClearEnable):
+            fill(0, DS.select(1, 100))
+
+    Args:
+        value: Value to write (literal, Tag, or Expression).
+        dest: Dest BlockRange or IndirectBlockRange from .select().
+        oneshot: If True, execute only once per rung activation.
+    """
+    ctx = _require_rung_context("fill")
+    ctx._rung.add_instruction(FillInstruction(value, dest, oneshot))
 
 
 # ============================================================================
