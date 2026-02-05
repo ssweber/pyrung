@@ -108,15 +108,15 @@ class Instruction(ABC):
         return False
 
 
-def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> tuple[list[str], list[Any]]:
-    """Resolve a BlockRange or IndirectBlockRange to tag names and defaults.
+def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag]:
+    """Resolve a BlockRange or IndirectBlockRange to a list of Tags.
 
     Args:
         block_range: BlockRange or IndirectBlockRange to resolve.
         ctx: ScanContext for resolving indirect references.
 
     Returns:
-        Tuple of (tag_names, defaults) lists.
+        List of resolved Tag objects (with type info preserved).
     """
     from pyrung.core.memory_bank import BlockRange, IndirectBlockRange
 
@@ -128,8 +128,7 @@ def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> tuple[list[st
             f"Expected BlockRange or IndirectBlockRange, got {type(block_range).__name__}"
         )
 
-    tags = block_range.tags()
-    return [t.name for t in tags], [t.default for t in tags]
+    return block_range.tags()
 
 
 class OneShotMixin:
@@ -648,18 +647,19 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         if not self.should_execute():
             return
 
-        src_names, src_defaults = resolve_block_range_ctx(self.source, ctx)
-        dst_names, _ = resolve_block_range_ctx(self.dest, ctx)
+        src_tags = resolve_block_range_tags_ctx(self.source, ctx)
+        dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
 
-        if len(src_names) != len(dst_names):
+        if len(src_tags) != len(dst_tags):
             raise ValueError(
-                f"BlockCopy length mismatch: source has {len(src_names)} elements, "
-                f"dest has {len(dst_names)} elements"
+                f"BlockCopy length mismatch: source has {len(src_tags)} elements, "
+                f"dest has {len(dst_tags)} elements"
             )
 
         updates = {}
-        for src_name, src_default, dst_name in zip(src_names, src_defaults, dst_names, strict=True):
-            updates[dst_name] = ctx.get_tag(src_name, src_default)
+        for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+            value = ctx.get_tag(src_tag.name, src_tag.default)
+            updates[dst_tag.name] = _truncate_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)
 
 
@@ -787,7 +787,9 @@ class FillInstruction(OneShotMixin, Instruction):
             return
 
         value = resolve_tag_or_value_ctx(self.value, ctx)
-        dst_names, _ = resolve_block_range_ctx(self.dest, ctx)
+        dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
 
-        updates = {name: value for name in dst_names}
+        updates = {}
+        for dst_tag in dst_tags:
+            updates[dst_tag.name] = _truncate_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)

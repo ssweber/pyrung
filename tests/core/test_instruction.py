@@ -331,6 +331,22 @@ class TestBlockCopyInstruction:
         assert new_state.tags["DS11"] == 200
         assert new_state.tags["DS12"] == 300
 
+    def test_blockcopy_truncates_to_dest_type(self):
+        """BLOCKCOPY truncates values to destination type (DINT→INT)."""
+        from pyrung.core.instruction import BlockCopyInstruction
+
+        DD = Block("DD", TagType.DINT, 1, 100)
+        DS = Block("DS", TagType.INT, 1, 100)
+
+        instr = BlockCopyInstruction(DD.select(1, 2), DS.select(1, 2))
+
+        # 70000 → INT16: 4464, 100000 → INT16: -31072
+        state = SystemState().with_tags({"DD1": 70000, "DD2": 100000})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == 4464
+        assert new_state.tags["DS2"] == -31072
+
 
 class TestFillInstruction:
     """Test FILL instruction."""
@@ -429,6 +445,22 @@ class TestFillInstruction:
         assert original.tags["DS2"] == 20
         assert new_state.tags["DS1"] == 0
         assert new_state.tags["DS2"] == 0
+
+    def test_fill_truncates_to_dest_type(self):
+        """FILL truncates value to destination INT (16-bit signed)."""
+        from pyrung.core.instruction import FillInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+
+        # 70000 → INT16: 4464
+        instr = FillInstruction(70000, DS.select(1, 3))
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == 4464
+        assert new_state.tags["DS2"] == 4464
+        assert new_state.tags["DS3"] == 4464
 
 
 class TestMathInstruction:
