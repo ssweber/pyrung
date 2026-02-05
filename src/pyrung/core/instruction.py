@@ -649,6 +649,111 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         ctx.set_tags(updates)
 
 
+def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
+    """Truncate a value to fit the destination tag's type.
+
+    Implements hardware-verified modular wrapping:
+    - INT: 16-bit signed (-32768 to 32767)
+    - DINT: 32-bit signed (-2147483648 to 2147483647)
+    - WORD: 16-bit unsigned (0 to 65535)
+    - REAL: 32-bit float (no truncation, just cast)
+    - BOOL: truthiness
+    - CHAR: no truncation
+
+    In "hex" mode, all integer types wrap at 16-bit unsigned (0-65535).
+
+    Args:
+        value: The computed value to truncate.
+        tag: The destination tag (used for type info).
+        mode: "decimal" (default signed) or "hex" (unsigned 16-bit).
+
+    Returns:
+        Value truncated to the tag's type range.
+    """
+    from pyrung.core.tag import TagType
+
+    # Handle division-by-zero sentinels (inf, nan)
+    if isinstance(value, float) and (
+        value != value or value == float("inf") or value == float("-inf")
+    ):
+        return 0
+
+    if mode == "hex":
+        # Hex mode: unsigned 16-bit wrap for all integer types
+        return int(value) & 0xFFFF
+
+    tag_type = tag.type
+
+    if tag_type == TagType.BOOL:
+        return bool(value)
+
+    if tag_type == TagType.REAL:
+        return float(value)
+
+    if tag_type == TagType.CHAR:
+        return value
+
+    # Integer truncation with signed wrapping
+    int_val = int(value)
+
+    if tag_type == TagType.INT:
+        # 16-bit signed: wrap to -32768..32767
+        return ((int_val + 0x8000) & 0xFFFF) - 0x8000
+
+    if tag_type == TagType.DINT:
+        # 32-bit signed: wrap to -2147483648..2147483647
+        return ((int_val + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+
+    if tag_type == TagType.WORD:
+        # 16-bit unsigned: wrap to 0..65535
+        return int_val & 0xFFFF
+
+    # Fallback: no truncation
+    return value
+
+
+class MathInstruction(OneShotMixin, Instruction):
+    """Math instruction.
+
+    Evaluates an expression and stores the result in a destination tag,
+    with truncation to the destination's type width.
+
+    Key differences from CopyInstruction:
+    - Truncates result to destination tag's bit width (modular wrapping)
+    - Division by zero produces 0 (not infinity)
+    - Supports "decimal" (signed) and "hex" (unsigned 16-bit) modes
+    """
+
+    def __init__(
+        self,
+        expression: Any,
+        dest: Tag,
+        oneshot: bool = False,
+        mode: str = "decimal",
+    ):
+        OneShotMixin.__init__(self, oneshot)
+        self.expression = expression
+        self.dest = dest
+        self.mode = mode
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
+        try:
+            value = resolve_tag_or_value_ctx(self.expression, ctx)
+        except ZeroDivisionError:
+            value = 0
+
+        # Truncate to destination type
+        value = _truncate_to_tag_type(value, self.dest, self.mode)
+
+        # Resolve destination name (handles indirect)
+        target_name = resolve_tag_name_ctx(self.dest, ctx)
+        ctx.set_tag(target_name, value)
+
+
 class FillInstruction(OneShotMixin, Instruction):
     """Fill instruction.
 

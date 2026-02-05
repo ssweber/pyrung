@@ -29,6 +29,7 @@ from pyrung.core.instruction import (
     CountUpInstruction,
     FillInstruction,
     LatchInstruction,
+    MathInstruction,
     OffDelayInstruction,
     OnDelayInstruction,
     OutInstruction,
@@ -259,6 +260,36 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
     """
     ctx = _require_rung_context("fill")
     ctx._rung.add_instruction(FillInstruction(value, dest, oneshot))
+
+
+def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
+    """Math instruction.
+
+    Evaluates an expression and stores the result in dest, with
+    truncation to the destination tag's bit width (modular wrapping).
+
+    Key differences from copy():
+    - Truncates result to destination tag's type width
+    - Division by zero produces 0 (not infinity)
+    - Supports "decimal" (signed) and "hex" (unsigned 16-bit) modes
+
+    Example:
+        with Rung(Enable):
+            math(DS1 * DS2 + DS3, Result)
+            math(MaskA & MaskB, MaskResult, mode="hex")
+
+    Args:
+        expression: Expression, Tag, or literal to evaluate.
+        dest: Destination tag (type determines truncation width).
+        oneshot: If True, execute only once per rung activation.
+        mode: "decimal" (signed arithmetic) or "hex" (unsigned 16-bit wrap).
+
+    Returns:
+        The dest tag.
+    """
+    ctx = _require_rung_context("math")
+    ctx._rung.add_instruction(MathInstruction(expression, dest, oneshot, mode))
+    return dest
 
 
 # ============================================================================

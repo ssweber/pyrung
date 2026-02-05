@@ -402,3 +402,237 @@ class TestFillInstruction:
         assert original.tags["DS2"] == 20
         assert new_state.tags["DS1"] == 0
         assert new_state.tags["DS2"] == 0
+
+
+class TestMathInstruction:
+    """Test MATH instruction — hardware-verified overflow and truncation behavior."""
+
+    def test_math_simple_addition(self):
+        """MATH evaluates expression and stores result."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Int("Result")
+        expr = TagExpr(DS1) + TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DS1": 100, "DS2": 200})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == 300
+
+    def test_math_truncation_int16(self):
+        """INT dest truncates to 16-bit signed (modular wrapping)."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Int("Result")
+        expr = TagExpr(DS1) * TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        # 1000 * 1000 = 1,000,000 → mod 65536 = 16960
+        # As signed 16-bit: 16960 (fits in positive range)
+        state = SystemState().with_tags({"DS1": 1000, "DS2": 1000})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 16960
+
+    def test_math_truncation_int16_signed_wrap(self):
+        """INT dest wraps to negative for values above 32767."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Int("Result")
+        expr = TagExpr(DS1) + TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        # 30000 + 30000 = 60000 → signed 16-bit: -5536
+        state = SystemState().with_tags({"DS1": 30000, "DS2": 30000})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == -5536
+
+    def test_math_truncation_dint32(self):
+        """DINT dest truncates to 32-bit signed."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Dint
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Dint("Result")
+        expr = TagExpr(DS1) * TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        # 1000 * 1000 = 1,000,000 — fits in 32-bit signed
+        state = SystemState().with_tags({"DS1": 1000, "DS2": 1000})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 1_000_000
+
+    def test_math_dint32_overflow_wrap(self):
+        """DINT wraps at 32-bit signed boundary (hardware-verified)."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Dint
+
+        DD1 = Dint("DD1")
+        Result = Dint("Result")
+        # 2,147,483,647 + 1 = -2,147,483,648
+        expr = TagExpr(DD1) + 1
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DD1": 2_147_483_647})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == -2_147_483_648
+
+    def test_math_dint32_multiply_wrap(self):
+        """50000 * 50000 wraps in 32-bit signed (hardware-verified)."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Dint
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Dint("Result")
+        expr = TagExpr(DS1) * TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        # 50000 * 50000 = 2,500,000,000 → wraps to -1,794,967,296
+        state = SystemState().with_tags({"DS1": 50000, "DS2": 50000})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == -1_794_967_296
+
+    def test_math_division_by_zero(self):
+        """Division by zero produces 0."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Int("Result")
+        expr = TagExpr(DS1) / TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DS1": 100, "DS2": 0, "Result": 999})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 0
+
+    def test_math_integer_division_truncates_toward_zero(self):
+        """Division truncates toward zero: -7 / 2 = -3 (not -4)."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Int("Result")
+        # True division gives -3.5, int() gives -3
+        expr = TagExpr(DS1) / TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DS1": -7, "DS2": 2})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == -3
+
+    def test_math_real_dest_no_truncation(self):
+        """REAL destination stores float without integer truncation."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Real
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        Result = Real("Result")
+        expr = TagExpr(DS1) / TagExpr(DS2)
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DS1": 7, "DS2": 2})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 3.5
+
+    def test_math_hex_mode_unsigned_wrap(self):
+        """Hex mode wraps at unsigned 16-bit boundary (0-65535)."""
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Word
+
+        MaskA = Word("MaskA")
+        Result = Word("Result")
+        # 0xFFFF + 1 = 0x10000 → wraps to 0
+        instr = MathInstruction(MaskA + 1, Result, mode="hex")
+
+        state = SystemState().with_tags({"MaskA": 0xFFFF})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 0
+
+    def test_math_hex_mode_no_sign_extension(self):
+        """Hex mode result is always 0-65535 (no sign)."""
+        from pyrung.core.instruction import MathInstruction
+        from pyrung.core.tag import Word
+
+        MaskA = Word("MaskA")
+        Result = Word("Result")
+        # -1 in hex mode → 0xFFFF = 65535
+        instr = MathInstruction(MaskA - 2, Result, mode="hex")
+
+        state = SystemState().with_tags({"MaskA": 1})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 65535
+
+    def test_math_literal_expression(self):
+        """MATH works with literal values."""
+        from pyrung.core.instruction import MathInstruction
+
+        Result = Int("Result")
+        instr = MathInstruction(42, Result)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 42
+
+    def test_math_oneshot(self):
+        """MATH with oneshot only executes once."""
+        from pyrung.core.instruction import MathInstruction
+
+        Result = Int("Result")
+        instr = MathInstruction(42, Result, oneshot=True)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 42
+
+        # Second execution — oneshot blocks it
+        state2 = new_state.with_tags({"Result": 0})
+        new_state2 = execute(instr, state2)
+        assert new_state2.tags["Result"] == 0  # Unchanged
+
+    def test_math_does_not_mutate_input(self):
+        """MATH returns new state, input unchanged."""
+        from pyrung.core.instruction import MathInstruction
+
+        Result = Int("Result")
+        instr = MathInstruction(42, Result)
+
+        original = SystemState().with_tags({"Result": 0})
+        new_state = execute(instr, original)
+
+        assert original.tags["Result"] == 0
+        assert new_state.tags["Result"] == 42
+
+    def test_math_spec_example_ds_overflow(self):
+        """Spec example: 200*200+30000=70000 → DS stores 4464."""
+        from pyrung.core.expression import TagExpr
+        from pyrung.core.instruction import MathInstruction
+
+        DS1 = Int("DS1")
+        DS2 = Int("DS2")
+        DS3 = Int("DS3")
+        Result = Int("Result")
+        expr = TagExpr(DS1) * TagExpr(DS2) + TagExpr(DS3)
+        instr = MathInstruction(expr, Result)
+
+        state = SystemState().with_tags({"DS1": 200, "DS2": 200, "DS3": 30000})
+        new_state = execute(instr, state)
+        assert new_state.tags["Result"] == 4464
