@@ -27,7 +27,7 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
-from pyrung.core.memory_bank import (
+from pyrung.core.memory_block import (
     Block,
     BlockRange,
     IndirectBlockRange,

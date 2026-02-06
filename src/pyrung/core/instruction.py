@@ -14,7 +14,7 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_bank import IndirectRef
+    from pyrung.core.memory_block import IndirectRef
 
 
 def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
@@ -29,8 +29,8 @@ def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) 
     """
     # Import here to avoid circular imports
     from pyrung.core.expression import Expression
-    from pyrung.core.memory_bank import IndirectExprRef
-    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
+    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectRef as IndirectRefType
 
     # Check for Expression first (includes TagExpr)
     if isinstance(source, Expression):
@@ -61,8 +61,8 @@ def resolve_tag_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> Tag:
         The resolved Tag (with type info preserved).
     """
     # Import here to avoid circular imports
-    from pyrung.core.memory_bank import IndirectExprRef
-    from pyrung.core.memory_bank import IndirectRef as IndirectRefType
+    from pyrung.core.memory_block import IndirectExprRef
+    from pyrung.core.memory_block import IndirectRef as IndirectRefType
 
     # Check for IndirectExprRef first
     if isinstance(target, IndirectExprRef):
@@ -118,7 +118,7 @@ def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag
     Returns:
         List of resolved Tag objects (with type info preserved).
     """
-    from pyrung.core.memory_bank import BlockRange, IndirectBlockRange
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
     if isinstance(block_range, IndirectBlockRange):
         block_range = block_range.resolve_ctx(ctx)

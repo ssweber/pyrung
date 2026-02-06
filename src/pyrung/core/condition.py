@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_bank import IndirectRef
+    from pyrung.core.memory_block import IndirectRef
     from pyrung.core.tag import Tag
 
 

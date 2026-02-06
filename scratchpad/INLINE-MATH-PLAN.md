@@ -261,7 +261,7 @@ sqrt, sin, cos, tan, etc.
 | `src/pyrung/engine/tag.py` | Add arithmetic ops | 3 (GREEN) |
 | `src/pyrung/engine/condition.py` | Add ExprCompare* | 4 (GREEN) |
 | `src/pyrung/engine/instruction.py` | Update resolver | 5 (GREEN) |
-| `src/pyrung/engine/memory_bank.py` | Add ops to IndirectTag | 5 (GREEN) |
+| `src/pyrung/engine/memory_block.py` | Add ops to IndirectTag | 5 (GREEN) |
 | `src/pyrung/engine/__init__.py` | Export new symbols | 5 (GREEN) |
 
 ## Verification

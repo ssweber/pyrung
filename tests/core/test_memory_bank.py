@@ -25,7 +25,7 @@ from pyrung.core import (
     copy,
     out,
 )
-from pyrung.core.memory_bank import IndirectBlockRange
+from pyrung.core.memory_block import IndirectBlockRange
 from tests.conftest import evaluate_condition, evaluate_program
 
 # =============================================================================
