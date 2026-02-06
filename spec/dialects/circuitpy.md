@@ -1,4 +1,4 @@
-# Cricket Dialect — Handoff Brief
+# CircuitPython Dialect — Handoff Brief
 
 > **Status:** Handoff — earliest stage. Architecture decisions made, everything else is open.
 > **Depends on:** All core specs.
@@ -8,7 +8,7 @@
 
 ## Scope
 
-The Cricket dialect targets ProductivityOpen P1AM-200 (and potentially other Arduino-controlled PLC platforms). The key difference from Click: Cricket **generates deployable code** rather than exporting a configuration file. The simulation is identical — only the export path differs.
+The CircuitPython dialect targets ProductivityOpen P1AM-200 (and potentially other Arduino-controlled PLC platforms). The key difference from Click: CircuitPython **generates deployable code** rather than exporting a configuration file. The simulation is identical — only the export path differs.
 
 ---
 
@@ -19,7 +19,7 @@ The Cricket dialect targets ProductivityOpen P1AM-200 (and potentially other Ard
 The P1AM-200 is a base unit with slots for I/O modules. Each slot holds a specific module (discrete input, discrete output, analog input, relay output, etc.).
 
 ```python
-from pyrung.cricket import P1AM
+from pyrung.circuitpy import P1AM
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")      # 8-ch discrete input  → InputBlock
@@ -32,7 +32,7 @@ Each slot call returns an `InputBlock` or `OutputBlock` (core types), sized and 
 
 ### Internal Memory
 
-Cricket programs need internal memory (counters, steps, flags) that isn't tied to a physical slot. These are just core `Block` instances:
+CircuitPython programs need internal memory (counters, steps, flags) that isn't tied to a physical slot. These are just core `Block` instances:
 
 ```python
 Flags = Block("Flags", Bool, range(1, 33))
@@ -46,56 +46,26 @@ In generated code, these become global variables or arrays.
 The primary export is Arduino .ino code (or MicroPython .py).
 
 ```python
-from pyrung.cricket import generate_arduino, generate_micropython
-
-generate_arduino(logic, hw, "output.ino")
-generate_micropython(logic, hw, "main.py")
+from pyrung.circuitpy import ...
 ```
 
 The generated code structure:
 
-```cpp
-// output.ino (conceptual)
-#include <P1AM.h>
-
-// Global state
-bool Flags[33];       // Flags block, index 0 unused
-int Registers[101];   // Registers block, index 0 unused
-
-void setup() {
-    P1.init();
-    // Module configuration
-}
-
-void loop() {
-    // 1. Read inputs
-    bool slot1[9];
-    for (int i = 1; i <= 8; i++) slot1[i] = P1.readDiscrete(1, i);
-
-    // 2. Execute logic (ladder → imperative)
-    // Rung 1: if (slot1[1]) { slot2[1] = true; }
-    // ...
-
-    // 3. Write outputs
-    for (int i = 1; i <= 8; i++) P1.writeDiscrete(slot2[i], 2, i);
-}
+```
+TBD
 ```
 
 This is the `while True` loop you mentioned — every PLC scan becomes one iteration of `loop()`.
 
-### .immediate in Cricket
+### .immediate in CircuitPython
 
-Generates inline `P1.readDiscrete()` / `P1.writeDiscrete()` calls within the logic section, rather than reading/writing from the scan buffers.
+Generates inline `point = base[1].inputs[2].value` / `allPoints = base[1].di_bitmapped()` calls within the logic section, rather than reading/writing from the scan buffers.
 
-```cpp
-// Normal: uses scan buffer
-if (slot1_buffer[1]) { ... }
-
-// Immediate: reads hardware directly
-if (P1.readDiscrete(1, 1)) { ... }
+```
+TBD
 ```
 
-### Cricket Validation
+### CircuitPython Validation
 
 Separate from Click. Checks things like:
 - Slot number is valid for P1AM base (1–15?)
@@ -113,25 +83,25 @@ Produces a `ValidationReport` (same core structure as Click).
 
 This dialect is at the idea stage. Big questions:
 
-- **Module catalog:** Where does the knowledge of "P1-08SIM has 8 discrete inputs" live? A dict in `pyrung.cricket`? A separate package (`pyp1am`)? A JSON/YAML data file?
-- **Analog scaling:** Analog modules read raw ADC counts. Does Cricket handle scaling (engineering units), or is that the user's problem via `math()`?
+- **Module catalog:** Where does the knowledge of "P1-08SIM has 8 discrete inputs" live? A dict in `pyrung.circuitpy`? A separate package (`pyp1am`)? A JSON/YAML data file?
+- **Analog scaling:** Analog modules read raw ADC counts. Does CircuitPython handle scaling (engineering units), or is that the user's problem via `math()`?
 - **Timer implementation:** Arduino has `millis()`. How do pyrung timers translate? `on_delay` becomes a millis-comparison pattern in generated code?
 - **Counter persistence:** Arduino has no persistent storage by default. What does `retentive=True` mean? EEPROM? SD card? Just a warning?
 - **Subroutine codegen:** Do pyrung subroutines become C++ functions? Arduino functions? Inline code?
 - **Code generation quality:** How readable should generated code be? Comment-heavy? Minimal? Configurable?
 - **Other Arduino PLC targets:** Just P1AM, or also Opta, Click (via Arduino adapter), or generic GPIO? How modular is the codegen?
 - **Testing workflow:** Write in pyrung, simulate, generate code, flash to hardware. Is there a verification step? (Simulate-vs-hardware comparison?)
-- **DSL extensions:** You mentioned possible DSL extensions for Cricket. What did you have in mind? Analog-specific instructions? Communication protocols? PID?
+- **DSL extensions:** You mentioned possible DSL extensions for CircuitPython. What did you have in mind? Analog-specific instructions? Communication protocols? PID?
 
 ---
 
 ## Not For Current Scope
 
-Cricket is future work. The purpose of this handoff is to prove the dialect boundary is clean — that everything we design in core works for both Click and Cricket without compromise. If a core design decision would paint Cricket into a corner, we need to know now.
+CircuitPython is future work. The purpose of this handoff is to prove the dialect boundary is clean — that everything we design in core works for both Click and CircuitPython without compromise. If a core design decision would paint CircuitPython into a corner, we need to know now.
 
-Key architectural test: **can Cricket use the core DSL, engine, and debug API without modification?** Based on current design, yes:
+Key architectural test: **can CircuitPython use the core DSL, engine, and debug API without modification?** Based on current design, yes:
 - `Program`, `Rung`, conditions, instructions — all core, all work
-- `InputBlock` / `OutputBlock` — core types, Cricket constructs them from slot config
-- `PLCRunner` — simulates Cricket programs identically to Click
-- `force`, `when().pause()`, history, `fork_from` — all work on Cricket programs
+- `InputBlock` / `OutputBlock` — core types, CircuitPython constructs them from slot config
+- `PLCRunner` — simulates CircuitPython programs identically to Click
+- `force`, `when().pause()`, history, `fork_from` — all work on CircuitPython programs
 - Only the export path differs: `TagMap` + nickname CSV vs `generate_arduino()`

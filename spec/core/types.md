@@ -129,7 +129,7 @@ class TagType(Enum):
 - `Tag` (from `Block`) does **not** have `.immediate` — it's an `AttributeError`.
 - In simulation: validation-time check, no runtime behavior.
 - In Click: transcription hint.
-- In Cricket: different codegen.
+- In CircuitPython: different codegen.
 
 ---
 

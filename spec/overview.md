@@ -27,7 +27,7 @@ The core is hardware-agnostic. Hardware knowledge lives in dialects.
 │                   User Program                         │
 │  from pyrung import *                                  │
 │  from pyrung.click import x, y, c, ds, TagMap          │
-│  # or: from pyrung.cricket import P1AM, generate_ino   │
+│  # or: from pyrung.circuitpy import P1AM, ...          │
 ├────────────────────────────────────────────────────────┤
 │                   pyrung (core)                        │
 │                                                        │
@@ -55,7 +55,7 @@ The core is hardware-agnostic. Hardware knowledge lives in dialects.
 ├────────────────────────────────────────────────────────┤
 │              Dialects (hardware-specific)              │
 │                                                        │
-│  pyrung.click                pyrung.cricket            │
+│  pyrung.click                pyrung.circuitpy          │
 │  ─────────────               ──────────────            │
 │  Pre-built blocks:           P1AM hardware model       │
 │    x, y, c, ds, df,         Slot/channel addressing    │
@@ -63,7 +63,7 @@ The core is hardware-agnostic. Hardware knowledge lives in dialects.
 │  Click aliases:              Code generation:          │
 │    Bit, Float, Hex, etc.      generate_arduino()       │
 │  TagMap (mapping)              generate_micropython()  │
-│  Nickname CSV I/O            Cricket validation rules  │
+│  Nickname CSV I/O      CircuitPython validation rules  │
 │  Click validation rules                                │
 │  Depends on clickplc-config                            │
 └────────────────────────────────────────────────────────┘
@@ -98,11 +98,11 @@ runner.patch({"Button": True})
 runner.step()
 ```
 
-### Cricket program (same core DSL, different hardware)
+### CircuitPython program (same core DSL, different hardware)
 
 ```python
 from pyrung import *
-from pyrung.cricket import P1AM, generate_arduino
+from pyrung.circuitpy import P1AM, generate_arduino
 
 hw = P1AM()
 inputs  = hw.slot(1, "P1-08SIM")    # → InputBlock("Slot1", Bool, range(1, 9))
@@ -121,7 +121,7 @@ runner.patch({Button.name: True})
 runner.step()
 
 # Generate deployable code
-generate_arduino(logic, hw, "output.ino")
+generate...
 ```
 
 ### Explicit imports (for those who prefer them)
@@ -205,7 +205,7 @@ All in-memory writes — including to OutputBlock tags — are visible to subseq
 |---------|----------|
 | Simulation (pure) | Validation-time check only. No runtime behavior change. |
 | Click dialect | Transcription hint for Click software export. |
-| Cricket dialect | Generates different code (inline `P1.readDiscrete()` vs scan buffer). |
+| CircuitPython dialect | Generates different code |
 | Hardware-in-the-loop | Re-reads/writes the hardware adapter mid-scan. |
 
 ---
@@ -230,7 +230,7 @@ class ValidationReport:
         """One-line: '3 unmapped, 1 error, 2 warnings, 5 hints'"""
 ```
 
-Each dialect implements its own validator that produces a `ValidationReport`. The Click dialect checks Click-specific restrictions (pointer banks, expression limits, bank compatibility). The Cricket dialect checks slot/channel validity and codegen constraints.
+Each dialect implements its own validator that produces a `ValidationReport`. The Click dialect checks Click-specific restrictions (pointer banks, expression limits, bank compatibility). The CircuitPython dialect checks slot/channel validity and codegen constraints.
 
 The report structure is universal. The rules that populate it are dialect-specific.
 
@@ -254,9 +254,9 @@ The report structure is universal. The rules that populate it are dialect-specif
 | `TagMap` | `pyrung.click` | Click mapping + validation |
 | Nickname CSV I/O | `pyrung.click` | Click ecosystem |
 | Click validation rules | `pyrung.click` | Click hardware restrictions |
-| `P1AM`, `Slot`, module catalog | `pyrung.cricket` | P1AM hardware model |
-| `generate_arduino`, `generate_micropython` | `pyrung.cricket` | Cricket code generation |
-| Cricket validation rules | `pyrung.cricket` | Cricket hardware restrictions |
+| `P1AM`, `Slot`, module catalog | `pyrung.circuitpy` | P1AM hardware model |
+| `generate_circuitpython` | CircuitPython code generation |
+| CircuitPython validation rules | `pyrung.circuitpy` | CircuitPython hardware restrictions |
 
 ---
 
@@ -270,7 +270,7 @@ pyrung.click (dialect)
   ├── pyrung              (core)
   └── clickplc-config          (shared Click hardware contants, Nickname (csv) and Dataview (.cdv) file handling.)
 
-pyrung.cricket (dialect)
+pyrung.circuitpy (dialect)
   └── pyrung              (core)
 
 clickplc-config (standalone)
@@ -292,4 +292,4 @@ clickplc-config (standalone)
 | `core/engine.md` | SystemState, PLCRunner, TimeMode, step/run/patch, scan cycle. | Handoff |
 | `core/debug.md` | force, when().pause(), monitor, history, seek, rewind, diff, fork_from. | Handoff |
 | `dialects/click.md` | Pre-built blocks, TagMap, validation, nickname I/O, clickplc-config bridge. | Handoff |
-| `dialects/cricket.md` | P1AM model, slot/channel, codegen, cricket validation. | Handoff |
+| `dialects/circuit.md` | P1AM model, slot/channel, codegen, circuitpython validation. | Handoff |
