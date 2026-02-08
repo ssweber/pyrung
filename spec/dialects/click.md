@@ -3,12 +3,15 @@
 > **Status:** Handoff — decisions captured, needs full spec writeup.
 > **Depends on:** All core specs. Also depends on `pyclickplc` (external package).
 > **Implementation milestones:** 9 (pyclickplc extraction), 10 (Tag Mapping)
+> **See also:** `spec/HANDOFF.md` (rich value types & soft PLC architecture)
 
 ---
 
 ## Scope
 
-Everything Click-hardware-specific: pre-built blocks, Click type aliases, `TagMap`, nickname file I/O, Click validation rules, and the bridge to `pyclickplc`.
+Everything Click-hardware-specific: pre-built blocks, Click type aliases, `TagMap`,
+nickname file I/O, Click validation rules, the bridge to `pyclickplc`, and the
+soft PLC adapter (`ClickDataProvider`).
 
 ---
 
@@ -42,17 +45,24 @@ Exact ranges come from `pyclickplc`. Retentive defaults also come from `pyclickp
 
 ### Click Type Aliases
 
-Re-exported from `pyrung.click` for Click-familiar users:
+Re-exported from `pyrung.click` for Click-familiar users. These are the **only**
+home for Click aliases — pyrung core uses IEC names exclusively.
 
 ```python
+# Tag constructors
 Bit   = Bool
 Int2  = Dint
 Float = Real
 Hex   = Word
 Txt   = Char
+
+# Rich value types (re-exported from pyclickplc)
+from pyclickplc.values import PlcBit, PlcInt2, PlcFloat, PlcHex, PlcTxt
 ```
 
 These are just aliases — they produce standard `Tag` objects with IEC `TagType`.
+Rich value types are the same classes as their IEC counterparts (e.g. `PlcHex`
+is `PlcWord`).
 
 ### TagMap
 
@@ -178,10 +188,38 @@ state = state.set_bit("SC44", False)
 
 **Contrast with Allen-Bradley:** Click flags auto-reset and never halt the processor (except SC46). Allen-Bradley SLC-500 latches overflow flags and can fault the processor if not explicitly cleared.
 
+### Soft PLC Adapter (`ClickDataProvider`)
+
+Implements pyclickplc's `DataProvider` protocol, bridging pyrung's `SystemState`
+to the Modbus server. This enables pyrung to act as a soft PLC accessible via
+standard Modbus TCP.
+
+```python
+from pyclickplc.server import ClickServer, DataProvider
+
+class ClickDataProvider:
+    """Bridges pyrung SystemState to pyclickplc DataProvider protocol."""
+
+    def read(self, address: str) -> PlcValue:
+        tag_name = self._address_to_tag(address)
+        return self._state.tags.get(tag_name, default)
+
+    def write(self, address: str, value: PlcValue) -> None:
+        self._runner.patch({tag_name: value})
+
+# Usage:
+provider = ClickDataProvider(runner)
+server = ClickServer(provider, port=502)
+```
+
+Values flow as raw primitives through the adapter — no rich type wrapping needed
+on the server path. See `spec/HANDOFF.md` for the full data flow diagram.
+
 ---
 
 ## Needs Specification
 
+- **ClickDataProvider details:** Thread safety (Modbus server is async, scan engine is sync). How writes are queued for the next scan. How reads get a consistent snapshot.
 - **TagMap.resolve():** Given a logical tag reference, return the hardware address. Specify the return type.
 - **TagMap.offset_for():** Given a Block, return the offset between logical indices and hardware addresses. E.g., `Alarms` at logical 1–99 mapped to C101–199, offset = 100.
 - **Validation report sections:** Mapping status, mapping errors, hardware hints, summary. Port from original SPEC.md with updated terminology (Block not MemoryBank).
@@ -190,4 +228,4 @@ state = state.set_bit("SC44", False)
 - **Interleaved pairs:** Click's DD/DH/DF interleaving. Document how this affects mapping validation.
 - **Tag name validation at map time:** Names validated against `clickplc.validation` rules (24-char max, forbidden chars, reserved words). Errors vs warnings.
 - **SC/SD (system) blocks:** Are these read-only? Can you map user tags to them? Probably no — they're system-provided.
-- **What `pyclickplc` provides vs what `pyrung.click` owns:** Clear boundary. pyclickplc = address model, types, file I/O. pyrung.click = live blocks, TagMap, validation, DSL integration.
+- **What `pyclickplc` provides vs what `pyrung.click` owns:** Clear boundary. pyclickplc = address model, types, file I/O, rich value types. pyrung.click = live blocks, TagMap, validation, DSL integration, soft PLC adapter.
