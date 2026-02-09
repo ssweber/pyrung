@@ -1,6 +1,8 @@
 # Rich PLC Value Types & Soft PLC Architecture — Handoff
 
-> **Status:** Handoff — decisions captured from cross-repo design session.
+> **Status:** In progress. `PlcValue`, `ModbusResponse`, `DataProvider`, and
+> `MemoryDataProvider` are implemented in pyclickplc. Rich value types (`values.py`)
+> and soft PLC wiring are next.
 > **Depends on:** `pyclickplc` (external), `spec/dialects/click.md`
 
 ---
@@ -32,7 +34,7 @@ pyrung.core.SystemState  <--  PLCRunner executes ladder logic
 The `DataProvider` protocol is the seam between the two libraries:
 
 ```python
-# pyclickplc/server.py (existing)
+# pyclickplc/server.py (implemented)
 PlcValue = bool | int | float | str
 
 class DataProvider(Protocol):
@@ -136,12 +138,15 @@ presentation boundaries, not in the engine.
 
 ## Implementation order
 
-1. **pyclickplc `values.py`** — define the six rich types with `__str__`, `__repr__`,
+1. ~~**pyclickplc foundation**~~ — `PlcValue`, `ModbusResponse`, `DataProvider`,
+   `MemoryDataProvider` are done. `ModbusResponse` is a `Mapping` with normalized
+   address keys (e.g. `resp["DS1"]`).
+2. **pyclickplc `values.py`** — define the six rich types with `__str__`, `__repr__`,
    `__format__`, `.raw()`. See `pyclickplc/spec/HANDOFF.md` for display rules.
-2. **pyclickplc client/dataview** — return rich types from reads and conversions.
-3. **pyrung core cleanup** — delete deprecated aliases from `TagType` and `tag.py`.
-4. **pyrung.click dialect** — re-export Click aliases, implement `ClickDataProvider`.
-5. **Soft PLC integration** — wire `ClickDataProvider` + `ClickServer` + `PLCRunner`.
+3. **pyclickplc client/dataview** — return rich types from reads and conversions.
+4. **pyrung core cleanup** — delete deprecated aliases from `TagType` and `tag.py`.
+5. **pyrung.click dialect** — re-export Click aliases, implement `ClickDataProvider`.
+6. **Soft PLC integration** — wire `ClickDataProvider` + `ClickServer` + `PLCRunner`.
 
 ---
 
