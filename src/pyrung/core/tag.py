@@ -24,28 +24,6 @@ class TagType(Enum):
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
 
-    # Deprecated aliases (enum aliasing - same value = alias)
-    BIT = "bool"
-    INT2 = "dint"
-    FLOAT = "real"
-    HEX = "word"
-    TXT = "char"
-
-    # Deprecated aliases for backward compatibility
-    @classmethod
-    def _missing_(cls, value: object) -> TagType | None:
-        """Handle deprecated aliases."""
-        aliases = {
-            "bit": cls.BOOL,
-            "int2": cls.DINT,
-            "float": cls.REAL,
-            "hex": cls.WORD,
-            "txt": cls.CHAR,
-        }
-        if isinstance(value, str):
-            return aliases.get(value)
-        return None
-
 
 @dataclass(frozen=True)
 class Tag:
@@ -56,7 +34,7 @@ class Tag:
 
     Attributes:
         name: Unique identifier for this tag.
-        type: Data type (BIT, INT, FLOAT, etc.).
+        type: Data type (BOOL, INT, DINT, REAL, WORD, CHAR).
         retentive: Whether value survives power cycles.
         default: Default value (None means use type default).
     """
@@ -420,24 +398,3 @@ def Char(name: str, retentive: bool = True) -> Tag:
         retentive: Whether value survives power cycles. Default True.
     """
     return Tag(name, TagType.CHAR, retentive)
-
-
-# Deprecated aliases for backward compatibility
-def Bit(name: str, retentive: bool = False) -> Tag:
-    """Deprecated: Use Bool() instead."""
-    return Bool(name, retentive)
-
-
-def Int2(name: str, retentive: bool = True) -> Tag:
-    """Deprecated: Use Dint() instead."""
-    return Dint(name, retentive)
-
-
-def Float(name: str, retentive: bool = True) -> Tag:
-    """Deprecated: Use Real() instead."""
-    return Real(name, retentive)
-
-
-def Txt(name: str, retentive: bool = True) -> Tag:
-    """Deprecated: Use Char() instead."""
-    return Char(name, retentive)

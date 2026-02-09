@@ -6,7 +6,7 @@ This tests the DSL syntax:
             out(target)
 """
 
-from pyrung.core import Bit, Int, PLCRunner, SystemState
+from pyrung.core import Bool, Int, PLCRunner, SystemState
 from tests.conftest import evaluate_condition, evaluate_rung
 
 
@@ -17,8 +17,8 @@ class TestProgramContextManager:
         """Program context manager captures rungs defined within it."""
         from pyrung.core.program import Program, Rung, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as prog:
             with Rung(Button):
@@ -30,9 +30,9 @@ class TestProgramContextManager:
         """Program captures multiple rungs in order."""
         from pyrung.core.program import Program, Rung, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
-        Motor = Bit("Motor")
+        Button = Bool("Button")
+        Light = Bool("Light")
+        Motor = Bool("Motor")
 
         with Program() as prog:
             with Rung(Button):
@@ -51,8 +51,8 @@ class TestRungDSL:
         """out() adds OUT instruction."""
         from pyrung.core.program import Program, Rung, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as prog:
             with Rung(Button):
@@ -67,8 +67,8 @@ class TestRungDSL:
         """latch() adds LATCH instruction."""
         from pyrung.core.program import Program, Rung, latch
 
-        Button = Bit("Button")
-        Motor = Bit("Motor")
+        Button = Bool("Button")
+        Motor = Bool("Motor")
 
         with Program() as prog:
             with Rung(Button):
@@ -82,8 +82,8 @@ class TestRungDSL:
         """reset() adds RESET instruction."""
         from pyrung.core.program import Program, Rung, reset
 
-        StopButton = Bit("StopButton")
-        Motor = Bit("Motor")
+        StopButton = Bool("StopButton")
+        Motor = Bool("Motor")
 
         with Program() as prog:
             with Rung(StopButton):
@@ -97,7 +97,7 @@ class TestRungDSL:
         """copy() adds COPY instruction."""
         from pyrung.core.program import Program, Rung, copy
 
-        Button = Bit("Button")
+        Button = Bool("Button")
         Step = Int("Step")
 
         with Program() as prog:
@@ -112,8 +112,8 @@ class TestRungDSL:
         """nc() creates normally closed condition."""
         from pyrung.core.program import Program, Rung, nc, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as prog:
             with Rung(nc(Button)):  # Light on when Button is OFF
@@ -137,8 +137,8 @@ class TestProgramDecorator:
         """@program decorator captures rungs from function."""
         from pyrung.core.program import Program, Rung, out, program
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         @program
         def my_logic():
@@ -157,8 +157,8 @@ class TestPLCRunnerIntegration:
         """PLCRunner evaluates program logic each scan."""
         from pyrung.core.program import Program, Rung, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(Button):
@@ -187,9 +187,9 @@ class TestPLCRunnerIntegration:
         """Classic start/stop latch circuit."""
         from pyrung.core.program import Program, Rung, latch, reset
 
-        StartButton = Bit("StartButton")
-        StopButton = Bit("StopButton")
-        MotorRunning = Bit("MotorRunning")
+        StartButton = Bool("StartButton")
+        StopButton = Bool("StopButton")
+        MotorRunning = Bool("MotorRunning")
 
         with Program() as logic:
             # Start rung: latch motor when start pressed
@@ -226,9 +226,9 @@ class TestPLCRunnerIntegration:
         from pyrung.core.program import Program, Rung, copy, out
 
         Step = Int("Step")
-        NextButton = Bit("NextButton")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
+        NextButton = Bool("NextButton")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
 
         with Program() as logic:
             # Light1 on when Step == 0
@@ -278,9 +278,9 @@ class TestBranch:
         from pyrung.core.program import Program, Rung, branch, out
 
         Step = Int("Step")
-        AutoMode = Bit("AutoMode")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
+        AutoMode = Bool("AutoMode")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -300,9 +300,9 @@ class TestBranch:
         from pyrung.core.program import Program, Rung, branch, out
 
         Step = Int("Step")
-        AutoMode = Bit("AutoMode")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
+        AutoMode = Bool("AutoMode")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -323,9 +323,9 @@ class TestBranch:
         from pyrung.core.program import Program, Rung, branch, out
 
         Step = Int("Step")
-        AutoMode = Bit("AutoMode")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
+        AutoMode = Bool("AutoMode")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -346,8 +346,8 @@ class TestBranch:
         from pyrung.core.program import Program, Rung, branch, copy, out
 
         Step = Int("Step")
-        AutoMode = Bit("AutoMode")
-        Light = Bit("Light")
+        AutoMode = Bool("AutoMode")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -372,7 +372,7 @@ class TestBranch:
 
         from pyrung.core.program import Program, branch, out
 
-        Light = Bit("Light")
+        Light = Bool("Light")
 
         with pytest.raises(RuntimeError, match="must be called inside a Rung"):
             with Program():
@@ -384,11 +384,11 @@ class TestBranch:
         from pyrung.core.program import Program, Rung, branch, out
 
         Step = Int("Step")
-        Mode1 = Bit("Mode1")
-        Mode2 = Bit("Mode2")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
-        Light3 = Bit("Light3")
+        Mode1 = Bool("Mode1")
+        Mode2 = Bool("Mode2")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
+        Light3 = Bool("Light3")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -423,7 +423,7 @@ class TestBranch:
         from pyrung.core.state import SystemState
 
         Step = Int("Step")
-        Mode = Bit("Mode")
+        Mode = Bool("Mode")
 
         captured_condition = None
 
@@ -467,9 +467,9 @@ class TestSubroutineAndCall:
         """Subroutine is defined and executed when called."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         with Program() as logic:
             with Rung(Button):
@@ -491,9 +491,9 @@ class TestSubroutineAndCall:
         """Subroutine is not executed when calling rung is false."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         with Program() as logic:
             with Rung(Button):
@@ -515,10 +515,10 @@ class TestSubroutineAndCall:
         """Subroutine rungs have their own conditions."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
+        Button = Bool("Button")
         Step = Int("Step")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         with Program() as logic:
             with Rung(Button):
@@ -549,8 +549,8 @@ class TestSubroutineAndCall:
 
         from pyrung.core.program import Program, Rung, call, out
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(Button):
@@ -567,8 +567,8 @@ class TestSubroutineAndCall:
         """Subroutine rungs are not executed in main scan unless called."""
         from pyrung.core.program import Program, Rung, out, subroutine
 
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         with Program() as logic:
             with Rung():  # Unconditional
@@ -594,9 +594,9 @@ class TestSubroutineDecorator:
         """Decorated subroutine is auto-registered and executed when called."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         @subroutine("init")
         def init_sequence():
@@ -619,8 +619,8 @@ class TestSubroutineDecorator:
         """Decorated subroutine rungs are not in the main scan."""
         from pyrung.core.program import Program, Rung, out, subroutine
 
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         @subroutine("my_sub")
         def my_sub():
@@ -643,9 +643,9 @@ class TestSubroutineDecorator:
         """Decorated subroutine is not executed when calling rung is false."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         @subroutine("my_sub")
         def my_sub():
@@ -668,10 +668,10 @@ class TestSubroutineDecorator:
         """Decorated subroutine rungs have their own conditions."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
+        Button = Bool("Button")
         Step = Int("Step")
-        Light = Bit("Light")
-        SubLight = Bit("SubLight")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
 
         @subroutine("my_sub")
         def my_sub():
@@ -701,8 +701,8 @@ class TestSubroutineDecorator:
 
         from pyrung.core.program import Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         @subroutine("my_sub")
         def my_sub():
@@ -717,8 +717,8 @@ class TestSubroutineDecorator:
         """@subroutine works with @program decorator."""
         from pyrung.core.program import Program, Rung, call, out, program, subroutine
 
-        Button = Bit("Button")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        SubLight = Bool("SubLight")
 
         @subroutine("init")
         def init_sequence():
@@ -743,9 +743,9 @@ class TestSubroutineDecorator:
         """Decorator and context-manager subroutines can coexist."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        Light1 = Bit("Light1")
-        Light2 = Bit("Light2")
+        Button = Bool("Button")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
 
         @subroutine("dec_sub")
         def dec_sub():
@@ -772,8 +772,8 @@ class TestSubroutineDecorator:
         """Existing string-based call() API is unchanged."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
-        Button = Bit("Button")
-        SubLight = Bit("SubLight")
+        Button = Bool("Button")
+        SubLight = Bool("SubLight")
 
         with Program() as logic:
             with Rung(Button):

@@ -32,7 +32,7 @@ class Rung:
         """Create a rung with conditions.
 
         Args:
-            conditions: Zero or more conditions. If a Bit Tag is passed,
+            conditions: Zero or more conditions. If a BOOL Tag is passed,
                         it's automatically wrapped in BitCondition.
         """
         self._conditions: list[Condition] = []
@@ -42,7 +42,7 @@ class Rung:
 
         for cond in conditions:
             if isinstance(cond, Tag):
-                # Bit tags become BitCondition (normally open contact)
+                # BOOL tags become BitCondition (normally open contact)
                 if cond.type == TagType.BOOL:
                     self._conditions.append(BitCondition(cond))
                 else:

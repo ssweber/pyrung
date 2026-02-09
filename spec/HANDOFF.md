@@ -1,8 +1,8 @@
 # Rich PLC Value Types & Soft PLC Architecture — Handoff
 
-> **Status:** In progress. `PlcValue`, `ModbusResponse`, `DataProvider`, and
-> `MemoryDataProvider` are implemented in pyclickplc. Rich value types (`values.py`)
-> and soft PLC wiring are next.
+> **Status:** In progress. `PlcValue`, `ModbusResponse`, `DataProvider`,
+> `MemoryDataProvider`, and rich value types (`values.py`) are implemented in
+> pyclickplc. Soft PLC wiring is next.
 > **Depends on:** `pyclickplc` (external), `spec/dialects/click.md`
 
 ---
@@ -49,7 +49,7 @@ transparently. No protocol changes needed.
 
 ## Decisions
 
-### 1. Rich types live in pyclickplc
+### 1. Rich types live in pyclickplc DONE
 
 New module: `pyclickplc/values.py`
 
@@ -100,18 +100,18 @@ class ClickDataProvider:
         self._runner.patch({tag_name: value})
 ```
 
-### 4. Delete deprecated aliases from pyrung core
+### 4. Delete deprecated aliases from pyrung core DONE
 
 Remove from `pyrung.core`:
 - `TagType` aliases: `BIT`, `INT2`, `FLOAT`, `HEX`, `TXT`
 - `_missing_()` handler for deprecated string values
 - Constructor aliases: `Bit()`, `Int2()`, `Float()`, `Txt()`
 
-Re-export from `pyrung.click` only:
+Re-export from `pyrung.click` only (Step 5A DONE):
 
 ```python
 # pyrung/click/__init__.py
-from pyrung.core import Bool as Bit, Dint as Int2, Real as Float, Char as Txt
+from pyrung.core import Bool as Bit, Dint as Int2, Real as Float, Word as Hex, Char as Txt
 ```
 
 ### 5. Naming convention: IEC primary, Click as aliases
@@ -138,14 +138,15 @@ presentation boundaries, not in the engine.
 
 ## Implementation order
 
-1. ~~**pyclickplc foundation**~~ — `PlcValue`, `ModbusResponse`, `DataProvider`,
+1. ~~**pyclickplc foundation**~~ DONE — `PlcValue`, `ModbusResponse`, `DataProvider`,
    `MemoryDataProvider` are done. `ModbusResponse` is a `Mapping` with normalized
    address keys (e.g. `resp["DS1"]`).
-2. **pyclickplc `values.py`** — define the six rich types with `__str__`, `__repr__`,
+2. ~~***pyclickplc `values.py`**~~ DONE — define the six rich types with `__str__`, `__repr__`,
    `__format__`, `.raw()`. See `pyclickplc/spec/HANDOFF.md` for display rules.
-3. **pyclickplc client/dataview** — return rich types from reads and conversions.
-4. **pyrung core cleanup** — delete deprecated aliases from `TagType` and `tag.py`.
-5. **pyrung.click dialect** — re-export Click aliases, implement `ClickDataProvider`.
+3. ~~**pyclickplc client/dataview**~~ DONE — return rich types from reads and conversions.
+4. ~~**pyrung core cleanup**~~ DONE — deprecated aliases removed from `TagType` and `tag.py`.
+5. **pyrung.click dialect** — Step 5A DONE (constructor aliases re-exported in `pyrung.click`);
+   Step 5B (`ClickDataProvider`) deferred until mapping and concurrency semantics are finalized.
 6. **Soft PLC integration** — wire `ClickDataProvider` + `ClickServer` + `PLCRunner`.
 
 ---

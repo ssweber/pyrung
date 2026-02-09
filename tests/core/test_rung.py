@@ -4,7 +4,7 @@ Rungs evaluate conditions and execute instructions.
 They are pure functions: evaluate(state) -> new_state.
 """
 
-from pyrung.core import Bit, Int, SystemState
+from pyrung.core import Bool, Int, SystemState
 from tests.conftest import evaluate_rung
 
 
@@ -16,8 +16,8 @@ class TestRungConditions:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         rung = Rung(Button)
         rung.add_instruction(OutInstruction(Light))
@@ -32,8 +32,8 @@ class TestRungConditions:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         rung = Rung(Button)
         rung.add_instruction(OutInstruction(Light))
@@ -49,7 +49,7 @@ class TestRungConditions:
         from pyrung.core.rung import Rung
 
         Step = Int("Step")
-        Light = Bit("Light")
+        Light = Bool("Light")
 
         rung = Rung(Step == 0)
         rung.add_instruction(OutInstruction(Light))
@@ -64,9 +64,9 @@ class TestRungConditions:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button1 = Bit("Button1")
-        Button2 = Bit("Button2")
-        Light = Bit("Light")
+        Button1 = Bool("Button1")
+        Button2 = Bool("Button2")
+        Light = Bool("Light")
 
         rung = Rung(Button1, Button2)  # Both must be true
         rung.add_instruction(OutInstruction(Light))
@@ -81,9 +81,9 @@ class TestRungConditions:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button1 = Bit("Button1")
-        Button2 = Bit("Button2")
-        Light = Bit("Light")
+        Button1 = Bool("Button1")
+        Button2 = Bool("Button2")
+        Light = Bool("Light")
 
         rung = Rung(Button1, Button2)
         rung.add_instruction(OutInstruction(Light))
@@ -98,7 +98,7 @@ class TestRungConditions:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Light = Bit("Light")
+        Light = Bool("Light")
 
         rung = Rung()  # No conditions
         rung.add_instruction(OutInstruction(Light))
@@ -138,8 +138,8 @@ class TestRungOutputHandling:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         rung = Rung(Button)
         rung.add_instruction(OutInstruction(Light))
@@ -160,8 +160,8 @@ class TestRungOutputHandling:
         from pyrung.core.instruction import LatchInstruction
         from pyrung.core.rung import Rung
 
-        Button = Bit("Button")
-        Motor = Bit("Motor")
+        Button = Bool("Button")
+        Motor = Bool("Motor")
 
         rung = Rung(Button)
         rung.add_instruction(LatchInstruction(Motor))
@@ -186,8 +186,8 @@ class TestRungImmutability:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         rung = Rung(Button)
         rung.add_instruction(OutInstruction(Light))
@@ -209,9 +209,9 @@ class TestRungWithAnyOf:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         rung = Rung(any_of(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
@@ -227,9 +227,9 @@ class TestRungWithAnyOf:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         rung = Rung(any_of(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
@@ -245,9 +245,9 @@ class TestRungWithAnyOf:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         rung = Rung(any_of(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
@@ -264,9 +264,9 @@ class TestRungWithAnyOf:
         from pyrung.core.rung import Rung
 
         Step = Int("Step")
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         # Step == 1 AND (Start OR CmdStart)
         rung = Rung(Step == 1, any_of(Start, CmdStart))
@@ -309,9 +309,9 @@ class TestRungWithBitwiseOr:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         rung = Rung(Start | CmdStart)
         rung.add_instruction(OutInstruction(Light))
@@ -327,10 +327,10 @@ class TestRungWithBitwiseOr:
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
-        A = Bit("A")
-        B = Bit("B")
-        C = Bit("C")
-        Light = Bit("Light")
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Light = Bool("Light")
 
         rung = Rung(A | B | C)
         rung.add_instruction(OutInstruction(Light))
@@ -347,9 +347,9 @@ class TestRungWithBitwiseOr:
         from pyrung.core.rung import Rung
 
         Step = Int("Step")
-        Start = Bit("Start")
-        CmdStart = Bit("CmdStart")
-        Light = Bit("Light")
+        Start = Bool("Start")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
 
         # Step == 1 AND (Start OR CmdStart)
         rung = Rung(Step == 1, Start | CmdStart)

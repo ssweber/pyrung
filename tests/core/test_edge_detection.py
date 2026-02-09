@@ -6,7 +6,7 @@ These tests verify:
 3. Edge detection works correctly across scan cycles
 """
 
-from pyrung.core import Bit, PLCRunner, Program, Rung, latch, out, reset
+from pyrung.core import Bool, PLCRunner, Program, Rung, latch, out, reset
 
 
 class TestRiseDSL:
@@ -17,7 +17,7 @@ class TestRiseDSL:
         from pyrung.core import rise
         from pyrung.core.condition import RisingEdgeCondition
 
-        Button = Bit("Button")
+        Button = Bool("Button")
         cond = rise(Button)
 
         assert isinstance(cond, RisingEdgeCondition)
@@ -27,8 +27,8 @@ class TestRiseDSL:
         """Rung with rise() should fire only on 0->1 transition."""
         from pyrung.core import rise
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(rise(Button)):
@@ -58,8 +58,8 @@ class TestRiseDSL:
         """rise() should not fire if signal was already True."""
         from pyrung.core import rise
 
-        Button = Bit("Button")
-        Counter = Bit("Counter")  # Use bit as simple flag
+        Button = Bool("Button")
+        Counter = Bool("Counter")  # Use bit as simple flag
 
         with Program() as logic:
             with Rung(rise(Button)):
@@ -85,8 +85,8 @@ class TestRiseDSL:
         """rise() should fire again after signal goes off then on."""
         from pyrung.core import rise
 
-        Button = Bit("Button")
-        PulseCount = Bit("PulseCount")
+        Button = Bool("Button")
+        PulseCount = Bool("PulseCount")
 
         with Program() as logic:
             with Rung(rise(Button)):
@@ -124,7 +124,7 @@ class TestFallDSL:
         from pyrung.core import fall
         from pyrung.core.condition import FallingEdgeCondition
 
-        Button = Bit("Button")
+        Button = Bool("Button")
         cond = fall(Button)
 
         assert isinstance(cond, FallingEdgeCondition)
@@ -134,8 +134,8 @@ class TestFallDSL:
         """Rung with fall() should fire only on 1->0 transition."""
         from pyrung.core import fall
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(fall(Button)):
@@ -166,8 +166,8 @@ class TestFallDSL:
         """fall() should not fire if signal was already False."""
         from pyrung.core import fall
 
-        Button = Bit("Button")
-        Counter = Bit("Counter")
+        Button = Bool("Button")
+        Counter = Bool("Counter")
 
         with Program() as logic:
             with Rung(fall(Button)):
@@ -189,8 +189,8 @@ class TestFallDSL:
         """fall() should fire again after signal goes on then off."""
         from pyrung.core import fall
 
-        Button = Bit("Button")
-        PulseCount = Bit("PulseCount")
+        Button = Bool("Button")
+        PulseCount = Bool("PulseCount")
 
         with Program() as logic:
             with Rung(fall(Button)):
@@ -228,8 +228,8 @@ class TestPrevValueTracking:
 
     def test_runner_updates_prev_values_after_scan(self):
         """Runner should update _prev:* in memory after each scan."""
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(Button):
@@ -253,9 +253,9 @@ class TestPrevValueTracking:
 
     def test_runner_tracks_multiple_tags(self):
         """Runner should track _prev:* for all tags that change."""
-        A = Bit("A")
-        B = Bit("B")
-        Out = Bit("Out")
+        A = Bool("A")
+        B = Bool("B")
+        Out = Bool("Out")
 
         with Program() as logic:
             with Rung(A, B):
@@ -283,9 +283,9 @@ class TestEdgeCombinations:
         """rise() can be combined with other conditions in a rung."""
         from pyrung.core import rise
 
-        Button = Bit("Button")
-        Enable = Bit("Enable")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Enable = Bool("Enable")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(rise(Button), Enable):  # Both must be true
@@ -315,8 +315,8 @@ class TestEdgeCombinations:
         """rise() and fall() can control set/reset of same output."""
         from pyrung.core import fall, rise
 
-        Button = Bit("Button")
-        Light = Bit("Light")
+        Button = Bool("Button")
+        Light = Bool("Light")
 
         with Program() as logic:
             with Rung(rise(Button)):

@@ -165,7 +165,7 @@ class CompareGe(Condition):
 class BitCondition(Condition):
     """Normally open contact (XIC) - true when bit is on.
 
-    This is the default condition when a Bit tag is used directly in a Rung.
+    This is the default condition when a BOOL tag is used directly in a Rung.
     """
 
     def __init__(self, tag: Tag):

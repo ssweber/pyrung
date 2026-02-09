@@ -14,7 +14,7 @@ Hardware-verified behaviors (Click PLC):
 - First scan includes current scan's dt (not 0 on first enable)
 """
 
-from pyrung.core import Bit, Int, PLCRunner, Program, Rung, TimeMode
+from pyrung.core import Bool, Int, PLCRunner, Program, Rung, TimeMode
 
 
 class TestOnDelayTON:
@@ -22,8 +22,8 @@ class TestOnDelayTON:
 
     def test_ton_accumulates_time_while_enabled(self):
         """TON accumulates elapsed time each scan while rung is true."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -49,8 +49,8 @@ class TestOnDelayTON:
 
     def test_ton_done_bit_when_setpoint_reached(self):
         """TON done bit turns ON when accumulator >= setpoint."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -84,8 +84,8 @@ class TestOnDelayTON:
 
     def test_ton_resets_immediately_when_disabled(self):
         """TON resets acc and done to 0/False immediately when rung goes false."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -113,8 +113,8 @@ class TestOnDelayTON:
 
     def test_ton_restarts_fresh_when_re_enabled(self):
         """TON starts from 0 when re-enabled after being disabled."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -147,9 +147,9 @@ class TestOnDelayRTON:
 
     def test_rton_accumulates_time_while_enabled(self):
         """RTON accumulates elapsed time each scan while rung is true."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -171,9 +171,9 @@ class TestOnDelayRTON:
 
     def test_rton_holds_value_when_disabled(self):
         """RTON retains accumulated time when rung goes false."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -205,9 +205,9 @@ class TestOnDelayRTON:
 
     def test_rton_continues_from_held_value_when_re_enabled(self):
         """RTON continues accumulating from held value when re-enabled."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -239,9 +239,9 @@ class TestOnDelayRTON:
 
     def test_rton_only_resets_via_reset_condition(self):
         """RTON only resets when reset condition is true."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -280,8 +280,8 @@ class TestOffDelayTOF:
 
     def test_tof_done_true_while_enabled(self):
         """TOF done bit is True while rung is true, acc stays at 0."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -311,8 +311,8 @@ class TestOffDelayTOF:
 
     def test_tof_counts_after_disable_done_stays_true(self):
         """TOF counts up after disable, done stays True until setpoint."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -340,8 +340,8 @@ class TestOffDelayTOF:
 
     def test_tof_done_false_when_setpoint_reached(self):
         """TOF done goes False when acc >= setpoint after disable."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -373,8 +373,8 @@ class TestOffDelayTOF:
 
     def test_tof_auto_resets_when_re_enabled(self):
         """TOF auto-resets (done=True, acc=0) when re-enabled."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -415,8 +415,8 @@ class TestTimerIntegration:
         """
         from pyrung.core import copy
 
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
         CapturedAcc = Int("CapturedAcc")
 
@@ -454,8 +454,8 @@ class TestTimerIntegration:
         Note: This test assumes Tms (milliseconds) as default.
         Other units (Ts, Tm, Th, Td) scale accordingly.
         """
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -488,12 +488,12 @@ class TestTimerIntegration:
         """TON and TOF can coexist in the same program."""
         from pyrung.core import out
 
-        Motor = Bit("Motor")
-        TON_done = Bit("t.StartDelay")
+        Motor = Bool("Motor")
+        TON_done = Bool("t.StartDelay")
         TON_acc = Int("td.StartDelay_acc")
-        TOF_done = Bit("t.StopDelay")
+        TOF_done = Bool("t.StopDelay")
         TOF_acc = Int("td.StopDelay_acc")
-        MotorOutput = Bit("MotorOutput")
+        MotorOutput = Bool("MotorOutput")
 
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
@@ -541,10 +541,10 @@ class TestTimerIntegration:
 
     def test_pump_delay_scenario(self):
         """Real-world scenario: Pump runs 5 minutes after motor starts."""
-        MotorRunning = Bit("MotorRunning")
-        PumpReady = Bit("t.PumpTmr")
+        MotorRunning = Bool("MotorRunning")
+        PumpReady = Bool("t.PumpTmr")
         PumpTmr_acc = Int("td.PumpTmr_acc")
-        PumpOutput = Bit("PumpOutput")
+        PumpOutput = Bool("PumpOutput")
 
         with Program() as logic:
             with Rung(MotorRunning):
@@ -589,8 +589,8 @@ class TestDynamicSetpoints:
 
     def test_ton_with_dynamic_setpoint(self):
         """TON supports Tag setpoint that can change at runtime."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
         Setpoint = Int("Setpoint")
 
@@ -640,8 +640,8 @@ class TestDynamicSetpoints:
         then the output of the timer will come on again until the new, higher
         Setpoint value is reached."
         """
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
         Setpoint = Int("Setpoint")
 
@@ -682,9 +682,9 @@ class TestDynamicSetpoints:
 
     def test_rton_with_dynamic_setpoint(self):
         """RTON supports Tag setpoint."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
         Setpoint = Int("Setpoint")
 
@@ -732,8 +732,8 @@ class TestTimerAccumulatorOverflow:
 
     def test_ton_accumulates_past_setpoint(self):
         """TON accumulator continues past setpoint towards max int."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -768,8 +768,8 @@ class TestTimerAccumulatorOverflow:
 
         Uses large dt to reach max int quickly.
         """
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -808,9 +808,9 @@ class TestTimerAccumulatorOverflow:
 
     def test_rton_accumulator_continues_past_setpoint(self):
         """RTON accumulator continues past setpoint when enabled."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -835,9 +835,9 @@ class TestTimerAccumulatorOverflow:
 
     def test_rton_accumulator_clamps_at_max_int(self):
         """RTON clamps at max int when re-enabled and continuing."""
-        Enable = Bit("Enable")
-        ResetBtn = Bit("ResetBtn")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -874,8 +874,8 @@ class TestTimerAccumulatorOverflow:
 
     def test_tof_accumulator_continues_past_setpoint(self):
         """TOF accumulator continues counting past setpoint while disabled."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
@@ -903,8 +903,8 @@ class TestTimerAccumulatorOverflow:
 
     def test_tof_accumulator_clamps_at_max_int(self):
         """TOF accumulator clamps at max int value (32767) while disabled."""
-        Enable = Bit("Enable")
-        Timer_done = Bit("t.Timer")
+        Enable = Bool("Enable")
+        Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:

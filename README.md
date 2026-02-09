@@ -30,6 +30,12 @@ runner.patch({"Button": True})
 runner.step()
 ```
 
+## Migration Note
+
+Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`.
+Click-style aliases moved from `pyrung.core` to `pyrung.click`:
+`Bit`, `Int2`, `Float`, `Hex`, `Txt`.
+
 ## Documentation
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.

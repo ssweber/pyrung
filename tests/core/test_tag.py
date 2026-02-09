@@ -15,8 +15,6 @@ class TestTagType:
         from pyrung.core import TagType
 
         assert TagType.BOOL.value == "bool"
-        # Deprecated alias still works
-        assert TagType.BIT == TagType.BOOL
 
     def test_int_type(self):
         from pyrung.core import TagType
@@ -28,21 +26,32 @@ class TestTagType:
         from pyrung.core import TagType
 
         assert TagType.REAL.value == "real"
-        # Deprecated alias still works
-        assert TagType.FLOAT == TagType.REAL
+
+    def test_deprecated_enum_aliases_removed(self):
+        from pyrung.core import TagType
+
+        for alias in ("BIT", "INT2", "FLOAT", "HEX", "TXT"):
+            assert not hasattr(TagType, alias)
+
+    @pytest.mark.parametrize("deprecated_name", ["bit", "int2", "float", "hex", "txt"])
+    def test_deprecated_string_aliases_fail(self, deprecated_name: str):
+        from pyrung.core import TagType
+
+        with pytest.raises(ValueError):
+            TagType(deprecated_name)
 
 
 class TestTagCreation:
     """Test Tag construction."""
 
     def test_create_with_name_only(self):
-        """Tag with just name defaults to BIT type."""
+        """Tag with just name defaults to BOOL type."""
         from pyrung.core import Tag, TagType
 
         tag = Tag("Button")
 
         assert tag.name == "Button"
-        assert tag.type == TagType.BIT
+        assert tag.type == TagType.BOOL
         assert tag.retentive is False
 
     def test_create_with_type(self):
@@ -74,22 +83,22 @@ class TestTagCreation:
 class TestTagHelpers:
     """Test convenience constructors."""
 
-    def test_bit_helper(self):
-        """Bit() creates a BIT tag."""
-        from pyrung.core import Bit, TagType
+    def test_bool_helper(self):
+        """Bool() creates a BOOL tag."""
+        from pyrung.core import Bool, TagType
 
-        tag = Bit("Light")
+        tag = Bool("Light")
 
         assert tag.name == "Light"
-        assert tag.type == TagType.BIT
+        assert tag.type == TagType.BOOL
         assert tag.retentive is False
         assert tag.default is False
 
-    def test_bit_retentive(self):
-        """Bit() can be retentive."""
-        from pyrung.core import Bit
+    def test_bool_retentive(self):
+        """Bool() can be retentive."""
+        from pyrung.core import Bool
 
-        tag = Bit("Latched", retentive=True)
+        tag = Bool("Latched", retentive=True)
 
         assert tag.retentive is True
 
@@ -104,14 +113,14 @@ class TestTagHelpers:
         assert tag.retentive is True
         assert tag.default == 0
 
-    def test_float_helper(self):
-        """Float() creates a FLOAT tag."""
-        from pyrung.core import Float, TagType
+    def test_real_helper(self):
+        """Real() creates a REAL tag."""
+        from pyrung.core import Real, TagType
 
-        tag = Float("Temperature")
+        tag = Real("Temperature")
 
         assert tag.name == "Temperature"
-        assert tag.type == TagType.FLOAT
+        assert tag.type == TagType.REAL
         assert tag.retentive is True
         assert tag.default == 0.0
 
@@ -297,21 +306,20 @@ class TestTagComparison:
 
     def test_tag_bool_raises(self):
         """Using Tag as bool raises TypeError."""
-        from pyrung.core import Bit
+        from pyrung.core import Bool
 
-        Button = Bit("Button")
+        Button = Bool("Button")
 
         with pytest.raises(TypeError):
             if Button:  # noqa: F634
                 pass
 
-    def test_bit_tag_as_condition(self):
-        """Bit/Bool tags can be used directly as conditions (truthy check)."""
-        from pyrung.core import Bit, TagType
+    def test_bool_tag_as_condition(self):
+        """BOOL tags can be used directly as conditions."""
+        from pyrung.core import Bool, TagType
 
-        Button = Bit("Button")
+        Button = Bool("Button")
 
-        # When used in Rung(), a BOOL tag becomes a "normally open contact"
-        # The Rung should accept it and wrap it appropriately
-        # This is tested in test_rung.py
+        # When used in Rung(), a BOOL tag becomes a normally open contact.
+        # Rung behavior is tested in test_rung.py.
         assert Button.type == TagType.BOOL

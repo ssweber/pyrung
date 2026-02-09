@@ -258,7 +258,7 @@ class CountUpInstruction(Instruction):
     - RESET condition: Clears done bit and accumulator
 
     Click-specific:
-    - Accumulator stored in CTD bank (INT2 / 32-bit signed)
+    - Accumulator stored in CTD bank (DINT / 32-bit signed)
     - Done bit in CT bank
     - NOT edge-triggered - counts every scan while condition is true
     """
@@ -348,7 +348,7 @@ class CountDownInstruction(Instruction):
     - RESET condition: Clears accumulator to 0 and clears done bit
 
     Click-specific:
-    - Accumulator stored in CTD bank (INT2 / 32-bit signed)
+    - Accumulator stored in CTD bank (DINT / 32-bit signed)
     - Done bit in CT bank
     - NOT edge-triggered - counts every scan while condition is true
     - Starts at 0 and counts down to negative values

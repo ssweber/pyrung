@@ -6,7 +6,7 @@ They return a new state, never mutating the input.
 
 import pytest
 
-from pyrung.core import Bit, Block, Int, SystemState, TagType
+from pyrung.core import Block, Bool, Int, SystemState, TagType
 from tests.conftest import execute
 
 
@@ -17,7 +17,7 @@ class TestOutInstruction:
         """OUT sets the target bit to True."""
         from pyrung.core.instruction import OutInstruction
 
-        Light = Bit("Light")
+        Light = Bool("Light")
         instr = OutInstruction(Light)
 
         state = SystemState().with_tags({"Light": False})
@@ -30,7 +30,7 @@ class TestOutInstruction:
         """OUT creates the tag if it doesn't exist."""
         from pyrung.core.instruction import OutInstruction
 
-        Light = Bit("Light")
+        Light = Bool("Light")
         instr = OutInstruction(Light)
 
         state = SystemState()
@@ -46,7 +46,7 @@ class TestLatchInstruction:
         """LATCH sets the target bit to True."""
         from pyrung.core.instruction import LatchInstruction
 
-        Motor = Bit("Motor")
+        Motor = Bool("Motor")
         instr = LatchInstruction(Motor)
 
         state = SystemState().with_tags({"Motor": False})
@@ -62,7 +62,7 @@ class TestResetInstruction:
         """RESET sets the target bit to False."""
         from pyrung.core.instruction import ResetInstruction
 
-        Motor = Bit("Motor")
+        Motor = Bool("Motor")
         instr = ResetInstruction(Motor)
 
         state = SystemState().with_tags({"Motor": True})
@@ -147,7 +147,7 @@ class TestOneShotBehavior:
         """One-shot OUT only executes on first call per rung activation."""
         from pyrung.core.instruction import OutInstruction
 
-        Light = Bit("Light")
+        Light = Bool("Light")
         instr = OutInstruction(Light, oneshot=True)
 
         state = SystemState().with_tags({"Light": False})
@@ -165,7 +165,7 @@ class TestOneShotBehavior:
         """One-shot resets when reset_oneshot() is called."""
         from pyrung.core.instruction import OutInstruction
 
-        Light = Bit("Light")
+        Light = Bool("Light")
         instr = OutInstruction(Light, oneshot=True)
 
         state = SystemState().with_tags({"Light": False})
@@ -189,7 +189,7 @@ class TestInstructionImmutability:
         """OUT instruction returns new state, input unchanged."""
         from pyrung.core.instruction import OutInstruction
 
-        Light = Bit("Light")
+        Light = Bool("Light")
         instr = OutInstruction(Light)
 
         original_state = SystemState().with_tags({"Light": False})

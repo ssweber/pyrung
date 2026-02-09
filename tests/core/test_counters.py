@@ -4,7 +4,7 @@ Counters are edge-triggered instructions that must be the last in a rung (termin
 They manipulate both a done bit and an accumulator.
 """
 
-from pyrung.core import Bit, Int, Int2, Program, Rung, count_down, count_up, rise
+from pyrung.core import Bool, Dint, Int, Program, Rung, count_down, count_up, rise
 
 
 class TestCountUpInstruction:
@@ -15,10 +15,10 @@ class TestCountUpInstruction:
 
         Click behavior: NOT edge-triggered. Increments continuously while enabled.
         """
-        PartSensor = Bit("PartSensor")
-        ResetBtn = Bit("ResetBtn")
-        PartCount_done = Bit("ct.PartCount")
-        PartCount_acc = Int2("ctd.PartCount_acc")
+        PartSensor = Bool("PartSensor")
+        ResetBtn = Bool("ResetBtn")
+        PartCount_done = Bool("ct.PartCount")
+        PartCount_acc = Dint("ctd.PartCount_acc")
 
         with Program() as logic:
             with Rung(PartSensor):
@@ -48,10 +48,10 @@ class TestCountUpInstruction:
 
     def test_count_up_sets_done_bit_at_setpoint(self):
         """CTU done bit turns ON when accumulator >= setpoint."""
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         with Program() as logic:
             with Rung(Trigger):
@@ -79,10 +79,10 @@ class TestCountUpInstruction:
 
     def test_count_up_reset(self):
         """CTU reset clears both done bit and accumulator."""
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         with Program() as logic:
             with Rung(Trigger):
@@ -110,11 +110,11 @@ class TestCountUpInstruction:
 
     def test_count_up_with_down_bidirectional(self):
         """CTU with .down() creates bidirectional counter."""
-        Enter = Bit("Enter")
-        Exit = Bit("Exit")
-        ResetBtn = Bit("ResetBtn")
-        Zone_done = Bit("ct.Zone")
-        Zone_acc = Int2("ctd.Zone_acc")
+        Enter = Bool("Enter")
+        Exit = Bool("Exit")
+        ResetBtn = Bool("ResetBtn")
+        Zone_done = Bool("ct.Zone")
+        Zone_acc = Dint("ctd.Zone_acc")
 
         with Program() as logic:
             with Rung(rise(Enter)):
@@ -160,10 +160,10 @@ class TestCountDownInstruction:
         Click behavior: NOT edge-triggered. Decrements continuously while enabled.
         Starts at 0, counts down to negative values.
         """
-        Dispense = Bit("Dispense")
-        Reload = Bit("Reload")
-        Remaining_done = Bit("ct.Remaining")
-        Remaining_acc = Int2("ctd.Remaining_acc")
+        Dispense = Bool("Dispense")
+        Reload = Bool("Reload")
+        Remaining_done = Bool("ct.Remaining")
+        Remaining_acc = Dint("ctd.Remaining_acc")
 
         with Program() as logic:
             with Rung(Dispense):
@@ -204,10 +204,10 @@ class TestCountDownInstruction:
 
         Click behavior: Done bit activates when reaching negative setpoint value.
         """
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         with Program() as logic:
             with Rung(Trigger):
@@ -251,10 +251,10 @@ class TestCountDownInstruction:
 
         Click behavior: Reset sets acc to 0, not to setpoint.
         """
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         with Program() as logic:
             with Rung(Trigger):
@@ -301,8 +301,8 @@ class TestCounterIntegration:
 
         # Tags
         DataTest = Int("DataTest")
-        TestCounter_done = Bit("ct.TestCounter")
-        TestCounter_acc = Int2("ctd.TestCounter_acc")
+        TestCounter_done = Bool("ct.TestCounter")
+        TestCounter_acc = Dint("ctd.TestCounter_acc")
         CopiedCounterBeforeEnd = Int("CopiedCounterBeforeEnd")
         Val2MultiplyInPlace = Int("Val2MultiplyInPlace")
 
@@ -371,12 +371,12 @@ class TestCounterIntegration:
 
         After running this test, user will verify against physical CLICK PLC.
         """
-        Trigger = Bit("Trigger")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
-        ResetBtn = Bit("ResetBtn")
-        SawCounterAt1 = Bit("SawCounterAt1")
-        SawCounterAt2 = Bit("SawCounterAt2")
+        Trigger = Bool("Trigger")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
+        ResetBtn = Bool("ResetBtn")
+        SawCounterAt1 = Bool("SawCounterAt1")
+        SawCounterAt2 = Bool("SawCounterAt2")
 
         with Program() as logic:
             # Rung 1: Count up every scan when Trigger is true
@@ -426,12 +426,12 @@ class TestCounterIntegration:
 
     def test_counter_in_production_line(self):
         """Test counter used in a production line scenario."""
-        PartSensor = Bit("PartSensor")
-        BatchComplete = Bit("BatchComplete")
-        ResetButton = Bit("ResetButton")
-        HalfwayLight = Bit("HalfwayLight")
-        PartCount_done = Bit("ct.PartCount")
-        PartCount_acc = Int2("ctd.PartCount_acc")
+        PartSensor = Bool("PartSensor")
+        BatchComplete = Bool("BatchComplete")
+        ResetButton = Bool("ResetButton")
+        HalfwayLight = Bool("HalfwayLight")
+        PartCount_done = Bool("ct.PartCount")
+        PartCount_acc = Dint("ctd.PartCount_acc")
 
         with Program() as logic:
             # Count parts
@@ -490,10 +490,10 @@ class TestCounterIntegration:
         from pyrung.core.program import branch
 
         Step = Int("Step")
-        AutoMode = Bit("AutoMode")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        AutoMode = Bool("AutoMode")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         with Program() as logic:
             with Rung(Step == 0):
@@ -529,11 +529,11 @@ class TestCounterIntegration:
 
     def test_count_down_in_branch_requires_parent_and_branch_conditions(self):
         """Count down in branch should require BOTH parent rung AND branch conditions."""
-        Enable = Bit("Enable")
-        Mode = Bit("Mode")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Enable = Bool("Enable")
+        Mode = Bool("Mode")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
 
         from pyrung.core.program import branch
 
@@ -579,10 +579,10 @@ class TestDynamicSetpoints:
         """CTU supports Tag setpoint that can change at runtime."""
         from pyrung.core import PLCRunner
 
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
         Setpoint = Int("Setpoint")
 
         with Program() as logic:
@@ -621,10 +621,10 @@ class TestDynamicSetpoints:
         """CTD supports Tag setpoint that can change at runtime."""
         from pyrung.core import PLCRunner
 
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
         Setpoint = Int("Setpoint")
 
         with Program() as logic:
@@ -668,10 +668,10 @@ class TestDynamicSetpoints:
         """When setpoint decreases below acc, done bit changes immediately."""
         from pyrung.core import PLCRunner
 
-        Trigger = Bit("Trigger")
-        ResetBtn = Bit("ResetBtn")
-        Counter_done = Bit("ct.Counter")
-        Counter_acc = Int2("ctd.Counter_acc")
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
         Setpoint = Int("Setpoint")
 
         with Program() as logic:

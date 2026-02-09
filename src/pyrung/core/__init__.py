@@ -63,20 +63,16 @@ from pyrung.core.program import (
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
 from pyrung.core.tag import (
-    Bit,
     Bool,
     Char,
     Dint,
-    Float,
     ImmediateRef,
     InputTag,
     Int,
-    Int2,
     OutputTag,
     Real,
     Tag,
     TagType,
-    Txt,
     Word,
 )
 from pyrung.core.time_mode import TimeMode, TimeUnit
@@ -99,11 +95,6 @@ __all__ = [
     "InputTag",
     "OutputTag",
     "ImmediateRef",
-    # Tags (deprecated aliases)
-    "Bit",
-    "Int2",
-    "Float",
-    "Txt",
     # Memory blocks
     "Block",
     "InputBlock",
