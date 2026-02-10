@@ -17,6 +17,15 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectRef
 
 
+_DINT_MIN = -2147483648
+_DINT_MAX = 2147483647
+
+
+def _clamp_dint(value: int) -> int:
+    """Clamp integer to DINT (32-bit signed) range."""
+    return max(_DINT_MIN, min(_DINT_MAX, value))
+
+
 def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
     """Resolve tag (direct or indirect), expression, or return literal value using ScanContext.
 
@@ -320,17 +329,21 @@ class CountUpInstruction(Instruction):
 
         # Get current accumulator value
         acc_value = ctx.get_tag(self.accumulator.name, 0)
+        delta = 0
 
         # Check UP condition (counts every scan when true)
         up_curr = self.up_condition.evaluate(ctx) if self.up_condition else False
         if up_curr:
-            acc_value += 1
+            delta += 1
 
         # Check DOWN condition (counts every scan when true, optional)
         if self.down_condition is not None:
             down_curr = self.down_condition.evaluate(ctx)
             if down_curr:
-                acc_value -= 1
+                delta -= 1
+
+        # Apply net delta once, then clamp to DINT range
+        acc_value = _clamp_dint(acc_value + delta)
 
         # Compute done bit (resolve setpoint dynamically)
         sp = self._resolve_setpoint_ctx(ctx)
@@ -415,6 +428,9 @@ class CountDownInstruction(Instruction):
         down_curr = self.down_condition.evaluate(ctx) if self.down_condition else False
         if down_curr:
             acc_value -= 1
+
+        # Clamp to DINT range
+        acc_value = _clamp_dint(acc_value)
 
         # Compute done bit (resolve setpoint dynamically)
         sp = self._resolve_setpoint_ctx(ctx)

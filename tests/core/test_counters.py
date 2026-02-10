@@ -283,6 +283,94 @@ class TestCountDownInstruction:
         assert runner.current_state.tags["ct.Counter"] is False
 
 
+class TestCounterAccumulatorClamp:
+    """Tests for DINT clamp behavior in counter accumulators."""
+
+    def test_ctu_accumulator_clamps_at_dint_max(self):
+        """CTU accumulator saturates at DINT max (2147483647)."""
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                count_up(Counter_done, Counter_acc, setpoint=2147483647).reset(ResetBtn)
+
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic)
+        runner.patch({"Trigger": False, "ResetBtn": False})
+        runner.step()
+
+        # Prime to one below max, then increment into max
+        runner.patch({"Trigger": True, "ctd.Counter_acc": 2147483646})
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == 2147483647
+        assert runner.current_state.tags["ct.Counter"] is True
+
+        # Further increments stay clamped
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == 2147483647
+        assert runner.current_state.tags["ct.Counter"] is True
+
+    def test_ctd_accumulator_clamps_at_dint_min(self):
+        """CTD accumulator saturates at DINT min (-2147483648)."""
+        Trigger = Bool("Trigger")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                count_down(Counter_done, Counter_acc, setpoint=1).reset(ResetBtn)
+
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic)
+        runner.patch({"Trigger": False, "ResetBtn": False})
+        runner.step()
+
+        # Prime to one above min, then decrement into min
+        runner.patch({"Trigger": True, "ctd.Counter_acc": -2147483647})
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == -2147483648
+        assert runner.current_state.tags["ct.Counter"] is True
+
+        # Further decrements stay clamped
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == -2147483648
+        assert runner.current_state.tags["ct.Counter"] is True
+
+    def test_ctu_bidirectional_clamp_applies_after_net_delta(self):
+        """Bidirectional CTU clamps after applying net (+1/-1) scan delta."""
+        Enable = Bool("Enable")
+        Down = Bool("Down")
+        ResetBtn = Bool("ResetBtn")
+        Counter_done = Bool("ct.Counter")
+        Counter_acc = Dint("ctd.Counter_acc")
+
+        with Program() as logic:
+            with Rung(Enable):
+                count_up(Counter_done, Counter_acc, setpoint=2147483647).down(Down).reset(ResetBtn)
+
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic)
+        runner.patch({"Enable": False, "Down": False, "ResetBtn": False})
+        runner.step()
+
+        # With both UP and DOWN true at max, net delta is zero (stays at max)
+        runner.patch({"Enable": True, "Down": True, "ctd.Counter_acc": 2147483647})
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == 2147483647
+
+        # DOWN-only scan still decrements from the clamped value
+        runner.patch({"Enable": False, "Down": True})
+        runner.step()
+        assert runner.current_state.tags["ctd.Counter_acc"] == 2147483646
+
+
 class TestCounterIntegration:
     """Integration tests for counter instructions."""
 
