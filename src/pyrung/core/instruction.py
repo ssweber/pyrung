@@ -19,11 +19,18 @@ if TYPE_CHECKING:
 
 _DINT_MIN = -2147483648
 _DINT_MAX = 2147483647
+_INT_MIN = -32768
+_INT_MAX = 32767
 
 
 def _clamp_dint(value: int) -> int:
     """Clamp integer to DINT (32-bit signed) range."""
     return max(_DINT_MIN, min(_DINT_MAX, value))
+
+
+def _clamp_int(value: int) -> int:
+    """Clamp integer to INT (16-bit signed) range."""
+    return max(_INT_MIN, min(_INT_MAX, value))
 
 
 def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
@@ -237,8 +244,8 @@ class CopyInstruction(OneShotMixin, Instruction):
         # Resolve target tag (handles Tag or IndirectRef)
         resolved_target = resolve_tag_ctx(self.target, ctx)
 
-        # Truncate to destination type
-        value = _truncate_to_tag_type(value, resolved_target)
+        # Copy-family store semantics: clamp signed integer overflow.
+        value = _store_copy_value_to_tag_type(value, resolved_target)
 
         ctx.set_tag(resolved_target.name, value)
 
@@ -675,14 +682,37 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         updates = {}
         for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
             value = ctx.get_tag(src_tag.name, src_tag.default)
-            updates[dst_tag.name] = _truncate_to_tag_type(value, dst_tag)
+            updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)
+
+
+def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
+    """Store value using copy/blockcopy/fill conversion semantics.
+
+    - INT and DINT use saturating clamp.
+    - Other destination types preserve current conversion behavior.
+    """
+    from pyrung.core.tag import TagType
+
+    # Match existing conversion behavior for non-finite float sentinels.
+    if isinstance(value, float) and (
+        value != value or value == float("inf") or value == float("-inf")
+    ):
+        return 0
+
+    if tag.type == TagType.INT:
+        return _clamp_int(int(value))
+
+    if tag.type == TagType.DINT:
+        return _clamp_dint(int(value))
+
+    return _truncate_to_tag_type(value, tag)
 
 
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     """Truncate a value to fit the destination tag's type.
 
-    Implements hardware-verified modular wrapping:
+    Implements hardware-verified modular wrapping used by math() result stores:
     - INT: 16-bit signed (-32768 to 32767)
     - DINT: 32-bit signed (-2147483648 to 2147483647)
     - WORD: 16-bit unsigned (0 to 65535)
@@ -807,5 +837,5 @@ class FillInstruction(OneShotMixin, Instruction):
 
         updates = {}
         for dst_tag in dst_tags:
-            updates[dst_tag.name] = _truncate_to_tag_type(value, dst_tag)
+            updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)

@@ -112,32 +112,73 @@ class TestCopyInstruction:
         assert new_state.tags["Target"] == 42
         assert new_state.tags["Source"] == 42  # Source unchanged
 
-    def test_copy_truncates_to_int16(self):
-        """COPY truncates value to destination INT (16-bit signed)."""
+    def test_copy_clamps_to_int16_max(self):
+        """COPY clamps to INT max when source is too large."""
         from pyrung.core.instruction import CopyInstruction
 
         Target = Int("Target")
-        # 70000 → signed 16-bit: 4464
+        # 70000 exceeds INT max (32767)
         instr = CopyInstruction(source=70000, target=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
 
-        assert new_state.tags["Target"] == 4464
+        assert new_state.tags["Target"] == 32767
 
-    def test_copy_truncates_to_dint32(self):
-        """COPY truncates value to destination DINT (32-bit signed)."""
+    def test_copy_clamps_to_int16_min(self):
+        """COPY clamps to INT min when source is too small."""
+        from pyrung.core.instruction import CopyInstruction
+
+        Target = Int("Target")
+        # -70000 is below INT min (-32768)
+        instr = CopyInstruction(source=-70000, target=Target)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Target"] == -32768
+
+    def test_copy_clamps_to_dint32_max(self):
+        """COPY clamps to DINT max when source is too large."""
         from pyrung.core.instruction import CopyInstruction
         from pyrung.core.tag import Dint
 
         Target = Dint("Target")
-        # 2^31 wraps to -2147483648
+        # 2^31 exceeds DINT max (2147483647)
         instr = CopyInstruction(source=2_147_483_648, target=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
 
+        assert new_state.tags["Target"] == 2_147_483_647
+
+    def test_copy_clamps_to_dint32_min(self):
+        """COPY clamps to DINT min when source is too small."""
+        from pyrung.core.instruction import CopyInstruction
+        from pyrung.core.tag import Dint
+
+        Target = Dint("Target")
+        # One below DINT min
+        instr = CopyInstruction(source=-2_147_483_649, target=Target)
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
         assert new_state.tags["Target"] == -2_147_483_648
+
+    def test_copy_word_preserves_bit_pattern_behavior(self):
+        """COPY to WORD preserves low 16-bit pattern (non-clamping behavior)."""
+        from pyrung.core.instruction import CopyInstruction
+        from pyrung.core.tag import Word
+
+        Target = Word("Target")
+
+        state = SystemState()
+        neg_state = execute(CopyInstruction(source=-1, target=Target), state)
+        assert neg_state.tags["Target"] == 65535
+
+        large_state = execute(CopyInstruction(source=70000, target=Target), state)
+        assert large_state.tags["Target"] == 4464
 
 
 class TestOneShotBehavior:
@@ -331,8 +372,8 @@ class TestBlockCopyInstruction:
         assert new_state.tags["DS11"] == 200
         assert new_state.tags["DS12"] == 300
 
-    def test_blockcopy_truncates_to_dest_type(self):
-        """BLOCKCOPY truncates values to destination type (DINT→INT)."""
+    def test_blockcopy_clamps_to_int_dest_type(self):
+        """BLOCKCOPY clamps signed overflow when destination is INT."""
         from pyrung.core.instruction import BlockCopyInstruction
 
         DD = Block("DD", TagType.DINT, 1, 100)
@@ -340,12 +381,25 @@ class TestBlockCopyInstruction:
 
         instr = BlockCopyInstruction(DD.select(1, 2), DS.select(1, 2))
 
-        # 70000 → INT16: 4464, 100000 → INT16: -31072
-        state = SystemState().with_tags({"DD1": 70000, "DD2": 100000})
+        state = SystemState().with_tags({"DD1": 70000, "DD2": -70000})
         new_state = execute(instr, state)
 
-        assert new_state.tags["DS1"] == 4464
-        assert new_state.tags["DS2"] == -31072
+        assert new_state.tags["DS1"] == 32767
+        assert new_state.tags["DS2"] == -32768
+
+    def test_blockcopy_clamps_to_dint_dest_type(self):
+        """BLOCKCOPY clamps signed overflow when destination is DINT."""
+        from pyrung.core.instruction import BlockCopyInstruction
+
+        DD = Block("DD", TagType.DINT, 1, 100)
+
+        instr = BlockCopyInstruction(DD.select(1, 2), DD.select(10, 11))
+
+        state = SystemState().with_tags({"DD1": 3_000_000_000, "DD2": -3_000_000_000})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DD10"] == 2_147_483_647
+        assert new_state.tags["DD11"] == -2_147_483_648
 
 
 class TestFillInstruction:
@@ -446,21 +500,63 @@ class TestFillInstruction:
         assert new_state.tags["DS1"] == 0
         assert new_state.tags["DS2"] == 0
 
-    def test_fill_truncates_to_dest_type(self):
-        """FILL truncates value to destination INT (16-bit signed)."""
+    def test_fill_clamps_to_int_dest_type(self):
+        """FILL clamps value to destination INT range."""
         from pyrung.core.instruction import FillInstruction
 
         DS = Block("DS", TagType.INT, 1, 100)
 
-        # 70000 → INT16: 4464
         instr = FillInstruction(70000, DS.select(1, 3))
 
         state = SystemState()
         new_state = execute(instr, state)
 
-        assert new_state.tags["DS1"] == 4464
-        assert new_state.tags["DS2"] == 4464
-        assert new_state.tags["DS3"] == 4464
+        assert new_state.tags["DS1"] == 32767
+        assert new_state.tags["DS2"] == 32767
+        assert new_state.tags["DS3"] == 32767
+
+    def test_fill_clamps_negative_to_int_dest_type(self):
+        """FILL clamps negative overflow to destination INT min."""
+        from pyrung.core.instruction import FillInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+
+        instr = FillInstruction(-70000, DS.select(1, 3))
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == -32768
+        assert new_state.tags["DS2"] == -32768
+        assert new_state.tags["DS3"] == -32768
+
+    def test_fill_clamps_to_dint_dest_type(self):
+        """FILL clamps value to destination DINT range."""
+        from pyrung.core.instruction import FillInstruction
+
+        DD = Block("DD", TagType.DINT, 1, 100)
+
+        instr = FillInstruction(3_000_000_000, DD.select(1, 2))
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DD1"] == 2_147_483_647
+        assert new_state.tags["DD2"] == 2_147_483_647
+
+    def test_fill_clamps_negative_to_dint_dest_type(self):
+        """FILL clamps negative overflow to destination DINT min."""
+        from pyrung.core.instruction import FillInstruction
+
+        DD = Block("DD", TagType.DINT, 1, 100)
+
+        instr = FillInstruction(-3_000_000_000, DD.select(1, 2))
+
+        state = SystemState()
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DD1"] == -2_147_483_648
+        assert new_state.tags["DD2"] == -2_147_483_648
 
 
 class TestMathInstruction:
