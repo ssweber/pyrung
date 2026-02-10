@@ -42,37 +42,52 @@ Block                ← internal memory
 - `Block[tag]` returns an `IndirectRef` resolved at runtime (pointer addressing).
 - `Block[expr]` returns an `IndirectExprRef` for computed addresses (e.g., `Block[idx + 1]`).
 - `Block.select(start, end)` returns a `MemoryBlock` for block operations (blockcopy, fill, pack). Both bounds inclusive.
-- `Block.name` + index generates the tag key for `SystemState.tags` (e.g., `"Alarms_3"`).
+- `Block.name` + index generates the tag key for `SystemState.tags` by default (e.g., `"Alarms3"`), but dialects may provide an address formatter override.
 
 ### Constructor
 
 ```python
-Block(name: str, type: TagType, start: int, end: int, retentive: bool = False)
-InputBlock(name: str, type: TagType, start: int, end: int)
-OutputBlock(name: str, type: TagType, start: int, end: int)
+Block(
+    name: str,
+    type: TagType,
+    start: int,
+    end: int,
+    retentive: bool = False,
+    valid_ranges: tuple[tuple[int, int], ...] | None = None,
+    address_formatter: Callable[[str, int], str] | None = None,
+)
+InputBlock(...)
+OutputBlock(...)
 ```
 
 - `start` and `end` are both **inclusive**. `Block("DS", TagType.INT, 1, 100)` means indices 1–100.
 - `start` must be 1 or greater. PLC addressing starts at 1.
 - `retentive` only applies to `Block`. InputBlock/OutputBlock are never retentive.
+- `valid_ranges` is optional. If unset, all addresses in `[start, end]` are valid. If set, only addresses within the listed segments are valid.
+- `address_formatter` is optional. If set, it controls generated tag names (used by dialects such as Click for canonical display names like `X001`).
 - When type is omitted, it can be inferred at map time (Click dialect feature — see `click.md`).
 
 ### .select(start, end)
 
-Selects a contiguous range of tags for block operations.
+Selects a range window of tags for block operations.
 
 ```python
 Block.select(start: int | Tag | Expression, end: int | Tag | Expression) -> MemoryBlock | IndirectMemoryBlock
 ```
 
-- Both bounds are **inclusive**: `DS.select(1, 100)` selects tags 1–100 (100 tags).
+- Both bounds are **inclusive**: `DS.select(1, 100)` selects tags 1–100 (100 tags for contiguous blocks).
+- `start > end` is invalid and raises `ValueError`.
 - Symmetrical with the constructor: `Block("DS", INT, 1, 100)` defines 1–100, `DS.select(1, 100)` selects 1–100.
+- For sparse blocks (`valid_ranges` set), `.select(start, end)` returns all valid addresses inside the inclusive window and skips invalid gaps.
 - When both arguments are `int`, returns a `MemoryBlock` (resolved at definition time).
 - When either argument is a `Tag` or `Expression`, returns an `IndirectMemoryBlock` (resolved at scan time).
 
 ```python
 # Static range
 DS.select(1, 100)              # → MemoryBlock, tags 1–100
+
+# Sparse window (e.g., Click X/Y style ranges)
+X.select(1, 21)                # → MemoryBlock, valid tags in window (1..16, 21)
 
 # Dynamic range via pointer
 DS.select(idx, idx + 10)       # → IndirectMemoryBlock, resolved each scan
@@ -85,7 +100,7 @@ Python's `Block[n:m]` slice syntax is **not supported**. Slice semantics are hal
 
 ### IndirectMemoryBlock
 
-Runtime-resolved contiguous range, returned by `.select()` when either bound is dynamic.
+Runtime-resolved range window, returned by `.select()` when either bound is dynamic.
 
 ```python
 IndirectMemoryBlock.resolve_ctx(ctx: ScanContext) -> MemoryBlock
@@ -93,7 +108,8 @@ IndirectMemoryBlock.resolve_ctx(ctx: ScanContext) -> MemoryBlock
 
 - Evaluates `start` and `end` expressions against current state.
 - Returns a concrete `MemoryBlock` for the resolved range.
-- Raises `ValueError` if resolved bounds are out of range.
+- Applies the same validation rules as static `.select()`.
+- Raises `ValueError` if resolved bounds are invalid (`start > end`) and `IndexError` if bounds are out of block range.
 
 ### IEC 61131-3 Type Constructors
 
@@ -142,4 +158,4 @@ class TagType(Enum):
 - **Retentive semantics:** What does `retentive=True` mean in simulation? (Probably: survives a simulated power cycle / `runner.reset()`.)
 - **Operator overloading:** Tags support `==`, `!=`, `<`, `<=`, `>`, `>=` for conditions, and `+`, `-`, `*`, `/`, `%`, `&`, `|`, `^` for math expressions. Specify what these return (Condition objects, Expression objects).
 - **Named attribute access:** `Setpoints.Max_Temp` as alias for `Setpoints["Max Temp"]`. Specify the name-mangling rules (spaces → underscores, etc.).
-- **`from_meta()` bridge:** This is Click-dialect-specific. Documented in `click.md`, not here. Core `Block` class has no knowledge of `MemoryBankMeta`.
+- **Click metadata bridge:** This is Click-dialect-specific. Documented in `click.md`, not here. Core `Block` class has no knowledge of Click bank metadata types.

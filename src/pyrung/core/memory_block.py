@@ -7,9 +7,9 @@ BlockRange represents contiguous ranges for block operations.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Never, cast, overload
 
 from pyrung.core.tag import InputTag, OutputTag, Tag, TagType
 
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         IndirectCompareLt,
     )
     from pyrung.core.context import ScanContext
+    from pyrung.core.expression import Expression
     from pyrung.core.state import SystemState
 
 
@@ -47,6 +48,8 @@ class Block:
     start: int
     end: int
     retentive: bool = False
+    valid_ranges: tuple[tuple[int, int], ...] | None = None
+    address_formatter: Callable[[str, int], str] | None = None
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -54,6 +57,30 @@ class Block:
             raise ValueError(f"start must be >= 1, got {self.start}")
         if self.end < self.start:
             raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
+        if self.valid_ranges is None:
+            return
+        for lo, hi in self.valid_ranges:
+            if lo > hi:
+                raise ValueError(f"valid range segment must have lo <= hi, got ({lo}, {hi})")
+            if lo < self.start or hi > self.end:
+                raise ValueError(
+                    f"valid range segment ({lo}, {hi}) must be within {self.start}-{self.end}"
+                )
+
+    @overload
+    def __getitem__(self, key: int) -> Tag: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Never: ...
+
+    @overload
+    def __getitem__(self, key: Tag) -> IndirectRef: ...
+
+    @overload
+    def __getitem__(self, key: Expression) -> IndirectExprRef: ...
+
+    @overload
+    def __getitem__(self, key: object) -> Tag | IndirectRef | IndirectExprRef: ...
 
     def __getitem__(self, key: int | slice | Tag | Any) -> Tag | IndirectRef | IndirectExprRef:
         """Access tags by address, pointer tag, or expression.
@@ -74,13 +101,7 @@ class Block:
         from pyrung.core.expression import Expression
 
         if isinstance(key, int):
-            if key == 0:
-                raise IndexError("Address 0 is not valid; addresses start at 1")
-            if key < self.start or key > self.end:
-                raise IndexError(
-                    f"Address {key} out of range for {self.name} block "
-                    f"(valid: {self.start}-{self.end})"
-                )
+            self._validate_address(key)
             return self._get_tag(key)
         elif isinstance(key, slice):
             raise TypeError("Use .select(start, end) instead of slice syntax")
@@ -97,11 +118,68 @@ class Block:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
             self._tag_cache[addr] = Tag(
-                name=f"{self.name}{addr}",
+                name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=self.retentive,
             )
         return self._tag_cache[addr]
+
+    def _format_tag_name(self, addr: int) -> str:
+        if self.address_formatter is None:
+            return f"{self.name}{addr}"
+        return self.address_formatter(self.name, addr)
+
+    def _is_sparse_address_valid(self, addr: int) -> bool:
+        if self.valid_ranges is None:
+            return True
+        return any(lo <= addr <= hi for lo, hi in self.valid_ranges)
+
+    def _validate_address(self, addr: int) -> None:
+        if addr == 0:
+            raise IndexError("Address 0 is not valid; addresses start at 1")
+        if addr < self.start or addr > self.end:
+            raise IndexError(
+                f"Address {addr} out of range for {self.name} block "
+                f"(valid: {self.start}-{self.end})"
+            )
+        if not self._is_sparse_address_valid(addr):
+            raise IndexError(
+                f"Address {addr} is not valid for {self.name} block "
+                f"(valid window: {self.start}-{self.end}, sparse-ranged)"
+            )
+
+    def _validate_window_bound(self, addr: int, label: str) -> None:
+        if addr == 0:
+            raise IndexError("Address 0 is not valid; addresses start at 1")
+        if addr < self.start or addr > self.end:
+            raise IndexError(
+                f"{label} address {addr} out of range for {self.name} block "
+                f"(valid: {self.start}-{self.end})"
+            )
+
+    def _window_addresses(self, start: int, end: int) -> range | tuple[int, ...]:
+        if self.valid_ranges is None:
+            return range(start, end + 1)
+
+        addresses: set[int] = set()
+        for lo, hi in self.valid_ranges:
+            if hi < start or lo > end:
+                continue
+            seg_start = max(start, lo)
+            seg_end = min(end, hi)
+            addresses.update(range(seg_start, seg_end + 1))
+        return tuple(sorted(addresses))
+
+    @overload
+    def select(self, start: int, end: int) -> BlockRange: ...
+
+    @overload
+    def select(
+        self, start: Tag | Expression, end: int | Tag | Expression
+    ) -> IndirectBlockRange: ...
+
+    @overload
+    def select(self, start: int, end: Tag | Expression) -> IndirectBlockRange: ...
 
     def select(
         self, start: int | Tag | Any, end: int | Tag | Any
@@ -117,16 +195,12 @@ class Block:
         """
 
         if isinstance(start, int) and isinstance(end, int):
-            if start < self.start or start > self.end:
-                raise IndexError(
-                    f"Start address {start} out of range for {self.name} block "
-                    f"(valid: {self.start}-{self.end})"
+            if start > end:
+                raise ValueError(
+                    f"select start ({start}) must be <= end ({end}) for {self.name} block"
                 )
-            if end < self.start or end > self.end:
-                raise IndexError(
-                    f"End address {end} out of range for {self.name} block "
-                    f"(valid: {self.start}-{self.end})"
-                )
+            self._validate_window_bound(start, "Start")
+            self._validate_window_bound(end, "End")
             return BlockRange(self, start, end)
         else:
             return IndirectBlockRange(self, start, end)
@@ -142,18 +216,34 @@ class InputBlock(Block):
     InputBlock always has retentive=False (inputs are not retentive).
     """
 
-    def __init__(self, name: str, type: TagType, start: int, end: int):
-        super().__init__(name=name, type=type, start=start, end=end, retentive=False)
+    def __init__(
+        self,
+        name: str,
+        type: TagType,
+        start: int,
+        end: int,
+        valid_ranges: tuple[tuple[int, int], ...] | None = None,
+        address_formatter: Callable[[str, int], str] | None = None,
+    ):
+        super().__init__(
+            name=name,
+            type=type,
+            start=start,
+            end=end,
+            retentive=False,
+            valid_ranges=valid_ranges,
+            address_formatter=address_formatter,
+        )
 
     def _get_tag(self, addr: int) -> InputTag:
         """Get or create an InputTag for the given address."""
         if addr not in self._tag_cache:
             self._tag_cache[addr] = InputTag(
-                name=f"{self.name}{addr}",
+                name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
             )
-        return self._tag_cache[addr]
+        return cast(InputTag, self._tag_cache[addr])
 
 
 @dataclass
@@ -163,18 +253,34 @@ class OutputBlock(Block):
     OutputBlock always has retentive=False (outputs are not retentive).
     """
 
-    def __init__(self, name: str, type: TagType, start: int, end: int):
-        super().__init__(name=name, type=type, start=start, end=end, retentive=False)
+    def __init__(
+        self,
+        name: str,
+        type: TagType,
+        start: int,
+        end: int,
+        valid_ranges: tuple[tuple[int, int], ...] | None = None,
+        address_formatter: Callable[[str, int], str] | None = None,
+    ):
+        super().__init__(
+            name=name,
+            type=type,
+            start=start,
+            end=end,
+            retentive=False,
+            valid_ranges=valid_ranges,
+            address_formatter=address_formatter,
+        )
 
     def _get_tag(self, addr: int) -> OutputTag:
         """Get or create an OutputTag for the given address."""
         if addr not in self._tag_cache:
             self._tag_cache[addr] = OutputTag(
-                name=f"{self.name}{addr}",
+                name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
             )
-        return self._tag_cache[addr]
+        return cast(OutputTag, self._tag_cache[addr])
 
 
 @dataclass(frozen=True)
@@ -192,21 +298,21 @@ class BlockRange:
     end: int
 
     @property
-    def addresses(self) -> range:
-        """Return the range of addresses in this block."""
-        return range(self.start, self.end + 1)
+    def addresses(self) -> range | tuple[int, ...]:
+        """Return addresses in this block window, filtered by block rules."""
+        return self.block._window_addresses(self.start, self.end)
 
     def tags(self) -> list[Tag]:
         """Return list of Tag objects for all addresses in this block."""
-        return [self.block[addr] for addr in self.addresses]
+        return [self.block._get_tag(addr) for addr in self.addresses]
 
     def __len__(self) -> int:
-        return self.end - self.start + 1
+        return len(self.addresses)
 
     def __iter__(self) -> Iterator[Tag]:
         """Iterate over Tags in this block."""
         for addr in self.addresses:
-            yield self.block[addr]
+            yield self.block._get_tag(addr)
 
     def __repr__(self) -> str:
         return f"BlockRange({self.block.name}[{self.start}:{self.end}])"
@@ -233,7 +339,10 @@ class IndirectBlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
         start = self._resolve_one(self.start_expr, ctx)
         end = self._resolve_one(self.end_expr, ctx)
-        return BlockRange(self.block, start, end)
+        resolved = self.block.select(start, end)
+        if not isinstance(resolved, BlockRange):
+            raise TypeError("Resolved indirect block range did not produce BlockRange")
+        return resolved
 
     @staticmethod
     def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:
@@ -276,7 +385,8 @@ class IndirectRef:
             IndexError: If resolved address is out of range.
         """
         ptr_value = state.tags.get(self.pointer.name, self.pointer.default)
-        return self.block[ptr_value]
+        self.block._validate_address(ptr_value)
+        return self.block._get_tag(ptr_value)
 
     def resolve_ctx(self, ctx: ScanContext) -> Tag:
         """Resolve pointer value to concrete Tag using ScanContext.
@@ -291,7 +401,8 @@ class IndirectRef:
             IndexError: If resolved address is out of range.
         """
         ptr_value = ctx.get_tag(self.pointer.name, self.pointer.default)
-        return self.block[ptr_value]
+        self.block._validate_address(ptr_value)
+        return self.block._get_tag(ptr_value)
 
     def __eq__(self, other: object) -> Condition:
         """Create equality comparison condition."""
@@ -366,7 +477,8 @@ class IndirectExprRef:
             IndexError: If resolved address is out of range.
         """
         addr = int(self.expr.evaluate(ctx))
-        return self.block[addr]
+        self.block._validate_address(addr)
+        return self.block._get_tag(addr)
 
     def __repr__(self) -> str:
         return f"IndirectExprRef({self.block.name}[{self.expr}])"

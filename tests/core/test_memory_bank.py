@@ -127,6 +127,16 @@ class TestBlock:
         with pytest.raises(ValueError, match="end.*must be >= start"):
             Block("DS", TagType.INT, 10, 5)
 
+    def test_valid_ranges_segment_must_be_ordered(self):
+        """Sparse valid_ranges segments must have lo <= hi."""
+        with pytest.raises(ValueError, match="lo <= hi"):
+            Block("X", TagType.BOOL, 1, 100, valid_ranges=((10, 9),))
+
+    def test_valid_ranges_segment_must_fit_block_window(self):
+        """Sparse valid_ranges segments must stay within start/end."""
+        with pytest.raises(ValueError, match="must be within"):
+            Block("X", TagType.BOOL, 1, 100, valid_ranges=((1, 101),))
+
     def test_slice_raises_type_error(self):
         """Slice syntax raises TypeError directing to .select()."""
         DS = Block("DS", TagType.INT, 1, 4500)
@@ -201,6 +211,13 @@ class TestSelect:
         with pytest.raises(IndexError, match="out of range"):
             DS.select(4500, 4501)
 
+    def test_select_start_must_be_le_end(self):
+        """select(start, end) rejects reversed bounds."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+
+        with pytest.raises(ValueError, match="must be <="):
+            DS.select(21, 1)
+
     def test_select_single_address(self):
         """select(n, n) creates single-address block."""
         DS = Block("DS", TagType.INT, 1, 4500)
@@ -256,6 +273,83 @@ class TestIndirectSelect:
         assert resolved.start == 100
         assert resolved.end == 105
         assert len(resolved) == 6
+
+    def test_indirect_memory_block_resolve_rejects_reversed_bounds(self):
+        """IndirectBlockRange uses block.select() validation for resolved bounds."""
+        from pyrung.core import ScanContext
+
+        DS = Block("DS", TagType.INT, 1, 4500)
+        start_tag = Int("Start")
+        end_tag = Int("End")
+
+        indirect_block = DS.select(start_tag, end_tag)
+        state = SystemState().with_tags({"Start": 21, "End": 1})
+        ctx = ScanContext(state)
+
+        with pytest.raises(ValueError, match="must be <="):
+            indirect_block.resolve_ctx(ctx)
+
+
+class TestSparseSelect:
+    """Test sparse range addressing behavior."""
+
+    def test_sparse_getitem_allows_segment_addresses_and_rejects_gaps(self):
+        """Sparse blocks reject holes even when inside min/max bounds."""
+        X = Block(
+            "X",
+            TagType.BOOL,
+            1,
+            816,
+            valid_ranges=((1, 16), (21, 36)),
+        )
+
+        assert X[1].name == "X1"
+        assert X[16].name == "X16"
+        assert X[21].name == "X21"
+        with pytest.raises(IndexError):
+            X[17]
+
+    def test_sparse_select_filters_to_valid_addresses(self):
+        """Sparse select(start, end) returns only valid addresses in that window."""
+        X = Block(
+            "X",
+            TagType.BOOL,
+            1,
+            816,
+            valid_ranges=((1, 16), (21, 36)),
+        )
+
+        block = X.select(1, 21)
+        expected_addresses = tuple(range(1, 17)) + (21,)
+
+        assert tuple(block.addresses) == expected_addresses
+        assert len(block) == len(expected_addresses)
+        assert [int(tag.name[1:]) for tag in block.tags()] == list(expected_addresses)
+        assert [int(tag.name[1:]) for tag in block] == list(expected_addresses)
+
+
+class TestAddressFormatter:
+    """Test optional address formatting hook for block tags."""
+
+    def test_block_uses_default_formatter(self):
+        """Without formatter hook, block uses prefix+address naming."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        assert DS[1].name == "DS1"
+
+    def test_block_uses_custom_formatter(self):
+        """Custom formatter is used when provided."""
+        fmt = lambda name, addr: f"{name}:{addr:03d}"  # noqa: E731
+        DS = Block("DS", TagType.INT, 1, 4500, address_formatter=fmt)
+        assert DS[1].name == "DS:001"
+
+    def test_input_output_blocks_use_custom_formatter(self):
+        """InputBlock/OutputBlock pass formatter through to tag creation."""
+        fmt = lambda name, addr: f"{name}{addr:03d}"  # noqa: E731
+        X = InputBlock("X", TagType.BOOL, 1, 100, address_formatter=fmt)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 100, address_formatter=fmt)
+
+        assert X[1].name == "X001"
+        assert Y[1].name == "Y001"
 
 
 # =============================================================================

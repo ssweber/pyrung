@@ -443,6 +443,37 @@ class TestCopyAndMathReferenceExamples:
         assert new_state.tags["DH3"] == 0xA2D8
 
 
+class TestClickPrebuiltProgramIntegration:
+    """Program-level integration using prebuilt Click blocks."""
+
+    def test_click_input_to_output_rung_uses_canonical_names(self):
+        """x/y prebuilt blocks execute in Program with Click canonical tag names."""
+        from pyrung.click import x, y
+        from pyrung.core.program import Program, Rung, out
+
+        with Program() as prog:
+            with Rung(x[1]):
+                out(y[1])
+
+        state = SystemState().with_tags({"X001": True, "Y001": False})
+        new_state = evaluate_program(prog, state)
+        assert new_state.tags["Y001"] is True
+
+    def test_click_sparse_window_pack_bits_skips_invalid_addresses(self):
+        """x.select(1, 21) packs 17 valid bits (1-16 and 21), not raw 21 addresses."""
+        from pyrung.click import dd, x
+        from pyrung.core.program import Program, Rung, pack_bits
+
+        with Program() as prog:
+            with Rung():
+                pack_bits(x.select(1, 21), dd[1])
+
+        # Only X021 is ON. If sparse gaps are skipped, this is packed as bit 16.
+        state = SystemState().with_tags({"X021": True})
+        new_state = evaluate_program(prog, state)
+        assert new_state.tags["DD1"] == (1 << 16)
+
+
 class TestPLCRunnerIntegration:
     """Test full integration with PLCRunner."""
 

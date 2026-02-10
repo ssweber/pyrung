@@ -19,15 +19,33 @@ soft PLC adapter (`ClickDataProvider`).
 
 ### Pre-built Blocks
 
-Constructed from `pyclickplc.BANKS[NAME].valid_ranges`. These are convenience instances — users can also create their own blocks and map them.
+Constructed from `pyclickplc.BANKS[NAME]`. These are convenience instances — users can also create their own blocks and map them.
 
 ```python
 from pyrung.click import x, y, c, ds, dd, dh, df, t, td, ct, ctd, sc, sd, txt
 
 # x and y are InputBlock/OutputBlock, everything else is Block
+
+# exported variables are lowercase, but block identities remain uppercase
+assert x.name == "X"
+assert ds.name == "DS"
+
+# canonical Click tag display names
+assert x[1].name == "X001"
+assert y[1].name == "Y001"
+assert c[1].name == "C1"
+assert ds[1].name == "DS1"
 ```
 
 Exact ranges come from `pyclickplc`. Retentive defaults also come from `pyclickplc` (`DEFAULT_RETENTIVE`).
+
+Sparse selection behavior:
+
+```python
+# X/Y are sparse banks. select() uses an inclusive window and returns only valid addresses.
+window = x.select(1, 21)
+# Includes X001..X016 and X021 (17 tags total)
+```
 
 ### Click Type Aliases
 
@@ -91,30 +109,30 @@ Alarms.map_to(c.select(101, 200))                       # → Bool inferred from
 
 Explicit type always overrides. Retentive default can also be inferred but explicit overrides.
 
-### `from_meta()` Bridge
+### `_block_from_bank_config()` Bridge
 
 This is a Click-dialect factory, **not** a method on core `Block`:
 
 ```python
 # In pyrung.click
-from clickplc.blocks import MemoryBankMeta
+from pyclickplc import BankConfig
 
-def block_from_meta(meta: MemoryBankMeta) -> Block | InputBlock | OutputBlock:
-    """Construct a Block from pyclickplc metadata.
+def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBlock:
+    """Construct a Block from pyclickplc bank metadata.
     
     Dispatches to InputBlock/OutputBlock/Block based on 
     memory_type (X → InputBlock, Y → OutputBlock, else Block).
     """
 ```
 
-Core `Block` has no knowledge of `MemoryBankMeta`.
+Core `Block` has no knowledge of Click metadata types.
 
 ### Nickname File Round-Trip
 
 Loading:
 ```python
 mapping = TagMap.from_nickname_file("project.csv")
-# Uses clickplc.nicknames.load_nickname_file()
+# Uses pyclickplc.nicknames.read_csv()/load helper
 # Reconstructs Blocks from MemoryBankMeta (block tags)
 # Creates Tags for standalone nicknames
 # Timer/counter _D suffix pairs linked automatically
@@ -215,6 +233,6 @@ on the server path. See `spec/HANDOFF.md` for the full data flow diagram.
 - **Bank compatibility matrix:** Which Click banks can be compared, used together in blockcopy, etc. This comes from pyclickplc.
 - **XD/YD addressing:** Click's XD/YD pseudo-addresses for reading discrete inputs/outputs as words. How does this surface?
 - **Interleaved pairs:** Click's DD/DH/DF interleaving. Document how this affects mapping validation.
-- **Tag name validation at map time:** Names validated against `clickplc.validation` rules (24-char max, forbidden chars, reserved words). Errors vs warnings.
+- **Tag name validation at map time:** Names validated against `pyclickplc.validation` rules (24-char max, forbidden chars, reserved words). Errors vs warnings.
 - **SC/SD (system) blocks:** Are these read-only? Can you map user tags to them? Probably no — they're system-provided.
 - **What `pyclickplc` provides vs what `pyrung.click` owns:** Clear boundary. pyclickplc = address model, types, file I/O, rich value types. pyrung.click = live blocks, TagMap, validation, DSL integration, soft PLC adapter.
