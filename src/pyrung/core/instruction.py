@@ -15,7 +15,7 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 
 
 _DINT_MIN = -2147483648
@@ -158,6 +158,25 @@ def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag
     return block_range.tags()
 
 
+def resolve_coil_targets_ctx(target: Tag | BlockRange | IndirectBlockRange, ctx: ScanContext) -> list[Tag]:
+    """Resolve a coil target to one or more concrete Tags.
+
+    Coil targets support:
+    - Single Tag
+    - BlockRange from `.select(start, end)`
+    - IndirectBlockRange from dynamic `.select(...)`
+    """
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+    if isinstance(target, Tag):
+        return [target]
+    if isinstance(target, (BlockRange, IndirectBlockRange)):
+        return resolve_block_range_tags_ctx(target, ctx)
+    raise TypeError(
+        f"Expected Tag, BlockRange, or IndirectBlockRange, got {type(target).__name__}"
+    )
+
+
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
 
@@ -193,14 +212,15 @@ class OutInstruction(OneShotMixin, Instruction):
     Sets the target bit to True when executed.
     """
 
-    def __init__(self, target: Tag, oneshot: bool = False):
+    def __init__(self, target: Tag | BlockRange | IndirectBlockRange, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
 
     def execute(self, ctx: ScanContext) -> None:
         if not self.should_execute():
             return
-        ctx.set_tag(self.target.name, True)
+        for target in resolve_coil_targets_ctx(self.target, ctx):
+            ctx.set_tag(target.name, True)
 
 
 class LatchInstruction(Instruction):
@@ -210,11 +230,12 @@ class LatchInstruction(Instruction):
     not reset when the rung goes false.
     """
 
-    def __init__(self, target: Tag):
+    def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
         self.target = target
 
     def execute(self, ctx: ScanContext) -> None:
-        ctx.set_tag(self.target.name, True)
+        for target in resolve_coil_targets_ctx(self.target, ctx):
+            ctx.set_tag(target.name, True)
 
 
 class ResetInstruction(Instruction):
@@ -223,11 +244,12 @@ class ResetInstruction(Instruction):
     Sets the target to its default value (False for bits, 0 for ints).
     """
 
-    def __init__(self, target: Tag):
+    def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
         self.target = target
 
     def execute(self, ctx: ScanContext) -> None:
-        ctx.set_tag(self.target.name, self.target.default)
+        for target in resolve_coil_targets_ctx(self.target, ctx):
+            ctx.set_tag(target.name, target.default)
 
 
 class CopyInstruction(OneShotMixin, Instruction):

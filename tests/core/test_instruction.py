@@ -40,6 +40,20 @@ class TestOutInstruction:
 
         assert new_state.tags["Light"] is True
 
+    def test_out_sets_block_range_true(self):
+        """OUT sets all bits in a selected range to True."""
+        from pyrung.core.instruction import OutInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = OutInstruction(C.select(1, 3))
+
+        state = SystemState().with_tags({"C1": False, "C2": False, "C3": False})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["C1"] is True
+        assert new_state.tags["C2"] is True
+        assert new_state.tags["C3"] is True
+
 
 class TestLatchInstruction:
     """Test LATCH/SET instruction."""
@@ -55,6 +69,20 @@ class TestLatchInstruction:
         new_state = execute(instr, state)
 
         assert new_state.tags["Motor"] is True
+
+    def test_latch_sets_block_range_true(self):
+        """LATCH sets all bits in a selected range to True."""
+        from pyrung.core.instruction import LatchInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = LatchInstruction(C.select(10, 12))
+
+        state = SystemState().with_tags({"C10": False, "C11": False, "C12": False})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["C10"] is True
+        assert new_state.tags["C11"] is True
+        assert new_state.tags["C12"] is True
 
 
 class TestResetInstruction:
@@ -83,6 +111,19 @@ class TestResetInstruction:
         new_state = execute(instr, state)
 
         assert new_state.tags["Counter"] == 0
+
+    def test_reset_sets_block_range_defaults(self):
+        """RESET applies default values across all selected tags."""
+        from pyrung.core.instruction import ResetInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = ResetInstruction(DS.select(1, 2))
+
+        state = SystemState().with_tags({"DS1": 123, "DS2": -9})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == 0
+        assert new_state.tags["DS2"] == 0
 
 
 class TestCopyInstruction:

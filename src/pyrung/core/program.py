@@ -39,6 +39,7 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
+from pyrung.core.memory_block import BlockRange
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
@@ -64,6 +65,15 @@ def _require_rung_context(func_name: str) -> Rung:
     if rung is None:
         raise RuntimeError(f"{func_name}() must be called inside a Rung context")
     return rung
+
+
+def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
+    """Normalize a coil target to concrete tags."""
+    if isinstance(target, Tag):
+        return [target]
+    if isinstance(target, BlockRange):
+        return target.tags()
+    raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
 
 
 class Program:
@@ -171,7 +181,7 @@ class Rung:
 # ============================================================================
 
 
-def out(target: Tag, oneshot: bool = False) -> Tag:
+def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
     """Output coil instruction (OUT).
 
     Sets target to True when rung is true.
@@ -180,14 +190,16 @@ def out(target: Tag, oneshot: bool = False) -> Tag:
     Example:
         with Rung(Button):
             out(Light)
+            out(Y.select(1, 4))
     """
     ctx = _require_rung_context("out")
+    for coil_tag in _iter_coil_tags(target):
+        ctx._rung.register_coil(coil_tag)
     ctx._rung.add_instruction(OutInstruction(target, oneshot))
-    ctx._rung.register_coil(target)
     return target
 
 
-def latch(target: Tag) -> Tag:
+def latch(target: Tag | BlockRange) -> Tag | BlockRange:
     """Latch/Set instruction (SET).
 
     Sets target to True. Unlike OUT, does NOT reset when rung goes false.
@@ -196,13 +208,15 @@ def latch(target: Tag) -> Tag:
     Example:
         with Rung(StartButton):
             latch(MotorRunning)
+            latch(C.select(1, 8))
     """
     ctx = _require_rung_context("latch")
+    _iter_coil_tags(target)
     ctx._rung.add_instruction(LatchInstruction(target))
     return target
 
 
-def reset(target: Tag) -> Tag:
+def reset(target: Tag | BlockRange) -> Tag | BlockRange:
     """Reset/Unlatch instruction (RST).
 
     Sets target to its default value (False for bits, 0 for ints).
@@ -210,8 +224,10 @@ def reset(target: Tag) -> Tag:
     Example:
         with Rung(StopButton):
             reset(MotorRunning)
+            reset(C.select(1, 8))
     """
     ctx = _require_rung_context("reset")
+    _iter_coil_tags(target)
     ctx._rung.add_instruction(ResetInstruction(target))
     return target
 

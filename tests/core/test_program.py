@@ -63,6 +63,30 @@ class TestRungDSL:
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Light"] is True
 
+    def test_rung_with_out_block_range(self):
+        """out() accepts .select() and drives all tags in the range."""
+        from pyrung.core.program import Program, Rung, out
+
+        Button = Bool("Button")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as prog:
+            with Rung(Button):
+                out(C.select(1, 3))
+
+        state = SystemState().with_tags({"Button": True, "C1": False, "C2": False, "C3": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["C1"] is True
+        assert state.tags["C2"] is True
+        assert state.tags["C3"] is True
+
+        # Next scan with rung not enabled: OUT coils reset automatically.
+        state = state.with_tags({"Button": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["C1"] is False
+        assert state.tags["C2"] is False
+        assert state.tags["C3"] is False
+
     def test_rung_with_latch(self):
         """latch() adds LATCH instruction."""
         from pyrung.core.program import Program, Rung, latch
@@ -78,6 +102,30 @@ class TestRungDSL:
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Motor"] is True
 
+    def test_rung_with_latch_block_range(self):
+        """latch() accepts .select() and latches all tags in the range."""
+        from pyrung.core.program import Program, Rung, latch
+
+        Button = Bool("Button")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as prog:
+            with Rung(Button):
+                latch(C.select(10, 12))
+
+        state = SystemState().with_tags({"Button": True, "C10": False, "C11": False, "C12": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["C10"] is True
+        assert state.tags["C11"] is True
+        assert state.tags["C12"] is True
+
+        # LATCH remains on after rung false.
+        state = state.with_tags({"Button": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["C10"] is True
+        assert state.tags["C11"] is True
+        assert state.tags["C12"] is True
+
     def test_rung_with_reset(self):
         """reset() adds RESET instruction."""
         from pyrung.core.program import Program, Rung, reset
@@ -92,6 +140,23 @@ class TestRungDSL:
         state = SystemState().with_tags({"StopButton": True, "Motor": True})
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Motor"] is False
+
+    def test_rung_with_reset_block_range(self):
+        """reset() accepts .select() and resets all tags in the range."""
+        from pyrung.core.program import Program, Rung, reset
+
+        StopButton = Bool("StopButton")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as prog:
+            with Rung(StopButton):
+                reset(C.select(20, 22))
+
+        state = SystemState().with_tags({"StopButton": True, "C20": True, "C21": True, "C22": True})
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["C20"] is False
+        assert new_state.tags["C21"] is False
+        assert new_state.tags["C22"] is False
 
     def test_rung_with_copy(self):
         """copy() adds COPY instruction."""
