@@ -150,8 +150,9 @@ class Rung:
 
         # Reset oneshot triggers
         for instruction in self._instructions:
-            if hasattr(instruction, "reset_oneshot"):
-                instruction.reset_oneshot()
+            reset_oneshot = getattr(instruction, "reset_oneshot", None)
+            if callable(reset_oneshot):
+                reset_oneshot()
 
         # Propagate false to nested branches
         for branch in self._branches:

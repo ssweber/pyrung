@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -61,13 +61,13 @@ class Tag:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: object) -> Condition:
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
         return CompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
@@ -97,7 +97,7 @@ class Tag:
 
         return CompareGe(self, other)
 
-    def __or__(self, other: Tag | Condition) -> Any:
+    def __or__(self, other: object) -> Any:
         """Create OR condition (for BOOL) or bitwise OR expression (for non-BOOL)."""
         from pyrung.core.condition import AnyCondition
         from pyrung.core.condition import Condition as CondBase
@@ -105,7 +105,12 @@ class Tag:
 
         # For non-BOOL tags, use bitwise OR
         if self.type != TagType.BOOL:
-            return TagExpr(self) | other
+            if isinstance(other, CondBase):
+                raise TypeError(
+                    f"Cannot OR Tag with {type(other).__name__}. "
+                    "Bitwise OR requires numeric/tag expression operands."
+                )
+            return TagExpr(self) | cast(Any, other)
 
         if isinstance(other, Tag | CondBase):
             return AnyCondition(self, other)
@@ -122,7 +127,12 @@ class Tag:
 
         # For non-BOOL tags, use bitwise OR
         if self.type != TagType.BOOL:
-            return other | TagExpr(self)
+            if isinstance(other, CondBase):
+                raise TypeError(
+                    f"Cannot OR {type(other).__name__} with Tag. "
+                    "Bitwise OR requires numeric/tag expression operands."
+                )
+            return cast(Any, other) | TagExpr(self)
 
         if isinstance(other, Tag | CondBase):
             return AnyCondition(other, self)

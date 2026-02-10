@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.tag import Tag
 
 Numeric = int | float
 
@@ -547,57 +548,57 @@ class MathFuncExpr(Expression):
         return f"{self.name}({self.operand})"
 
 
-def sqrt(x: Expression | Numeric) -> MathFuncExpr:
+def sqrt(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Square root function."""
     return MathFuncExpr(_wrap(x), math.sqrt, "sqrt")
 
 
-def sin(x: Expression | Numeric) -> MathFuncExpr:
+def sin(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Sine function (radians)."""
     return MathFuncExpr(_wrap(x), math.sin, "sin")
 
 
-def cos(x: Expression | Numeric) -> MathFuncExpr:
+def cos(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Cosine function (radians)."""
     return MathFuncExpr(_wrap(x), math.cos, "cos")
 
 
-def tan(x: Expression | Numeric) -> MathFuncExpr:
+def tan(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Tangent function (radians)."""
     return MathFuncExpr(_wrap(x), math.tan, "tan")
 
 
-def asin(x: Expression | Numeric) -> MathFuncExpr:
+def asin(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Arc sine function (returns radians)."""
     return MathFuncExpr(_wrap(x), math.asin, "asin")
 
 
-def acos(x: Expression | Numeric) -> MathFuncExpr:
+def acos(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Arc cosine function (returns radians)."""
     return MathFuncExpr(_wrap(x), math.acos, "acos")
 
 
-def atan(x: Expression | Numeric) -> MathFuncExpr:
+def atan(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Arc tangent function (returns radians)."""
     return MathFuncExpr(_wrap(x), math.atan, "atan")
 
 
-def radians(x: Expression | Numeric) -> MathFuncExpr:
+def radians(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Convert degrees to radians."""
     return MathFuncExpr(_wrap(x), math.radians, "radians")
 
 
-def degrees(x: Expression | Numeric) -> MathFuncExpr:
+def degrees(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Convert radians to degrees."""
     return MathFuncExpr(_wrap(x), math.degrees, "degrees")
 
 
-def log10(x: Expression | Numeric) -> MathFuncExpr:
+def log10(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Base-10 logarithm."""
     return MathFuncExpr(_wrap(x), math.log10, "log10")
 
 
-def log(x: Expression | Numeric) -> MathFuncExpr:
+def log(x: Expression | Numeric | Tag) -> MathFuncExpr:
     """Natural logarithm."""
     return MathFuncExpr(_wrap(x), math.log, "log")
 
@@ -629,12 +630,12 @@ class ShiftFuncExpr(Expression):
         return f"{self.name}({self.value}, {self.count})"
 
 
-def lsh(x: Expression | int, n: Expression | int) -> ShiftFuncExpr:
+def lsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Left shift function: lsh(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v << c, "lsh")
 
 
-def rsh(x: Expression | int, n: Expression | int) -> ShiftFuncExpr:
+def rsh(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Right shift function: rsh(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), lambda v, c: v >> c, "rsh")
 
@@ -653,11 +654,11 @@ def _rotate_right_16(value: int, count: int) -> int:
     return ((value >> count) | (value << (16 - count))) & 0xFFFF
 
 
-def lro(x: Expression | int, n: Expression | int) -> ShiftFuncExpr:
+def lro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Rotate left function (16-bit): lro(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), _rotate_left_16, "lro")
 
 
-def rro(x: Expression | int, n: Expression | int) -> ShiftFuncExpr:
+def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Rotate right function (16-bit): rro(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), _rotate_right_16, "rro")

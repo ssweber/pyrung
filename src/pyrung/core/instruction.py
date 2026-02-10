@@ -15,7 +15,7 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
 _DINT_MIN = -2147483648
@@ -44,7 +44,7 @@ def _float_to_int_bits(f: float) -> int:
     return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
-def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
+def resolve_tag_or_value_ctx(source: Tag | IndirectRef | IndirectExprRef | Any, ctx: ScanContext) -> Any:
     """Resolve tag (direct or indirect), expression, or return literal value using ScanContext.
 
     Args:
@@ -77,7 +77,7 @@ def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) 
     return source
 
 
-def resolve_tag_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> Tag:
+def resolve_tag_ctx(target: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
     """Resolve target to a concrete Tag (handling indirect) using ScanContext.
 
     Args:
@@ -101,7 +101,7 @@ def resolve_tag_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> Tag:
     return target
 
 
-def resolve_tag_name_ctx(target: Tag | IndirectRef, ctx: ScanContext) -> str:
+def resolve_tag_name_ctx(target: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> str:
     """Resolve tag to its name (handling indirect) using ScanContext.
 
     Args:
@@ -239,7 +239,10 @@ class CopyInstruction(OneShotMixin, Instruction):
     """
 
     def __init__(
-        self, source: Tag | IndirectRef | Any, target: Tag | IndirectRef, oneshot: bool = False
+        self,
+        source: Tag | IndirectRef | IndirectExprRef | Any,
+        target: Tag | IndirectRef | IndirectExprRef,
+        oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
         self.source = source

@@ -3,6 +3,8 @@
 TDD: Write tests first, then implement to pass.
 """
 
+from typing import Any, cast
+
 import pytest
 from pyrsistent import pmap
 
@@ -64,7 +66,8 @@ class TestSystemStateImmutability:
         state = SystemState().with_tags({"Motor": False})
 
         with pytest.raises(TypeError):
-            state.tags["Motor"] = True
+            tags = cast(Any, state.tags)
+            tags["Motor"] = True
 
     def test_memory_is_immutable(self):
         """Memory dict cannot be mutated."""
@@ -73,7 +76,8 @@ class TestSystemStateImmutability:
         state = SystemState().with_memory({"timer_1": 0})
 
         with pytest.raises(TypeError):
-            state.memory["timer_1"] = 100
+            memory = cast(Any, state.memory)
+            memory["timer_1"] = 100
 
 
 class TestSystemStateTransitions:

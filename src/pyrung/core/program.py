@@ -45,6 +45,7 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
     from pyrung.core.state import SystemState
 
 
@@ -215,7 +216,11 @@ def reset(target: Tag) -> Tag:
     return target
 
 
-def copy(source: Tag | Any, target: Tag, oneshot: bool = False) -> Tag:
+def copy(
+    source: Any,
+    target: Tag | IndirectRef | IndirectExprRef,
+    oneshot: bool = False,
+) -> Tag | IndirectRef | IndirectExprRef:
     """Copy instruction (CPY/MOV).
 
     Copies source value to target.
@@ -924,7 +929,7 @@ def on_delay(
 def off_delay(
     done_bit: Tag,
     accumulator: Tag,
-    setpoint: int,
+    setpoint: Tag | int,
     time_unit: TimeUnit = TimeUnit.Tms,
 ) -> OffDelayBuilder:
     """Off-Delay Timer instruction (TOF) - Click-style.
@@ -941,7 +946,7 @@ def off_delay(
     Args:
         done_bit: Tag that stays True for setpoint time after rung goes false.
         accumulator: Tag to increment while disabled.
-        setpoint: Delay time in time units.
+        setpoint: Delay time in time units (Tag or int).
         time_unit: Time unit for accumulator (default: Tms).
 
     Returns:

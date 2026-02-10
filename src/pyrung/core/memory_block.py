@@ -235,6 +235,24 @@ class InputBlock(Block):
             address_formatter=address_formatter,
         )
 
+    @overload
+    def __getitem__(self, key: int) -> InputTag: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Never: ...
+
+    @overload
+    def __getitem__(self, key: Tag) -> IndirectRef: ...
+
+    @overload
+    def __getitem__(self, key: Expression) -> IndirectExprRef: ...
+
+    @overload
+    def __getitem__(self, key: object) -> InputTag | IndirectRef | IndirectExprRef: ...
+
+    def __getitem__(self, key: int | slice | Tag | Any) -> InputTag | IndirectRef | IndirectExprRef:
+        return cast(InputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
+
     def _get_tag(self, addr: int) -> InputTag:
         """Get or create an InputTag for the given address."""
         if addr not in self._tag_cache:
@@ -271,6 +289,24 @@ class OutputBlock(Block):
             valid_ranges=valid_ranges,
             address_formatter=address_formatter,
         )
+
+    @overload
+    def __getitem__(self, key: int) -> OutputTag: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> Never: ...
+
+    @overload
+    def __getitem__(self, key: Tag) -> IndirectRef: ...
+
+    @overload
+    def __getitem__(self, key: Expression) -> IndirectExprRef: ...
+
+    @overload
+    def __getitem__(self, key: object) -> OutputTag | IndirectRef | IndirectExprRef: ...
+
+    def __getitem__(self, key: int | slice | Tag | Any) -> OutputTag | IndirectRef | IndirectExprRef:
+        return cast(OutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _get_tag(self, addr: int) -> OutputTag:
         """Get or create an OutputTag for the given address."""
@@ -404,13 +440,13 @@ class IndirectRef:
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
 
-    def __eq__(self, other: object) -> Condition:
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
         """Create equality comparison condition."""
         from pyrung.core.condition import IndirectCompareEq
 
         return IndirectCompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import IndirectCompareNe
 
