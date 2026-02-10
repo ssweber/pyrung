@@ -6,8 +6,8 @@ This tests the DSL syntax:
             out(target)
 """
 
-from pyrung.core import Bool, Int, PLCRunner, SystemState
-from tests.conftest import evaluate_condition, evaluate_rung
+from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Real, SystemState, TagType
+from tests.conftest import evaluate_condition, evaluate_program, evaluate_rung
 
 
 class TestProgramContextManager:
@@ -108,6 +108,76 @@ class TestRungDSL:
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Step"] == 5
 
+    def test_rung_with_pack_bits(self):
+        """pack_bits() adds PACK_BITS instruction."""
+        from pyrung.core.program import Program, Rung, pack_bits
+
+        Button = Bool("Button")
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+
+        with Program() as prog:
+            with Rung(Button):
+                pack_bits(C.select(1, 4), Dest)
+
+        state = SystemState().with_tags(
+            {"Button": True, "C1": True, "C2": False, "C3": True, "C4": False, "Dest": 0}
+        )
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["Dest"] == 0b0101
+
+    def test_rung_with_pack_words(self):
+        """pack_words() adds PACK_WORDS instruction with low-word-first ordering."""
+        from pyrung.core.program import Program, Rung, pack_words
+
+        Button = Bool("Button")
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Dint("Dest")
+
+        with Program() as prog:
+            with Rung(Button):
+                pack_words(DS.select(1, 2), Dest)
+
+        state = SystemState().with_tags({"Button": True, "DS1": 0x1234, "DS2": 0x5678})
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["Dest"] == 0x56781234
+
+    def test_rung_with_unpack_to_bits(self):
+        """unpack_to_bits() adds UNPACK_TO_BITS instruction."""
+        from pyrung.core.program import Program, Rung, unpack_to_bits
+
+        Button = Bool("Button")
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as prog:
+            with Rung(Button):
+                unpack_to_bits(Source, C.select(1, 4))
+
+        state = SystemState().with_tags({"Button": True, "Source": 0b1010})
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["C1"] is False
+        assert new_state.tags["C2"] is True
+        assert new_state.tags["C3"] is False
+        assert new_state.tags["C4"] is True
+
+    def test_rung_with_unpack_to_words(self):
+        """unpack_to_words() adds UNPACK_TO_WORDS instruction."""
+        from pyrung.core.program import Program, Rung, unpack_to_words
+
+        Button = Bool("Button")
+        Source = Real("Source")
+        DH = Block("DH", TagType.WORD, 1, 100)
+
+        with Program() as prog:
+            with Rung(Button):
+                unpack_to_words(Source, DH.select(1, 2))
+
+        state = SystemState().with_tags({"Button": True, "Source": 1.0})
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["DH1"] == 0x0000
+        assert new_state.tags["DH2"] == 0x3F80
+
     def test_rung_with_nc_condition(self):
         """nc() creates normally closed condition."""
         from pyrung.core.program import Program, Rung, nc, out
@@ -148,6 +218,229 @@ class TestProgramDecorator:
         # my_logic is now a Program
         assert isinstance(my_logic, Program)
         assert len(my_logic.rungs) == 1
+
+
+class TestPublicExports:
+    """Test public core exports."""
+
+    def test_pack_unpack_exports(self):
+        from pyrung.core import pack_bits, pack_words, unpack_to_bits, unpack_to_words
+
+        assert callable(pack_bits)
+        assert callable(pack_words)
+        assert callable(unpack_to_bits)
+        assert callable(unpack_to_words)
+
+
+class TestCastingReferenceExamples:
+    """Program-level tests based on docs/click_reference/casting.md examples."""
+
+    def test_example1_bypass_sign_priority_via_dh(self):
+        """DS=-1 -> DD keeps sign, but DS->DH->DD preserves 0x0000FFFF."""
+        from pyrung.core.program import Program, Rung, copy
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        DH = Block("DH", TagType.WORD, 1, 100)
+        DD = Block("DD", TagType.DINT, 1, 100)
+
+        with Program() as prog:
+            with Rung():
+                copy(-1, DS[1])
+            with Rung():
+                copy(DS[1], DD[1])
+            with Rung():
+                copy(DS[1], DH[1])
+                copy(DH[1], DD[2])
+
+        new_state = evaluate_program(prog, SystemState())
+
+        assert new_state.tags["DS1"] == -1
+        assert new_state.tags["DD1"] == -1  # 0xFFFFFFFF sign-preserved
+        assert new_state.tags["DH1"] == 0xFFFF
+        assert new_state.tags["DD2"] == 65535  # 0x0000FFFF preserved via unsigned hop
+
+    def test_example2_unpack_preserves_32_bit_pattern(self):
+        """DD -> DS clamps, while DD -> unpack DH -> pack DD preserves pattern."""
+        from pyrung.core.program import Program, Rung, copy, pack_words, unpack_to_words
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        DH = Block("DH", TagType.WORD, 1, 100)
+        DD = Block("DD", TagType.DINT, 1, 100)
+
+        with Program() as prog:
+            with Rung():
+                copy(305_419_896, DD[1])  # 0x12345678
+            with Rung():
+                copy(DD[1], DS[1])  # Range-limited for INT destination
+            with Rung():
+                unpack_to_words(DD[1], DH.select(1, 2))
+            with Rung():
+                pack_words(DH.select(1, 2), DD[2])
+
+        new_state = evaluate_program(prog, SystemState())
+
+        assert new_state.tags["DD1"] == 305_419_896
+        assert new_state.tags["DS1"] == 32767  # clamped INT max
+        assert new_state.tags["DH1"] == 0x5678  # low word first
+        assert new_state.tags["DH2"] == 0x1234  # high word second
+        assert new_state.tags["DD2"] == 305_419_896  # packed back losslessly
+
+
+class TestCopyAndMathReferenceExamples:
+    """Program-level tests based on CLICK reference examples."""
+
+    def test_copy_block_example_with_oneshot_behavior(self):
+        """copy_block.md: one-shot block copy on OFF->ON transition behavior."""
+        from pyrung.core.program import Program, Rung, blockcopy
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 1000)
+
+        with Program() as logic:
+            with Rung(Enable):
+                blockcopy(DS.select(1, 3), DS.select(501, 503), oneshot=True)
+
+        runner = PLCRunner(logic)
+        runner.patch(
+            {
+                "Enable": False,
+                "DS1": 10,
+                "DS2": 20,
+                "DS3": 30,
+                "DS501": 0,
+                "DS502": 0,
+                "DS503": 0,
+            }
+        )
+        runner.step()
+
+        # Rising edge copies once
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 10
+        assert runner.current_state.tags["DS502"] == 20
+        assert runner.current_state.tags["DS503"] == 30
+
+        # While still true, oneshot blocks additional copies
+        runner.patch({"DS1": 100, "DS2": 200, "DS3": 300})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 10
+        assert runner.current_state.tags["DS502"] == 20
+        assert runner.current_state.tags["DS503"] == 30
+
+        # False then true re-arms oneshot and copies again
+        runner.patch({"Enable": False})
+        runner.step()
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 100
+        assert runner.current_state.tags["DS502"] == 200
+        assert runner.current_state.tags["DS503"] == 300
+
+    def test_fill_example_with_oneshot_behavior(self):
+        """copy_fill.md: one-shot fill loads constant across destination range."""
+        from pyrung.core.program import Program, Rung, fill
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 1000)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(1000, DS.select(501, 503), oneshot=True)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Enable": False, "DS501": 1, "DS502": 2, "DS503": 3})
+        runner.step()
+
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 1000
+        assert runner.current_state.tags["DS502"] == 1000
+        assert runner.current_state.tags["DS503"] == 1000
+
+        # Change values while rung remains true; oneshot blocks re-fill
+        runner.patch({"DS501": 5, "DS502": 6, "DS503": 7})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 5
+        assert runner.current_state.tags["DS502"] == 6
+        assert runner.current_state.tags["DS503"] == 7
+
+        # Retrigger after OFF->ON
+        runner.patch({"Enable": False})
+        runner.step()
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["DS501"] == 1000
+        assert runner.current_state.tags["DS502"] == 1000
+        assert runner.current_state.tags["DS503"] == 1000
+
+    def test_pack_copy_example_c2_to_c7_into_dh(self):
+        """copy_pack.md: pack range of C bits into a DH word destination."""
+        from pyrung.core.program import Program, Rung, pack_bits
+
+        Enable = Bool("Enable")
+        C = Block("C", TagType.BOOL, 1, 100)
+        DH = Block("DH", TagType.WORD, 1, 100)
+
+        with Program() as prog:
+            with Rung(Enable):
+                pack_bits(C.select(2, 7), DH[10])
+
+        # C2 is bit0, C3 bit1 ... C7 bit5
+        state = SystemState().with_tags(
+            {
+                "Enable": True,
+                "C2": False,
+                "C3": True,
+                "C4": True,
+                "C5": False,
+                "C6": True,
+                "C7": False,
+            }
+        )
+        new_state = evaluate_program(prog, state)
+        assert new_state.tags["DH10"] == 0b010110
+
+    def test_unpack_copy_example_dh_to_c_range(self):
+        """copy_unpack.md: unpack DH source into destination C bit range."""
+        from pyrung.core.program import Program, Rung, unpack_to_bits
+
+        Enable = Bool("Enable")
+        C = Block("C", TagType.BOOL, 1, 100)
+        DH = Block("DH", TagType.WORD, 1, 100)
+
+        with Program() as prog:
+            with Rung(Enable):
+                unpack_to_bits(DH[2], C.select(15, 19))
+
+        # bit pattern for lower 5 bits: 1,0,1,1,0
+        state = SystemState().with_tags({"Enable": True, "DH2": 0b01101})
+        new_state = evaluate_program(prog, state)
+
+        assert new_state.tags["C15"] is True
+        assert new_state.tags["C16"] is False
+        assert new_state.tags["C17"] is True
+        assert new_state.tags["C18"] is True
+        assert new_state.tags["C19"] is False
+
+    def test_math_hex_shift_rotate_example(self):
+        """math_hex.md: RSH/RRO example with DH1=0x45B1."""
+        from pyrung.core import rro, rsh
+        from pyrung.core.program import Program, Rung, math
+
+        Enable = Bool("Enable")
+        DH = Block("DH", TagType.WORD, 1, 200)
+
+        with Program() as prog:
+            with Rung(Enable):
+                math(rsh(DH[1], 1), DH[2], mode="hex")
+                math(rro(DH[1], 1), DH[3], mode="hex")
+
+        state = SystemState().with_tags({"Enable": True, "DH1": 0x45B1})
+        new_state = evaluate_program(prog, state)
+
+        assert new_state.tags["DH2"] == 0x22D8
+        assert new_state.tags["DH3"] == 0xA2D8
 
 
 class TestPLCRunnerIntegration:

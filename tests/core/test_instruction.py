@@ -4,9 +4,11 @@ Instructions are pure functions that transform SystemState.
 They return a new state, never mutating the input.
 """
 
+import struct
+
 import pytest
 
-from pyrung.core import Block, Bool, Int, SystemState, TagType
+from pyrung.core import Block, Bool, Dint, Int, Real, SystemState, TagType, Word
 from tests.conftest import execute
 
 
@@ -557,6 +559,546 @@ class TestFillInstruction:
 
         assert new_state.tags["DD1"] == -2_147_483_648
         assert new_state.tags["DD2"] == -2_147_483_648
+
+
+class TestPackBitsInstruction:
+    """Test PACK_BITS instruction."""
+
+    def test_pack_8_bits_into_int(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 8), Dest)
+
+        state = SystemState().with_tags(
+            {
+                "C1": True,
+                "C2": False,
+                "C3": True,
+                "C4": True,
+                "C5": False,
+                "C6": False,
+                "C7": True,
+                "C8": False,
+            }
+        )
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == 77
+
+    def test_pack_16_bits_into_word(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Word("Dest")
+        instr = PackBitsInstruction(C.select(1, 16), Dest)
+
+        state = SystemState().with_tags({"C1": True, "C16": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == 0x8001
+
+    def test_pack_16_bits_into_int_uses_signed_wrap(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 16), Dest)
+
+        state = SystemState().with_tags({"C16": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == -32768
+
+    def test_pack_32_bits_into_dint(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackBitsInstruction(C.select(1, 32), Dest)
+
+        state = SystemState().with_tags({"C1": True, "C32": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == -2_147_483_647
+
+    def test_pack_32_bits_into_real_reinterprets_ieee754(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Real("Dest")
+        instr = PackBitsInstruction(C.select(1, 32), Dest)
+
+        pattern = 0x3F800000  # 1.0f
+        tags = {f"C{i + 1}": bool((pattern >> i) & 1) for i in range(32)}
+        state = SystemState().with_tags(tags)
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == pytest.approx(1.0)
+
+    def test_pack_uses_defaults_for_missing_bits(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 8), Dest)
+
+        new_state = execute(instr, SystemState())
+        assert new_state.tags["Dest"] == 0
+
+    def test_pack_bits_17_into_16_bit_dest_raises(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 17), Dest)
+
+        with pytest.raises(ValueError, match="width is 16"):
+            execute(instr, SystemState())
+
+    def test_pack_bits_33_into_32_bit_dest_raises(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackBitsInstruction(C.select(1, 33), Dest)
+
+        with pytest.raises(ValueError, match="width is 32"):
+            execute(instr, SystemState())
+
+    def test_pack_bits_invalid_dest_type_raises(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Bool("Dest")
+        instr = PackBitsInstruction(C.select(1, 8), Dest)
+
+        with pytest.raises(TypeError, match="destination"):
+            execute(instr, SystemState())
+
+    def test_pack_bits_oneshot(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 4), Dest, oneshot=True)
+
+        state = SystemState().with_tags({"C1": True})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == 1
+
+        state2 = new_state.with_tags({"C2": True, "Dest": 0})
+        new_state2 = execute(instr, state2)
+        assert new_state2.tags["Dest"] == 0
+
+    def test_pack_bits_does_not_mutate_input(self):
+        from pyrung.core.instruction import PackBitsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Int("Dest")
+        instr = PackBitsInstruction(C.select(1, 4), Dest)
+
+        original = SystemState().with_tags({"C1": True, "Dest": 0})
+        new_state = execute(instr, original)
+
+        assert original.tags["Dest"] == 0
+        assert new_state.tags["Dest"] == 1
+
+
+class TestPackWordsInstruction:
+    """Test PACK_WORDS instruction."""
+
+    def test_pack_two_ints_into_dint_low_word_first(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(DS.select(1, 2), Dest)
+
+        state = SystemState().with_tags({"DS1": 0x1234, "DS2": 0x5678})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == 0x56781234
+
+    def test_pack_two_words_into_dint(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DH = Block("DH", TagType.WORD, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(DH.select(1, 2), Dest)
+
+        state = SystemState().with_tags({"DH1": 0xFFFF, "DH2": 0x0001})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == 0x0001FFFF
+
+    def test_pack_words_into_real_reinterprets_ieee754(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DH = Block("DH", TagType.WORD, 1, 100)
+        Dest = Real("Dest")
+        instr = PackWordsInstruction(DH.select(1, 2), Dest)
+
+        state = SystemState().with_tags({"DH1": 0x0000, "DH2": 0x3F80})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == pytest.approx(1.0)
+
+    def test_pack_words_negative_high_word_preserves_bit_pattern(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(DS.select(1, 2), Dest)
+
+        state = SystemState().with_tags({"DS1": 0, "DS2": -1})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Dest"] == -65536
+
+    def test_pack_words_length_not_two_raises(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(DS.select(1, 3), Dest)
+
+        with pytest.raises(ValueError, match="exactly 2"):
+            execute(instr, SystemState())
+
+    def test_pack_words_invalid_dest_type_raises(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Int("Dest")
+        instr = PackWordsInstruction(DS.select(1, 2), Dest)
+
+        with pytest.raises(TypeError, match="destination"):
+            execute(instr, SystemState())
+
+    def test_pack_words_invalid_source_type_raises(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        C = Block("C", TagType.BOOL, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(C.select(1, 2), Dest)
+
+        with pytest.raises(TypeError, match="source tags"):
+            execute(instr, SystemState())
+
+    def test_pack_words_oneshot(self):
+        from pyrung.core.instruction import PackWordsInstruction
+
+        DS = Block("DS", TagType.INT, 1, 100)
+        Dest = Dint("Dest")
+        instr = PackWordsInstruction(DS.select(1, 2), Dest, oneshot=True)
+
+        state = SystemState().with_tags({"DS1": 1, "DS2": 0})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == 1
+
+        state2 = new_state.with_tags({"DS1": 2, "Dest": 0})
+        new_state2 = execute(instr, state2)
+        assert new_state2.tags["Dest"] == 0
+
+
+class TestUnpackToBitsInstruction:
+    """Test UNPACK_TO_BITS instruction."""
+
+    def test_unpack_int_to_16_bits(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Int("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 16))
+
+        state = SystemState().with_tags({"Source": 0x00A5})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["C1"] is True
+        assert new_state.tags["C2"] is False
+        assert new_state.tags["C3"] is True
+        assert new_state.tags["C4"] is False
+        assert new_state.tags["C5"] is False
+        assert new_state.tags["C6"] is True
+        assert new_state.tags["C7"] is False
+        assert new_state.tags["C8"] is True
+
+    def test_unpack_negative_int_sets_bit_15(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Int("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 16))
+
+        state = SystemState().with_tags({"Source": -32768})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["C16"] is True
+        assert new_state.tags["C1"] is False
+
+    def test_unpack_dint_to_32_bits(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 32))
+
+        state = SystemState().with_tags({"Source": -2_147_483_647})  # 0x80000001
+        new_state = execute(instr, state)
+
+        assert new_state.tags["C1"] is True
+        assert new_state.tags["C32"] is True
+        assert new_state.tags["C2"] is False
+
+    def test_unpack_real_to_32_bits_uses_ieee754_pattern(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Real("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 32))
+
+        state = SystemState().with_tags({"Source": 1.0})
+        new_state = execute(instr, state)
+
+        bits = 0
+        for i in range(32):
+            if new_state.tags[f"C{i + 1}"]:
+                bits |= 1 << i
+        assert bits == 0x3F800000
+
+    def test_unpack_zero_sets_all_false(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 8))
+
+        state = SystemState().with_tags({"Source": 0})
+        new_state = execute(instr, state)
+
+        for i in range(1, 9):
+            assert new_state.tags[f"C{i}"] is False
+
+    def test_unpack_all_ones_sets_all_true(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 32))
+
+        state = SystemState().with_tags({"Source": -1})
+        new_state = execute(instr, state)
+
+        for i in range(1, 33):
+            assert new_state.tags[f"C{i}"] is True
+
+    def test_unpack_int_to_17_bits_raises(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Int("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 17))
+
+        with pytest.raises(ValueError, match="width is 16"):
+            execute(instr, SystemState().with_tags({"Source": 0}))
+
+    def test_unpack_dint_to_33_bits_raises(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 33))
+
+        with pytest.raises(ValueError, match="width is 32"):
+            execute(instr, SystemState().with_tags({"Source": 0}))
+
+    def test_unpack_to_bits_invalid_source_type_raises(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Bool("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 8))
+
+        with pytest.raises(TypeError, match="source"):
+            execute(instr, SystemState())
+
+    def test_unpack_to_bits_oneshot(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Int("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 4), oneshot=True)
+
+        state = SystemState().with_tags({"Source": 1, "C1": False, "C2": False})
+        new_state = execute(instr, state)
+        assert new_state.tags["C1"] is True
+
+        state2 = new_state.with_tags({"Source": 2, "C1": False, "C2": False})
+        new_state2 = execute(instr, state2)
+        assert new_state2.tags["C1"] is False
+        assert new_state2.tags["C2"] is False
+
+    def test_unpack_to_bits_does_not_mutate_input(self):
+        from pyrung.core.instruction import UnpackToBitsInstruction
+
+        Source = Int("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToBitsInstruction(Source, C.select(1, 4))
+
+        original = SystemState().with_tags({"Source": 1, "C1": False})
+        new_state = execute(instr, original)
+
+        assert original.tags["C1"] is False
+        assert new_state.tags["C1"] is True
+
+
+class TestUnpackToWordsInstruction:
+    """Test UNPACK_TO_WORDS instruction."""
+
+    def test_unpack_dint_to_two_words_low_word_first(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DS.select(1, 2))
+
+        state = SystemState().with_tags({"Source": 0x56781234})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == 0x1234
+        assert new_state.tags["DS2"] == 0x5678
+
+    def test_unpack_real_to_two_words(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Real("Source")
+        DH = Block("DH", TagType.WORD, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DH.select(1, 2))
+
+        state = SystemState().with_tags({"Source": 1.0})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DH1"] == 0x0000
+        assert new_state.tags["DH2"] == 0x3F80
+
+    def test_unpack_negative_dint_source(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        DH = Block("DH", TagType.WORD, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DH.select(1, 2))
+
+        state = SystemState().with_tags({"Source": -1})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DH1"] == 0xFFFF
+        assert new_state.tags["DH2"] == 0xFFFF
+
+    def test_unpack_to_words_wraps_for_int_dest(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DS.select(1, 2))
+
+        state = SystemState().with_tags({"Source": -1})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == -1
+        assert new_state.tags["DS2"] == -1
+
+    def test_unpack_to_words_length_not_two_raises(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DS.select(1, 3))
+
+        with pytest.raises(ValueError, match="exactly 2"):
+            execute(instr, SystemState().with_tags({"Source": 0}))
+
+    def test_unpack_to_words_invalid_source_type_raises(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Int("Source")
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DS.select(1, 2))
+
+        with pytest.raises(TypeError, match="source"):
+            execute(instr, SystemState())
+
+    def test_unpack_to_words_invalid_dest_type_raises(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        C = Block("C", TagType.BOOL, 1, 100)
+        instr = UnpackToWordsInstruction(Source, C.select(1, 2))
+
+        with pytest.raises(TypeError, match="destination tags"):
+            execute(instr, SystemState().with_tags({"Source": 0}))
+
+    def test_unpack_to_words_oneshot(self):
+        from pyrung.core.instruction import UnpackToWordsInstruction
+
+        Source = Dint("Source")
+        DS = Block("DS", TagType.INT, 1, 100)
+        instr = UnpackToWordsInstruction(Source, DS.select(1, 2), oneshot=True)
+
+        state = SystemState().with_tags({"Source": 1, "DS1": 0, "DS2": 0})
+        new_state = execute(instr, state)
+        assert new_state.tags["DS1"] == 1
+        assert new_state.tags["DS2"] == 0
+
+        state2 = new_state.with_tags({"Source": 2, "DS1": 0, "DS2": 0})
+        new_state2 = execute(instr, state2)
+        assert new_state2.tags["DS1"] == 0
+        assert new_state2.tags["DS2"] == 0
+
+
+class TestPackUnpackRoundTrip:
+    """Round-trip validation for pack/unpack instruction pairs."""
+
+    def test_pack_bits_then_unpack_to_bits_recovers_pattern(self):
+        from pyrung.core.instruction import PackBitsInstruction, UnpackToBitsInstruction
+
+        CIn = Block("CIn", TagType.BOOL, 1, 100)
+        COut = Block("COut", TagType.BOOL, 1, 100)
+        Temp = Dint("Temp")
+
+        pattern = 0xA5A5A5A5
+        source_tags = {f"CIn{i + 1}": bool((pattern >> i) & 1) for i in range(32)}
+        initial_state = SystemState().with_tags(source_tags)
+
+        packed_state = execute(PackBitsInstruction(CIn.select(1, 32), Temp), initial_state)
+        roundtrip_state = execute(
+            UnpackToBitsInstruction(Temp, COut.select(1, 32)),
+            packed_state,
+        )
+
+        for i in range(32):
+            assert roundtrip_state.tags[f"COut{i + 1}"] == source_tags[f"CIn{i + 1}"]
+
+    def test_pack_words_then_unpack_to_words_through_real_recovers_values(self):
+        from pyrung.core.instruction import PackWordsInstruction, UnpackToWordsInstruction
+
+        DSIn = Block("DSIn", TagType.INT, 1, 100)
+        DSOut = Block("DSOut", TagType.INT, 1, 100)
+        Temp = Real("Temp")
+
+        initial_state = SystemState().with_tags({"DSIn1": -12345, "DSIn2": 23456})
+        packed_state = execute(PackWordsInstruction(DSIn.select(1, 2), Temp), initial_state)
+        roundtrip_state = execute(
+            UnpackToWordsInstruction(Temp, DSOut.select(1, 2)),
+            packed_state,
+        )
+
+        assert roundtrip_state.tags["DSOut1"] == -12345
+        assert roundtrip_state.tags["DSOut2"] == 23456
+
+        bits = struct.unpack("<I", struct.pack("<f", packed_state.tags["Temp"]))[0]
+        assert bits == ((23456 << 16) | ((-12345) & 0xFFFF))
 
 
 class TestMathInstruction:

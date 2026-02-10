@@ -19,26 +19,12 @@ soft PLC adapter (`ClickDataProvider`).
 
 ### Pre-built Blocks
 
-Constructed from `clickplc.banks.ADDRESS_RANGES`. These are convenience instances — users can also create their own blocks and map them.
+Constructed from `pyclickplc.BANKS[NAME].valid_ranges`. These are convenience instances — users can also create their own blocks and map them.
 
 ```python
 from pyrung.click import x, y, c, ds, dd, dh, df, t, td, ct, ctd, sc, sd, txt
 
 # x and y are InputBlock/OutputBlock, everything else is Block
-x   = InputBlock("X",   Bool, range(1, 817))
-y   = OutputBlock("Y",  Bool, range(1, 817))
-c   = Block("C",        Bool, range(1, 2001))
-ds  = Block("DS",       Int,  range(1, 4501))
-dd  = Block("DD",       Dint, range(1, 1001))
-dh  = Block("DH",       Word, range(1, 501))
-df  = Block("DF",       Real, range(1, 501))
-t   = Block("T",        Bool, range(1, 501))
-td  = Block("TD",       Int,  range(1, 501))
-ct  = Block("CT",       Bool, range(1, 251))
-ctd = Block("CTD",      Dint, range(1, 251))
-sc  = Block("SC",       Bool, range(1, ...))   # System control bits
-sd  = Block("SD",       Int,  range(1, ...))   # System data
-txt = Block("TXT",      Char, range(1, 1001))
 ```
 
 Exact ranges come from `pyclickplc`. Retentive defaults also come from `pyclickplc` (`DEFAULT_RETENTIVE`).
@@ -89,6 +75,9 @@ mapping = TagMap.from_nickname_file("project.csv")
 
 # Export
 mapping.to_nickname_file("project.csv")
+
+
+Uses from pyclickplc import read_csv, write_csv # see readme
 ```
 
 ### Type Inference at Map Time

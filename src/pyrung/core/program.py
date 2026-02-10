@@ -33,7 +33,11 @@ from pyrung.core.instruction import (
     OffDelayInstruction,
     OnDelayInstruction,
     OutInstruction,
+    PackBitsInstruction,
+    PackWordsInstruction,
     ResetInstruction,
+    UnpackToBitsInstruction,
+    UnpackToWordsInstruction,
 )
 from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag
@@ -260,6 +264,30 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
     """
     ctx = _require_rung_context("fill")
     ctx._rung.add_instruction(FillInstruction(value, dest, oneshot))
+
+
+def pack_bits(bit_block: Any, dest: Any, oneshot: bool = False) -> None:
+    """Pack BOOL tags from a BlockRange into a register destination."""
+    ctx = _require_rung_context("pack_bits")
+    ctx._rung.add_instruction(PackBitsInstruction(bit_block, dest, oneshot))
+
+
+def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
+    """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
+    ctx = _require_rung_context("pack_words")
+    ctx._rung.add_instruction(PackWordsInstruction(word_block, dest, oneshot))
+
+
+def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:
+    """Unpack a register source into BOOL tags in a BlockRange."""
+    ctx = _require_rung_context("unpack_to_bits")
+    ctx._rung.add_instruction(UnpackToBitsInstruction(source, bit_block, oneshot))
+
+
+def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None:
+    """Unpack a 32-bit register source into two 16-bit tags in a BlockRange."""
+    ctx = _require_rung_context("unpack_to_words")
+    ctx._rung.add_instruction(UnpackToWordsInstruction(source, word_block, oneshot))
 
 
 def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:

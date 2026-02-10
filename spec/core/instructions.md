@@ -32,9 +32,9 @@ All instructions are hardware-agnostic. They operate on Tags and Blocks from cor
 | `blockcopy` | `blockcopy(source_block, dest_start, oneshot=False)` | Copy contiguous range. Dest length inferred from source. `source_block` is a `MemoryBlock` from `.select()`. |
 | `fill` | `fill(value, dest_block, oneshot=False)` | Write constant to every element in range. `dest_block` is a `MemoryBlock` from `.select()`. |
 | `pack_bits` | `pack_bits(bit_block, dest_word)` | Pack N bits into a Word or Dword. `bit_block` from `.select()`. |
-| `pack_words` | `pack_words(hi, lo, dest_dword)` | Pack two Words into a Dword. |
+| `pack_words` | `pack_words(word_block, dest_dword)` | Pack two Words into a Dword. `word_block` from `.select()` (low-word-first). |
 | `unpack_to_bits` | `unpack_to_bits(source_word, bit_block)` | Unpack Word/Dword into individual bits. `bit_block` from `.select()`. |
-| `unpack_to_words` | `unpack_to_words(source_dword, hi, lo)` | Unpack Dword into two Words. |
+| `unpack_to_words` | `unpack_to_words(source_dword, word_block)` | Unpack Dword into two Words. `word_block` from `.select()` (low-word-first). |
 
 ### Math
 

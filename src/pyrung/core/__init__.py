@@ -55,10 +55,14 @@ from pyrung.core.program import (
     off_delay,
     on_delay,
     out,
+    pack_bits,
+    pack_words,
     program,
     reset,
     rise,
     subroutine,
+    unpack_to_bits,
+    unpack_to_words,
 )
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
@@ -117,6 +121,10 @@ __all__ = [
     "copy",
     "blockcopy",
     "fill",
+    "pack_bits",
+    "pack_words",
+    "unpack_to_bits",
+    "unpack_to_words",
     "math",
     "call",
     "count_up",

@@ -6,6 +6,7 @@ All state modifications are collected and committed at scan end.
 
 from __future__ import annotations
 
+import struct
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +32,16 @@ def _clamp_dint(value: int) -> int:
 def _clamp_int(value: int) -> int:
     """Clamp integer to INT (16-bit signed) range."""
     return max(_INT_MIN, min(_INT_MAX, value))
+
+
+def _int_to_float_bits(n: int) -> float:
+    """Reinterpret a 32-bit unsigned integer bit pattern as IEEE 754 float."""
+    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]
+
+
+def _float_to_int_bits(f: float) -> int:
+    """Reinterpret an IEEE 754 float bit pattern as 32-bit unsigned integer."""
+    return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
 def resolve_tag_or_value_ctx(source: Tag | IndirectRef | Any, ctx: ScanContext) -> Any:
@@ -838,4 +849,193 @@ class FillInstruction(OneShotMixin, Instruction):
         updates = {}
         for dst_tag in dst_tags:
             updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
+        ctx.set_tags(updates)
+
+
+class PackBitsInstruction(OneShotMixin, Instruction):
+    """Pack BOOL tags from a BlockRange into a destination register."""
+
+    def __init__(self, bit_block: Any, dest: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.bit_block = bit_block
+        self.dest = dest
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        from pyrung.core.tag import TagType
+
+        dest_tag = resolve_tag_ctx(self.dest, ctx)
+        if dest_tag.type not in {TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL}:
+            raise TypeError(
+                f"pack_bits destination must be INT, WORD, DINT, or REAL; got {dest_tag.type.name}"
+            )
+
+        bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
+        width = 16 if dest_tag.type in {TagType.INT, TagType.WORD} else 32
+        if len(bit_tags) > width:
+            raise ValueError(
+                f"pack_bits destination width is {width} bits but block has {len(bit_tags)} tags"
+            )
+
+        packed = 0
+        for bit_index, bit_tag in enumerate(bit_tags):
+            if bit_tag.type != TagType.BOOL:
+                raise TypeError(
+                    f"pack_bits source tags must be BOOL; got {bit_tag.type.name} at {bit_tag.name}"
+                )
+            bit_value = ctx.get_tag(bit_tag.name, bit_tag.default)
+            if bool(bit_value):
+                packed |= 1 << bit_index
+
+        if dest_tag.type == TagType.REAL:
+            value = _int_to_float_bits(packed)
+        else:
+            value = _truncate_to_tag_type(packed, dest_tag)
+        ctx.set_tag(dest_tag.name, value)
+
+
+class PackWordsInstruction(OneShotMixin, Instruction):
+    """Pack two 16-bit tags into a 32-bit destination register."""
+
+    def __init__(self, word_block: Any, dest: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.word_block = word_block
+        self.dest = dest
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        from pyrung.core.tag import TagType
+
+        dest_tag = resolve_tag_ctx(self.dest, ctx)
+        if dest_tag.type not in {TagType.DINT, TagType.REAL}:
+            raise TypeError(
+                f"pack_words destination must be DINT or REAL; got {dest_tag.type.name}"
+            )
+
+        word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
+        if len(word_tags) != 2:
+            raise ValueError(f"pack_words requires exactly 2 source tags; got {len(word_tags)}")
+        if word_tags[0].type not in {TagType.INT, TagType.WORD}:
+            raise TypeError(
+                f"pack_words source tags must be INT or WORD; got {word_tags[0].type.name} "
+                f"at {word_tags[0].name}"
+            )
+        if word_tags[1].type not in {TagType.INT, TagType.WORD}:
+            raise TypeError(
+                f"pack_words source tags must be INT or WORD; got {word_tags[1].type.name} "
+                f"at {word_tags[1].name}"
+            )
+
+        lo_value = ctx.get_tag(word_tags[0].name, word_tags[0].default)
+        hi_value = ctx.get_tag(word_tags[1].name, word_tags[1].default)
+        packed = (int(hi_value) << 16) | (int(lo_value) & 0xFFFF)
+
+        if dest_tag.type == TagType.REAL:
+            value = _int_to_float_bits(packed)
+        else:
+            value = _truncate_to_tag_type(packed, dest_tag)
+        ctx.set_tag(dest_tag.name, value)
+
+
+class UnpackToBitsInstruction(OneShotMixin, Instruction):
+    """Unpack a register value into individual BOOL tags in a BlockRange."""
+
+    def __init__(self, source: Any, bit_block: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.source = source
+        self.bit_block = bit_block
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        from pyrung.core.tag import TagType
+
+        source_tag = resolve_tag_ctx(self.source, ctx)
+        if source_tag.type not in {TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL}:
+            raise TypeError(
+                "unpack_to_bits source must be INT, WORD, DINT, or REAL; "
+                f"got {source_tag.type.name}"
+            )
+
+        bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
+        width = 16 if source_tag.type in {TagType.INT, TagType.WORD} else 32
+        if len(bit_tags) > width:
+            raise ValueError(
+                f"unpack_to_bits source width is {width} bits but block has {len(bit_tags)} tags"
+            )
+
+        source_value = ctx.get_tag(source_tag.name, source_tag.default)
+        if source_tag.type == TagType.REAL:
+            bits = _float_to_int_bits(source_value)
+        elif source_tag.type in {TagType.INT, TagType.WORD}:
+            bits = int(source_value) & 0xFFFF
+        else:  # DINT
+            bits = int(source_value) & 0xFFFFFFFF
+
+        updates = {}
+        for bit_index, bit_tag in enumerate(bit_tags):
+            if bit_tag.type != TagType.BOOL:
+                raise TypeError(
+                    f"unpack_to_bits destination tags must be BOOL; got "
+                    f"{bit_tag.type.name} at {bit_tag.name}"
+                )
+            updates[bit_tag.name] = bool((bits >> bit_index) & 1)
+        ctx.set_tags(updates)
+
+
+class UnpackToWordsInstruction(OneShotMixin, Instruction):
+    """Unpack a 32-bit register value into two 16-bit destination tags."""
+
+    def __init__(self, source: Any, word_block: Any, oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self.source = source
+        self.word_block = word_block
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        from pyrung.core.tag import TagType
+
+        source_tag = resolve_tag_ctx(self.source, ctx)
+        if source_tag.type not in {TagType.DINT, TagType.REAL}:
+            raise TypeError(
+                f"unpack_to_words source must be DINT or REAL; got {source_tag.type.name}"
+            )
+
+        word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
+        if len(word_tags) != 2:
+            raise ValueError(
+                f"unpack_to_words requires exactly 2 destination tags; got {len(word_tags)}"
+            )
+        if word_tags[0].type not in {TagType.INT, TagType.WORD}:
+            raise TypeError(
+                f"unpack_to_words destination tags must be INT or WORD; got "
+                f"{word_tags[0].type.name} at {word_tags[0].name}"
+            )
+        if word_tags[1].type not in {TagType.INT, TagType.WORD}:
+            raise TypeError(
+                f"unpack_to_words destination tags must be INT or WORD; got "
+                f"{word_tags[1].type.name} at {word_tags[1].name}"
+            )
+
+        source_value = ctx.get_tag(source_tag.name, source_tag.default)
+        bits = (
+            _float_to_int_bits(source_value)
+            if source_tag.type == TagType.REAL
+            else (int(source_value) & 0xFFFFFFFF)
+        )
+
+        lo_word = bits & 0xFFFF
+        hi_word = (bits >> 16) & 0xFFFF
+
+        updates = {
+            word_tags[0].name: _truncate_to_tag_type(lo_word, word_tags[0]),
+            word_tags[1].name: _truncate_to_tag_type(hi_word, word_tags[1]),
+        }
         ctx.set_tags(updates)
