@@ -78,12 +78,42 @@ wheels = [
 ]
 
 [[package]]
+name = "pyclickplc"
+source = { editable = "../pyclickplc" }
+dependencies = [
+    { name = "pymodbus" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pymodbus", specifier = ">=3.8" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "codespell", specifier = ">=2.4.1" },
+    { name = "funlog", specifier = ">=0.2.0" },
+    { name = "pytest", specifier = ">=8.3.5" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
+    { name = "rich", specifier = ">=13.9.4" },
+    { name = "ruff", specifier = ">=0.11.0" },
+    { name = "ty", specifier = ">=0.0.14" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.19.2"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631, upload-time = "2025-06-21T13:39:12.283Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217, upload-time = "2025-06-21T13:39:07.939Z" },
+]
+
+[[package]]
+name = "pymodbus"
+version = "3.12.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/dc/8db192f3a66032e1bd900eb87b5bbcb539d5118f520372af0cb92ba42499/pymodbus-3.12.0.tar.gz", hash = "sha256:3fafe85e5d82bb9bcbda14b97a0e69a47dc46be55631e9f988adfaf95140c44b", size = 166075, upload-time = "2026-02-08T22:13:14.623Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/34/425cc4cd1ca9650498d74cec48582ecca204db9c9a5de514502738b3ec1d/pymodbus-3.12.0-py3-none-any.whl", hash = "sha256:fff8d216a0977b2e7c10796f6b1a90fefbf88d4cc598dee7dff21d383870ca7c", size = 167829, upload-time = "2026-02-08T22:13:11.981Z" },
 ]
 
 [[package]]
@@ -111,6 +141,7 @@ wheels = [
 name = "pyrung"
 source = { editable = "." }
 dependencies = [
+    { name = "pyclickplc" },
     { name = "pyrsistent" },
 ]
 
@@ -125,7 +156,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pyrsistent", specifier = ">=0.20.0" }]
+requires-dist = [
+    { name = "pyclickplc", editable = "../pyclickplc" },
+    { name = "pyrsistent", specifier = ">=0.20.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [

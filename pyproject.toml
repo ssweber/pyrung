@@ -40,6 +40,7 @@ classifiers = [
 
 dependencies = [
     "pyrsistent>=0.20.0",
+    "pyclickplc",
 ]
 
 
@@ -86,6 +87,10 @@ packages = ["src/pyrung"]
 
 
 # ---- Settings ----
+
+[tool.uv.sources]
+pyclickplc = { path = "../pyclickplc", editable = true }
+
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
