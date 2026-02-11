@@ -55,11 +55,20 @@ with Rung(fall(Button)):
 # Multiple conditions — AND (comma-separated)
 with Rung(Button, nc(Fault), AutoMode):
 
+# AND — all_of() function
+with Rung(all_of(Button, nc(Fault), AutoMode)):
+
 # OR — any_of() function
 with Rung(AutoMode, any_of(Start, RemoteStart)):
 
+# Grouped AND inside OR
+with Rung(any_of(Start, (AutoMode, Ready), RemoteStart)):
+
 # OR — pipe operator (alternative syntax)
 with Rung(Button | OtherButton):
+
+# AND — ampersand operator (alternative syntax)
+with Rung(Button & Ready):
 
 # Comparisons
 with Rung(Step == 0):

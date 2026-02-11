@@ -6,12 +6,17 @@ Conditions are evaluated lazily at scan time against SystemState.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectRef
     from pyrung.core.tag import Tag
+
+
+ConditionTerm: TypeAlias = "Condition | Tag"
+ConditionGroup: TypeAlias = "tuple[ConditionTerm, ...] | list[ConditionTerm]"
+ConditionInput: TypeAlias = "ConditionTerm | ConditionGroup"
 
 
 class Condition(ABC):
@@ -37,7 +42,7 @@ class Condition(ABC):
         if not isinstance(other, Condition):
             raise TypeError(
                 f"Cannot compare Condition with {type(other).__name__}. "
-                f"If using | with comparisons, add parentheses: Button | (Step == 0)"
+                f"If using | or & with comparisons, add parentheses: Button | (Step == 0)"
             )
         return self is other
 
@@ -59,6 +64,22 @@ class Condition(ABC):
 
         if isinstance(other, Tag):
             return AnyCondition(other, self)
+        return NotImplemented
+
+    def __and__(self, other: Condition | Tag) -> AllCondition:
+        """AND two conditions: (Step == 0) & Start."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            return AllCondition(self, other)
+        return NotImplemented
+
+    def __rand__(self, other: Condition | Tag) -> AllCondition:
+        """Support reverse AND: Tag & Condition."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            return AllCondition(other, self)
         return NotImplemented
 
 
@@ -314,8 +335,66 @@ class IndirectCompareGe(Condition):
 
 
 # =============================================================================
-# Composite Conditions (any_of)
+# Composite Conditions (all_of / any_of)
 # =============================================================================
+
+
+def _as_condition(cond: object) -> Condition:
+    """Normalize a Tag/Condition into a concrete Condition."""
+    from pyrung.core.tag import Tag, TagType
+
+    if isinstance(cond, Tag):
+        if cond.type == TagType.BOOL:
+            return BitCondition(cond)
+        raise TypeError(
+            f"Non-BOOL tag '{cond.name}' cannot be used directly as condition. "
+            "Use comparison operators: tag == value, tag > 0, etc."
+        )
+    if isinstance(cond, Condition):
+        return cond
+    raise TypeError(f"Expected Condition or Tag, got {type(cond)}")
+
+
+class AllCondition(Condition):
+    """AND condition - true when all sub-conditions are true.
+
+    Example:
+        with Rung(all_of(Ready, AutoMode)):
+            out(StartPermissive)
+    """
+
+    def __init__(self, *conditions: ConditionInput):
+        self.conditions: list[Condition] = []
+        for cond in conditions:
+            if isinstance(cond, tuple | list):
+                if not cond:
+                    raise ValueError("all_of() group cannot be empty")
+                for grouped in cond:
+                    self.conditions.append(_as_condition(grouped))
+            else:
+                self.conditions.append(_as_condition(cond))
+
+        if not self.conditions:
+            raise ValueError("all_of() requires at least one condition")
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return all(cond.evaluate(ctx) for cond in self.conditions)
+
+    def __and__(self, other: Condition | Tag) -> AllCondition:
+        """Support chaining: (A & B) & C flattens to AllCondition(A, B, C)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            return AllCondition(*self.conditions, other)
+        return NotImplemented
+
+    def __rand__(self, other: Condition | Tag) -> AllCondition:
+        """Support reverse: C & (A & B)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            return AllCondition(other, *self.conditions)
+        return NotImplemented
 
 
 class AnyCondition(Condition):
@@ -326,23 +405,20 @@ class AnyCondition(Condition):
             out(Light)
     """
 
-    def __init__(self, *conditions: Condition | Tag):
-        from pyrung.core.tag import Tag, TagType
-
+    def __init__(self, *conditions: ConditionInput):
         self.conditions: list[Condition] = []
         for cond in conditions:
-            if isinstance(cond, Tag):
-                if cond.type == TagType.BOOL:
-                    self.conditions.append(BitCondition(cond))
-                else:
-                    raise TypeError(
-                        f"Non-BOOL tag '{cond.name}' cannot be used directly as condition. "
-                        "Use comparison operators: tag == value, tag > 0, etc."
-                    )
-            elif isinstance(cond, Condition):
-                self.conditions.append(cond)
+            if isinstance(cond, tuple | list):
+                if not cond:
+                    raise ValueError("any_of() group cannot be empty")
+                # Groups inside any_of() are interpreted as AND sub-groups.
+                group_conditions: list[Condition] = [_as_condition(grouped) for grouped in cond]
+                self.conditions.append(AllCondition(*group_conditions))
             else:
-                raise TypeError(f"Expected Condition or Tag, got {type(cond)}")
+                self.conditions.append(_as_condition(cond))
+
+        if not self.conditions:
+            raise ValueError("any_of() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext) -> bool:
         return any(cond.evaluate(ctx) for cond in self.conditions)

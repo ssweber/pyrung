@@ -368,3 +368,82 @@ class TestRungWithBitwiseOr:
         )
         new_state = evaluate_rung(rung, state)
         assert new_state.tags["Light"] is False
+
+
+class TestRungWithAllOf:
+    """Test rung with all_of() composite condition (AND logic)."""
+
+    def test_rung_with_all_of(self):
+        """Rung executes only when all conditions in all_of are true."""
+        from pyrung.core import all_of
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        Light = Bool("Light")
+
+        rung = Rung(all_of(Ready, Auto))
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Ready": True, "Auto": True, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags({"Ready": True, "Auto": False, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False
+
+
+class TestRungWithGroupedAnyOf:
+    """Test grouped AND terms inside any_of()."""
+
+    def test_rung_with_any_of_group(self):
+        """Rung executes when an AND-group inside any_of() is true."""
+        from pyrung.core import any_of
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Start = Bool("Start")
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        Light = Bool("Light")
+
+        rung = Rung(any_of(Start, (Ready, Auto)))
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags(
+            {"Start": False, "Ready": True, "Auto": True, "Light": False}
+        )
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags(
+            {"Start": False, "Ready": True, "Auto": False, "Light": False}
+        )
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False
+
+
+class TestRungWithBitwiseAnd:
+    """Test rung with & operator for AND conditions."""
+
+    def test_rung_with_ampersand(self):
+        """Rung executes when both & conditions are true."""
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        Light = Bool("Light")
+
+        rung = Rung(Ready & Auto)
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Ready": True, "Auto": True, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags({"Ready": True, "Auto": False, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False

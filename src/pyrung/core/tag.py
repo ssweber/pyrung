@@ -272,14 +272,30 @@ class Tag:
     # =========================================================================
 
     def __and__(self, other: Any) -> Any:
-        """Create bitwise AND expression: Tag & value."""
+        """Create AND condition (for BOOL) or bitwise AND expression (non-BOOL)."""
+        from pyrung.core.condition import AllCondition
+        from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
+
+        if self.type == TagType.BOOL:
+            if isinstance(other, CondBase):
+                return AllCondition(self, other)
+            if isinstance(other, Tag) and other.type == TagType.BOOL:
+                return AllCondition(self, other)
 
         return TagExpr(self) & other
 
     def __rand__(self, other: Any) -> Any:
-        """Create bitwise AND expression: value & Tag."""
+        """Support reverse AND for conditions and bitwise expressions."""
+        from pyrung.core.condition import AllCondition
+        from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
+
+        if self.type == TagType.BOOL:
+            if isinstance(other, CondBase):
+                return AllCondition(other, self)
+            if isinstance(other, Tag) and other.type == TagType.BOOL:
+                return AllCondition(other, self)
 
         return other & TagExpr(self)
 

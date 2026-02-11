@@ -32,7 +32,8 @@ The core is hardware-agnostic. Hardware knowledge lives in dialects.
 │                   pyrung (core)                        │
 │                                                        │
 │  DSL         Program, Rung, branch, subroutine,        │
-│              conditions (nc, rise, fall, any_of)       │
+│              conditions (nc, rise, fall, any_of,        │
+│              all_of, |, &)                              │
 │                                                        │
 │  Types       Tag, InputTag, OutputTag                  │
 │              Block, InputBlock, OutputBlock            │
@@ -242,7 +243,7 @@ The report structure is universal. The rules that populate it are dialect-specif
 |--------|---------|-----------|
 | `Program`, `Rung`, `branch`, `subroutine`, `call` | `pyrung` | Universal DSL structure |
 | `out`, `latch`, `reset`, `copy`, `math`, `on_delay`, `count_up`, ... | `pyrung` | Universal instructions |
-| `nc`, `rise`, `fall`, `any_of` | `pyrung` | Universal conditions |
+| `nc`, `rise`, `fall`, `any_of`, `all_of` | `pyrung` | Universal conditions |
 | `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char` | `pyrung` | IEC 61131-3 types |
 | `Tag`, `InputTag`, `OutputTag` | `pyrung` | Core tag types |
 | `Block`, `InputBlock`, `OutputBlock` | `pyrung` | Core block types |

@@ -490,3 +490,135 @@ class TestOrPrecedenceErrors:
         # Different objects, so not equal
         assert (cond1 == cond1) is True
         assert (cond1 == cond2) is False
+
+
+class TestAllOf:
+    """Test all_of() composite condition (AND logic)."""
+
+    def test_all_of_true_when_all_true(self):
+        """all_of is true when all conditions are true."""
+        from pyrung.core import all_of
+
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        cond = all_of(Ready, Auto)
+
+        state = SystemState().with_tags({"Ready": True, "Auto": True})
+        assert evaluate_condition(cond, state) is True
+
+    def test_all_of_false_when_any_false(self):
+        """all_of is false when any condition is false."""
+        from pyrung.core import all_of
+
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        cond = all_of(Ready, Auto)
+
+        state = SystemState().with_tags({"Ready": True, "Auto": False})
+        assert evaluate_condition(cond, state) is False
+
+    def test_all_of_with_comparisons(self):
+        """all_of works with comparison conditions."""
+        from pyrung.core import all_of
+
+        Step = Int("Step")
+        Mode = Int("Mode")
+        cond = all_of(Step == 1, Mode == 2)
+
+        state = SystemState().with_tags({"Step": 1, "Mode": 2})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"Step": 1, "Mode": 1})
+        assert evaluate_condition(cond, state) is False
+
+
+class TestGroupedAnyOf:
+    """Test grouped AND terms inside any_of()."""
+
+    def test_any_of_with_tuple_group(self):
+        """Tuple/list entries are treated as grouped AND terms."""
+        from pyrung.core import any_of
+
+        Start = Bool("Start")
+        Ready = Bool("Ready")
+        Auto = Bool("Auto")
+        Remote = Bool("Remote")
+        cond = any_of(Start, (Ready, Auto), Remote)
+
+        state = SystemState().with_tags(
+            {"Start": False, "Ready": True, "Auto": True, "Remote": False}
+        )
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags(
+            {"Start": False, "Ready": True, "Auto": False, "Remote": False}
+        )
+        assert evaluate_condition(cond, state) is False
+
+    def test_any_of_with_list_group(self):
+        """List group syntax is also supported."""
+        from pyrung.core import any_of
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        cond = any_of([A, B], C)
+
+        state = SystemState().with_tags({"A": True, "B": True, "C": False})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"A": True, "B": False, "C": False})
+        assert evaluate_condition(cond, state) is False
+
+
+class TestBitwiseAndOperator:
+    """Test & operator for combining conditions (AND logic)."""
+
+    def test_tag_and_tag(self):
+        """Bool tags can be ANDed with & operator."""
+        A = Bool("A")
+        B = Bool("B")
+        cond = A & B
+
+        state = SystemState().with_tags({"A": True, "B": True})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"A": True, "B": False})
+        assert evaluate_condition(cond, state) is False
+
+    def test_condition_and_condition(self):
+        """Comparison conditions can be ANDed with & operator."""
+        Step = Int("Step")
+        Mode = Int("Mode")
+        cond = (Step == 1) & (Mode == 2)
+
+        state = SystemState().with_tags({"Step": 1, "Mode": 2})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"Step": 1, "Mode": 3})
+        assert evaluate_condition(cond, state) is False
+
+    def test_tag_and_condition(self):
+        """Bool tags and comparison conditions can be mixed with &."""
+        Enable = Bool("Enable")
+        Step = Int("Step")
+        cond = Enable & (Step == 1)
+
+        state = SystemState().with_tags({"Enable": True, "Step": 1})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"Enable": False, "Step": 1})
+        assert evaluate_condition(cond, state) is False
+
+    def test_chained_and(self):
+        """Multiple & operators chain correctly."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        cond = A & B & C
+
+        state = SystemState().with_tags({"A": True, "B": True, "C": True})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"A": True, "B": False, "C": True})
+        assert evaluate_condition(cond, state) is False

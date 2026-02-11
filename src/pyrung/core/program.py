@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.condition import (
+    AllCondition,
     AnyCondition,
     Condition,
     FallingEdgeCondition,
@@ -35,8 +36,8 @@ from pyrung.core.instruction import (
     OutInstruction,
     PackBitsInstruction,
     PackWordsInstruction,
-    ReturnInstruction,
     ResetInstruction,
+    ReturnInstruction,
     ShiftInstruction,
     SubroutineReturnSignal,
     UnpackToBitsInstruction,
@@ -444,7 +445,9 @@ def fall(tag: Tag) -> FallingEdgeCondition:
     return FallingEdgeCondition(tag)
 
 
-def any_of(*conditions: Condition | Tag) -> AnyCondition:
+def any_of(
+    *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+) -> AnyCondition:
     """OR condition - true when any sub-condition is true.
 
     Use this to combine multiple conditions with OR logic within a rung.
@@ -458,13 +461,37 @@ def any_of(*conditions: Condition | Tag) -> AnyCondition:
         with Rung(Step == 1, Start | CmdStart):
             out(Light)
 
+        # Grouped AND inside OR:
+        with Rung(any_of(Start, (AutoMode, Ready), RemoteStart)):
+            out(Light)
+
     Args:
-        conditions: Two or more conditions (Tags or Conditions) to OR together.
+        conditions: Conditions to OR together. Tuple/list entries are interpreted
+                    as grouped AND terms.
 
     Returns:
         AnyCondition that evaluates True if any sub-condition is True.
     """
     return AnyCondition(*conditions)
+
+
+def all_of(
+    *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+) -> AllCondition:
+    """AND condition - true when all sub-conditions are true.
+
+    This is equivalent to comma-separated rung conditions, but useful when building
+    grouped condition trees with any_of() or `&`.
+
+    Example:
+        with Rung(all_of(Ready, AutoMode)):
+            out(StartPermissive)
+
+        # Equivalent operator form:
+        with Rung((Ready & AutoMode) | RemoteStart):
+            out(StartPermissive)
+    """
+    return AllCondition(*conditions)
 
 
 def call(target: str | SubroutineFunc) -> None:
