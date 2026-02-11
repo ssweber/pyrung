@@ -35,8 +35,10 @@ from pyrung.core.instruction import (
     OutInstruction,
     PackBitsInstruction,
     PackWordsInstruction,
+    ReturnInstruction,
     ResetInstruction,
     ShiftInstruction,
+    SubroutineReturnSignal,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
@@ -136,8 +138,11 @@ class Program:
         """Execute a subroutine by name within a ScanContext."""
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
-        for rung in self.subroutines[name]:
-            rung.evaluate(ctx)
+        try:
+            for rung in self.subroutines[name]:
+                rung.evaluate(ctx)
+        except SubroutineReturnSignal:
+            return
 
     @classmethod
     def current(cls) -> Program | None:
@@ -499,6 +504,21 @@ def call(target: str | SubroutineFunc) -> None:
         name = target
 
     ctx._rung.add_instruction(CallInstruction(name, prog))
+
+
+def return_() -> None:
+    """Return from the current subroutine.
+
+    Example:
+        with subroutine("my_sub"):
+            with Rung(Abort):
+                return_()
+    """
+    ctx = _require_rung_context("return_")
+    prog = Program.current()
+    if prog is None or prog._current_subroutine is None:
+        raise RuntimeError("return_() must be used inside a subroutine")
+    ctx._rung.add_instruction(ReturnInstruction())
 
 
 # ============================================================================

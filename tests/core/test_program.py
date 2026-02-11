@@ -975,6 +975,88 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is False
 
+    def test_return_exits_subroutine_early(self):
+        """return_() exits subroutine immediately and skips remaining rungs."""
+        from pyrung.core.program import Program, Rung, call, out, return_, subroutine
+
+        Run = Bool("Run")
+        First = Bool("First")
+        Second = Bool("Second")
+        Third = Bool("Third")
+
+        with Program() as logic:
+            with Rung(Run):
+                call("my_sub")
+
+            with subroutine("my_sub"):
+                with Rung():
+                    out(First)
+                    return_()
+                    out(Second)
+
+                with Rung():
+                    out(Third)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Run": True, "First": False, "Second": False, "Third": False})
+        runner.step()
+
+        assert runner.current_state.tags["First"] is True
+        assert runner.current_state.tags["Second"] is False
+        assert runner.current_state.tags["Third"] is False
+
+    def test_return_only_exits_current_subroutine(self):
+        """return_() in a nested call should not abort the caller subroutine."""
+        from pyrung.core.program import Program, Rung, call, out, return_, subroutine
+
+        Run = Bool("Run")
+        CallerDone = Bool("CallerDone")
+        CalleeBefore = Bool("CalleeBefore")
+        CalleeAfter = Bool("CalleeAfter")
+
+        with Program() as logic:
+            with Rung(Run):
+                call("caller")
+
+            with subroutine("caller"):
+                with Rung():
+                    call("callee")
+                    out(CallerDone)
+
+            with subroutine("callee"):
+                with Rung():
+                    out(CalleeBefore)
+                    return_()
+                    out(CalleeAfter)
+
+        runner = PLCRunner(logic)
+        runner.patch(
+            {
+                "Run": True,
+                "CallerDone": False,
+                "CalleeBefore": False,
+                "CalleeAfter": False,
+            }
+        )
+        runner.step()
+
+        assert runner.current_state.tags["CallerDone"] is True
+        assert runner.current_state.tags["CalleeBefore"] is True
+        assert runner.current_state.tags["CalleeAfter"] is False
+
+    def test_return_outside_subroutine_raises(self):
+        """return_() is only valid while defining a subroutine."""
+        import pytest
+
+        from pyrung.core.program import Program, Rung, return_
+
+        Run = Bool("Run")
+
+        with pytest.raises(RuntimeError, match="inside a subroutine"):
+            with Program():
+                with Rung(Run):
+                    return_()
+
 
 class TestSubroutineDecorator:
     """Test @subroutine('name') decorator syntax."""

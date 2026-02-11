@@ -142,6 +142,10 @@ class Instruction(ABC):
         return False
 
 
+class SubroutineReturnSignal(Exception):
+    """Internal control-flow signal used by return_() inside subroutines."""
+
+
 def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag]:
     """Resolve a BlockRange or IndirectBlockRange to a list of Tags.
 
@@ -306,6 +310,13 @@ class CallInstruction(Instruction):
 
     def execute(self, ctx: ScanContext) -> None:
         self._program.call_subroutine_ctx(self.subroutine_name, ctx)
+
+
+class ReturnInstruction(Instruction):
+    """Return from the current subroutine immediately."""
+
+    def execute(self, ctx: ScanContext) -> None:  # noqa: ARG002
+        raise SubroutineReturnSignal
 
 
 class CountUpInstruction(Instruction):
