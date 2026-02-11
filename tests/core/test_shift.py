@@ -21,7 +21,9 @@ class TestShiftInstruction:
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = PLCRunner(logic)
-        runner.patch({"Data": True, "Clock": False, "Reset": False, "C1": True, "C2": False, "C3": False})
+        runner.patch(
+            {"Data": True, "Clock": False, "Reset": False, "C1": True, "C2": False, "C3": False}
+        )
         runner.step()
         assert runner.current_state.tags["C1"] is True
         assert runner.current_state.tags["C2"] is False
@@ -87,7 +89,9 @@ class TestShiftInstruction:
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = PLCRunner(logic)
-        runner.patch({"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": True, "C3": True})
+        runner.patch(
+            {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": True, "C3": True}
+        )
         runner.step()
 
         # Rising edge with reset active.
@@ -149,7 +153,9 @@ class TestShiftInstruction:
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = PLCRunner(logic)
-        runner.patch({"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False})
+        runner.patch(
+            {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False}
+        )
         runner.step()
         runner.patch({"Clock": True})
         runner.step()
@@ -168,7 +174,9 @@ class TestShiftInstruction:
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
         runner = PLCRunner(logic)
-        runner.patch({"Data": False, "Clock": False, "Reset": False, "C1": True, "C2": True, "C3": False})
+        runner.patch(
+            {"Data": False, "Clock": False, "Reset": False, "C1": True, "C2": True, "C3": False}
+        )
         runner.step()
         runner.patch({"Clock": True})
         runner.step()

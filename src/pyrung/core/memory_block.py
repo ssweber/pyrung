@@ -305,7 +305,9 @@ class OutputBlock(Block):
     @overload
     def __getitem__(self, key: object) -> OutputTag | IndirectRef | IndirectExprRef: ...
 
-    def __getitem__(self, key: int | slice | Tag | Any) -> OutputTag | IndirectRef | IndirectExprRef:
+    def __getitem__(
+        self, key: int | slice | Tag | Any
+    ) -> OutputTag | IndirectRef | IndirectExprRef:
         return cast(OutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _get_tag(self, addr: int) -> OutputTag:

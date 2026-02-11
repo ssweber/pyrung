@@ -15,7 +15,12 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
 
 
 _DINT_MIN = -2147483648
@@ -44,7 +49,9 @@ def _float_to_int_bits(f: float) -> int:
     return struct.unpack("<I", struct.pack("<f", float(f)))[0]
 
 
-def resolve_tag_or_value_ctx(source: Tag | IndirectRef | IndirectExprRef | Any, ctx: ScanContext) -> Any:
+def resolve_tag_or_value_ctx(
+    source: Tag | IndirectRef | IndirectExprRef | Any, ctx: ScanContext
+) -> Any:
     """Resolve tag (direct or indirect), expression, or return literal value using ScanContext.
 
     Args:
@@ -158,7 +165,9 @@ def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag
     return block_range.tags()
 
 
-def resolve_coil_targets_ctx(target: Tag | BlockRange | IndirectBlockRange, ctx: ScanContext) -> list[Tag]:
+def resolve_coil_targets_ctx(
+    target: Tag | BlockRange | IndirectBlockRange, ctx: ScanContext
+) -> list[Tag]:
     """Resolve a coil target to one or more concrete Tags.
 
     Coil targets support:
@@ -172,9 +181,7 @@ def resolve_coil_targets_ctx(target: Tag | BlockRange | IndirectBlockRange, ctx:
         return [target]
     if isinstance(target, (BlockRange, IndirectBlockRange)):
         return resolve_block_range_tags_ctx(target, ctx)
-    raise TypeError(
-        f"Expected Tag, BlockRange, or IndirectBlockRange, got {type(target).__name__}"
-    )
+    raise TypeError(f"Expected Tag, BlockRange, or IndirectBlockRange, got {type(target).__name__}")
 
 
 class OneShotMixin:
