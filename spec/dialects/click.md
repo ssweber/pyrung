@@ -224,6 +224,70 @@ server = ClickServer(provider, port=502)
 Values flow as raw primitives through the adapter — no rich type wrapping needed
 on the server path. See `spec/HANDOFF.md` for the full data flow diagram.
 
+### Communication Instructions (`send` / `receive`)
+
+`pyrung.click` now exports CLICK-address-aware communication instructions:
+
+```python
+from pyrung.click import send, receive
+
+send(
+    host="192.168.1.20",
+    port=502,
+    remote_start="DS1",
+    source=LocalSetpoint,      # Tag or BlockRange
+    sending=CommSending,       # BOOL
+    success=CommSuccess,       # BOOL
+    error=CommError,           # BOOL
+    exception_response=CommEx, # INT or DINT
+    device_id=1,
+    count=None,                # default: inferred from source length
+)
+
+receive(
+    host="192.168.1.20",
+    port=502,
+    remote_start="DS1",
+    dest=LocalWords.select(1, 4),  # Tag or BlockRange
+    receiving=CommReceiving,       # BOOL
+    success=CommSuccess,           # BOOL
+    error=CommError,               # BOOL
+    exception_response=CommEx,     # INT or DINT
+    device_id=1,
+    count=None,                    # default: inferred from destination length
+)
+```
+
+Behavior contract:
+
+- Runtime transport is Modbus TCP via `pyclickplc.ClickClient`.
+- Requests run asynchronously in a background worker pool (scan loop stays synchronous).
+- Instructions are `always_execute()` and self-gate on the captured rung condition.
+- If rung false: clear `busy/success/error/exception_response` and cancel in-flight work (best effort).
+- If rung true and idle: submit request, set busy true, clear success/error/exception.
+- If rung true and pending: hold busy true until request completes.
+- On completion:
+  - success -> `busy=False`, `success=True`, `error=False`, `exception_response=0`
+  - failure -> `busy=False`, `success=False`, `error=True`, `exception_response=<code or 0>`
+- With rung held true, completed instructions auto-restart on the next scan.
+
+Validation rules:
+
+- `sending`/`receiving`, `success`, and `error` must be BOOL tags.
+- `exception_response` must be INT or DINT.
+- `count` must be >= 1 and must match resolved local operand length.
+- `remote_start` is parsed/validated using CLICK address rules from `pyclickplc`.
+
+Exception code rules:
+
+- `exception_response` uses a best-effort parse from error text (`exception_code=N`).
+- If no Modbus exception code is available (transport/runtime error), code is `0`.
+
+Current scope:
+
+- Implemented: `send` and `receive` (CLICK-address API).
+- Not yet implemented: function-code-selectable/raw Modbus variants and serial/RTU transport options.
+
 ---
 
 ## Needs Specification

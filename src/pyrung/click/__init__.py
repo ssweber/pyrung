@@ -74,6 +74,7 @@ sd = _block_from_bank_config(BANKS["SD"])
 txt = _block_from_bank_config(BANKS["TXT"])
 
 from pyrung.click.data_provider import ClickDataProvider
+from pyrung.click.send_receive import receive, send
 from pyrung.click.tag_map import TagMap
 
 __all__ = [
@@ -98,5 +99,7 @@ __all__ = [
     "txt",
     "TagMap",
     "ClickDataProvider",
+    "send",
+    "receive",
     "MappingEntry",
 ]

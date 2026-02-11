@@ -38,6 +38,12 @@ def test_click_prebuilt_blocks_are_exported():
         assert hasattr(click, name)
 
 
+def test_click_send_receive_are_exported():
+    click = importlib.import_module("pyrung.click")
+    assert hasattr(click, "send")
+    assert hasattr(click, "receive")
+
+
 def test_click_prebuilt_block_classes_and_identity_names():
     from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, y
 
