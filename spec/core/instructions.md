@@ -138,16 +138,32 @@ with loop(count=N, oneshot=False):
 
 ```python
 search(
-    condition=">" | "=" | "!=" | "<" | "<=" | ">=",
+    condition="==" | "!=" | "<" | "<=" | ">" | ">=",
     value=100,
-    start=Block[1],
-    end=Block[100],
+    search_range=Block.select(1, 100),
     result=ResultTag,
     found=FoundFlag,
     continuous=False,
     oneshot=False
 )
 ```
+
+- `search_range` must be a `.select(...)` range (`BlockRange` or `IndirectBlockRange`).
+- Direction follows range order:
+  - `Block.select(1, 100)` scans low-to-high.
+  - `Block.select(1, 100).reverse()` scans high-to-low.
+- On success: `result = matched_address`, `found = True`.
+- On miss: `result = -1`, `found = False`.
+- `result` must be INT or DINT. `found` must be BOOL.
+- `continuous=False`: always restart at first address in range order.
+- `continuous=True`:
+  - `result == 0`: restart at first address.
+  - `result == -1`: treat as exhausted; return miss without rescanning.
+  - otherwise resume at first address strictly after current result in active direction.
+- Text search (`CHAR` ranges):
+  - only `==` and `!=` are valid operators.
+  - RHS resolves to `str(...)`, empty string is invalid.
+  - compares windowed substrings (`N=len(rhs)`) across consecutive tags in range order.
 
 ### Shift Register
 
@@ -185,6 +201,5 @@ shift(bit_range) \
 - **Timer behavior details:** What happens when `on_delay` rung goes false (TON: reset acc, RTON: hold acc)? What's the accumulator value on the scan it fires? Clamping behavior at max.
 - **Counter clamping:** At `INT_MAX` / `INT_MIN`, does the accumulator stop or wrap?
 - **`loop.idx` base:** 0-based or 1-based? Since blocks are 1-indexed, 1-based `loop.idx` might be more natural. Or provide both (`loop.idx` 0-based, `loop.pos` 1-based)?
-- **Search return semantics:** What value goes in `result` — the logical block index? The tag name? What if not found?
 - **Shift register data input:** The rung condition is the data bit — confirm this. What type must start/end be (Bool only)?
 - **Instruction return values:** Do instructions return anything? For chaining (`.reset()`, `.down()`)? For inspection?

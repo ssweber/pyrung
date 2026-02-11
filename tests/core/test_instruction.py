@@ -9,7 +9,7 @@ import struct
 import pytest
 
 from pyrung.core import Block, Bool, Dint, Int, Real, SystemState, TagType, Word
-from tests.conftest import execute
+from tests.conftest import evaluate_rung, execute
 
 
 class TestOutInstruction:
@@ -1374,3 +1374,302 @@ class TestMathInstruction:
         state = SystemState().with_tags({"DS1": 200, "DS2": 200, "DS3": 30000})
         new_state = execute(instr, state)
         assert new_state.tags["Result"] == 4464
+
+
+class TestSearchInstruction:
+    """Test SEARCH instruction."""
+
+    def test_search_found_must_be_bool(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Result = Int("Result")
+
+        with pytest.raises(TypeError, match="found tag must be BOOL"):
+            SearchInstruction(
+                condition="==",
+                value=1,
+                search_range=DS.select(1, 3),
+                result=Result,
+                found=Int("Found"),
+            )
+
+    def test_search_result_must_be_int_or_dint(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+
+        with pytest.raises(TypeError, match="result tag must be INT or DINT"):
+            SearchInstruction(
+                condition="==",
+                value=1,
+                search_range=DS.select(1, 3),
+                result=Real("Result"),
+                found=Found,
+            )
+
+    def test_search_invalid_condition_rejected(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        with pytest.raises(ValueError, match="Invalid search condition"):
+            SearchInstruction(
+                condition="=",
+                value=1,
+                search_range=DS.select(1, 3),
+                result=Result,
+                found=Found,
+            )
+
+    def test_search_range_type_enforced(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        with pytest.raises(
+            TypeError, match="search_range must be BlockRange or IndirectBlockRange"
+        ):
+            SearchInstruction(
+                condition="==",
+                value=1,
+                search_range=Int("NotARange"),  # type: ignore[arg-type]
+                result=Result,
+                found=Found,
+            )
+
+    @pytest.mark.parametrize(
+        ("condition", "value", "expected"),
+        [
+            ("==", 10, 1),
+            ("!=", 10, 2),
+            (">", 10, 2),
+            (">=", 20, 2),
+            ("<", 10, 3),
+            ("<=", 10, 1),
+        ],
+    )
+    def test_search_numeric_success(self, condition, value, expected):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction(condition, value, DS.select(1, 3), Result, Found)
+        state = SystemState().with_tags({"DS1": 10, "DS2": 20, "DS3": 5})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == expected
+        assert new_state.tags["Found"] is True
+
+    def test_search_numeric_miss_sets_minus_one_and_false(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction(">", 100, DS.select(1, 3), Result, Found)
+        state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3, "Result": 99, "Found": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == -1
+        assert new_state.tags["Found"] is False
+
+    def test_search_continuous_progression(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", 2, DS.select(1, 4), Result, Found, continuous=True)
+        state = SystemState().with_tags(
+            {"DS1": 1, "DS2": 2, "DS3": 3, "DS4": 2, "Result": 0, "Found": False}
+        )
+
+        step1 = execute(instr, state)
+        assert step1.tags["Result"] == 2
+        assert step1.tags["Found"] is True
+
+        step2 = execute(instr, step1)
+        assert step2.tags["Result"] == 4
+        assert step2.tags["Found"] is True
+
+        step3 = execute(instr, step2)
+        assert step3.tags["Result"] == -1
+        assert step3.tags["Found"] is False
+
+    def test_search_continuous_exhausted_no_rescan(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", 1, DS.select(1, 3), Result, Found, continuous=True)
+        state = SystemState().with_tags({"DS1": 1, "DS2": 1, "DS3": 1, "Result": -1, "Found": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == -1
+        assert new_state.tags["Found"] is False
+
+    def test_search_continuous_restart_when_result_zero(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", 7, DS.select(1, 3), Result, Found, continuous=True)
+        state = SystemState().with_tags({"DS1": 1, "DS2": 7, "DS3": 7, "Result": 0, "Found": False})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == 2
+        assert new_state.tags["Found"] is True
+
+    def test_search_continuous_reverse_resume(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction(
+            "==", 5, DS.select(1, 5).reverse(), Result, Found, continuous=True
+        )
+        state = SystemState().with_tags(
+            {"DS1": 0, "DS2": 5, "DS3": 0, "DS4": 5, "DS5": 0, "Result": 0, "Found": False}
+        )
+
+        step1 = execute(instr, state)
+        assert step1.tags["Result"] == 4
+        assert step1.tags["Found"] is True
+
+        step2 = execute(instr, step1)
+        assert step2.tags["Result"] == 2
+        assert step2.tags["Found"] is True
+
+        step3 = execute(instr, step2)
+        assert step3.tags["Result"] == -1
+        assert step3.tags["Found"] is False
+
+    def test_search_oneshot_behavior(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", 2, DS.select(1, 2), Result, Found, oneshot=True)
+        state = SystemState().with_tags({"DS1": 0, "DS2": 2, "Result": 0, "Found": False})
+
+        step1 = execute(instr, state)
+        assert step1.tags["Result"] == 2
+        assert step1.tags["Found"] is True
+
+        step2 = execute(instr, step1.with_tags({"Result": 77, "Found": False, "DS2": 0}))
+        assert step2.tags["Result"] == 77
+        assert step2.tags["Found"] is False
+
+    def test_search_rung_false_preserves_result_and_found(self):
+        from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.rung import Rung as RungLogic
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        rung = RungLogic(Enable)
+        rung.add_instruction(SearchInstruction("==", 1, DS.select(1, 3), Result, Found))
+
+        state = SystemState().with_tags(
+            {"Enable": False, "DS1": 1, "DS2": 1, "DS3": 1, "Result": 55, "Found": True}
+        )
+        new_state = evaluate_rung(rung, state)
+
+        assert new_state.tags["Result"] == 55
+        assert new_state.tags["Found"] is True
+
+    def test_search_text_equality(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", "ADC", CH.select(1, 6), Result, Found)
+        state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == 1
+        assert new_state.tags["Found"] is True
+
+    def test_search_text_inequality(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("!=", "ADC", CH.select(1, 4), Result, Found)
+        state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == 2
+        assert new_state.tags["Found"] is True
+
+    def test_search_text_reverse_range(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", "ADC", CH.select(1, 4).reverse(), Result, Found)
+        state = SystemState().with_tags({"CH1": "Z", "CH2": "C", "CH3": "D", "CH4": "A"})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Result"] == 4
+        assert new_state.tags["Found"] is True
+
+    def test_search_text_invalid_operator(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+        instr = SearchInstruction(">", "ADC", CH.select(1, 4), Result, Found)
+
+        with pytest.raises(ValueError, match="Text search only supports"):
+            execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B", "CH3": "C"}))
+
+    def test_search_text_empty_value_rejected(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Found = Bool("Found")
+        Result = Int("Result")
+        instr = SearchInstruction("==", "", CH.select(1, 4), Result, Found)
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B"}))
+
+    def test_search_empty_resolved_range_is_miss(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10, valid_ranges=((1, 2), (5, 6)))
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        instr = SearchInstruction("==", 0, DS.select(3, 4), Result, Found)
+        new_state = execute(instr, SystemState().with_tags({"Result": 123, "Found": True}))
+
+        assert new_state.tags["Result"] == -1
+        assert new_state.tags["Found"] is False

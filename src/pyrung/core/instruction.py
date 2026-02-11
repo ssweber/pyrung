@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import struct
 from abc import ABC, abstractmethod
+from operator import eq, ge, gt, le, lt, ne
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
@@ -27,6 +28,14 @@ _DINT_MIN = -2147483648
 _DINT_MAX = 2147483647
 _INT_MIN = -32768
 _INT_MAX = 32767
+_SEARCH_OPERATOR_MAP = {
+    "==": eq,
+    "!=": ne,
+    "<": lt,
+    "<=": le,
+    ">": gt,
+    ">=": ge,
+}
 
 
 def _clamp_dint(value: int) -> int:
@@ -156,6 +165,11 @@ def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag
     Returns:
         List of resolved Tag objects (with type info preserved).
     """
+    return resolve_block_range_ctx(block_range, ctx).tags()
+
+
+def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> BlockRange:
+    """Resolve a BlockRange or IndirectBlockRange to a concrete BlockRange."""
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
     if isinstance(block_range, IndirectBlockRange):
@@ -166,7 +180,7 @@ def resolve_block_range_tags_ctx(block_range: Any, ctx: ScanContext) -> list[Tag
             f"Expected BlockRange or IndirectBlockRange, got {type(block_range).__name__}"
         )
 
-    return block_range.tags()
+    return block_range
 
 
 def resolve_coil_targets_ctx(
@@ -893,6 +907,181 @@ class FillInstruction(OneShotMixin, Instruction):
         for dst_tag in dst_tags:
             updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)
+
+
+class SearchInstruction(OneShotMixin, Instruction):
+    """Search instruction.
+
+    Scans a selected range for the first value (or text window) matching
+    the given condition and writes:
+    - result: matched address, or -1 on miss
+    - found: True on hit, False on miss
+    """
+
+    def __init__(
+        self,
+        condition: str,
+        value: Any,
+        search_range: BlockRange | IndirectBlockRange,
+        result: Tag,
+        found: Tag,
+        continuous: bool = False,
+        oneshot: bool = False,
+    ):
+        from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+        from pyrung.core.tag import TagType
+
+        if condition not in _SEARCH_OPERATOR_MAP:
+            raise ValueError(
+                f"Invalid search condition: {condition!r}. Expected one of: ==, !=, <, <=, >, >="
+            )
+        if not isinstance(search_range, (BlockRange, IndirectBlockRange)):
+            raise TypeError(
+                "search_range must be BlockRange or IndirectBlockRange from .select(), "
+                f"got {type(search_range).__name__}"
+            )
+        if found.type != TagType.BOOL:
+            raise TypeError(f"search found tag must be BOOL, got {found.type.name}")
+        if result.type not in {TagType.INT, TagType.DINT}:
+            raise TypeError(f"search result tag must be INT or DINT, got {result.type.name}")
+
+        OneShotMixin.__init__(self, oneshot)
+        self.condition = condition
+        self.value = value
+        self.search_range = search_range
+        self.result = result
+        self.found = found
+        self.continuous = continuous
+        self._compare = _SEARCH_OPERATOR_MAP[condition]
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        resolved_range = resolve_block_range_ctx(self.search_range, ctx)
+        addresses = list(resolved_range.addresses)
+        tags = resolved_range.tags()
+
+        if not addresses:
+            self._write_miss(ctx)
+            return
+
+        cursor_index = self._resolve_cursor_index(
+            addresses=addresses,
+            reverse_order=resolved_range.reverse_order,
+            ctx=ctx,
+        )
+        if cursor_index is None:
+            self._write_miss(ctx)
+            return
+
+        if self._is_text_path(tags):
+            matched_address = self._search_text(
+                tags=tags,
+                addresses=addresses,
+                cursor_index=cursor_index,
+                ctx=ctx,
+            )
+        else:
+            matched_address = self._search_numeric(
+                tags=tags,
+                addresses=addresses,
+                cursor_index=cursor_index,
+                ctx=ctx,
+            )
+
+        if matched_address is None:
+            self._write_miss(ctx)
+            return
+
+        ctx.set_tags({self.result.name: matched_address, self.found.name: True})
+
+    def _write_miss(self, ctx: ScanContext) -> None:
+        ctx.set_tags({self.result.name: -1, self.found.name: False})
+
+    def _resolve_cursor_index(
+        self, addresses: list[int], reverse_order: bool, ctx: ScanContext
+    ) -> int | None:
+        if not self.continuous:
+            return 0
+
+        current_result = int(ctx.get_tag(self.result.name, self.result.default))
+        if current_result == 0:
+            return 0
+        if current_result == -1:
+            return None
+
+        if reverse_order:
+            for idx, addr in enumerate(addresses):
+                if addr < current_result:
+                    return idx
+            return None
+
+        for idx, addr in enumerate(addresses):
+            if addr > current_result:
+                return idx
+        return None
+
+    def _is_text_path(self, tags: list[Tag]) -> bool:
+        from pyrung.core.tag import TagType
+
+        first_type = tags[0].type
+        if first_type == TagType.CHAR:
+            for tag in tags:
+                if tag.type != TagType.CHAR:
+                    raise TypeError(
+                        "search text ranges must contain only CHAR tags; "
+                        f"got {tag.type.name} at {tag.name}"
+                    )
+            return True
+
+        if first_type in {TagType.INT, TagType.DINT, TagType.REAL, TagType.WORD}:
+            return False
+
+        raise TypeError(
+            "search range tags must be INT, DINT, REAL, WORD, or CHAR; "
+            f"got {first_type.name} at {tags[0].name}"
+        )
+
+    def _search_numeric(
+        self, tags: list[Tag], addresses: list[int], cursor_index: int, ctx: ScanContext
+    ) -> int | None:
+        rhs_value = resolve_tag_or_value_ctx(self.value, ctx)
+
+        for idx in range(cursor_index, len(tags)):
+            candidate = ctx.get_tag(tags[idx].name, tags[idx].default)
+            if self._compare(candidate, rhs_value):
+                return addresses[idx]
+        return None
+
+    def _search_text(
+        self, tags: list[Tag], addresses: list[int], cursor_index: int, ctx: ScanContext
+    ) -> int | None:
+        if self.condition not in {"==", "!="}:
+            raise ValueError("Text search only supports '==' and '!=' conditions")
+
+        rhs_text = str(resolve_tag_or_value_ctx(self.value, ctx))
+        if rhs_text == "":
+            raise ValueError("Text search value cannot be empty")
+
+        window_len = len(rhs_text)
+        if window_len > len(tags):
+            return None
+
+        last_start = len(tags) - window_len
+        if cursor_index > last_start:
+            return None
+
+        for start in range(cursor_index, last_start + 1):
+            candidate = "".join(
+                str(ctx.get_tag(tags[start + offset].name, tags[start + offset].default))
+                for offset in range(window_len)
+            )
+            if self.condition == "==" and candidate == rhs_text:
+                return addresses[start]
+            if self.condition == "!=" and candidate != rhs_text:
+                return addresses[start]
+        return None
 
 
 class ShiftInstruction(Instruction):

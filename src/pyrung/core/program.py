@@ -38,6 +38,7 @@ from pyrung.core.instruction import (
     PackWordsInstruction,
     ResetInstruction,
     ReturnInstruction,
+    SearchInstruction,
     ShiftInstruction,
     SubroutineReturnSignal,
     UnpackToBitsInstruction,
@@ -346,6 +347,44 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
     ctx = _require_rung_context("math")
     ctx._rung.add_instruction(MathInstruction(expression, dest, oneshot, mode))
     return dest
+
+
+def search(
+    condition: str,
+    value: Any,
+    search_range: BlockRange | IndirectBlockRange,
+    result: Tag,
+    found: Tag,
+    continuous: bool = False,
+    oneshot: bool = False,
+) -> Tag:
+    """Search instruction.
+
+    Scans a selected range and writes the first matching address into `result`.
+    Writes `found` True on hit; on miss writes `result=-1` and `found=False`.
+    """
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+    from pyrung.core.tag import TagType
+
+    if condition not in {"==", "!=", "<", "<=", ">", ">="}:
+        raise ValueError(
+            f"Invalid search condition: {condition!r}. Expected one of: ==, !=, <, <=, >, >="
+        )
+    if not isinstance(search_range, (BlockRange, IndirectBlockRange)):
+        raise TypeError(
+            "search() expects search_range from .select() "
+            f"(BlockRange or IndirectBlockRange), got {type(search_range).__name__}"
+        )
+    if found.type != TagType.BOOL:
+        raise TypeError(f"search() found must be BOOL, got {found.type.name}")
+    if result.type not in {TagType.INT, TagType.DINT}:
+        raise TypeError(f"search() result must be INT or DINT, got {result.type.name}")
+
+    ctx = _require_rung_context("search")
+    ctx._rung.add_instruction(
+        SearchInstruction(condition, value, search_range, result, found, continuous, oneshot)
+    )
+    return result
 
 
 class ShiftBuilder:

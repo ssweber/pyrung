@@ -265,6 +265,142 @@ class TestRungDSL:
         assert new_state.tags["Light"] is False
 
 
+class TestSearchDSL:
+    """Test SEARCH integration via Program/Rung DSL."""
+
+    def test_rung_with_search_instruction(self):
+        from pyrung.core.program import Program, Rung, search
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 100)
+        Result = Int("Result")
+        Found = Bool("Found")
+
+        with Program() as prog:
+            with Rung(Enable):
+                ret = search("==", 20, DS.select(1, 3), Result, Found)
+                assert ret is Result
+
+        state = SystemState().with_tags(
+            {"Enable": True, "DS1": 10, "DS2": 20, "DS3": 30, "Result": 0, "Found": False}
+        )
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["Result"] == 2
+        assert new_state.tags["Found"] is True
+
+    def test_search_then_copy_by_pointer_pattern(self):
+        from pyrung.core.program import Program, Rung, copy, search
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 100)
+        DD = Block("DD", TagType.DINT, 1, 100)
+        Pointer = Int("Pointer")
+        Found = Bool("Found")
+
+        with Program() as prog:
+            with Rung(Enable):
+                search("==", 30, DS.select(1, 5), Pointer, Found)
+            with Rung(Found):
+                copy(DS[Pointer], DD[1])
+
+        state = SystemState().with_tags(
+            {
+                "Enable": True,
+                "DS1": 10,
+                "DS2": 20,
+                "DS3": 30,
+                "DS4": 40,
+                "DS5": 50,
+                "Pointer": 0,
+                "Found": False,
+                "DD1": 0,
+            }
+        )
+        new_state = evaluate_program(prog, state)
+
+        assert new_state.tags["Pointer"] == 3
+        assert new_state.tags["Found"] is True
+        assert new_state.tags["DD1"] == 30
+
+    def test_search_continuous_progression_across_runner_steps(self):
+        from pyrung.core.program import Program, Rung, search
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 100)
+        Result = Int("Result")
+        Found = Bool("Found")
+
+        with Program() as logic:
+            with Rung(Enable):
+                search("==", 7, DS.select(1, 4), Result, Found, continuous=True)
+
+        runner = PLCRunner(logic)
+        runner.patch(
+            {"Enable": True, "DS1": 7, "DS2": 0, "DS3": 7, "DS4": 0, "Result": 0, "Found": False}
+        )
+
+        runner.step()
+        assert runner.current_state.tags["Result"] == 1
+        assert runner.current_state.tags["Found"] is True
+
+        runner.step()
+        assert runner.current_state.tags["Result"] == 3
+        assert runner.current_state.tags["Found"] is True
+
+        runner.step()
+        assert runner.current_state.tags["Result"] == -1
+        assert runner.current_state.tags["Found"] is False
+
+    def test_search_reverse_range_order(self):
+        from pyrung.core.program import Program, Rung, search
+
+        Enable = Bool("Enable")
+        DS = Block("DS", TagType.INT, 1, 100)
+        Result = Int("Result")
+        Found = Bool("Found")
+
+        with Program() as prog:
+            with Rung(Enable):
+                search("==", 5, DS.select(1, 4).reverse(), Result, Found)
+
+        state = SystemState().with_tags(
+            {"Enable": True, "DS1": 5, "DS2": 0, "DS3": 5, "DS4": 0, "Result": 0, "Found": False}
+        )
+        new_state = evaluate_program(prog, state)
+
+        assert new_state.tags["Result"] == 3
+        assert new_state.tags["Found"] is True
+
+    def test_search_text_end_to_end(self):
+        from pyrung.core.program import Program, Rung, search
+
+        Enable = Bool("Enable")
+        CH = Block("CH", TagType.CHAR, 1, 100)
+        Result = Int("Result")
+        Found = Bool("Found")
+
+        with Program() as logic:
+            with Rung(Enable):
+                search("==", "ADC", CH.select(1, 6), Result, Found)
+
+        runner = PLCRunner(logic)
+        runner.patch(
+            {
+                "Enable": True,
+                "CH1": "A",
+                "CH2": "D",
+                "CH3": "C",
+                "CH4": "X",
+                "Result": 0,
+                "Found": False,
+            }
+        )
+        runner.step()
+
+        assert runner.current_state.tags["Result"] == 1
+        assert runner.current_state.tags["Found"] is True
+
+
 class TestProgramDecorator:
     """Test @program decorator."""
 
@@ -295,6 +431,11 @@ class TestPublicExports:
         assert callable(pack_words)
         assert callable(unpack_to_bits)
         assert callable(unpack_to_words)
+
+    def test_search_export(self):
+        from pyrung.core import search
+
+        assert callable(search)
 
 
 class TestCastingReferenceExamples:
