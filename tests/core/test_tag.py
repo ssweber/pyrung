@@ -206,7 +206,7 @@ class TestInputTag:
 
         tag = InputTag("X1", TagType.BOOL)
         with pytest.raises(AttributeError):
-            setattr(tag, "name", "X2")
+            setattr(tag, "name", "X2")  # noqa: B010
 
 
 class TestOutputTag:
@@ -237,7 +237,7 @@ class TestOutputTag:
 
         tag = OutputTag("Y1", TagType.BOOL)
         with pytest.raises(AttributeError):
-            setattr(tag, "name", "Y2")
+            setattr(tag, "name", "Y2")  # noqa: B010
 
 
 class TestImmediateRef:
@@ -257,7 +257,7 @@ class TestImmediateRef:
 
         tag = Tag("C1")
         with pytest.raises(AttributeError):
-            getattr(tag, "immediate")
+            getattr(tag, "immediate")  # noqa: B009
 
 
 class TestTagComparison:
