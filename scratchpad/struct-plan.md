@@ -12,19 +12,35 @@ Struct automates this. It works like a dataclass factory — you define fields w
 
 ```python
 Alarm = Struct("Alarm", count=10,
-    id   = Int(retentive=True),
+    id   = Int(default=auto(), retentive=True),  # 1, 2, 3, ...
     val  = Int(default=0),
     Time = Int(),
     On   = Bool(retentive=True),
 )
 ```
 
+### Field factories
+
+Struct fields are declared like dataclass fields: typed factory + policy metadata.
+
+```python
+Int(default=0, retentive=False)
+Bool(default=False, retentive=True)
+Int(default=auto(start=1, step=1))
+```
+
+`default` modes:
+- Literal default (`default=0`) applies to all instances in the field.
+- Enumerated default (`default=auto(...)`) is resolved per instance index.
+  Example: `Alarm[i].id.default == i` for `auto(start=1, step=1)`.
+
 ### Instance access
 
 `Alarm[i]` returns an instance object with field attributes:
 
 ```python
-Alarm[1].id    # → Tag("Alarm1_id", INT, retentive=True)
+Alarm[1].id    # → Tag("Alarm1_id", INT, default=1, retentive=True)
+Alarm[3].id    # → Tag("Alarm3_id", INT, default=3, retentive=True)
 Alarm[1].val   # → Tag("Alarm1_val", INT, default=0)
 Alarm[3].On    # → Tag("Alarm3_On", BOOL, retentive=True)
 ```
@@ -45,16 +61,20 @@ These Blocks carry the policy (retentive, default) from the field declaration. E
 
 ### Hardware assignment
 
-Each attribute is assigned independently, like any other Block:
+In the field-grouped layout, each attribute is assigned independently, like any other Block:
 
 ```python
-HardwareAssignments({
+TagMap({
     Alarm.id:   ds.select(1001, 1010),
     Alarm.val:  ds.select(1011, 1020),
     Alarm.Time: ds.select(1021, 1030),
     Alarm.On:   c.select(1, 10),
 })
 ```
+
+CSV block tags stay per attribute block, not per Struct:
+`<Alarm.id>...</Alarm.id>`, `<Alarm.val>...</Alarm.val>`, `<Alarm.Time>...</Alarm.Time>`,
+`<Alarm.On>...</Alarm.On>`.
 
 Export produces:
 ```
@@ -73,9 +93,21 @@ DS1022: Alarm2_Time
 
 ## How It Works Internally
 
-Struct is a tag factory that produces ordinary Blocks. By the time anything reaches HardwareAssignments, Struct has done its job.
+Struct is a tag factory that produces ordinary Blocks. By the time anything reaches TagMap, Struct has done its job.
 
 ```python
+@dataclass(frozen=True)
+class AutoDefault:
+    start: int = 1
+    step: int = 1
+
+def auto(*, start: int = 1, step: int = 1) -> AutoDefault: ...
+
+def resolve_default(spec, index: int):
+    if isinstance(spec, AutoDefault):
+        return spec.start + (index - 1) * spec.step
+    return spec
+
 class Struct:
     def __init__(self, name: str, count: int, **fields):
         self._name = name
@@ -90,26 +122,26 @@ class Struct:
                 start=1,
                 end=count,
                 retentive=field_def.retentive,
-                default=field_def.default,
+                address_formatter=lambda _prefix, i, fn=field_name: f"{name}{i}_{fn}",
             )
-            # Set per-tag names: Alarm1_id, Alarm2_id, ...
-            for i in range(1, count + 1):
-                block[i].name = f"{name}{i}_{field_name}"
+            # Tags are immutable; create per-slot defaults when slot tags are first materialized.
+            # auto() defaults are index-based (1..count by default).
             self._blocks[field_name] = block
 ```
 
 `Alarm.id` returns the Block. `Alarm[1]` returns a lightweight instance view that routes `.id` → `Alarm.id[1]`.
+Struct never mutates `Tag` objects after creation.
 
 ### Layer separation
 
 ```
 Struct (tag factory)
   → produces Blocks with patterned names and per-field policies
-      → Blocks feed into HardwareAssignments as normal
-          → HardwareAssignments exports to CSV (sparse, per .name)
+      → Blocks feed into TagMap as normal
+          → TagMap exports to CSV (sparse, per .name)
 ```
 
-HardwareAssignments never knows about Struct. It just sees Blocks.
+TagMap never knows about Struct. It just sees Blocks.
 
 ---
 
@@ -122,7 +154,7 @@ Both are supported. The choice is about how you assign hardware, not how Struct 
 Each attribute gets its own contiguous range. Recommended when you don't need pointer-level record copies:
 
 ```python
-HardwareAssignments({
+TagMap({
     Alarm.id:   ds.select(1001, 1010),
     Alarm.val:  ds.select(1011, 1020),
     Alarm.Time: ds.select(1021, 1030),
@@ -140,21 +172,30 @@ C1..10:       all Alarm On bits
 
 ### Instance-grouped (with stride, for pointer operations)
 
-All fields for one instance are contiguous within each bank. Enables `blockcopy` of a full record. Requires a stride to leave room for future fields:
+All fields for one instance are contiguous within each bank. Enables `blockcopy` of a full record. Requires a stride to leave room for future fields.
+
+Design decision: use separate typed Struct groups per logical record family (for example `AlarmInts`, `AlarmBits`) rather than a mixed-type packed accessor like `Alarm.ints`.
 
 ```python
-Alarm = Struct("Alarm", count=10, stride=5,
-    id   = Int(retentive=True),
+AlarmInts = Struct("Alarm", count=10, stride=5,
+    id   = Int(default=auto(), retentive=True),
     val  = Int(default=0),
     Time = Int(),
+)
+
+AlarmBits = Struct("Alarm", count=10,
     On   = Bool(retentive=True),
 )
 
-HardwareAssignments({
-    Alarm.ints:  ds.start_at(1001),   # DS1001..1050, stride=5
-    Alarm.bools: c.select(1, 10),
+TagMap({
+    AlarmInts:      ds.select(1001, 1050),       # full stride span for INT fields
+    AlarmBits.On:   c.select(1, 10),
 })
 ```
+
+`AlarmInts` expands internally to per-attribute mappings based on field order/offset. The selected range is validated before mapping:
+- all attributes must fit in the declared stride
+- total required slots (`count * stride`) must fit inside the selected range
 
 Memory layout:
 ```
@@ -167,20 +208,27 @@ DS1005: (spare)         DS1010: (spare)
 
 Copying alarm 3 to history: `blockcopy(base + 2*stride, stride, dest)`.
 
-The stride version needs more design work — how `Alarm.ints` collapses int fields into one interleaved block, how spare slots are handled at export (omitted, matching sparse export rule), and whether stride is per-bank or global.
+Stride keeps a simple assignment model: select one full range for each typed Struct group, then validate it can contain every attribute slot.
 
 ---
 
 ## Per-Instance Override
 
-Even with Struct defaults, individual tags can be overridden:
+Even with Struct defaults, per-instance export metadata is applied at the mapping layer:
 
 ```python
-Alarm[7].id.name = "SpecialAlarm_id"    # custom name
-Alarm[7].val.default = 999              # custom default for this instance
+mapping = TagMap({
+    Alarm.id:   ds.select(1001, 1010),
+    Alarm.val:  ds.select(1011, 1020),
+    Alarm.Time: ds.select(1021, 1030),
+    Alarm.On:   c.select(1, 10),
+})
+
+mapping.override(Alarm[7].id, name="SpecialAlarm_id")  # custom nickname
+mapping.override(Alarm[7].val, default=999)            # custom default
 ```
 
-This works because Struct produces real Tag objects. Overrides stick on the Tag and flow through to export.
+`Tag` objects remain immutable. `TagMap.override()` controls export/validation metadata for mapped slots.
 
 ---
 
@@ -188,10 +236,10 @@ This works because Struct produces real Tag objects. Overrides stick on the Tag 
 
 | Concept | What it is | Who uses it |
 |---------|-----------|-------------|
-| Tag | Named value with type, retentive, default | Engine (logic), HardwareAssignments (export) |
-| Block | Indexed collection of Tags | Engine (logic), HardwareAssignments (export) |
+| Tag | Named value with type, retentive, default | Engine (logic), TagMap (export) |
+| Block | Indexed collection of Tags | Engine (logic), TagMap (export) |
 | Struct | Factory that produces Blocks with patterned names | User (setup), produces Blocks |
-| HardwareAssignments | Maps Tags/Blocks to hardware addresses | Export (CSV), validation |
+| TagMap | Maps Tags/Blocks to hardware addresses | Export (CSV), validation |
 
 Struct adds no new concepts to the mapping layer. It's purely a convenience for the user.
 
@@ -199,12 +247,14 @@ Struct adds no new concepts to the mapping layer. It's purely a convenience for 
 
 ## Open Questions
 
-1. **Stride scope**: Per-bank (int stride vs bool stride) or single global stride? Per-bank is more flexible; single is simpler to declare.
+1. **Stride range assignment (decided)**: Map a full hardware span for each typed Struct group (for example `AlarmInts: ds.select(...)`) and validate that all attribute slots fit.
 
 2. **Naming separator**: `Alarm1_id` uses underscore. Should this be configurable? Dot (`Alarm1.id`) would conflict with the attribute access syntax.
 
-3. **Instance numbering**: Start at 0 or 1? PLC convention is typically 1-based.
+3. **Instance numbering (decided)**: Struct indices are 1-based.
 
-4. **BlockTag markers in CSV**: Should the `<Alarm>...</Alarm>` markers in the nickname file wrap all attributes of a Struct together, or wrap each attribute Block separately? Wrapping all together communicates "these are one concept" but spans multiple memory types.
+4. **BlockTag markers in CSV (decided)**: Use per-attribute wrapping only:
+   `<Alarm.id>...</Alarm.id>`, `<Alarm.val>...</Alarm.val>`, `<Alarm.Time>...</Alarm.Time>`,
+   `<Alarm.On>...</Alarm.On>`. Do not wrap multiple attribute blocks under `<Alarm>...</Alarm>`.
 
-5. **Deferred: `Alarm.ints` accessor**: For the stride layout, how to expose "all int fields interleaved" as a single Block for assignment. This is the main design challenge of the stride variant.
+5. **Typed group model (decided)**: Use separate Struct groups for each bank/type family (for example `AlarmInts`, `AlarmBits`). Do not add a mixed-type `Alarm.ints` accessor.
