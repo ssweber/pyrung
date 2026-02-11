@@ -105,6 +105,14 @@ class TestSystemStateTransitions:
         assert state2.tags["B"] == 99  # Updated
         assert state2.tags["C"] == 3  # Added
 
+    def test_with_tags_accepts_string_values(self):
+        """with_tags() supports CHAR-like string values."""
+        from pyrung.core import SystemState
+
+        state = SystemState().with_tags({"TXT1": "A"})
+
+        assert state.tags["TXT1"] == "A"
+
     def test_with_memory_returns_new_state(self):
         """with_memory() returns a new state, original unchanged."""
         from pyrung.core import SystemState

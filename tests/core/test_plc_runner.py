@@ -153,6 +153,17 @@ class TestPLCRunnerPatch:
 
         assert runner.current_state.tags["X"] == 99
 
+    def test_patch_accepts_string_values(self):
+        """patch() supports CHAR-like string values."""
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic=[])
+
+        runner.patch(tags={"TXT1": "B"})
+        runner.step()
+
+        assert runner.current_state.tags["TXT1"] == "B"
+
 
 class TestPLCRunnerSimulationTime:
     """Test simulation_time property."""

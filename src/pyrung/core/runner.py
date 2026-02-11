@@ -63,7 +63,7 @@ class PLCRunner:
             self._logic = [logic]
 
         self._state = initial_state if initial_state is not None else SystemState()
-        self._pending_patches: dict[str, bool | int | float] = {}
+        self._pending_patches: dict[str, bool | int | float | str] = {}
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
@@ -95,7 +95,7 @@ class PLCRunner:
         if mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
 
-    def patch(self, tags: dict[str, bool | int | float]) -> None:
+    def patch(self, tags: dict[str, bool | int | float | str]) -> None:
         """Queue tag values for next scan (one-shot).
 
         Values are applied at the start of the next step() call,

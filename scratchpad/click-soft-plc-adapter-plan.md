@@ -5,16 +5,21 @@
 `TagMap`, map-time type compatibility, and nickname round-trip are already in place. Remaining work is a runtime bridge: map hardware addresses to logical tags, read from immutable runner state, and queue writes for the next scan.
 
 This work is split into two PRs to keep review surface small:
-1. **Prep PR:** broaden core tag-value typing to include `str`.
-2. **Adapter PR:** add `ClickDataProvider` + tests.
+1. **Prep PR (done):** broaden core tag-value typing to include `str`.
+2. **Adapter PR (next):** add `ClickDataProvider` + tests.
 
-## Prep PR (separate, first)
+## Prep PR (done)
 
 Broaden core signatures from `bool | int | float` to `bool | int | float | str`:
 - `src/pyrung/core/runner.py` (`_pending_patches`, `patch(...)`)
 - `src/pyrung/core/state.py` (`with_tags(...)`)
 
-This is a typing alignment change (with `pyclickplc.server.PlcValue`) and should ship independently before adapter code.
+Status:
+- Completed in `src/pyrung/core/runner.py`.
+- Completed in `src/pyrung/core/state.py`.
+- Added test coverage for string tag writes in:
+  - `tests/core/test_system_state.py`
+  - `tests/core/test_plc_runner.py`
 
 ## Public API / Interface Changes
 
@@ -79,7 +84,7 @@ This is a typing alignment change (with `pyclickplc.server.PlcValue`) and should
 
 ## Implementation Steps
 
-1. **Prep PR first:** broaden core value typing to include `str`:
+1. **Prep PR:** broaden core value typing to include `str` (done):
    - `src/pyrung/core/runner.py`
    - `src/pyrung/core/state.py`
 2. Add public TagMap slot-iteration API for hardware-facing consumers.

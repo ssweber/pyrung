@@ -17,7 +17,7 @@ class SystemState(PRecord):
     Attributes:
         scan_id: Monotonically increasing scan counter.
         timestamp: Simulation clock in seconds.
-        tags: Immutable mapping of tag names to values (bool, int, float).
+        tags: Immutable mapping of tag names to values (bool, int, float, str).
         memory: Immutable mapping for internal state (timers, counters, etc).
     """
 
@@ -26,7 +26,7 @@ class SystemState(PRecord):
     tags = field(type=PMap, initial=pmap())
     memory = field(type=PMap, initial=pmap())
 
-    def with_tags(self, updates: dict[str, bool | int | float]) -> SystemState:
+    def with_tags(self, updates: dict[str, bool | int | float | str]) -> SystemState:
         """Return new state with updated tags. Original unchanged."""
         return self.set(tags=self.tags.update(updates))
 
