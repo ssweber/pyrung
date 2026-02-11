@@ -4,6 +4,7 @@ from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
 
 from pyrung.core import Block, Bool, Char, Dint, InputBlock, OutputBlock, Real, TagType, Word
+from pyrung.core.tag import MappingEntry
 
 Bit = Bool
 Int2 = Dint
@@ -72,6 +73,8 @@ ctd = _block_from_bank_config(BANKS["CTD"])
 sd = _block_from_bank_config(BANKS["SD"])
 txt = _block_from_bank_config(BANKS["TXT"])
 
+from pyrung.click.tag_map import TagMap
+
 __all__ = [
     "Bit",
     "Int2",
@@ -92,4 +95,6 @@ __all__ = [
     "ctd",
     "sd",
     "txt",
+    "TagMap",
+    "MappingEntry",
 ]

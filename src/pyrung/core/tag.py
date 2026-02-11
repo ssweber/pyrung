@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
+    from pyrung.core.memory_block import Block, BlockRange
 
 
 class TagType(Enum):
@@ -23,6 +24,14 @@ class TagType(Enum):
     REAL = "real"  # 32-bit float
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
+
+
+@dataclass(frozen=True)
+class MappingEntry:
+    """Logical-to-hardware mapping declaration used by TagMap."""
+
+    source: Tag | Block
+    target: Tag | BlockRange
 
 
 @dataclass(frozen=True)
@@ -147,6 +156,10 @@ class Tag:
             f"Cannot use Tag '{self.name}' as boolean. "
             "Use it in a Rung condition instead: Rung(tag) or Rung(tag == value)"
         )
+
+    def map_to(self, target: Tag) -> MappingEntry:
+        """Create a logical-to-hardware mapping entry."""
+        return MappingEntry(source=self, target=target)
 
     # =========================================================================
     # Arithmetic Operators -> Expression

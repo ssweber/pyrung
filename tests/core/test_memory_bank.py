@@ -107,6 +107,17 @@ class TestBlock:
         assert C[1].type == TagType.BOOL
         assert DF[1].type == TagType.REAL
 
+    def test_block_identity_hashing(self):
+        """Blocks with identical fields are distinct identity keys."""
+        block_a = Block("DS", TagType.INT, 1, 100)
+        block_b = Block("DS", TagType.INT, 1, 100)
+
+        mapping = {block_a: "A", block_b: "B"}
+
+        assert len(mapping) == 2
+        assert mapping[block_a] == "A"
+        assert mapping[block_b] == "B"
+
     def test_retentive_default(self):
         """Non-retentive block creates non-retentive tags."""
         C = Block("C", TagType.BOOL, 1, 2000, retentive=False)

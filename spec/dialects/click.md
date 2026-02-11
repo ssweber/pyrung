@@ -98,16 +98,18 @@ mapping.to_nickname_file("project.csv")
 Uses from pyclickplc import read_csv, write_csv # see readme
 ```
 
-### Type Inference at Map Time
+### Type Compatibility at Map Time
 
-When a user-defined Block omits the type, it's inferred from the hardware bank it maps to:
+TagMap validates that logical and hardware data types are compatible.
+Logical `Tag`/`Block` types are not inferred from hardware during mapping.
 
 ```python
-Alarms = Block("Alarms", range(1, 100))        # No type specified
-Alarms.map_to(c.select(101, 200))                       # → Bool inferred from C bank
-```
+Alarms = Block("Alarms", TagType.BOOL, 1, 100)
+mapping = TagMap({Alarms: c.select(101, 200)})  # valid BOOL -> C(BIT)
 
-Explicit type always overrides. Retentive default can also be inferred but explicit overrides.
+Setpoint = Tag("Setpoint", TagType.INT)
+TagMap({Setpoint: c[1]})  # raises type mismatch (INT -> BIT)
+```
 
 ### `_block_from_bank_config()` Bridge
 

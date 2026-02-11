@@ -24,9 +24,10 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.expression import Expression
     from pyrung.core.state import SystemState
+    from pyrung.core.tag import MappingEntry
 
 
-@dataclass
+@dataclass(eq=False)
 class Block:
     """Factory for creating Tags from a typed memory region.
 
@@ -205,11 +206,17 @@ class Block:
         else:
             return IndirectBlockRange(self, start, end)
 
+    def map_to(self, target: BlockRange) -> MappingEntry:
+        """Create a logical-to-hardware mapping entry."""
+        from pyrung.core.tag import MappingEntry
+
+        return MappingEntry(source=self, target=target)
+
     def __repr__(self) -> str:
         return f"Block({self.name!r}, {self.type}, {self.start}, {self.end})"
 
 
-@dataclass
+@dataclass(eq=False)
 class InputBlock(Block):
     """Block that creates InputTag instances for physical inputs.
 
@@ -264,7 +271,7 @@ class InputBlock(Block):
         return cast(InputTag, self._tag_cache[addr])
 
 
-@dataclass
+@dataclass(eq=False)
 class OutputBlock(Block):
     """Block that creates OutputTag instances for physical outputs.
 
