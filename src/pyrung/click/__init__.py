@@ -1,6 +1,7 @@
 """Click-style constructor aliases and prebuilt memory blocks."""
 
-from pyclickplc import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType, format_address_display
+from pyclickplc.addresses import format_address_display
+from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
 
 from pyrung.core import Block, Bool, Char, Dint, InputBlock, OutputBlock, Real, TagType, Word
 
