@@ -51,6 +51,7 @@ class Block:
     retentive: bool = False
     valid_ranges: tuple[tuple[int, int], ...] | None = None
     address_formatter: Callable[[str, int], str] | None = None
+    default_factory: Callable[[int], Any] | None = None
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -118,10 +119,14 @@ class Block:
     def _get_tag(self, addr: int) -> Tag:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
+            default = None
+            if self.default_factory is not None:
+                default = self.default_factory(addr)
             self._tag_cache[addr] = Tag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=self.retentive,
+                default=default,
             )
         return self._tag_cache[addr]
 
@@ -231,6 +236,7 @@ class InputBlock(Block):
         end: int,
         valid_ranges: tuple[tuple[int, int], ...] | None = None,
         address_formatter: Callable[[str, int], str] | None = None,
+        default_factory: Callable[[int], Any] | None = None,
     ):
         super().__init__(
             name=name,
@@ -240,6 +246,7 @@ class InputBlock(Block):
             retentive=False,
             valid_ranges=valid_ranges,
             address_formatter=address_formatter,
+            default_factory=default_factory,
         )
 
     @overload
@@ -263,10 +270,14 @@ class InputBlock(Block):
     def _get_tag(self, addr: int) -> InputTag:
         """Get or create an InputTag for the given address."""
         if addr not in self._tag_cache:
+            default = None
+            if self.default_factory is not None:
+                default = self.default_factory(addr)
             self._tag_cache[addr] = InputTag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
+                default=default,
             )
         return cast(InputTag, self._tag_cache[addr])
 
@@ -286,6 +297,7 @@ class OutputBlock(Block):
         end: int,
         valid_ranges: tuple[tuple[int, int], ...] | None = None,
         address_formatter: Callable[[str, int], str] | None = None,
+        default_factory: Callable[[int], Any] | None = None,
     ):
         super().__init__(
             name=name,
@@ -295,6 +307,7 @@ class OutputBlock(Block):
             retentive=False,
             valid_ranges=valid_ranges,
             address_formatter=address_formatter,
+            default_factory=default_factory,
         )
 
     @overload
@@ -320,10 +333,14 @@ class OutputBlock(Block):
     def _get_tag(self, addr: int) -> OutputTag:
         """Get or create an OutputTag for the given address."""
         if addr not in self._tag_cache:
+            default = None
+            if self.default_factory is not None:
+                default = self.default_factory(addr)
             self._tag_cache[addr] = OutputTag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
+                default=default,
             )
         return cast(OutputTag, self._tag_cache[addr])
 

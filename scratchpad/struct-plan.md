@@ -1,99 +1,65 @@
-# Struct Design Exploration
+# Struct / PackedStruct Design Plan (Refined)
 
 ## Problem
 
-Setting up multi-field records (alarms, recipes, batch data) on a Click PLC means manually reserving parallel slices across different memory banks, maintaining naming conventions, and leaving room for future fields. This is the most tedious part of Click project setup.
+Click projects often need repeated records (alarms, recipes, batch data). Building these manually means:
 
-Struct automates this. It works like a dataclass factory — you define fields with types and policies once, stamp out instances, and assign each attribute to a hardware range independently.
+- Reserving parallel slices in multiple banks
+- Keeping naming/indexing consistent
+- Leaving growth room without breaking existing address contracts
 
----
+The goal is to introduce two factories:
 
-## Core API
+- `Struct`: mixed-type records, field-grouped layout
+- `PackedStruct`: single-type records, instance-grouped layout
 
-```python
-Alarm = Struct("Alarm", count=10,
-    id   = Int(default=auto(), retentive=True),  # 1, 2, 3, ...
-    val  = Int(default=0),
-    Time = Int(),
-    On   = Bool(retentive=True),
-)
-```
-
-### Field factories
-
-Struct fields are declared like dataclass fields: typed factory + policy metadata.
-
-```python
-Int(default=0, retentive=False)
-Bool(default=False, retentive=True)
-Int(default=auto(start=1, step=1))
-```
-
-`default` modes:
-- Literal default (`default=0`) applies to all instances in the field.
-- Enumerated default (`default=auto(...)`) is resolved per instance index.
-  Example: `Alarm[i].id.default == i` for `auto(start=1, step=1)`.
-
-### Instance access
-
-`Alarm[i]` returns an instance object with field attributes:
-
-```python
-Alarm[1].id    # → Tag("Alarm1_id", INT, default=1, retentive=True)
-Alarm[3].id    # → Tag("Alarm3_id", INT, default=3, retentive=True)
-Alarm[1].val   # → Tag("Alarm1_val", INT, default=0)
-Alarm[3].On    # → Tag("Alarm3_On", BOOL, retentive=True)
-```
-
-Name pattern: `{StructName}{Index}_{FieldName}` — e.g., `Alarm1_id`, `Alarm3_On`.
-
-### Attribute access
-
-Each attribute surfaces as a Block — all instances of that field:
-
-```python
-Alarm.id       # → Block of 10 Ints: Alarm1_id, Alarm2_id, ... Alarm10_id
-Alarm.val      # → Block of 10 Ints: Alarm1_val, ...
-Alarm.On       # → Block of 10 Bools: Alarm1_On, ...
-```
-
-These Blocks carry the policy (retentive, default) from the field declaration. Every tag in `Alarm.id` inherits `retentive=True`.
-
-### Hardware assignment
-
-In the field-grouped layout, each attribute is assigned independently, like any other Block:
-
-```python
-TagMap({
-    Alarm.id:   ds.select(1001, 1010),
-    Alarm.val:  ds.select(1011, 1020),
-    Alarm.Time: ds.select(1021, 1030),
-    Alarm.On:   c.select(1, 10),
-})
-```
-
-CSV block tags stay per attribute block, not per Struct:
-`<Alarm.id>...</Alarm.id>`, `<Alarm.val>...</Alarm.val>`, `<Alarm.Time>...</Alarm.Time>`,
-`<Alarm.On>...</Alarm.On>`.
-
-Export produces:
-```
-DS1001: Alarm1_id   (retentive)       C1:  Alarm1_On  (retentive)
-DS1002: Alarm2_id   (retentive)       C2:  Alarm2_On  (retentive)
-...                                   ...
-DS1011: Alarm1_val  (default=0)
-DS1012: Alarm2_val  (default=0)
-...
-DS1021: Alarm1_Time
-DS1022: Alarm2_Time
-...
-```
+Both must compile down to existing `Tag`, `Block`, and `MappingEntry` primitives.
 
 ---
 
-## How It Works Internally
+## Hard Constraints from Current Code
 
-Struct is a tag factory that produces ordinary Blocks. By the time anything reaches TagMap, Struct has done its job.
+1. `TagMap` currently accepts only:
+   - `Tag -> Tag`
+   - `Block -> BlockRange`
+2. `MappingEntry` is `source: Tag | Block`, `target: Tag | BlockRange`.
+3. `BlockRange` only models start/end windows; it does not natively model strided lists.
+4. `TagMap.from_nickname_file()` reconstructs block spans from open/close block comments.
+   Sparse block comments with large interior gaps will round-trip as dense spans.
+
+Implication: `PackedStruct` interleaving must avoid depending on sparse `BlockRange` block comments unless TagMap import/export is also changed.
+
+---
+
+## API Surface
+
+### Field descriptor
+
+```python
+from dataclasses import dataclass
+from typing import Any
+from pyrung.core import TagType
+
+
+UNSET = object()
+
+
+@dataclass(frozen=True)
+class Field:
+    # Required in Struct, ignored in PackedStruct
+    type: TagType | None = None
+    # UNSET means "use tag-type default"
+    default: Any = UNSET
+    retentive: bool = False
+```
+
+Default semantics:
+
+- `default=UNSET`: use existing `Tag` type default behavior
+- `default=<literal>`: fixed per instance
+- `default=auto(...)`: per-instance enumerated default
+
+### Auto defaults
 
 ```python
 @dataclass(frozen=True)
@@ -101,160 +67,272 @@ class AutoDefault:
     start: int = 1
     step: int = 1
 
-def auto(*, start: int = 1, step: int = 1) -> AutoDefault: ...
 
-def resolve_default(spec, index: int):
+def auto(*, start: int = 1, step: int = 1) -> AutoDefault: ...
+```
+
+Resolution:
+
+```python
+def resolve_default(spec: object, index: int) -> object:
     if isinstance(spec, AutoDefault):
         return spec.start + (index - 1) * spec.step
+    if spec is UNSET:
+        return None  # let Tag.__post_init__ apply type default
     return spec
-
-class Struct:
-    def __init__(self, name: str, count: int, **fields):
-        self._name = name
-        self._count = count
-        self._fields = fields  # {"id": Int(retentive=True), ...}
-        self._blocks = {}      # {"id": Block(...), "On": Block(...), ...}
-
-        for field_name, field_def in fields.items():
-            block = Block(
-                f"{name}.{field_name}",
-                field_def.type,
-                start=1,
-                end=count,
-                retentive=field_def.retentive,
-                address_formatter=lambda _prefix, i, fn=field_name: f"{name}{i}_{fn}",
-            )
-            # Tags are immutable; create per-slot defaults when slot tags are first materialized.
-            # auto() defaults are index-based (1..count by default).
-            self._blocks[field_name] = block
 ```
 
-`Alarm.id` returns the Block. `Alarm[1]` returns a lightweight instance view that routes `.id` → `Alarm.id[1]`.
-Struct never mutates `Tag` objects after creation.
-
-### Layer separation
-
-```
-Struct (tag factory)
-  → produces Blocks with patterned names and per-field policies
-      → Blocks feed into TagMap as normal
-          → TagMap exports to CSV (sparse, per .name)
-```
-
-TagMap never knows about Struct. It just sees Blocks.
+Validation rule: `AutoDefault` is allowed only for numeric tag types (`INT`, `DINT`, `WORD`).
 
 ---
 
-## Two Layout Options
+## Struct (Mixed Type, Field Grouped)
 
-Both are supported. The choice is about how you assign hardware, not how Struct works.
+### Declaration
 
-### Field-grouped (default, simple)
+```python
+Alarm = Struct(
+    "Alarm",
+    count=10,
+    id=Field(TagType.INT, default=auto(), retentive=True),
+    val=Field(TagType.INT, default=0),
+    Time=Field(TagType.INT),
+    On=Field(TagType.BOOL, retentive=True),
+)
+```
 
-Each attribute gets its own contiguous range. Recommended when you don't need pointer-level record copies:
+### Access patterns
+
+```python
+Alarm.id        # Block of 10 INT tags
+Alarm.On        # Block of 10 BOOL tags
+Alarm[1].id     # Tag("Alarm1_id", ...)
+Alarm[3].On     # Tag("Alarm3_On", ...)
+```
+
+Name pattern: `{StructName}{Index}_{FieldName}`.
+
+### Mapping
+
+Each field is a normal `Block`, mapped normally:
 
 ```python
 TagMap({
-    Alarm.id:   ds.select(1001, 1010),
-    Alarm.val:  ds.select(1011, 1020),
+    Alarm.id: ds.select(1001, 1010),
+    Alarm.val: ds.select(1011, 1020),
     Alarm.Time: ds.select(1021, 1030),
-    Alarm.On:   c.select(1, 10),
+    Alarm.On: c.select(1, 10),
 })
 ```
 
-Memory layout:
-```
-DS1001..1010: all Alarm ids
-DS1011..1020: all Alarm vals
-DS1021..1030: all Alarm Times
-C1..10:       all Alarm On bits
-```
+CSV block markers stay per field (`<Alarm.id> ... </Alarm.id>`), because these are true block mappings.
 
-### Instance-grouped (with stride, for pointer operations)
+---
 
-All fields for one instance are contiguous within each bank. Enables `blockcopy` of a full record. Requires a stride to leave room for future fields.
+## PackedStruct (Single Type, Instance Grouped)
 
-Design decision: use separate typed Struct groups per logical record family (for example `AlarmInts`, `AlarmBits`) rather than a mixed-type packed accessor like `Alarm.ints`.
+### Declaration
 
 ```python
-AlarmInts = Struct("Alarm", count=10, stride=5,
-    id   = Int(default=auto(), retentive=True),
-    val  = Int(default=0),
-    Time = Int(),
+AlarmInts = PackedStruct(
+    "Alarm",
+    TagType.INT,
+    count=10,
+    pad=2,
+    id=Field(default=auto(), retentive=True),
+    val=Field(default=0),
+    Time=Field(),
 )
-
-AlarmBits = Struct("Alarm", count=10,
-    On   = Bool(retentive=True),
-)
-
-TagMap({
-    AlarmInts:      ds.select(1001, 1050),       # full stride span for INT fields
-    AlarmBits.On:   c.select(1, 10),
-})
 ```
 
-`AlarmInts` expands internally to per-attribute mappings based on field order/offset. The selected range is validated before mapping:
-- all attributes must fit in the declared stride
-- total required slots (`count * stride`) must fit inside the selected range
+`pad=N` appends `empty1..emptyN` as real fields.
 
-Memory layout:
-```
-DS1001: Alarm1_id       DS1006: Alarm2_id       C1: Alarm1_On
-DS1002: Alarm1_val      DS1007: Alarm2_val      C2: Alarm2_On
-DS1003: Alarm1_Time     DS1008: Alarm2_Time     ...
-DS1004: (spare)         DS1009: (spare)
-DS1005: (spare)         DS1010: (spare)
-```
+Effective record width:
 
-Copying alarm 3 to history: `blockcopy(base + 2*stride, stride, dest)`.
+`width = len(user_fields) + pad`
 
-Stride keeps a simple assignment model: select one full range for each typed Struct group, then validate it can contain every attribute slot.
-
----
-
-## Per-Instance Override
-
-Even with Struct defaults, per-instance export metadata is applied at the mapping layer:
+### Access patterns
 
 ```python
-mapping = TagMap({
-    Alarm.id:   ds.select(1001, 1010),
-    Alarm.val:  ds.select(1011, 1020),
-    Alarm.Time: ds.select(1021, 1030),
-    Alarm.On:   c.select(1, 10),
-})
-
-mapping.override(Alarm[7].id, name="SpecialAlarm_id")  # custom nickname
-mapping.override(Alarm[7].val, default=999)            # custom default
+AlarmInts.id
+AlarmInts.empty1
+AlarmInts[1].id
 ```
 
-`Tag` objects remain immutable. `TagMap.override()` controls export/validation metadata for mapped slots.
+### Mapping contract
+
+`PackedStruct.map_to(target_range)` returns `list[MappingEntry]`.
+
+Decision:
+
+- If `width == 1`: emit one normal block mapping (`Block -> BlockRange`).
+- If `width > 1`: emit per-slot mappings (`Tag -> Tag`) to represent interleaving without TagMap changes.
+
+This keeps TagMap unchanged and avoids sparse block-comment round-trip distortion.
+
+Example:
+
+```python
+mapping = TagMap([
+    *AlarmInts.map_to(ds.select(1001, 1050)),  # 10 * (3 + 2) = 50
+])
+```
+
+Interleaving algorithm for `width > 1`:
+
+```python
+hw_addrs = tuple(target.addresses)
+expected = count * width
+if len(hw_addrs) != expected:
+    raise ValueError(...)
+
+entries = []
+for i in range(1, count + 1):
+    base = (i - 1) * width
+    for offset, field_name in enumerate(field_order):
+        logical = blocks[field_name][i]               # Tag
+        hardware = target.block[hw_addrs[base + offset]]  # Tag
+        entries.append(logical.map_to(hardware))
+return entries
+```
+
+Tradeoff for `width > 1`:
+
+- `TagMap.resolve(AlarmInts.id, index)` is not available (field block is not mapped as a block entry).
+- `TagMap.resolve(AlarmInts[index].id)` works.
+- CSV export uses standalone rows (no field block markers) for those entries.
 
 ---
 
-## Relationship to Existing Concepts
+## Internals
 
-| Concept | What it is | Who uses it |
-|---------|-----------|-------------|
-| Tag | Named value with type, retentive, default | Engine (logic), TagMap (export) |
-| Block | Indexed collection of Tags | Engine (logic), TagMap (export) |
-| Struct | Factory that produces Blocks with patterned names | User (setup), produces Blocks |
-| TagMap | Maps Tags/Blocks to hardware addresses | Export (CSV), validation |
+### Block change: per-index default factory
 
-Struct adds no new concepts to the mapping layer. It's purely a convenience for the user.
+Extend `Block`:
+
+```python
+default_factory: Callable[[int], Any] | None = None
+```
+
+Tag creation logic:
+
+- For `addr`, compute `default = default_factory(addr)` when provided
+- Pass `default` into `Tag(...)`
+- Cache still keyed by address, so defaults remain deterministic per slot
+
+Important: `InputBlock` and `OutputBlock` override `_get_tag`; they must also honor `default_factory` for consistency.
+
+### New module
+
+Add `src/pyrung/core/struct.py` with:
+
+- `Field`
+- `AutoDefault`, `auto()`, `resolve_default()`
+- `Struct`
+- `PackedStruct`
+- `InstanceView`
+
+### `Struct` validation
+
+- `name` must be non-empty
+- `count` must be `int >= 1`
+- at least one field is required
+- every field value must be a `Field`
+- every field in `Struct` must have `type is not None`
+- field names may not collide with reserved API names (`map_to`, `fields`, etc.)
+- `auto()` only on numeric types
+
+### `PackedStruct` validation
+
+- `name` non-empty
+- `count >= 1`
+- `pad >= 0`
+- at least one user field
+- each field value must be `Field`
+- `Field.type` is rejected (PackedStruct type is defined only at the class level)
+- `pad` names (`empty1..`) must not collide with user fields
+- `auto()` only on numeric `PackedStruct` base type
+
+### `InstanceView`
+
+```python
+class InstanceView:
+    def __init__(self, owner, index: int): ...
+    def __getattr__(self, field_name: str) -> Tag: ...
+```
+
+- Index is validated on `__getitem__`
+- Unknown field access raises `AttributeError` (not `KeyError`)
 
 ---
 
-## Open Questions
+## TagMap Interaction
 
-1. **Stride range assignment (decided)**: Map a full hardware span for each typed Struct group (for example `AlarmInts: ds.select(...)`) and validate that all attribute slots fit.
+No TagMap code changes required.
 
-2. **Naming separator**: `Alarm1_id` uses underscore. Should this be configurable? Dot (`Alarm1.id`) would conflict with the attribute access syntax.
+`Struct` mappings are standard block mappings.
 
-3. **Instance numbering (decided)**: Struct indices are 1-based.
+`PackedStruct` mappings:
 
-4. **BlockTag markers in CSV (decided)**: Use per-attribute wrapping only:
-   `<Alarm.id>...</Alarm.id>`, `<Alarm.val>...</Alarm.val>`, `<Alarm.Time>...</Alarm.Time>`,
-   `<Alarm.On>...</Alarm.On>`. Do not wrap multiple attribute blocks under `<Alarm>...</Alarm>`.
+- `width == 1`: standard block mapping
+- `width > 1`: expanded `Tag -> Tag` mappings
 
-5. **Typed group model (decided)**: Use separate Struct groups for each bank/type family (for example `AlarmInts`, `AlarmBits`). Do not add a mixed-type `Alarm.ints` accessor.
+Override behavior:
+
+```python
+mapping.override(Alarm[7].id, name="SpecialAlarm_id")
+mapping.override(AlarmInts[7].id, default=999)
+```
+
+Works in both cases because overrides already support mapped standalone tags and block slots.
+
+---
+
+## Implementation Order
+
+1. Add `default_factory` support in `Block` / `InputBlock` / `OutputBlock`.
+2. Add `core/struct.py` with `Field`, `AutoDefault`, and helpers.
+3. Implement `Struct` with block-per-field generation and `InstanceView`.
+4. Implement `PackedStruct` with `pad`, accessors, and `map_to`.
+5. Export new symbols from `src/pyrung/core/__init__.py`.
+6. Add tests.
+
+---
+
+## Tests
+
+### Core (`tests/core/test_struct.py`)
+
+- `Struct` builds blocks with correct types
+- `Struct` tags use `{Name}{Index}_{Field}` names
+- `Struct` literal defaults and `auto()` defaults resolve correctly
+- `Struct` retentive policy is inherited by generated tags
+- invalid declarations raise (`count`, missing type, bad field value)
+- `InstanceView` index bounds and missing attribute behavior
+
+### Packed (`tests/core/test_packed_struct.py`)
+
+- `pad` generates `empty1..emptyN`
+- width calculation and range-length validation
+- interleaved `map_to` output addresses are correct
+- `width == 1` path emits block mapping
+- `width > 1` path emits per-slot tag mappings
+- `auto()` restrictions by type
+
+### Click mapping integration (`tests/click/test_struct_mapping.py`)
+
+- `TagMap.resolve(Alarm[2].id)` and `TagMap.resolve(Alarm.id, 2)` for `Struct`
+- `TagMap.resolve(AlarmInts[2].id)` for `PackedStruct width > 1`
+- CSV export contains expected slot names/defaults/retentive values
+
+---
+
+## Decided Points
+
+1. Indexing is 1-based.
+2. Name format is fixed: `{StructName}{Index}_{FieldName}`.
+3. Keep `Struct` and `PackedStruct` as separate classes.
+4. Keep TagMap unchanged.
+5. `PackedStruct` interleaving uses `Tag -> Tag` expansion when width > 1.
+6. `pad` fields are real named fields (`empty1..emptyN`).
+7. Per-slot metadata remains a `TagMap.override(...)` concern.

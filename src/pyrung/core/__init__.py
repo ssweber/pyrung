@@ -67,6 +67,7 @@ from pyrung.core.program import (
 )
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
+from pyrung.core.struct import AutoDefault, Field, InstanceView, PackedStruct, Struct, auto
 from pyrung.core.tag import (
     Bool,
     Char,
@@ -88,6 +89,13 @@ __all__ = [
     "SystemState",
     "TimeMode",
     "TimeUnit",
+    # Structured factories
+    "Field",
+    "AutoDefault",
+    "auto",
+    "Struct",
+    "PackedStruct",
+    "InstanceView",
     # Tags (IEC 61131-3 names)
     "Tag",
     "TagType",

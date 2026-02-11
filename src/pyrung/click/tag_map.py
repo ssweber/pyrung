@@ -206,6 +206,9 @@ class TagMap:
         self._block_lookup: dict[int, _BlockEntry] = {}
         self._slot_ids: set[int] = set()
         self._standalone_names: set[str] = set()
+        self._block_slot_forward_by_id: dict[int, Tag] = {}
+        self._block_slot_forward_by_name: dict[str, Tag] = {}
+        self._ambiguous_block_slot_names: set[str] = set()
         self._overrides_by_name: dict[str, SlotOverride] = {}
         self._overrides_by_slot_id: dict[int, SlotOverride] = {}
         self._warnings: tuple[str, ...] = ()
@@ -263,8 +266,16 @@ class TagMap:
                 self._block_entries.append(block_entry)
                 self._entries.append(block_entry)
                 self._block_lookup[block_id] = block_entry
-                for logical_addr in block_entry.logical_addresses:
-                    self._slot_ids.add(id(source[logical_addr]))
+                for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
+                    logical_slot = source[logical_addr]
+                    hardware_slot = block_entry.hardware.block[hardware_addr]
+                    self._slot_ids.add(id(logical_slot))
+                    self._block_slot_forward_by_id[id(logical_slot)] = hardware_slot
+                    existing = self._block_slot_forward_by_name.get(logical_slot.name)
+                    if existing is not None and existing.name != hardware_slot.name:
+                        self._ambiguous_block_slot_names.add(logical_slot.name)
+                    else:
+                        self._block_slot_forward_by_name[logical_slot.name] = hardware_slot
                 continue
 
             raise ValueError(
@@ -433,7 +444,18 @@ class TagMap:
                 raise TypeError("Standalone tag resolution does not accept index.")
             entry = self._tag_forward.get(source.name)
             if entry is None:
-                raise KeyError(f"No mapping for standalone tag {source.name!r}.")
+                hardware = self._block_slot_forward_by_id.get(id(source))
+                if hardware is not None:
+                    return hardware.name
+                if source.name in self._ambiguous_block_slot_names:
+                    raise KeyError(
+                        f"Tag name {source.name!r} is ambiguous across mapped block slots. "
+                        "Resolve by block and index instead."
+                    )
+                hardware = self._block_slot_forward_by_name.get(source.name)
+                if hardware is None:
+                    raise KeyError(f"No mapping for standalone tag {source.name!r}.")
+                return hardware.name
             return entry.hardware.name
 
         if isinstance(source, Block):
@@ -547,7 +569,11 @@ class TagMap:
         if isinstance(item, str):
             return item in self._tag_forward
         if isinstance(item, Tag):
-            return item.name in self._tag_forward
+            return (
+                item.name in self._tag_forward
+                or id(item) in self._block_slot_forward_by_id
+                or item.name in self._block_slot_forward_by_name
+            )
         if isinstance(item, Block):
             return id(item) in self._block_lookup
         return False
