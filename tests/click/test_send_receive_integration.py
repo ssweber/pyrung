@@ -44,6 +44,26 @@ class _NodeConfig:
     error_tags: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class _OutageNodeAConfig:
+    program: Program
+    initial_patch: dict[str, bool | int | float | str]
+    send_status: _StatusTags
+    recv_status: _StatusTags
+    recv_dest_tag: str
+    send_value: int
+    recv_sentinel: int
+
+
+@dataclass(frozen=True)
+class _OutageNodeBConfig:
+    program: Program
+    mapping: TagMap
+    initial_patch: dict[str, bool | int | float | str]
+    recv_sink_tag: str
+    send_value: int
+
+
 def _status(prefix: str, *, busy_kind: str) -> _StatusTags:
     return _StatusTags(
         busy=Bool(f"{prefix}_{busy_kind}"),
@@ -351,6 +371,87 @@ def _float_matches(value: object, expected: float, *, epsilon: float = 1e-6) -> 
     return abs(value - expected) <= epsilon
 
 
+def _assert_status(
+    tags: dict[str, object],
+    status: _StatusTags,
+    *,
+    busy: bool,
+    success: bool,
+    error: bool,
+    exception: int,
+) -> None:
+    assert tags.get(status.busy.name) is busy
+    assert tags.get(status.success.name) is success
+    assert tags.get(status.error.name) is error
+    assert tags.get(status.exception.name) == exception
+
+
+def _build_outage_node_a(port_b: int) -> _OutageNodeAConfig:
+    enable = Bool("A_Enable")
+    send_source = Int("A_SendSrc")
+    recv_dest = Int("A_RecvDest")
+    send_status = _status("A_OutageSend", busy_kind="Sending")
+    recv_status = _status("A_OutageRecv", busy_kind="Receiving")
+
+    send_value = 314
+    recv_sentinel = -999
+
+    with Program() as logic:
+        with Rung(enable):
+            send(
+                host="127.0.0.1",
+                port=port_b,
+                remote_start="DS101",
+                source=send_source,
+                sending=send_status.busy,
+                success=send_status.success,
+                error=send_status.error,
+                exception_response=send_status.exception,
+            )
+            receive(
+                host="127.0.0.1",
+                port=port_b,
+                remote_start="DS201",
+                dest=recv_dest,
+                receiving=recv_status.busy,
+                success=recv_status.success,
+                error=recv_status.error,
+                exception_response=recv_status.exception,
+            )
+
+    return _OutageNodeAConfig(
+        program=logic,
+        initial_patch={
+            "A_Enable": True,
+            "A_SendSrc": send_value,
+            "A_RecvDest": recv_sentinel,
+        },
+        send_status=send_status,
+        recv_status=recv_status,
+        recv_dest_tag=recv_dest.name,
+        send_value=send_value,
+        recv_sentinel=recv_sentinel,
+    )
+
+
+def _build_outage_node_b() -> _OutageNodeBConfig:
+    recv_sink = Int("B_RecvSink")
+    send_source = Int("B_SendSrc")
+    send_value = 678
+
+    with Program() as logic:
+        pass
+
+    mapping = TagMap([recv_sink.map_to(ds[101]), send_source.map_to(ds[201])])
+    return _OutageNodeBConfig(
+        program=logic,
+        mapping=mapping,
+        initial_patch={"B_SendSrc": send_value},
+        recv_sink_tag=recv_sink.name,
+        send_value=send_value,
+    )
+
+
 async def _run_two_node_exchange() -> list[str]:
     port_a = _find_unused_port()
     port_b = _find_unused_port(exclude={port_a})
@@ -514,4 +615,166 @@ async def _run_two_node_exchange() -> list[str]:
 
 def test_two_local_click_programs_exchange_send_receive_across_datatypes():
     logs = asyncio.run(_run_two_node_exchange())
+    assert logs
+
+
+async def _run_transient_peer_outage_auto_recovery() -> list[str]:
+    port_b = _find_unused_port()
+    node_a = _build_outage_node_a(port_b)
+    node_b = _build_outage_node_b()
+
+    runner_a = PLCRunner(logic=node_a.program)
+    runner_a.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
+    runner_b = PLCRunner(logic=node_b.program)
+    runner_b.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
+
+    logs: list[str] = [f"node A started with B offline on port {port_b}"]
+    scan = 0
+    server_b: ClickServer | None = None
+
+    try:
+        runner_a.patch(node_a.initial_patch)
+
+        scan += 1
+        runner_a.step()
+        tags_a = runner_a.current_state.tags
+        _assert_status(
+            tags_a,
+            node_a.send_status,
+            busy=True,
+            success=False,
+            error=False,
+            exception=0,
+        )
+        _assert_status(
+            tags_a,
+            node_a.recv_status,
+            busy=True,
+            success=False,
+            error=False,
+            exception=0,
+        )
+        assert tags_a.get(node_a.recv_dest_tag) == node_a.recv_sentinel
+        logs.append(f"scan {scan}: requests submitted while B offline")
+
+        outage_deadline = time.monotonic() + 6.0
+        while time.monotonic() < outage_deadline:
+            scan += 1
+            runner_a.step()
+            tags_a = runner_a.current_state.tags
+            assert tags_a.get(node_a.recv_dest_tag) == node_a.recv_sentinel
+            send_failed = (
+                tags_a.get(node_a.send_status.busy.name) is False
+                and tags_a.get(node_a.send_status.success.name) is False
+                and tags_a.get(node_a.send_status.error.name) is True
+            )
+            recv_failed = (
+                tags_a.get(node_a.recv_status.busy.name) is False
+                and tags_a.get(node_a.recv_status.success.name) is False
+                and tags_a.get(node_a.recv_status.error.name) is True
+            )
+            if send_failed and recv_failed:
+                _assert_status(
+                    tags_a,
+                    node_a.send_status,
+                    busy=False,
+                    success=False,
+                    error=True,
+                    exception=0,
+                )
+                _assert_status(
+                    tags_a,
+                    node_a.recv_status,
+                    busy=False,
+                    success=False,
+                    error=True,
+                    exception=0,
+                )
+                logs.append(f"scan {scan}: offline failure latched with exception_response=0")
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError(
+                "Did not observe offline send/receive failure before timeout.\n"
+                f"final tags: {dict(runner_a.current_state.tags)}\n"
+                f"logs: {logs}"
+            )
+
+        scan += 1
+        runner_a.step()
+        tags_a = runner_a.current_state.tags
+        _assert_status(
+            tags_a,
+            node_a.send_status,
+            busy=True,
+            success=False,
+            error=False,
+            exception=0,
+        )
+        _assert_status(
+            tags_a,
+            node_a.recv_status,
+            busy=True,
+            success=False,
+            error=False,
+            exception=0,
+        )
+        assert tags_a.get(node_a.recv_dest_tag) == node_a.recv_sentinel
+        logs.append(f"scan {scan}: rung stayed true and auto-restarted both requests")
+
+        runner_b.patch(node_b.initial_patch)
+        runner_b.step()
+        server_b = ClickServer(
+            ClickDataProvider(runner=runner_b, tag_map=node_b.mapping),
+            host="127.0.0.1",
+            port=port_b,
+        )
+        await server_b.start()
+        logs.append("node B started without toggling A_Enable")
+
+        recovery_deadline = time.monotonic() + 8.0
+        while time.monotonic() < recovery_deadline:
+            scan += 1
+            runner_a.step()
+            runner_b.step()
+            tags_a = runner_a.current_state.tags
+            tags_b = runner_b.current_state.tags
+
+            if (
+                tags_b.get(node_b.recv_sink_tag) == node_a.send_value
+                and tags_a.get(node_a.recv_dest_tag) == node_b.send_value
+                and tags_a.get(node_a.send_status.busy.name) is False
+                and tags_a.get(node_a.send_status.success.name) is True
+                and tags_a.get(node_a.send_status.error.name) is False
+                and tags_a.get(node_a.send_status.exception.name) == 0
+                and tags_a.get(node_a.recv_status.busy.name) is False
+                and tags_a.get(node_a.recv_status.success.name) is True
+                and tags_a.get(node_a.recv_status.error.name) is False
+                and tags_a.get(node_a.recv_status.exception.name) == 0
+            ):
+                logs.append(
+                    f"scan {scan}: recovered with B_RecvSink={node_a.send_value}, "
+                    f"A_RecvDest={node_b.send_value}"
+                )
+                return logs
+            await asyncio.sleep(0.005)
+
+        raise AssertionError(
+            "Did not auto-recover after B came online.\n"
+            f"A tags: {dict(runner_a.current_state.tags)}\n"
+            f"B tags: {dict(runner_b.current_state.tags)}\n"
+            f"logs: {logs}"
+        )
+    finally:
+        runner_a.patch({"A_Enable": False})
+        for _ in range(3):
+            runner_a.step()
+            runner_b.step()
+            await asyncio.sleep(0.002)
+        if server_b is not None:
+            await server_b.stop()
+
+
+def test_transient_peer_outage_then_auto_recovery_without_reenable():
+    logs = asyncio.run(_run_transient_peer_outage_auto_recovery())
     assert logs
