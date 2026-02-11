@@ -184,6 +184,20 @@ class TestSelect:
 
         assert block.addresses == range(100, 110)
 
+    def test_select_reverse_addresses(self):
+        """block.reverse() iterates the same window in reverse order."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        block = DS.select(100, 103).reverse()
+
+        assert tuple(block.addresses) == (103, 102, 101, 100)
+
+    def test_select_reverse_tags(self):
+        """block.reverse().tags() follows reversed address order."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        tags = DS.select(100, 102).reverse().tags()
+
+        assert [tag.name for tag in tags] == ["DS102", "DS101", "DS100"]
+
     def test_select_tags(self):
         """block.tags() returns list of Tags."""
         DS = Block("DS", TagType.INT, 1, 4500)
@@ -273,6 +287,22 @@ class TestIndirectSelect:
         assert resolved.start == 100
         assert resolved.end == 105
         assert len(resolved) == 6
+
+    def test_indirect_memory_block_reverse_resolve(self):
+        """IndirectBlockRange.reverse() preserves reverse ordering on resolve."""
+        from pyrung.core import ScanContext
+
+        DS = Block("DS", TagType.INT, 1, 4500)
+        start_tag = Int("Start")
+        end_tag = Int("End")
+
+        indirect_block = DS.select(start_tag, end_tag).reverse()
+        state = SystemState().with_tags({"Start": 100, "End": 102})
+        ctx = ScanContext(state)
+
+        resolved = indirect_block.resolve_ctx(ctx)
+        assert isinstance(resolved, BlockRange)
+        assert [tag.name for tag in resolved.tags()] == ["DS102", "DS101", "DS100"]
 
     def test_indirect_memory_block_resolve_rejects_reversed_bounds(self):
         """IndirectBlockRange uses block.select() validation for resolved bounds."""

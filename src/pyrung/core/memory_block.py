@@ -332,15 +332,25 @@ class BlockRange:
     block: Block
     start: int
     end: int
+    reverse_order: bool = False
 
     @property
     def addresses(self) -> range | tuple[int, ...]:
         """Return addresses in this block window, filtered by block rules."""
-        return self.block._window_addresses(self.start, self.end)
+        addresses = self.block._window_addresses(self.start, self.end)
+        if not self.reverse_order:
+            return addresses
+        if isinstance(addresses, range):
+            return range(addresses.stop - 1, addresses.start - 1, -1)
+        return tuple(reversed(addresses))
 
     def tags(self) -> list[Tag]:
         """Return list of Tag objects for all addresses in this block."""
         return [self.block._get_tag(addr) for addr in self.addresses]
+
+    def reverse(self) -> BlockRange:
+        """Return this same window with address iteration reversed."""
+        return BlockRange(self.block, self.start, self.end, not self.reverse_order)
 
     def __len__(self) -> int:
         return len(self.addresses)
@@ -370,6 +380,7 @@ class IndirectBlockRange:
     block: Block
     start_expr: int | Tag | Any
     end_expr: int | Tag | Any
+    reverse_order: bool = False
 
     def resolve_ctx(self, ctx: ScanContext) -> BlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
@@ -378,7 +389,16 @@ class IndirectBlockRange:
         resolved = self.block.select(start, end)
         if not isinstance(resolved, BlockRange):
             raise TypeError("Resolved indirect block range did not produce BlockRange")
-        return resolved
+        return resolved.reverse() if self.reverse_order else resolved
+
+    def reverse(self) -> IndirectBlockRange:
+        """Return this same dynamic window with address iteration reversed."""
+        return IndirectBlockRange(
+            block=self.block,
+            start_expr=self.start_expr,
+            end_expr=self.end_expr,
+            reverse_order=not self.reverse_order,
+        )
 
     @staticmethod
     def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:

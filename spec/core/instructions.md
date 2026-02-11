@@ -152,12 +152,14 @@ search(
 ### Shift Register
 
 ```python
-shift_register(start=Block[1], end=Block[8]) \
-    .clock(ClockBit) \
-    .reset(ResetBit)
+shift(bit_range) \
+    .clock(clock_condition) \
+    .reset(reset_condition)
 ```
 
-Direction determined by address order: `start < end` shifts right/up, `start > end` shifts left/down.
+`bit_range` is a `.select()` range and is the source of truth for direction:
+- `shift(C.select(2, 7))` shifts low-to-high.
+- `shift(C.select(2, 7).reverse())` shifts high-to-low.
 
 ---
 

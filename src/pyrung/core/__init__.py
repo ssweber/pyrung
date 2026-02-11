@@ -60,6 +60,7 @@ from pyrung.core.program import (
     program,
     reset,
     rise,
+    shift,
     subroutine,
     unpack_to_bits,
     unpack_to_words,
@@ -129,6 +130,7 @@ __all__ = [
     "call",
     "count_up",
     "count_down",
+    "shift",
     "on_delay",
     "off_delay",
     # Conditions

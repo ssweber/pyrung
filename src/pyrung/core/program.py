@@ -36,6 +36,7 @@ from pyrung.core.instruction import (
     PackBitsInstruction,
     PackWordsInstruction,
     ResetInstruction,
+    ShiftInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
@@ -46,7 +47,7 @@ from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
     from pyrung.core.state import SystemState
 
 
@@ -339,6 +340,62 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
     ctx = _require_rung_context("math")
     ctx._rung.add_instruction(MathInstruction(expression, dest, oneshot, mode))
     return dest
+
+
+class ShiftBuilder:
+    """Builder for shift instruction with required .clock().reset() chaining."""
+
+    def __init__(
+        self,
+        bit_range: BlockRange | IndirectBlockRange,
+        data_condition: Any,
+    ):
+        self._bit_range = bit_range
+        self._data_condition = data_condition
+        self._clock_condition: Condition | Tag | None = None
+        self._rung = _require_rung_context("shift")
+
+    def clock(self, condition: Condition | Tag) -> ShiftBuilder:
+        """Set the shift clock trigger condition."""
+        self._clock_condition = condition
+        return self
+
+    def reset(self, condition: Condition | Tag) -> BlockRange | IndirectBlockRange:
+        """Finalize the shift instruction with required reset condition."""
+        if self._clock_condition is None:
+            raise RuntimeError("shift().clock(...) must be called before shift().reset(...)")
+
+        instr = ShiftInstruction(
+            bit_range=self._bit_range,
+            data_condition=self._data_condition,
+            clock_condition=self._clock_condition,
+            reset_condition=condition,
+        )
+        self._rung._rung.add_instruction(instr)
+        return self._bit_range
+
+
+def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
+    """Shift register instruction builder.
+
+    Data input comes from current rung power. Use .clock(...) then .reset(...)
+    to finalize and add the instruction.
+
+    Example:
+        with Rung(DataBit):
+            shift(C.select(2, 7)).clock(ClockBit).reset(ResetBit)
+    """
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+    if not isinstance(bit_range, (BlockRange, IndirectBlockRange)):
+        raise TypeError(
+            f"shift() expects a BlockRange or IndirectBlockRange from .select(), "
+            f"got {type(bit_range).__name__}"
+        )
+
+    ctx = _require_rung_context("shift")
+    data_condition = ctx._rung._get_combined_condition()
+    return ShiftBuilder(bit_range, data_condition)
 
 
 # ============================================================================

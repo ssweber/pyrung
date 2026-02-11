@@ -877,6 +877,98 @@ class FillInstruction(OneShotMixin, Instruction):
         ctx.set_tags(updates)
 
 
+class ShiftInstruction(Instruction):
+    """Shift register instruction.
+
+    Terminal instruction that always executes and checks:
+    - data condition (rung combined condition) for inserted bit value
+    - clock condition for OFF->ON edge shift trigger
+    - reset condition (level) to clear all bits in the range
+    """
+
+    def __init__(
+        self,
+        bit_range: BlockRange | IndirectBlockRange,
+        data_condition: Any,
+        clock_condition: Any,
+        reset_condition: Any,
+    ):
+        from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+        if not isinstance(bit_range, (BlockRange, IndirectBlockRange)):
+            raise TypeError(
+                f"shift bit_range must be BlockRange or IndirectBlockRange, "
+                f"got {type(bit_range).__name__}"
+            )
+
+        self.bit_range = bit_range
+        self.data_condition = self._to_condition(data_condition)
+        self.clock_condition = self._to_condition(clock_condition)
+        self.reset_condition = self._to_condition(reset_condition)
+        self._prev_clock_key = f"_shift_prev_clock:{id(self)}"
+
+        if self.clock_condition is None:
+            raise ValueError("shift requires a clock condition")
+        if self.reset_condition is None:
+            raise ValueError("shift requires a reset condition")
+
+    def _to_condition(self, obj: Any) -> Any:
+        """Convert a BOOL tag to BitCondition for condition inputs."""
+        from pyrung.core.condition import BitCondition
+        from pyrung.core.tag import Tag as TagClass
+        from pyrung.core.tag import TagType
+
+        if obj is None:
+            return None
+        if isinstance(obj, TagClass):
+            if obj.type == TagType.BOOL:
+                return BitCondition(obj)
+            raise TypeError(
+                f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
+                "Use comparison operators: tag == value, tag > 0, etc."
+            )
+        return obj
+
+    def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
+        from pyrung.core.tag import TagType
+
+        tags = resolve_block_range_tags_ctx(self.bit_range, ctx)
+        if not tags:
+            raise ValueError("shift bit_range resolved to an empty range")
+        for tag in tags:
+            if tag.type != TagType.BOOL:
+                raise TypeError(
+                    f"shift bit_range must contain only BOOL tags; "
+                    f"got {tag.type.name} at {tag.name}"
+                )
+        return tags
+
+    def always_execute(self) -> bool:
+        """Shift must always run to capture clock edges while rung is false."""
+        return True
+
+    def execute(self, ctx: ScanContext) -> None:
+        tags = self._resolve_tags(ctx)
+
+        data_bit = self.data_condition.evaluate(ctx) if self.data_condition is not None else True
+        clock_curr = bool(self.clock_condition.evaluate(ctx))
+        clock_prev = bool(ctx.get_memory(self._prev_clock_key, False))
+        rising_edge = clock_curr and not clock_prev
+
+        if rising_edge:
+            prev_values = [bool(ctx.get_tag(tag.name, tag.default)) for tag in tags]
+            updates = {tags[0].name: bool(data_bit)}
+            for idx, tag in enumerate(tags[1:], start=1):
+                updates[tag.name] = prev_values[idx - 1]
+            ctx.set_tags(updates)
+
+        reset_active = bool(self.reset_condition.evaluate(ctx))
+        if reset_active:
+            ctx.set_tags({tag.name: False for tag in tags})
+
+        ctx.set_memory(self._prev_clock_key, clock_curr)
+
+
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
 
