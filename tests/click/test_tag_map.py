@@ -7,7 +7,7 @@ import pytest
 from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
-from pyrung.click import TagMap, c, x
+from pyrung.click import TagMap, c, ds, x
 from pyrung.click.tag_map import UNSET
 from pyrung.core import Block, Bool, Tag, TagType
 
@@ -75,6 +75,7 @@ def test_empty_map():
     assert mapping.tags() == ()
     assert mapping.blocks() == ()
     assert mapping.entries == ()
+    assert mapping.mapped_slots() == ()
 
 
 def test_contains_tag_name_and_object():
@@ -84,6 +85,41 @@ def test_contains_tag_name_and_object():
     assert "Valve" in mapping
     assert valve in mapping
     assert Bool("Valve") in mapping
+
+
+def test_mapped_slots_include_standalone_and_block_slots():
+    valve = Bool("Valve")
+    alarms = Block("Alarm", TagType.BOOL, 1, 2)
+    mapping = TagMap({valve: c[1], alarms: x.select(1, 2)})
+
+    slots = mapping.mapped_slots()
+    assert len(slots) == 3
+
+    assert slots[0].hardware_address == "C1"
+    assert slots[0].memory_type == "C"
+    assert slots[0].address == 1
+    assert slots[0].logical_name == "Valve"
+    assert slots[0].default is False
+
+    assert slots[1].hardware_address == "X001"
+    assert slots[1].memory_type == "X"
+    assert slots[1].address == 1
+    assert slots[1].logical_name == "Alarm1"
+
+    assert slots[2].hardware_address == "X002"
+    assert slots[2].memory_type == "X"
+    assert slots[2].address == 2
+    assert slots[2].logical_name == "Alarm2"
+
+
+def test_mapped_slots_use_override_default():
+    value = Tag("Value", TagType.INT, default=5)
+    mapping = TagMap({value: ds[1]})
+    mapping.override(value, default=7)
+
+    slots = mapping.mapped_slots()
+    assert len(slots) == 1
+    assert slots[0].default == 7
 
 
 def test_contains_block():

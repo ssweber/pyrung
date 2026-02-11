@@ -29,6 +29,17 @@ class SlotOverride:
 
 
 @dataclass(frozen=True)
+class MappedSlot:
+    """Public runtime slot metadata for a mapped logical/hardware pair."""
+
+    hardware_address: str
+    logical_name: str
+    default: object
+    memory_type: str
+    address: int
+
+
+@dataclass(frozen=True)
 class _TagEntry:
     logical: Tag
     hardware: Tag
@@ -498,6 +509,24 @@ class TagMap:
     def blocks(self) -> tuple[_BlockEntry, ...]:
         return self._block_entries_tuple
 
+    def mapped_slots(self) -> tuple[MappedSlot, ...]:
+        """Return all mapped slots for runtime hardware-facing consumers."""
+        slots: list[MappedSlot] = []
+
+        for entry in self._entries_tuple:
+            if isinstance(entry, _TagEntry):
+                slots.append(self._mapped_slot(entry.logical, entry.hardware))
+                continue
+
+            for logical_addr, hardware_addr in zip(
+                entry.logical_addresses, entry.hardware_addresses, strict=True
+            ):
+                logical_slot = entry.logical[logical_addr]
+                hardware_slot = entry.hardware.block[hardware_addr]
+                slots.append(self._mapped_slot(logical_slot, hardware_slot))
+
+        return tuple(slots)
+
     @property
     def entries(self) -> tuple[_TagEntry | _BlockEntry, ...]:
         return self._entries_tuple
@@ -693,6 +722,17 @@ class TagMap:
         retentive = slot.retentive if override.retentive is None else override.retentive
         default = slot.default if override.default is UNSET else override.default
         return name, retentive, default
+
+    def _mapped_slot(self, logical_slot: Tag, hardware_slot: Tag) -> MappedSlot:
+        memory_type, address = self._parse_hardware_tag(hardware_slot)
+        _, _, default = self._effective_metadata(logical_slot)
+        return MappedSlot(
+            hardware_address=format_address_display(memory_type, address),
+            logical_name=logical_slot.name,
+            default=default,
+            memory_type=memory_type,
+            address=address,
+        )
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:
