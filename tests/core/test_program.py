@@ -488,6 +488,7 @@ class TestStrictDslControlFlowGuard:
         with pytest.raises(ForbiddenControlFlowError, match="Move imports outside"):
             with Program():
                 from pyrung.core import out
+
                 print(out)
 
     def test_context_manager_rejects_comprehension(self):

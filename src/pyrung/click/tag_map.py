@@ -13,11 +13,10 @@ from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, MEMORY_TYPE_BASES, DataTy
 from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
+from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
-
-from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 
 UNSET: Final = object()
 
@@ -575,7 +574,9 @@ class TagMap:
         for entry in self._system_tag_entries_tuple:
             read_only = self._system_read_only[entry.logical.name]
             slots.append(
-                self._mapped_slot(entry.logical, entry.hardware, read_only=read_only, source="system")
+                self._mapped_slot(
+                    entry.logical, entry.hardware, read_only=read_only, source="system"
+                )
             )
 
         return tuple(slots)

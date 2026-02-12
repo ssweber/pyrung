@@ -39,7 +39,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
         runner = PLCRunner(logic)
@@ -65,7 +64,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=50)  # 50ms setpoint
 
         runner = PLCRunner(logic)
@@ -99,7 +97,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
         runner = PLCRunner(logic)
@@ -127,7 +124,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
         runner = PLCRunner(logic)
@@ -161,7 +157,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -184,7 +179,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -217,7 +211,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -250,7 +243,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -289,7 +281,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -319,7 +310,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -347,7 +337,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -379,7 +368,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -420,7 +408,6 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=1000)
 
             with Rung(Enable):
@@ -457,7 +444,6 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(Enable):
-
                 # Using default Tms - accumulator in milliseconds
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -493,12 +479,10 @@ class TestTimerIntegration:
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
             with Rung(Motor):
-
                 on_delay(TON_done, TON_acc, setpoint=50)
 
             # Stop delay: Output stays on 50ms after motor stops
             with Rung(Motor):
-
                 off_delay(TOF_done, TOF_acc, setpoint=50)
 
             # Output logic: TON done AND TOF done
@@ -541,12 +525,10 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(MotorRunning):
-
                 # 5000ms = 5 seconds (scaled down from 5 minutes for test)
                 on_delay(PumpReady, PumpTmr_acc, setpoint=5000)
 
             with Rung(PumpReady):
-
                 out(PumpOutput)
 
         runner = PLCRunner(logic)
@@ -587,7 +569,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=Setpoint)
 
         runner = PLCRunner(logic)
@@ -637,7 +618,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=Setpoint)
 
         runner = PLCRunner(logic)
@@ -679,7 +659,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=Setpoint).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -726,7 +705,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
         runner = PLCRunner(logic)
@@ -761,7 +739,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
         runner = PLCRunner(logic)
@@ -801,7 +778,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -827,7 +803,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
@@ -864,7 +839,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -892,7 +866,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
         runner = PLCRunner(logic)
@@ -923,4 +896,3 @@ class TestTimerAccumulatorOverflow:
         # Further scans stay clamped
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 32767
-
