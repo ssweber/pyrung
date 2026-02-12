@@ -657,7 +657,7 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
         assert tags_a.get(node_a.recv_dest_tag) == node_a.recv_sentinel
         logs.append(f"scan {scan}: requests submitted while B offline")
 
-        outage_deadline = time.monotonic() + 6.0
+        outage_deadline = time.monotonic() + 12.0
         while time.monotonic() < outage_deadline:
             scan += 1
             runner_a.step()

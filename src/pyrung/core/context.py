@@ -7,10 +7,13 @@ preserving read-after-write visibility.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.state import SystemState
+
+TagResolver = Callable[[str, Any], tuple[bool, Any]]
 
 
 class ScanContext:
@@ -34,9 +37,17 @@ class ScanContext:
         "_memory_evolver",
         "_tags_pending",
         "_memory_pending",
+        "_resolver",
+        "_read_only_tags",
     )
 
-    def __init__(self, state: SystemState) -> None:
+    def __init__(
+        self,
+        state: SystemState,
+        *,
+        resolver: TagResolver | None = None,
+        read_only_tags: frozenset[str] = frozenset(),
+    ) -> None:
         """Create a new ScanContext from a SystemState.
 
         Args:
@@ -47,6 +58,8 @@ class ScanContext:
         self._memory_evolver = state.memory.evolver()
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
+        self._resolver = resolver
+        self._read_only_tags = read_only_tags
 
     # =========================================================================
     # Read operations (with pending visibility)
@@ -66,7 +79,13 @@ class ScanContext:
         """
         if name in self._tags_pending:
             return self._tags_pending[name]
-        return self._state.tags.get(name, default)
+        if name in self._state.tags:
+            return self._state.tags[name]
+        if self._resolver is not None:
+            resolved, value = self._resolver(name, self)
+            if resolved:
+                return value
+        return default
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         """Get a memory value, checking pending writes first.
@@ -95,6 +114,8 @@ class ScanContext:
             name: The tag name to set.
             value: The value to set.
         """
+        if name in self._read_only_tags:
+            raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
         self._tags_pending[name] = value
         self._tags_evolver[name] = value
 
@@ -104,6 +125,20 @@ class ScanContext:
         Args:
             updates: Dict of tag names to values.
         """
+        for name in updates:
+            if name in self._read_only_tags:
+                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        self._tags_pending.update(updates)
+        for name, value in updates.items():
+            self._tags_evolver[name] = value
+
+    def _set_tag_internal(self, name: str, value: Any) -> None:
+        """Set a tag while bypassing read-only guards (runtime-only use)."""
+        self._tags_pending[name] = value
+        self._tags_evolver[name] = value
+
+    def _set_tags_internal(self, updates: dict[str, Any]) -> None:
+        """Set multiple tags while bypassing read-only guards (runtime-only use)."""
         self._tags_pending.update(updates)
         for name, value in updates.items():
             self._tags_evolver[name] = value
@@ -127,6 +162,26 @@ class ScanContext:
         self._memory_pending.update(updates)
         for key, value in updates.items():
             self._memory_evolver[key] = value
+
+    def _get_tag_internal(self, name: str, default: Any = None) -> Any:
+        """Read tag value without resolver fallback."""
+        if name in self._tags_pending:
+            return self._tags_pending[name]
+        return self._state.tags.get(name, default)
+
+    def _has_tag_internal(self, name: str) -> bool:
+        """Check for a pending or persisted tag without resolver fallback."""
+        return name in self._tags_pending or name in self._state.tags
+
+    def _get_memory_internal(self, key: str, default: Any = None) -> Any:
+        """Read memory value without side effects."""
+        if key in self._memory_pending:
+            return self._memory_pending[key]
+        return self._state.memory.get(key, default)
+
+    def _has_memory_internal(self, key: str) -> bool:
+        """Check for a pending or persisted memory key."""
+        return key in self._memory_pending or key in self._state.memory
 
     # =========================================================================
     # Passthrough properties

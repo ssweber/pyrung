@@ -17,6 +17,8 @@ from pyrung.core.runner import PLCRunner
 class _MappedRuntimeSlot:
     logical_name: str
     default: object
+    read_only: bool
+    source: str
 
 
 class ClickDataProvider:
@@ -48,6 +50,8 @@ class ClickDataProvider:
             reverse[slot.hardware_address] = _MappedRuntimeSlot(
                 logical_name=slot.logical_name,
                 default=slot.default,
+                read_only=slot.read_only,
+                source=slot.source,
             )
         return reverse
 
@@ -56,6 +60,12 @@ class ClickDataProvider:
         mapped = self._mapped_slots.get(normalized)
         if mapped is None:
             return self._fallback.read(normalized)
+        if mapped.source == "system":
+            found, value = self._runner.system_runtime.resolve(
+                mapped.logical_name, self._runner.current_state
+            )
+            if found:
+                return value
         return self._runner.current_state.tags.get(mapped.logical_name, mapped.default)
 
     def write(self, address: str, value: PlcValue) -> None:
@@ -66,4 +76,8 @@ class ClickDataProvider:
             return
 
         assert_runtime_value(BANKS[bank].data_type, value, bank=bank, index=index)
+        if mapped.source == "system" and mapped.read_only:
+            raise ValueError(
+                f"Tag '{mapped.logical_name}' is read-only system point and cannot be written"
+            )
         self._runner.patch({mapped.logical_name: value})

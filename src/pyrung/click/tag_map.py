@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 import pyclickplc
 from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key, parse_address
@@ -14,6 +14,10 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
+from pyrung.core.system_points import (
+    SYSTEM_CLICK_SLOTS,
+    SYSTEM_TAGS_BY_NAME,
+)
 from pyrung.core.tag import MappingEntry
 
 UNSET: Final = object()
@@ -37,6 +41,8 @@ class MappedSlot:
     default: object
     memory_type: str
     address: int
+    read_only: bool
+    source: Literal["user", "system"]
 
 
 @dataclass(frozen=True)
@@ -207,13 +213,20 @@ class TagMap:
     def __init__(
         self,
         mappings: dict[Tag | Block, Tag | BlockRange] | Iterable[MappingEntry] | None = None,
+        *,
+        include_system: bool = True,
     ):
         normalized = self._normalize_mappings(mappings)
+        self._include_system = include_system
 
         self._tag_entries: list[_TagEntry] = []
         self._block_entries: list[_BlockEntry] = []
         self._entries: list[_TagEntry | _BlockEntry] = []
+        self._system_tag_entries: list[_TagEntry] = []
         self._tag_forward: dict[str, _TagEntry] = {}
+        self._system_tag_forward: dict[str, _TagEntry] = {}
+        self._system_alias_forward: dict[str, _TagEntry] = {}
+        self._system_read_only: dict[str, bool] = {}
         self._block_lookup: dict[int, _BlockEntry] = {}
         self._slot_ids: set[int] = set()
         self._standalone_names: set[str] = set()
@@ -225,12 +238,14 @@ class TagMap:
         self._warnings: tuple[str, ...] = ()
 
         used_hardware: dict[int, str] = {}
+        used_hardware_logical: dict[int, str] = {}
 
         for mapping in normalized:
             source = mapping.source
             target = mapping.target
 
             if isinstance(source, Tag) and isinstance(target, Tag):
+                self._reject_reserved_system_name(source.name)
                 self._validate_tag_mapping(source, target)
                 if source.name in self._standalone_names:
                     raise ValueError(f"Duplicate standalone logical tag name: {source.name!r}")
@@ -239,7 +254,9 @@ class TagMap:
                 self._claim_hardware_address(
                     get_addr_key(memory_type, address),
                     owner=f"tag {source.name!r}",
+                    logical_name=source.name,
                     used_hardware=used_hardware,
+                    used_hardware_logical=used_hardware_logical,
                 )
 
                 entry = _TagEntry(logical=source, hardware=target)
@@ -264,14 +281,18 @@ class TagMap:
 
                 self._validate_block_mapping(block_entry)
 
-                for hardware_addr in block_entry.hardware_addresses:
+                for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
+                    logical_slot = source[logical_addr]
+                    self._reject_reserved_system_name(logical_slot.name)
                     memory_type, _ = self._parse_hardware_tag(
                         block_entry.hardware.block[hardware_addr]
                     )
                     self._claim_hardware_address(
                         get_addr_key(memory_type, hardware_addr),
                         owner=f"block {source.name!r}",
+                        logical_name=logical_slot.name,
                         used_hardware=used_hardware,
+                        used_hardware_logical=used_hardware_logical,
                     )
 
                 self._block_entries.append(block_entry)
@@ -292,6 +313,23 @@ class TagMap:
             raise ValueError(
                 "Unsupported mapping pair. Supported mappings are Tag->Tag and Block->BlockRange."
             )
+
+        if self._include_system:
+            for slot in SYSTEM_CLICK_SLOTS:
+                memory_type, address = self._parse_hardware_tag(slot.hardware)
+                self._claim_hardware_address(
+                    get_addr_key(memory_type, address),
+                    owner=f"system tag {slot.logical.name!r}",
+                    logical_name=slot.logical.name,
+                    used_hardware=used_hardware,
+                    used_hardware_logical=used_hardware_logical,
+                    compatible_logical_names={slot.logical.name, slot.click_nickname},
+                )
+                entry = _TagEntry(logical=slot.logical, hardware=slot.hardware)
+                self._system_tag_entries.append(entry)
+                self._system_tag_forward[slot.logical.name] = entry
+                self._system_alias_forward[slot.click_nickname] = entry
+                self._system_read_only[slot.logical.name] = slot.read_only
 
         self._freeze_entries()
         self._refresh_nickname_validation()
@@ -447,6 +485,10 @@ class TagMap:
                 raise TypeError("Standalone tag resolution does not accept index.")
             entry = self._tag_forward.get(source)
             if entry is None:
+                entry = self._system_tag_forward.get(source)
+            if entry is None:
+                entry = self._system_alias_forward.get(source)
+            if entry is None:
                 raise KeyError(f"No mapping for standalone tag {source!r}.")
             return entry.hardware.name
 
@@ -454,6 +496,8 @@ class TagMap:
             if index is not None:
                 raise TypeError("Standalone tag resolution does not accept index.")
             entry = self._tag_forward.get(source.name)
+            if entry is None:
+                entry = self._system_tag_forward.get(source.name)
             if entry is None:
                 hardware = self._block_slot_forward_by_id.get(id(source))
                 if hardware is not None:
@@ -515,7 +559,9 @@ class TagMap:
 
         for entry in self._entries_tuple:
             if isinstance(entry, _TagEntry):
-                slots.append(self._mapped_slot(entry.logical, entry.hardware))
+                slots.append(
+                    self._mapped_slot(entry.logical, entry.hardware, read_only=False, source="user")
+                )
                 continue
 
             for logical_addr, hardware_addr in zip(
@@ -523,7 +569,15 @@ class TagMap:
             ):
                 logical_slot = entry.logical[logical_addr]
                 hardware_slot = entry.hardware.block[hardware_addr]
-                slots.append(self._mapped_slot(logical_slot, hardware_slot))
+                slots.append(
+                    self._mapped_slot(logical_slot, hardware_slot, read_only=False, source="user")
+                )
+
+        for entry in self._system_tag_entries_tuple:
+            read_only = self._system_read_only[entry.logical.name]
+            slots.append(
+                self._mapped_slot(entry.logical, entry.hardware, read_only=read_only, source="system")
+            )
 
         return tuple(slots)
 
@@ -596,10 +650,15 @@ class TagMap:
 
     def __contains__(self, item: Tag | Block | str) -> bool:
         if isinstance(item, str):
-            return item in self._tag_forward
+            return (
+                item in self._tag_forward
+                or item in self._system_tag_forward
+                or item in self._system_alias_forward
+            )
         if isinstance(item, Tag):
             return (
                 item.name in self._tag_forward
+                or item.name in self._system_tag_forward
                 or id(item) in self._block_slot_forward_by_id
                 or item.name in self._block_slot_forward_by_name
             )
@@ -698,20 +757,30 @@ class TagMap:
         addr_key: int,
         *,
         owner: str,
+        logical_name: str,
         used_hardware: dict[int, str],
+        used_hardware_logical: dict[int, str],
+        compatible_logical_names: set[str] | None = None,
     ) -> None:
         existing = used_hardware.get(addr_key)
         if existing is not None:
+            if compatible_logical_names is not None:
+                existing_logical = used_hardware_logical[addr_key]
+                if existing_logical in compatible_logical_names:
+                    return
             raise ValueError(f"Hardware address conflict between {existing} and {owner}.")
         used_hardware[addr_key] = owner
+        used_hardware_logical[addr_key] = logical_name
 
     def _freeze_entries(self) -> None:
         self._tag_entries_tuple = tuple(self._tag_entries)
         self._block_entries_tuple = tuple(self._block_entries)
         self._entries_tuple = tuple(self._entries)
+        self._system_tag_entries_tuple = tuple(self._system_tag_entries)
         del self._tag_entries
         del self._block_entries
         del self._entries
+        del self._system_tag_entries
 
     def _effective_metadata(self, slot: Tag) -> tuple[str, bool, object]:
         override = self.get_override(slot)
@@ -723,16 +792,32 @@ class TagMap:
         default = slot.default if override.default is UNSET else override.default
         return name, retentive, default
 
-    def _mapped_slot(self, logical_slot: Tag, hardware_slot: Tag) -> MappedSlot:
+    def _mapped_slot(
+        self,
+        logical_slot: Tag,
+        hardware_slot: Tag,
+        *,
+        read_only: bool,
+        source: Literal["user", "system"],
+    ) -> MappedSlot:
         memory_type, address = self._parse_hardware_tag(hardware_slot)
-        _, _, default = self._effective_metadata(logical_slot)
+        if source == "user":
+            _, _, default = self._effective_metadata(logical_slot)
+        else:
+            default = logical_slot.default
         return MappedSlot(
             hardware_address=format_address_display(memory_type, address),
             logical_name=logical_slot.name,
             default=default,
             memory_type=memory_type,
             address=address,
+            read_only=read_only,
+            source=source,
         )
+
+    def _reject_reserved_system_name(self, name: str) -> None:
+        if name in SYSTEM_TAGS_BY_NAME:
+            raise ValueError(f"Logical tag name {name!r} is reserved for system points.")
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:

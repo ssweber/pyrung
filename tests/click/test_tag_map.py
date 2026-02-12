@@ -69,7 +69,7 @@ def test_dict_constructor():
 
 
 def test_empty_map():
-    mapping = TagMap()
+    mapping = TagMap(include_system=False)
 
     assert len(mapping) == 0
     assert mapping.tags() == ()
@@ -90,7 +90,7 @@ def test_contains_tag_name_and_object():
 def test_mapped_slots_include_standalone_and_block_slots():
     valve = Bool("Valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({valve: c[1], alarms: x.select(1, 2)})
+    mapping = TagMap({valve: c[1], alarms: x.select(1, 2)}, include_system=False)
 
     slots = mapping.mapped_slots()
     assert len(slots) == 3
@@ -114,7 +114,7 @@ def test_mapped_slots_include_standalone_and_block_slots():
 
 def test_mapped_slots_use_override_default():
     value = Tag("Value", TagType.INT, default=5)
-    mapping = TagMap({value: ds[1]})
+    mapping = TagMap({value: ds[1]}, include_system=False)
     mapping.override(value, default=7)
 
     slots = mapping.mapped_slots()

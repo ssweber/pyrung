@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.context import ScanContext
 from pyrung.core.state import SystemState
+from pyrung.core.system_points import SystemPointRuntime
 from pyrung.core.time_mode import TimeMode
 
 if TYPE_CHECKING:
@@ -67,6 +68,10 @@ class PLCRunner:
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
+        self._system_runtime = SystemPointRuntime(
+            time_mode_getter=lambda: self._time_mode,
+            fixed_step_dt_getter=lambda: self._dt,
+        )
 
     @property
     def current_state(self) -> SystemState:
@@ -82,6 +87,11 @@ class PLCRunner:
     def time_mode(self) -> TimeMode:
         """Current time mode."""
         return self._time_mode
+
+    @property
+    def system_runtime(self) -> SystemPointRuntime:
+        """System point runtime component."""
+        return self._system_runtime
 
     def set_time_mode(self, mode: TimeMode, dt: float = 0.1) -> None:
         """Set the time mode for simulation.
@@ -104,6 +114,9 @@ class PLCRunner:
         Args:
             tags: Dict of tag names to values.
         """
+        for name in tags:
+            if self._system_runtime.is_read_only(name):
+                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
         self._pending_patches.update(tags)
 
     def step(self) -> SystemState:
@@ -119,8 +132,15 @@ class PLCRunner:
         Returns:
             The new SystemState after this scan.
         """
-        # Create ScanContext for batched updates
-        ctx = ScanContext(self._state)
+        # Create ScanContext for batched updates + system resolver
+        ctx = ScanContext(
+            self._state,
+            resolver=self._system_runtime.resolve,
+            read_only_tags=self._system_runtime.read_only_tags,
+        )
+
+        # System lifecycle hooks run before patching and logic
+        self._system_runtime.on_scan_start(ctx)
 
         # Apply one-shot patches to context
         if self._pending_patches:
@@ -153,6 +173,9 @@ class PLCRunner:
         for name in ctx._tags_pending:
             if name not in self._state.tags:
                 ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+
+        # Final system updates before commit
+        self._system_runtime.on_scan_end(ctx)
 
         # Single commit: apply all changes and advance scan
         self._state = ctx.commit(dt=dt)
