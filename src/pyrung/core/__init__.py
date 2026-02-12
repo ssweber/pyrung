@@ -37,6 +37,7 @@ from pyrung.core.memory_block import (
     OutputBlock,
 )
 from pyrung.core.program import (
+    ForbiddenControlFlowError,
     Program,
     Rung,
     SubroutineFunc,
@@ -123,6 +124,7 @@ __all__ = [
     "Program",
     "Rung",
     "SubroutineFunc",
+    "ForbiddenControlFlowError",
     "program",
     "branch",
     "subroutine",

@@ -4,7 +4,7 @@ Counters are edge-triggered instructions that must be the last in a rung (termin
 They manipulate both a done bit and an accumulator.
 """
 
-from pyrung.core import Bool, Dint, Int, Program, Rung, count_down, count_up, rise
+from pyrung.core import Bool, Dint, Int, Program, Rung, count_down, count_up, latch, out, rise
 
 
 class TestCountUpInstruction:
@@ -473,14 +473,10 @@ class TestCounterIntegration:
 
             # Rung 2: Set flag if we see counter == 1
             with Rung(Counter_acc == 1):
-                from pyrung.core import latch
-
                 latch(SawCounterAt1)
 
             # Rung 3: Set flag if we see counter == 2
             with Rung(Counter_acc == 2):
-                from pyrung.core import latch
-
                 latch(SawCounterAt2)
 
         from pyrung.core import PLCRunner
@@ -528,14 +524,10 @@ class TestCounterIntegration:
 
             # Batch complete output
             with Rung(PartCount_done):
-                from pyrung.core import out
-
                 out(BatchComplete)
 
             # Halfway indicator
             with Rung(PartCount_acc >= 50):
-                from pyrung.core import out
-
                 out(HalfwayLight)
 
         from pyrung.core import PLCRunner

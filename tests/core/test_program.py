@@ -6,6 +6,8 @@ This tests the DSL syntax:
             out(target)
 """
 
+import pytest
+
 from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Real, SystemState, TagType
 from tests.conftest import evaluate_condition, evaluate_program, evaluate_rung
 
@@ -278,8 +280,7 @@ class TestSearchDSL:
 
         with Program() as prog:
             with Rung(Enable):
-                ret = search("==", 20, DS.select(1, 3), Result, Found)
-                assert ret is Result
+                search("==", 20, DS.select(1, 3), Result, Found)
 
         state = SystemState().with_tags(
             {"Enable": True, "DS1": 10, "DS2": 20, "DS3": 30, "Result": 0, "Found": False}
@@ -421,6 +422,214 @@ class TestProgramDecorator:
         assert len(my_logic.rungs) == 1
 
 
+class TestStrictDslControlFlowGuard:
+    """Tests for strict AST control-flow guard in Program/@program/@subroutine."""
+
+    def test_context_manager_rejects_if(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="if/elif/else"):
+            with Program():
+                if True:
+                    with Rung(Enable):
+                        out(Light)
+
+    def test_context_manager_rejects_and_or(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+
+        A = Bool("A")
+        B = Bool("B")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="all_of\\(\\).*any_of\\(\\)"):
+            with Program():
+                with Rung(A and B):
+                    out(Light)
+
+    def test_context_manager_rejects_not(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+
+        A = Bool("A")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="Use `nc\\(\\)`"):
+            with Program():
+                with Rung(not A):
+                    out(Light)
+
+    def test_context_manager_rejects_for_loop(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+
+        A = Bool("A")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="for/while"):
+            with Program():
+                for _ in range(1):
+                    with Rung(A):
+                        out(Light)
+
+    def test_context_manager_rejects_try_except(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program
+
+        with pytest.raises(ForbiddenControlFlowError, match="try/except"):
+            with Program():
+                try:
+                    pass
+                except RuntimeError:
+                    pass
+
+    def test_context_manager_rejects_import(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program
+
+        with pytest.raises(ForbiddenControlFlowError, match="Move imports outside"):
+            with Program():
+                from pyrung.core import out
+                print(out)
+
+    def test_context_manager_rejects_comprehension(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program
+
+        with pytest.raises(ForbiddenControlFlowError, match="Build tag collections outside"):
+            with Program():
+                print([n for n in (1, 2, 3)])
+
+    def test_context_manager_rejects_nested_function_definition(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program
+
+        with pytest.raises(ForbiddenControlFlowError, match="Define functions and classes outside"):
+            with Program():
+
+                def helper():
+                    pass
+
+                helper()
+
+    def test_program_decorator_rejects_assignment(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Rung, out, program
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="assignment"):
+
+            @program
+            def my_logic():
+                value = 1
+                if value:
+                    with Rung(Enable):
+                        out(Light)
+
+    def test_allowed_with_expr_call_and_pass_are_accepted(self):
+        from pyrung.core.program import Program, Rung, out
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        calls: list[str] = []
+
+        def marker() -> None:
+            calls.append("seen")
+
+        with Program() as logic:
+            pass
+            marker()
+            with Rung(Enable):
+                out(Light)
+
+        assert calls == ["seen"]
+        assert len(logic.rungs) == 1
+
+    def test_program_strict_false_opt_out(self):
+        from pyrung.core.program import Program, Rung, out
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            value = 1
+            if value:
+                with Rung(Enable):
+                    out(Light)
+
+        assert len(logic.rungs) == 1
+
+    def test_program_decorator_strict_false_opt_out(self):
+        from pyrung.core.program import Program, Rung, out, program
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        @program(strict=False)
+        def my_logic():
+            value = 1
+            if value:
+                with Rung(Enable):
+                    out(Light)
+
+        assert isinstance(my_logic, Program)
+        assert len(my_logic.rungs) == 1
+
+    def test_subroutine_decorator_rejects_assignment(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Rung, out, subroutine
+
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="assignment"):
+
+            @subroutine("bad_sub")
+            def bad_sub():
+                value = 1
+                if value:
+                    with Rung():
+                        out(Light)
+
+    def test_subroutine_decorator_strict_false_opt_out(self):
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        @subroutine("init", strict=False)
+        def init_sequence():
+            value = 1
+            if value:
+                with Rung():
+                    out(Light)
+
+        with Program() as logic:
+            with Rung(Enable):
+                call(init_sequence)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Enable": True, "Light": False})
+        runner.step()
+        assert runner.current_state.tags["Light"] is True
+
+    def test_guard_warns_and_skips_when_source_is_unavailable(self, monkeypatch):
+        import importlib
+
+        program_module = importlib.import_module("pyrung.core.program")
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        def _raise_source_error(_obj: object) -> tuple[list[str], int]:
+            raise OSError("source unavailable")
+
+        monkeypatch.setattr(program_module.inspect, "getsourcelines", _raise_source_error)
+
+        with pytest.warns(RuntimeWarning, match="Unable to perform strict DSL control-flow check"):
+            with program_module.Program() as logic:
+                with program_module.Rung(Enable):
+                    program_module.out(Light)
+
+        assert len(logic.rungs) == 1
+
+
 class TestPublicExports:
     """Test public core exports."""
 
@@ -436,6 +645,11 @@ class TestPublicExports:
         from pyrung.core import search
 
         assert callable(search)
+
+    def test_forbidden_control_flow_error_export(self):
+        from pyrung.core import ForbiddenControlFlowError
+
+        assert issubclass(ForbiddenControlFlowError, RuntimeError)
 
 
 class TestCastingReferenceExamples:

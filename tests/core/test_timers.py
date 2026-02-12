@@ -14,7 +14,18 @@ Hardware-verified behaviors (Click PLC):
 - First scan includes current scan's dt (not 0 on first enable)
 """
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, TimeMode
+from pyrung.core import (
+    Bool,
+    Int,
+    PLCRunner,
+    Program,
+    Rung,
+    TimeMode,
+    copy,
+    off_delay,
+    on_delay,
+    out,
+)
 
 
 class TestOnDelayTON:
@@ -28,7 +39,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -55,7 +65,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=50)  # 50ms setpoint
 
@@ -90,7 +99,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -119,7 +127,6 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -154,7 +161,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
@@ -178,7 +184,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
@@ -212,7 +217,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
@@ -246,7 +250,6 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
 
@@ -286,7 +289,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -317,7 +319,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -346,7 +347,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -379,7 +379,6 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -413,7 +412,6 @@ class TestTimerIntegration:
         Hardware-verified: With 2ms fixed scan, CapturedAcc values were 2,4,6,8,10
         showing the timer updated BEFORE the capture rung executed.
         """
-        from pyrung.core import copy
 
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
@@ -422,7 +420,6 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=1000)
 
@@ -460,7 +457,6 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 # Using default Tms - accumulator in milliseconds
                 on_delay(Timer_done, Timer_acc, setpoint=100)
@@ -486,7 +482,6 @@ class TestTimerIntegration:
 
     def test_ton_and_tof_in_same_program(self):
         """TON and TOF can coexist in the same program."""
-        from pyrung.core import out
 
         Motor = Bool("Motor")
         TON_done = Bool("t.StartDelay")
@@ -498,13 +493,11 @@ class TestTimerIntegration:
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
             with Rung(Motor):
-                from pyrung.core import on_delay
 
                 on_delay(TON_done, TON_acc, setpoint=50)
 
             # Stop delay: Output stays on 50ms after motor stops
             with Rung(Motor):
-                from pyrung.core import off_delay
 
                 off_delay(TOF_done, TOF_acc, setpoint=50)
 
@@ -548,13 +541,11 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(MotorRunning):
-                from pyrung.core import on_delay
 
                 # 5000ms = 5 seconds (scaled down from 5 minutes for test)
                 on_delay(PumpReady, PumpTmr_acc, setpoint=5000)
 
             with Rung(PumpReady):
-                from pyrung.core import out
 
                 out(PumpOutput)
 
@@ -596,7 +587,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=Setpoint)
 
@@ -647,7 +637,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=Setpoint)
 
@@ -690,7 +679,6 @@ class TestDynamicSetpoints:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=Setpoint).reset(ResetBtn)
 
@@ -738,7 +726,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -774,7 +761,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100)
 
@@ -815,7 +801,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
 
@@ -842,7 +827,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import on_delay
 
                 on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
 
@@ -880,7 +864,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -909,7 +892,6 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                from pyrung.core import off_delay
 
                 off_delay(Timer_done, Timer_acc, setpoint=50)
 
@@ -941,3 +923,4 @@ class TestTimerAccumulatorOverflow:
         # Further scans stay clamped
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 32767
+
