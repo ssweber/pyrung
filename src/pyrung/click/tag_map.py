@@ -14,11 +14,10 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
-from pyrung.core.system_points import (
-    SYSTEM_CLICK_SLOTS,
-    SYSTEM_TAGS_BY_NAME,
-)
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
+
+from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 
 UNSET: Final = object()
 
