@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
+
+if TYPE_CHECKING:
+    from pyrung.click.validation import ClickValidationReport, ValidationMode
+    from pyrung.core.program import Program
 
 import pyclickplc
 from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key, parse_address
@@ -550,6 +554,24 @@ class TagMap:
 
     def blocks(self) -> tuple[_BlockEntry, ...]:
         return self._block_entries_tuple
+
+    def validate(
+        self,
+        program: Program,
+        mode: ValidationMode = "warn",
+    ) -> ClickValidationReport:
+        """Validate a Program against Click portability rules.
+
+        Args:
+            program: The Program to validate.
+            mode: "warn" (findings as hints) or "strict" (findings as errors).
+
+        Returns:
+            ClickValidationReport with categorized findings.
+        """
+        from pyrung.click.validation import validate_click_program
+
+        return validate_click_program(program, self, mode=mode)
 
     def mapped_slots(self) -> tuple[MappedSlot, ...]:
         """Return all mapped slots for runtime hardware-facing consumers."""

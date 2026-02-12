@@ -76,6 +76,7 @@ txt = _block_from_bank_config(BANKS["TXT"])
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.send_receive import receive, send
 from pyrung.click.tag_map import TagMap
+from pyrung.click.validation import ClickFinding, ClickValidationReport, validate_click_program
 
 __all__ = [
     "Bit",
@@ -99,6 +100,9 @@ __all__ = [
     "txt",
     "TagMap",
     "ClickDataProvider",
+    "ClickFinding",
+    "ClickValidationReport",
+    "validate_click_program",
     "send",
     "receive",
     "MappingEntry",
