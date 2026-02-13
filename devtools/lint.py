@@ -28,7 +28,7 @@ def main():
     # 3. Ruff Formatter
     errcount += run(["ruff", "format", *SRC_PATHS])
 
-    errcount += run(["ty", "check"])
+    errcount += run(["ty", "check", *SRC_PATHS])
 
     rprint()
 
