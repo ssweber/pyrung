@@ -231,6 +231,48 @@ class OneShotMixin:
         self._has_executed = False
 
 
+class ForLoopInstruction(OneShotMixin, Instruction):
+    """For-loop instruction.
+
+    Executes a captured instruction list N times within one scan.
+    """
+
+    def __init__(
+        self,
+        count: Tag | IndirectRef | IndirectExprRef | Any,
+        idx_tag: Tag,
+        instructions: list[Instruction],
+        coils: set[Tag],
+        oneshot: bool = False,
+    ):
+        OneShotMixin.__init__(self, oneshot)
+        self.count = count
+        self.idx_tag = idx_tag
+        self.instructions = instructions
+        self.coils = coils
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        count_value = resolve_tag_or_value_ctx(self.count, ctx)
+        iterations = max(0, int(count_value))
+
+        for i in range(iterations):
+            # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
+            ctx.set_tag(self.idx_tag.name, i)
+            for instruction in self.instructions:
+                instruction.execute(ctx)
+
+    def reset_oneshot(self) -> None:
+        """Reset own oneshot state and propagate reset to captured children."""
+        OneShotMixin.reset_oneshot(self)
+        for instruction in self.instructions:
+            reset_fn = getattr(instruction, "reset_oneshot", None)
+            if callable(reset_fn):
+                reset_fn()
+
+
 class OutInstruction(OneShotMixin, Instruction):
     """Output coil instruction (OUT).
 

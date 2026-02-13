@@ -152,6 +152,7 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
         "enable_condition",
         "time_unit",
     ),
+    "ForLoopInstruction": ("count", "idx_tag"),
     "CallInstruction": ("subroutine_name",),
     "ReturnInstruction": (),
 }
@@ -451,6 +452,18 @@ class _Walker:
                 class_name,
                 "instruction.oneshot",
             )
+
+        # ForLoopInstruction captures nested child instructions.
+        if class_name == "ForLoopInstruction":
+            for child_instr in instr.instructions:
+                self._walk_instruction(
+                    child_instr,
+                    scope,
+                    subroutine,
+                    rung_index,
+                    branch_path,
+                    instr_idx,
+                )
 
     # -- value classification + recursive descent --------------------------
 

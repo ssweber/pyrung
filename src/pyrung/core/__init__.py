@@ -38,6 +38,7 @@ from pyrung.core.memory_block import (
 )
 from pyrung.core.program import (
     ForbiddenControlFlowError,
+    ForLoop,
     Program,
     Rung,
     SubroutineFunc,
@@ -51,6 +52,7 @@ from pyrung.core.program import (
     count_up,
     fall,
     fill,
+    forloop,
     latch,
     math,
     nc,
@@ -126,9 +128,11 @@ __all__ = [
     "Program",
     "Rung",
     "SubroutineFunc",
+    "ForLoop",
     "ForbiddenControlFlowError",
     "program",
     "branch",
+    "forloop",
     "subroutine",
     # Instructions
     "out",

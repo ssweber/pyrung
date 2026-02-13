@@ -34,6 +34,7 @@ from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
     FillInstruction,
+    ForLoopInstruction,
     LatchInstruction,
     MathInstruction,
     OffDelayInstruction,
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
 
 # Context stack for tracking current rung
 _rung_stack: list[Rung] = []
+_forloop_active = False
 
 
 def _current_rung() -> Rung | None:
@@ -1034,6 +1036,73 @@ def subroutine(name: str, *, strict: bool = True) -> Subroutine:
 
 
 # ============================================================================
+# ForLoop - repeated instruction block within a rung
+# ============================================================================
+
+
+class ForLoop:
+    """Context manager for a repeated instruction block within a rung."""
+
+    def __init__(self, count: Tag | int, oneshot: bool = False) -> None:
+        self.count = count
+        self.oneshot = oneshot
+        self.idx = Tag("_forloop_idx", TagType.DINT)
+        self._parent_ctx: Rung | None = None
+        self._capture_rung: RungLogic | None = None
+        self._capture_ctx: Rung | None = None
+
+    def __enter__(self) -> ForLoop:
+        global _forloop_active
+
+        if _forloop_active:
+            raise RuntimeError("Nested forloop is not permitted")
+
+        self._parent_ctx = _require_rung_context("forloop")
+        _forloop_active = True
+
+        # Capture body instructions to a temporary rung (like Branch capture).
+        self._capture_rung = RungLogic()
+        self._capture_ctx = Rung.__new__(Rung)
+        self._capture_ctx._rung = self._capture_rung
+        _rung_stack.append(self._capture_ctx)
+
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        global _forloop_active
+
+        _rung_stack.pop()
+        _forloop_active = False
+
+        if self._parent_ctx is None or self._capture_rung is None:
+            return
+
+        instruction = ForLoopInstruction(
+            count=self.count,
+            idx_tag=self.idx,
+            instructions=self._capture_rung._instructions,
+            coils=self._capture_rung._coils,
+            oneshot=self.oneshot,
+        )
+        self._parent_ctx._rung.add_instruction(instruction)
+
+        # Register child OUT targets on parent rung so rung-false resets still apply.
+        for coil in self._capture_rung._coils:
+            self._parent_ctx._rung.register_coil(coil)
+
+
+def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
+    """Create a repeated instruction block context.
+
+    Example:
+        with Rung(Enable):
+            with forloop(10) as loop:
+                copy(Source[loop.idx + 1], Dest[loop.idx + 1])
+    """
+    return ForLoop(count, oneshot=oneshot)
+
+
+# ============================================================================
 # Branch - parallel path within a rung
 # ============================================================================
 
@@ -1065,6 +1134,9 @@ class Branch:
         self._branch_ctx: Rung | None = None
 
     def __enter__(self) -> Branch:
+        if _forloop_active:
+            raise RuntimeError("branch() is not permitted inside forloop()")
+
         # Get parent rung context
         self._parent_ctx = _current_rung()
         if self._parent_ctx is None:
