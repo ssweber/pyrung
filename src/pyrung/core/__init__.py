@@ -87,6 +87,7 @@ from pyrung.core.tag import (
     OutputTag,
     Real,
     Tag,
+    TagNamespace,
     TagType,
     Word,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "InstanceView",
     # Tags (IEC 61131-3 names)
     "Tag",
+    "TagNamespace",
     "TagType",
     "Bool",
     "Int",

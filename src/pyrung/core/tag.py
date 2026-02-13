@@ -6,9 +6,12 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from pyrung.core.live_binding import get_active_runner
 
@@ -418,61 +421,236 @@ class LiveOutputTag(LiveTag, OutputTag):
     """OutputTag with runner-bound staged value access via .value."""
 
 
-def Bool(name: str, retentive: bool = False) -> LiveTag:
+class _AutoTagDecl:
+    """Descriptor used for class-based auto tag naming declarations."""
+
+    def __init__(self, tag_type: TagType, retentive: bool):
+        self._tag_type = tag_type
+        self._retentive = retentive
+        self._bound_tag: LiveTag | None = None
+
+    @property
+    def bound_tag(self) -> LiveTag | None:
+        return self._bound_tag
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        if not getattr(owner, "_PYRUNG_IS_TAG_NAMESPACE", False):
+            raise TypeError(
+                f"Auto tag declaration '{name}' must be defined on a TagNamespace subclass. "
+                f"Use explicit naming instead: Bool('{name}')."
+            )
+        self._bound_tag = LiveTag(name, self._tag_type, self._retentive)
+
+    def __get__(self, instance: object, owner: type | None = None) -> LiveTag:
+        if self._bound_tag is None:
+            raise TypeError("Auto tag declaration is not bound to a class attribute.")
+        return self._bound_tag
+
+
+class TagNamespace:
+    """Base class for opt-in class-based auto tag naming declarations."""
+
+    _PYRUNG_IS_TAG_NAMESPACE = True
+    __pyrung_tags__: Mapping[str, LiveTag] = MappingProxyType({})
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+
+        inherited_tags: dict[str, LiveTag] = {}
+        inherited_origins: list[tuple[str, LiveTag]] = []
+        for base in reversed(cls.__mro__[1:-1]):
+            if not getattr(base, "_PYRUNG_IS_TAG_NAMESPACE", False):
+                continue
+            base_tags = getattr(base, "__pyrung_tags__", None)
+            if not isinstance(base_tags, Mapping):
+                continue
+            for attr_name, tag in base_tags.items():
+                inherited_tags[attr_name] = tag
+                inherited_origins.append((f"{base.__name__}.{attr_name}", tag))
+
+        local_tags: dict[str, LiveTag] = {}
+        local_origins: list[tuple[str, LiveTag]] = []
+        for attr_name, value in cls.__dict__.items():
+            if isinstance(value, _AutoTagDecl):
+                bound = value.bound_tag
+                if bound is None:
+                    raise RuntimeError(
+                        f"Auto tag declaration '{attr_name}' on {cls.__name__} was not bound."
+                    )
+                setattr(cls, attr_name, bound)
+                local_tags[attr_name] = bound
+                local_origins.append((f"{cls.__name__}.{attr_name}", bound))
+            elif isinstance(value, Tag):
+                live_tag = _coerce_live_tag(value)
+                if live_tag is not value:
+                    setattr(cls, attr_name, live_tag)
+                local_tags[attr_name] = live_tag
+                local_origins.append((f"{cls.__name__}.{attr_name}", live_tag))
+
+        _validate_duplicate_names(cls.__name__, inherited_origins + local_origins)
+
+        merged = dict(inherited_tags)
+        merged.update(local_tags)
+        cls.__pyrung_tags__ = MappingProxyType(merged)
+
+    @classmethod
+    def tags(cls) -> dict[str, LiveTag]:
+        """Return a copy of this class' declared tag registry."""
+        return dict(cls.__pyrung_tags__)
+
+
+def _coerce_live_tag(tag: Tag) -> LiveTag:
+    if isinstance(tag, LiveTag):
+        return tag
+    return LiveTag(tag.name, tag.type, tag.retentive, tag.default)
+
+
+def _validate_duplicate_names(class_name: str, origins: list[tuple[str, LiveTag]]) -> None:
+    names_to_origins: dict[str, list[str]] = {}
+    for origin, tag in origins:
+        names_to_origins.setdefault(tag.name, []).append(origin)
+
+    duplicates = {name: refs for name, refs in names_to_origins.items() if len(refs) > 1}
+    if not duplicates:
+        return
+
+    details = "; ".join(
+        f"{tag_name!r} declared by {', '.join(refs)}"
+        for tag_name, refs in sorted(duplicates.items())
+    )
+    raise ValueError(f"Duplicate tag names in {class_name}: {details}")
+
+
+def _is_class_declaration_context(stack_depth: int) -> bool:
+    frame = inspect.currentframe()
+    try:
+        for _ in range(stack_depth):
+            if frame is None:
+                return False
+            frame = frame.f_back
+        if frame is None:
+            return False
+        return "__module__" in frame.f_locals and "__qualname__" in frame.f_locals
+    finally:
+        del frame
+
+
+def _tag_or_decl(
+    name: str | None, tag_type: TagType, retentive: bool, ctor_name: str
+) -> LiveTag | _AutoTagDecl:
+    if name is not None:
+        return LiveTag(name, tag_type, retentive)
+    if not _is_class_declaration_context(stack_depth=3):
+        raise TypeError(
+            f"{ctor_name}() without a name is only valid in a TagNamespace class body. "
+            f"Use {ctor_name}('TagName') or declare inside `class Tags(TagNamespace): ...`."
+        )
+    return _AutoTagDecl(tag_type, retentive)
+
+
+@overload
+def Bool(name: str, retentive: bool = False) -> LiveTag: ...
+
+
+@overload
+def Bool(name: None = None, retentive: bool = False) -> _AutoTagDecl: ...
+
+
+def Bool(name: str | None = None, retentive: bool = False) -> LiveTag | _AutoTagDecl:
     """Create a BOOL tag (boolean).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default False.
     """
-    return LiveTag(name, TagType.BOOL, retentive)
+    return _tag_or_decl(name, TagType.BOOL, retentive, "Bool")
 
 
-def Int(name: str, retentive: bool = True) -> LiveTag:
+@overload
+def Int(name: str, retentive: bool = True) -> LiveTag: ...
+
+
+@overload
+def Int(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
+
+
+def Int(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
     """Create an INT tag (16-bit signed integer).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return LiveTag(name, TagType.INT, retentive)
+    return _tag_or_decl(name, TagType.INT, retentive, "Int")
 
 
-def Dint(name: str, retentive: bool = True) -> LiveTag:
+@overload
+def Dint(name: str, retentive: bool = True) -> LiveTag: ...
+
+
+@overload
+def Dint(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
+
+
+def Dint(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
     """Create a DINT tag (32-bit signed integer).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return LiveTag(name, TagType.DINT, retentive)
+    return _tag_or_decl(name, TagType.DINT, retentive, "Dint")
 
 
-def Real(name: str, retentive: bool = True) -> LiveTag:
+@overload
+def Real(name: str, retentive: bool = True) -> LiveTag: ...
+
+
+@overload
+def Real(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
+
+
+def Real(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
     """Create a REAL tag (32-bit float).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return LiveTag(name, TagType.REAL, retentive)
+    return _tag_or_decl(name, TagType.REAL, retentive, "Real")
 
 
-def Word(name: str, retentive: bool = False) -> LiveTag:
+@overload
+def Word(name: str, retentive: bool = False) -> LiveTag: ...
+
+
+@overload
+def Word(name: None = None, retentive: bool = False) -> _AutoTagDecl: ...
+
+
+def Word(name: str | None = None, retentive: bool = False) -> LiveTag | _AutoTagDecl:
     """Create a WORD tag (16-bit unsigned).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default False.
     """
-    return LiveTag(name, TagType.WORD, retentive)
+    return _tag_or_decl(name, TagType.WORD, retentive, "Word")
 
 
-def Char(name: str, retentive: bool = True) -> LiveTag:
+@overload
+def Char(name: str, retentive: bool = True) -> LiveTag: ...
+
+
+@overload
+def Char(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
+
+
+def Char(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
     """Create a CHAR tag (single ASCII character).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return LiveTag(name, TagType.CHAR, retentive)
+    return _tag_or_decl(name, TagType.CHAR, retentive, "Char")

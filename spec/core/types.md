@@ -118,16 +118,30 @@ IndirectMemoryBlock.resolve_ctx(ctx: ScanContext) -> MemoryBlock
 
 ### IEC 61131-3 Type Constructors
 
-These are convenience functions that return `Tag`:
+These are convenience functions that return `LiveTag` when a name is provided:
 
 ```python
-Bool(name, retentive=False) → Tag(name, TagType.BOOL, retentive)
-Int(name, retentive=False)  → Tag(name, TagType.INT, retentive)
-Dint(name, retentive=False) → Tag(name, TagType.DINT, retentive)
-Real(name, retentive=False) → Tag(name, TagType.REAL, retentive)
-Word(name, retentive=False) → Tag(name, TagType.WORD, retentive)
-Char(name, retentive=False) → Tag(name, TagType.CHAR, retentive)
+Bool(name, retentive=False) → LiveTag(name, TagType.BOOL, retentive)
+Int(name, retentive=True)   → LiveTag(name, TagType.INT, retentive)
+Dint(name, retentive=True)  → LiveTag(name, TagType.DINT, retentive)
+Real(name, retentive=True)  → LiveTag(name, TagType.REAL, retentive)
+Word(name, retentive=False) → LiveTag(name, TagType.WORD, retentive)
+Char(name, retentive=True)  → LiveTag(name, TagType.CHAR, retentive)
 ```
+
+Core also supports opt-in class-based auto naming via `TagNamespace`:
+
+```python
+class Tags(TagNamespace):
+    Step1_Event = Bool()
+    Count = Int(retentive=True)
+```
+
+- In a `TagNamespace` class body, constructors may be called without `name` and use the
+  attribute name automatically.
+- Outside a `TagNamespace` class body, unnamed constructors are invalid and raise `TypeError`.
+- Explicit naming (`Bool("Step1_Event")`) remains fully supported and is still the canonical
+  cross-context form.
 
 Click aliases (`Bit`, `Float`, `Hex`, `Txt`, `Int2`) live in `pyrung.click`, not core.
 

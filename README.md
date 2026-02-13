@@ -103,6 +103,24 @@ Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Ch
 Click-style aliases moved from `pyrung.core` to `pyrung.click`:
 `Bit`, `Int2`, `Float`, `Hex`, `Txt`.
 
+## Auto Naming (Optional)
+
+`TagNamespace` provides opt-in class-based auto naming:
+
+```python
+from pyrung.core import Bool, Int, TagNamespace
+
+
+class Tags(TagNamespace):
+    Step1_Event = Bool()
+    Count = Int(retentive=True)
+```
+
+This binds names from attribute identifiers (`"Step1_Event"`, `"Count"`).
+Explicit naming remains supported and unchanged: `Bool("Step1_Event")`.
+
+Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intentionally unsupported.
+
 ## Documentation
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.
