@@ -28,6 +28,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.instruction import (
+    AsyncLambdaInstruction,
     BlockCopyInstruction,
     CallInstruction,
     CopyInstruction,
@@ -35,6 +36,7 @@ from pyrung.core.instruction import (
     CountUpInstruction,
     FillInstruction,
     ForLoopInstruction,
+    LambdaInstruction,
     LatchInstruction,
     MathInstruction,
     OffDelayInstruction,
@@ -86,6 +88,29 @@ def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
     if isinstance(target, BlockRange):
         return target.tags()
     raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
+
+
+def _validate_custom_callback(fn: Any, *, func_name: str, required_args: int) -> None:
+    """Validate callback contract for custom/acustom DSL entry points."""
+    if not callable(fn):
+        raise TypeError(f"{func_name}() fn must be callable, got {type(fn).__name__}")
+
+    call_attr = fn.__call__
+    if inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(call_attr):
+        raise TypeError(f"{func_name}() callback must be synchronous (async def is not supported)")
+
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{func_name}() could not inspect callback signature") from exc
+
+    sentinel_args = tuple(object() for _ in range(required_args))
+    try:
+        signature.bind(*sentinel_args)
+    except TypeError as exc:
+        if func_name == "custom":
+            raise TypeError("custom() expects callable compatible with (ctx)") from exc
+        raise TypeError("acustom() expects callable compatible with (ctx, enabled)") from exc
 
 
 class ForbiddenControlFlowError(RuntimeError):
@@ -577,6 +602,21 @@ def copy(
     ctx = _require_rung_context("copy")
     ctx._rung.add_instruction(CopyInstruction(source, target, oneshot))
     return target
+
+
+def custom(fn: Callable[[ScanContext], None], oneshot: bool = False) -> None:
+    """Execute a synchronous custom callback when rung power is true."""
+    ctx = _require_rung_context("custom")
+    _validate_custom_callback(fn, func_name="custom", required_args=1)
+    ctx._rung.add_instruction(LambdaInstruction(fn, oneshot))
+
+
+def acustom(fn: Callable[[ScanContext, bool], None]) -> None:
+    """Execute a synchronous custom callback every scan with rung enabled state."""
+    ctx = _require_rung_context("acustom")
+    _validate_custom_callback(fn, func_name="acustom", required_args=2)
+    enable_condition = ctx._rung._get_combined_condition()
+    ctx._rung.add_instruction(AsyncLambdaInstruction(fn, enable_condition))
 
 
 def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:

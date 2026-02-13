@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import struct
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from operator import eq, ge, gt, le, lt, ne
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +16,7 @@ from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
+    from pyrung.core.condition import Condition
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import (
         BlockRange,
@@ -229,6 +231,40 @@ class OneShotMixin:
     def reset_oneshot(self) -> None:
         """Reset oneshot state (call when rung goes false)."""
         self._has_executed = False
+
+
+class LambdaInstruction(OneShotMixin, Instruction):
+    """Escape-hatch instruction wrapping a user-provided synchronous callable."""
+
+    def __init__(self, fn: Callable[[ScanContext], None], oneshot: bool = False):
+        OneShotMixin.__init__(self, oneshot)
+        self._fn = fn
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+        self._fn(ctx)
+
+
+class AsyncLambdaInstruction(Instruction):
+    """Escape-hatch instruction that always runs and receives rung enabled state."""
+
+    def __init__(
+        self,
+        fn: Callable[[ScanContext, bool], None],
+        enable_condition: Condition | None,
+    ):
+        self._fn = fn
+        self._enable_condition = enable_condition
+
+    def always_execute(self) -> bool:
+        return True
+
+    def execute(self, ctx: ScanContext) -> None:
+        enabled = True
+        if self._enable_condition is not None:
+            enabled = bool(self._enable_condition.evaluate(ctx))
+        self._fn(ctx, enabled)
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):

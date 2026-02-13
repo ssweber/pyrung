@@ -31,6 +31,72 @@ with runner.active():
 runner.step()
 ```
 
+## Escape Hatch Callbacks (`custom` / `acustom`)
+
+For logic that does not map well to built-in DSL instructions, pyrung provides two escape-hatch
+instructions in `pyrung.core`:
+
+- `custom(fn, oneshot=False)`:
+  - Runs only when rung power is true.
+  - Callback signature: `fn(ctx) -> None`
+  - Optional `oneshot=True` uses standard one-shot behavior.
+- `acustom(fn)`:
+  - Runs every scan (including rung-false scans) and receives rung state.
+  - Callback signature: `fn(ctx, enabled: bool) -> None`
+  - Useful for async/stateful polling workflows.
+
+Both APIs validate callback compatibility and reject `async def` callbacks.
+
+### `custom()` Example (synchronous)
+
+```python
+from pyrung.core import Bool, Int, Program, Rung, custom
+
+Enable = Bool("Enable")
+Raw = Int("Raw")
+Scaled = Int("Scaled")
+
+def scale(ctx):
+    raw = int(ctx.get_tag(Raw.name, 0))
+    ctx.set_tag(Scaled.name, raw * 2 + 5)
+
+with Program() as logic:
+    with Rung(Enable):
+        custom(scale)
+```
+
+### `acustom()` Example (scan-to-scan state machine)
+
+```python
+from pyrung.core import Bool, Int, Program, Rung, acustom
+
+Enable = Bool("Enable")
+Busy = Bool("Busy")
+Count = Int("Count")
+
+def worker(ctx, enabled):
+    key = "_custom:worker:busy"
+    pending = bool(ctx.get_memory(key, False))
+    if enabled and not pending:
+        ctx.set_memory(key, True)
+        ctx.set_tag(Busy.name, True)
+        return
+    if enabled and pending:
+        n = int(ctx.get_tag(Count.name, 0))
+        ctx.set_tag(Count.name, n + 1)
+        return
+    ctx.set_memory(key, False)
+    ctx.set_tag(Busy.name, False)
+
+with Program() as logic:
+    with Rung(Enable):
+        acustom(worker)
+```
+
+Reference examples:
+- `src/pyrung/examples/custom_math.py`
+- `src/pyrung/examples/click_email.py`
+
 ## Migration Note
 
 Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`.
