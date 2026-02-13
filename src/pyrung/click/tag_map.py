@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 if TYPE_CHECKING:
+    from pyrung.click.profile import HardwareProfile
     from pyrung.click.validation import ClickValidationReport, ValidationMode
     from pyrung.core.program import Program
 
@@ -565,19 +566,21 @@ class TagMap:
         self,
         program: Program,
         mode: ValidationMode = "warn",
+        profile: HardwareProfile | None = None,
     ) -> ClickValidationReport:
         """Validate a Program against Click portability rules.
 
         Args:
             program: The Program to validate.
             mode: "warn" (findings as hints) or "strict" (findings as errors).
+            profile: Optional hardware capability profile override.
 
         Returns:
             ClickValidationReport with categorized findings.
         """
         from pyrung.click.validation import validate_click_program
 
-        return validate_click_program(program, self, mode=mode)
+        return validate_click_program(program, self, mode=mode, profile=profile)
 
     def mapped_slots(self) -> tuple[MappedSlot, ...]:
         """Return all mapped slots for runtime hardware-facing consumers."""

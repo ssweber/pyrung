@@ -17,7 +17,7 @@ import textwrap
 import warnings
 from collections.abc import Callable
 from types import FrameType
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, ClassVar, overload
 
 from pyrung.core.condition import (
     AllCondition,
@@ -52,7 +52,7 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.rung import Rung as RungLogic
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
@@ -107,6 +107,8 @@ _IMPORT_HINT = "Move imports outside the Program/subroutine scope"
 _ASSERT_HINT = "Not valid in ladder logic; handle validation outside DSL scope"
 _DEF_HINT = "Define functions and classes outside the Program/subroutine scope"
 _GENERIC_STMT_HINT = "Only `with ...:`, bare function calls, and `pass` are allowed in DSL scope"
+
+DialectValidator = Callable[..., Any]
 
 
 def _warn_check_skipped(target: str, reason: Exception) -> None:
@@ -375,6 +377,7 @@ class Program:
     """
 
     _current: Program | None = None
+    _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
 
     def __init__(self, *, strict: bool = True) -> None:
         self._strict = strict
@@ -440,6 +443,34 @@ class Program:
     def current(cls) -> Program | None:
         """Get the current program context (if any)."""
         return cls._current
+
+    @classmethod
+    def register_dialect(cls, name: str, validator: DialectValidator) -> None:
+        """Register a portability validator callback for a dialect name."""
+        existing = cls._dialect_validators.get(name)
+        if existing is None:
+            cls._dialect_validators[name] = validator
+            return
+        if existing is validator:
+            return
+        raise ValueError(f"Dialect {name!r} already registered to a different validator")
+
+    @classmethod
+    def registered_dialects(cls) -> tuple[str, ...]:
+        """Return registered dialect names in deterministic order."""
+        return tuple(sorted(cls._dialect_validators))
+
+    def validate(self, dialect: str, *, mode: str = "warn", **kwargs: Any) -> Any:
+        """Run dialect-specific portability validation for this Program."""
+        validator = self._dialect_validators.get(dialect)
+        if validator is None:
+            available = ", ".join(self.registered_dialects()) or "<none>"
+            raise KeyError(
+                f"Unknown validation dialect {dialect!r}. "
+                f"Available dialects: {available}. "
+                f"Import the dialect package first (example: import pyrung.{dialect})."
+            )
+        return validator(self, mode=mode, **kwargs)
 
     def evaluate(self, ctx: ScanContext) -> None:
         """Evaluate all main rungs in order (not subroutines) within a ScanContext."""

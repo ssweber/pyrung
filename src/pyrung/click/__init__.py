@@ -1,9 +1,12 @@
 """Click-style constructor aliases and prebuilt memory blocks."""
 
+from typing import Any
+
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
 
 from pyrung.core import Block, Bool, Char, Dint, InputBlock, OutputBlock, Real, TagType, Word
+from pyrung.core.program import Program
 from pyrung.core.tag import MappingEntry
 
 Bit = Bool
@@ -77,6 +80,18 @@ from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.send_receive import receive, send
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import ClickFinding, ClickValidationReport, validate_click_program
+
+
+def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: Any) -> Any:
+    tag_map = kwargs.pop("tag_map", None)
+    if tag_map is None:
+        raise TypeError("Program.validate('click', ...) requires keyword argument 'tag_map'.")
+    if not isinstance(tag_map, TagMap):
+        raise TypeError("Program.validate('click', ...) expects tag_map=TagMap(...).")
+    return validate_click_program(program, tag_map=tag_map, mode=mode, **kwargs)
+
+
+Program.register_dialect("click", _click_dialect_validator)
 
 __all__ = [
     "Bit",
