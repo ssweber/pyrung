@@ -396,11 +396,11 @@ class TestRungWithAllOf:
 
 
 class TestRungWithGroupedAnyOf:
-    """Test grouped AND terms inside any_of()."""
+    """Test explicit grouped AND terms inside any_of()."""
 
     def test_rung_with_any_of_group(self):
-        """Rung executes when an AND-group inside any_of() is true."""
-        from pyrung.core import any_of
+        """Rung executes when explicit all_of() group inside any_of() is true."""
+        from pyrung.core import all_of, any_of
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -409,7 +409,7 @@ class TestRungWithGroupedAnyOf:
         Auto = Bool("Auto")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Start, (Ready, Auto)))
+        rung = Rung(any_of(Start, all_of(Ready, Auto)))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags(

@@ -405,17 +405,15 @@ class AnyCondition(Condition):
             out(Light)
     """
 
-    def __init__(self, *conditions: ConditionInput):
+    def __init__(self, *conditions: ConditionTerm):
         self.conditions: list[Condition] = []
         for cond in conditions:
             if isinstance(cond, tuple | list):
-                if not cond:
-                    raise ValueError("any_of() group cannot be empty")
-                # Groups inside any_of() are interpreted as AND sub-groups.
-                group_conditions: list[Condition] = [_as_condition(grouped) for grouped in cond]
-                self.conditions.append(AllCondition(*group_conditions))
-            else:
-                self.conditions.append(_as_condition(cond))
+                raise TypeError(
+                    "any_of() does not accept tuple/list groups. "
+                    "Use all_of(...) or '&' for grouped AND terms."
+                )
+            self.conditions.append(_as_condition(cond))
 
         if not self.conditions:
             raise ValueError("any_of() requires at least one condition")

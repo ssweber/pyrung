@@ -846,7 +846,7 @@ def fall(tag: Tag) -> FallingEdgeCondition:
 
 
 def any_of(
-    *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    *conditions: Condition | Tag,
 ) -> AnyCondition:
     """OR condition - true when any sub-condition is true.
 
@@ -861,13 +861,12 @@ def any_of(
         with Rung(Step == 1, Start | CmdStart):
             out(Light)
 
-        # Grouped AND inside OR:
-        with Rung(any_of(Start, (AutoMode, Ready), RemoteStart)):
+        # Grouped AND inside OR (explicit):
+        with Rung(any_of(Start, all_of(AutoMode, Ready), RemoteStart)):
             out(Light)
 
     Args:
-        conditions: Conditions to OR together. Tuple/list entries are interpreted
-                    as grouped AND terms.
+        conditions: Conditions to OR together.
 
     Returns:
         AnyCondition that evaluates True if any sub-condition is True.

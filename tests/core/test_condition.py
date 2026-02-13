@@ -533,17 +533,17 @@ class TestAllOf:
 
 
 class TestGroupedAnyOf:
-    """Test grouped AND terms inside any_of()."""
+    """Test explicit grouped AND terms inside any_of()."""
 
-    def test_any_of_with_tuple_group(self):
-        """Tuple/list entries are treated as grouped AND terms."""
-        from pyrung.core import any_of
+    def test_any_of_with_explicit_all_of_group(self):
+        """Grouped AND terms require explicit all_of()."""
+        from pyrung.core import all_of, any_of
 
         Start = Bool("Start")
         Ready = Bool("Ready")
         Auto = Bool("Auto")
         Remote = Bool("Remote")
-        cond = any_of(Start, (Ready, Auto), Remote)
+        cond = any_of(Start, all_of(Ready, Auto), Remote)
 
         state = SystemState().with_tags(
             {"Start": False, "Ready": True, "Auto": True, "Remote": False}
@@ -555,20 +555,31 @@ class TestGroupedAnyOf:
         )
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_with_list_group(self):
-        """List group syntax is also supported."""
+    def test_any_of_rejects_tuple_group(self):
+        """Tuple groups must be written explicitly with all_of() or &."""
+        import pytest
+
         from pyrung.core import any_of
 
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
-        cond = any_of([A, B], C)
 
-        state = SystemState().with_tags({"A": True, "B": True, "C": False})
-        assert evaluate_condition(cond, state) is True
+        with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
+            any_of((A, B), C)
 
-        state = SystemState().with_tags({"A": True, "B": False, "C": False})
-        assert evaluate_condition(cond, state) is False
+    def test_any_of_rejects_list_group(self):
+        """List groups must be written explicitly with all_of() or &."""
+        import pytest
+
+        from pyrung.core import any_of
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+
+        with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
+            any_of([A, B], C)
 
 
 class TestBitwiseAndOperator:
