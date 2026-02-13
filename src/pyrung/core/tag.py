@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
+from pyrung.core.live_binding import get_active_runner
+
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.memory_block import Block, BlockRange
@@ -342,6 +344,35 @@ class Tag:
         return ~TagExpr(self)
 
 
+def _require_active_runner(tag_name: str):
+    runner = get_active_runner()
+    if runner is None:
+        raise RuntimeError(
+            f"Tag '{tag_name}' is not bound to an active runner. Use: with runner.active(): ..."
+        )
+    return runner
+
+
+class _LiveValueMixin:
+    """Add staged read/write value access through the active PLCRunner."""
+
+    @property
+    def value(self) -> Any:
+        tag = cast(Any, self)
+        runner = _require_active_runner(tag.name)
+        return runner._peek_live_tag_value(tag.name, tag.default)
+
+    @value.setter
+    def value(self, new_value: Any) -> None:
+        tag = cast(Any, self)
+        runner = _require_active_runner(tag.name)
+        runner.patch({tag.name: new_value})
+
+
+class LiveTag(_LiveValueMixin, Tag):
+    """Tag with runner-bound staged value access via .value."""
+
+
 @dataclass(frozen=True)
 class ImmediateRef:
     """Reference to the immediate (physical) value of an I/O tag.
@@ -379,61 +410,69 @@ class OutputTag(Tag):
         return ImmediateRef(self)
 
 
-def Bool(name: str, retentive: bool = False) -> Tag:
+class LiveInputTag(LiveTag, InputTag):
+    """InputTag with runner-bound staged value access via .value."""
+
+
+class LiveOutputTag(LiveTag, OutputTag):
+    """OutputTag with runner-bound staged value access via .value."""
+
+
+def Bool(name: str, retentive: bool = False) -> LiveTag:
     """Create a BOOL tag (boolean).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default False.
     """
-    return Tag(name, TagType.BOOL, retentive)
+    return LiveTag(name, TagType.BOOL, retentive)
 
 
-def Int(name: str, retentive: bool = True) -> Tag:
+def Int(name: str, retentive: bool = True) -> LiveTag:
     """Create an INT tag (16-bit signed integer).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return Tag(name, TagType.INT, retentive)
+    return LiveTag(name, TagType.INT, retentive)
 
 
-def Dint(name: str, retentive: bool = True) -> Tag:
+def Dint(name: str, retentive: bool = True) -> LiveTag:
     """Create a DINT tag (32-bit signed integer).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return Tag(name, TagType.DINT, retentive)
+    return LiveTag(name, TagType.DINT, retentive)
 
 
-def Real(name: str, retentive: bool = True) -> Tag:
+def Real(name: str, retentive: bool = True) -> LiveTag:
     """Create a REAL tag (32-bit float).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return Tag(name, TagType.REAL, retentive)
+    return LiveTag(name, TagType.REAL, retentive)
 
 
-def Word(name: str, retentive: bool = False) -> Tag:
+def Word(name: str, retentive: bool = False) -> LiveTag:
     """Create a WORD tag (16-bit unsigned).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default False.
     """
-    return Tag(name, TagType.WORD, retentive)
+    return LiveTag(name, TagType.WORD, retentive)
 
 
-def Char(name: str, retentive: bool = True) -> Tag:
+def Char(name: str, retentive: bool = True) -> LiveTag:
     """Create a CHAR tag (single ASCII character).
 
     Args:
         name: Tag name.
         retentive: Whether value survives power cycles. Default True.
     """
-    return Tag(name, TagType.CHAR, retentive)
+    return LiveTag(name, TagType.CHAR, retentive)

@@ -26,7 +26,8 @@ with Program() as logic:
 
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-runner.patch({"Button": True})
+with runner.active():
+    Button.value = True
 runner.step()
 ```
 

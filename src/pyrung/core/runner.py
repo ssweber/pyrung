@@ -11,16 +11,21 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.context import ScanContext
+from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import SystemPointRuntime
 from pyrung.core.time_mode import TimeMode
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from pyrung.core.rung import Rung
+    from pyrung.core.tag import Tag
 
 
 class PLCRunner:
@@ -105,19 +110,50 @@ class PLCRunner:
         if mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
 
-    def patch(self, tags: dict[str, bool | int | float | str]) -> None:
+    @contextmanager
+    def active(self) -> Iterator[PLCRunner]:
+        """Bind this runner as active for live Tag.value access."""
+        token = set_active_runner(self)
+        try:
+            yield self
+        finally:
+            reset_active_runner(token)
+
+    def patch(self, tags: Mapping[str | Tag, bool | int | float | str]) -> None:
         """Queue tag values for next scan (one-shot).
 
         Values are applied at the start of the next step() call,
         then cleared. Use for momentary inputs like button presses.
 
         Args:
-            tags: Dict of tag names to values.
+            tags: Dict of tag names or Tag objects to values.
         """
-        for name in tags:
+        from pyrung.core.tag import Tag as TagClass
+
+        normalized: dict[str, bool | int | float | str] = {}
+        for key, value in tags.items():
+            name: str
+            if isinstance(key, TagClass):
+                name = key.name
+            elif isinstance(key, str):
+                name = key
+            else:
+                raise TypeError(f"patch() keys must be str or Tag, got {type(key).__name__}")
             if self._system_runtime.is_read_only(name):
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-        self._pending_patches.update(tags)
+            normalized[name] = value
+        self._pending_patches.update(normalized)
+
+    def _peek_live_tag_value(self, name: str, default: Any) -> Any:
+        """Read a tag as seen by live Tag.value access."""
+        if name in self._pending_patches:
+            return self._pending_patches[name]
+
+        resolved, value = self._system_runtime.resolve(name, self._state)
+        if resolved:
+            return value
+
+        return self._state.tags.get(name, default)
 
     def step(self) -> SystemState:
         """Execute one scan cycle.

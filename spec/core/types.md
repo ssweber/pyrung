@@ -20,13 +20,18 @@ This file specifies the foundational type system: tags, blocks, and the IEC type
 Tag                  ← standalone (Bool, Int, etc.) or Block[n]
 ├── InputTag         ← InputBlock[n] only
 └── OutputTag        ← OutputBlock[n] only
+
+LiveTag              ← runtime-capable Tag with `.value`
+├── LiveInputTag     ← runtime-capable InputTag with `.value`
+└── LiveOutputTag    ← runtime-capable OutputTag with `.value`
 ```
 
 - **Tag** is a single named, typed value. Always internal memory. No `.immediate`.
 - **InputTag** adds `.immediate` property. Only created by indexing an `InputBlock`.
 - **OutputTag** adds `.immediate` property. Only created by indexing an `OutputBlock`.
-- Standalone constructors (`Bool("X")`, `Int("X")`) always produce plain `Tag`.
+- Standalone constructors (`Bool("X")`, `Int("X")`) produce `LiveTag` instances.
 - Tags carry type metadata but **no state**. Values live only in `SystemState.tags`.
+- `Live*Tag` adds staged runtime access via `.value` while a runner is active.
 
 ### Block Hierarchy
 
@@ -146,6 +151,13 @@ class TagType(Enum):
 - In simulation: validation-time check, no runtime behavior.
 - In Click: transcription hint.
 - In CircuitPython: different codegen.
+
+### .value
+
+- `.value` is available on runtime tag instances (`LiveTag`, `LiveInputTag`, `LiveOutputTag`).
+- Reads and writes are staged against the active runner patch queue.
+- Access requires explicit runner scope: `with runner.active(): ...`.
+- Outside active scope, `.value` raises a `RuntimeError`.
 
 ---
 

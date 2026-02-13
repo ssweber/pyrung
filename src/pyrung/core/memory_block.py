@@ -11,7 +11,13 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, cast, overload
 
-from pyrung.core.tag import InputTag, OutputTag, Tag, TagType
+from pyrung.core.tag import (
+    LiveInputTag,
+    LiveOutputTag,
+    LiveTag,
+    Tag,
+    TagType,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.condition import (
@@ -70,7 +76,7 @@ class Block:
                 )
 
     @overload
-    def __getitem__(self, key: int) -> Tag: ...
+    def __getitem__(self, key: int) -> LiveTag: ...
 
     @overload
     def __getitem__(self, key: slice) -> Never: ...
@@ -82,9 +88,9 @@ class Block:
     def __getitem__(self, key: Expression) -> IndirectExprRef: ...
 
     @overload
-    def __getitem__(self, key: object) -> Tag | IndirectRef | IndirectExprRef: ...
+    def __getitem__(self, key: object) -> LiveTag | IndirectRef | IndirectExprRef: ...
 
-    def __getitem__(self, key: int | slice | Tag | Any) -> Tag | IndirectRef | IndirectExprRef:
+    def __getitem__(self, key: int | slice | Tag | Any) -> LiveTag | IndirectRef | IndirectExprRef:
         """Access tags by address, pointer tag, or expression.
 
         Args:
@@ -116,19 +122,19 @@ class Block:
                 f"Invalid key type: {type(key).__name__}. Expected int, Tag, or Expression."
             )
 
-    def _get_tag(self, addr: int) -> Tag:
+    def _get_tag(self, addr: int) -> LiveTag:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
             default = None
             if self.default_factory is not None:
                 default = self.default_factory(addr)
-            self._tag_cache[addr] = Tag(
+            self._tag_cache[addr] = LiveTag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=self.retentive,
                 default=default,
             )
-        return self._tag_cache[addr]
+        return cast(LiveTag, self._tag_cache[addr])
 
     def _format_tag_name(self, addr: int) -> str:
         if self.address_formatter is None:
@@ -250,7 +256,7 @@ class InputBlock(Block):
         )
 
     @overload
-    def __getitem__(self, key: int) -> InputTag: ...
+    def __getitem__(self, key: int) -> LiveInputTag: ...
 
     @overload
     def __getitem__(self, key: slice) -> Never: ...
@@ -262,24 +268,26 @@ class InputBlock(Block):
     def __getitem__(self, key: Expression) -> IndirectExprRef: ...
 
     @overload
-    def __getitem__(self, key: object) -> InputTag | IndirectRef | IndirectExprRef: ...
+    def __getitem__(self, key: object) -> LiveInputTag | IndirectRef | IndirectExprRef: ...
 
-    def __getitem__(self, key: int | slice | Tag | Any) -> InputTag | IndirectRef | IndirectExprRef:
-        return cast(InputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
+    def __getitem__(
+        self, key: int | slice | Tag | Any
+    ) -> LiveInputTag | IndirectRef | IndirectExprRef:
+        return cast(LiveInputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
-    def _get_tag(self, addr: int) -> InputTag:
+    def _get_tag(self, addr: int) -> LiveInputTag:
         """Get or create an InputTag for the given address."""
         if addr not in self._tag_cache:
             default = None
             if self.default_factory is not None:
                 default = self.default_factory(addr)
-            self._tag_cache[addr] = InputTag(
+            self._tag_cache[addr] = LiveInputTag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
                 default=default,
             )
-        return cast(InputTag, self._tag_cache[addr])
+        return cast(LiveInputTag, self._tag_cache[addr])
 
 
 @dataclass(eq=False)
@@ -311,7 +319,7 @@ class OutputBlock(Block):
         )
 
     @overload
-    def __getitem__(self, key: int) -> OutputTag: ...
+    def __getitem__(self, key: int) -> LiveOutputTag: ...
 
     @overload
     def __getitem__(self, key: slice) -> Never: ...
@@ -323,26 +331,26 @@ class OutputBlock(Block):
     def __getitem__(self, key: Expression) -> IndirectExprRef: ...
 
     @overload
-    def __getitem__(self, key: object) -> OutputTag | IndirectRef | IndirectExprRef: ...
+    def __getitem__(self, key: object) -> LiveOutputTag | IndirectRef | IndirectExprRef: ...
 
     def __getitem__(
         self, key: int | slice | Tag | Any
-    ) -> OutputTag | IndirectRef | IndirectExprRef:
-        return cast(OutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
+    ) -> LiveOutputTag | IndirectRef | IndirectExprRef:
+        return cast(LiveOutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
-    def _get_tag(self, addr: int) -> OutputTag:
+    def _get_tag(self, addr: int) -> LiveOutputTag:
         """Get or create an OutputTag for the given address."""
         if addr not in self._tag_cache:
             default = None
             if self.default_factory is not None:
                 default = self.default_factory(addr)
-            self._tag_cache[addr] = OutputTag(
+            self._tag_cache[addr] = LiveOutputTag(
                 name=self._format_tag_name(addr),
                 type=self.type,
                 retentive=False,
                 default=default,
             )
-        return cast(OutputTag, self._tag_cache[addr])
+        return cast(LiveOutputTag, self._tag_cache[addr])
 
 
 @dataclass(frozen=True)

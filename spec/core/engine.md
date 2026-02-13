@@ -54,11 +54,18 @@ State is immutable. Mutations are queued and applied at scan boundaries.
 
 ```python
 runner.patch(tags={...})          # One-shot: applied to next scan, then released
+
+with runner.active():
+    StartButton.value = True      # Equivalent staged one-shot write
+    print(StartButton.value)      # Reads pending value before step()
 ```
 
 - `patch` sets values that take effect at the start of the next scan.
 - Patch values are consumed after one scan (they don't persist).
 - Multiple patches before a `step()` merge (last write wins per tag).
+- `patch` accepts both string keys and `Tag` keys (`{StartButton: True}`).
+- `.value` requires an explicit active scope (`with runner.active(): ...`) and
+  raises `RuntimeError` when used outside that scope.
 
 Force is in `core/debug.md`.
 

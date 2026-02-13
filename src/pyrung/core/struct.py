@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import MappingEntry, Tag, TagType
+from pyrung.core.tag import LiveTag, MappingEntry, TagType
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -66,7 +66,7 @@ class InstanceView:
         self._owner = owner
         self._index = index
 
-    def __getattr__(self, field_name: str) -> Tag:
+    def __getattr__(self, field_name: str) -> LiveTag:
         block = self._owner._blocks.get(field_name)
         if block is None:
             raise AttributeError(f"{type(self._owner).__name__!s} has no field {field_name!r}.")
