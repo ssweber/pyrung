@@ -920,7 +920,7 @@ def program(
             _check_function_body_strict(
                 inner_fn,
                 opt_out_hint="@program(strict=False)",
-                source_label=f"@program {inner_fn.__qualname__}",
+                source_label=f"@program {getattr(inner_fn, '__qualname__', repr(inner_fn))}",
             )
         prog = Program(strict=strict)
         with prog:
@@ -972,7 +972,7 @@ class Subroutine:
             _check_function_body_strict(
                 fn,
                 opt_out_hint=f'@subroutine("{self._name}", strict=False)',
-                source_label=f'@subroutine("{self._name}") {fn.__qualname__}',
+                source_label=f'@subroutine("{self._name}") {getattr(fn, "__qualname__", repr(fn))}',
             )
         return SubroutineFunc(self._name, fn)
 

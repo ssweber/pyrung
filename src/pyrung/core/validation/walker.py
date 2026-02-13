@@ -157,45 +157,6 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Condition child extraction sets
-# ---------------------------------------------------------------------------
-
-_COMPARE_CONDITIONS: set[type] = {
-    CompareEq,
-    CompareNe,
-    CompareLt,
-    CompareLe,
-    CompareGt,
-    CompareGe,
-}
-
-_INDIRECT_COMPARE_CONDITIONS: set[type] = {
-    IndirectCompareEq,
-    IndirectCompareNe,
-    IndirectCompareLt,
-    IndirectCompareLe,
-    IndirectCompareGt,
-    IndirectCompareGe,
-}
-
-_EXPR_COMPARE_CONDITIONS: set[type] = {
-    ExprCompareEq,
-    ExprCompareNe,
-    ExprCompareLt,
-    ExprCompareLe,
-    ExprCompareGt,
-    ExprCompareGe,
-}
-
-_BIT_CONDITIONS: set[type] = {
-    BitCondition,
-    NormallyClosedCondition,
-    RisingEdgeCondition,
-    FallingEdgeCondition,
-}
-
-
-# ---------------------------------------------------------------------------
 # Value classification
 # ---------------------------------------------------------------------------
 
@@ -312,21 +273,34 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
 
     Unknown subclasses fall back to iterating public attributes in sorted order.
     """
-    cond_type = type(cond)
-
-    if cond_type in {AllCondition, AnyCondition}:
+    if isinstance(cond, (AllCondition, AnyCondition)):
         return [(f"conditions[{i}]", child) for i, child in enumerate(cond.conditions)]
 
-    if cond_type in _COMPARE_CONDITIONS:
+    if isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         return [("tag", cond.tag), ("value", cond.value)]
 
-    if cond_type in _INDIRECT_COMPARE_CONDITIONS:
+    if isinstance(
+        cond,
+        (
+            IndirectCompareEq,
+            IndirectCompareNe,
+            IndirectCompareLt,
+            IndirectCompareLe,
+            IndirectCompareGt,
+            IndirectCompareGe,
+        ),
+    ):
         return [("indirect_ref", cond.indirect_ref), ("value", cond.value)]
 
-    if cond_type in _EXPR_COMPARE_CONDITIONS:
+    if isinstance(
+        cond,
+        (ExprCompareEq, ExprCompareNe, ExprCompareLt, ExprCompareLe, ExprCompareGt, ExprCompareGe),
+    ):
         return [("left", cond.left), ("right", cond.right)]
 
-    if cond_type in _BIT_CONDITIONS:
+    if isinstance(
+        cond, (BitCondition, NormallyClosedCondition, RisingEdgeCondition, FallingEdgeCondition)
+    ):
         return [("tag", cond.tag)]
 
     # Unknown condition: iterate public attributes in sorted key order

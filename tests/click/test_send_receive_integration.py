@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import socket
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pyclickplc.server import ClickServer
@@ -372,7 +373,7 @@ def _float_matches(value: object, expected: float, *, epsilon: float = 1e-6) -> 
 
 
 def _assert_status(
-    tags: dict[str, object],
+    tags: Mapping[str, object],
     status: _StatusTags,
     *,
     busy: bool,

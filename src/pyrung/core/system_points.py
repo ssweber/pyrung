@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.tag import Bool, Int, Tag
 
@@ -229,28 +229,32 @@ def _raw_get_tag(ctx_or_state: ScanContext | SystemState, name: str, default: An
     getter = getattr(ctx_or_state, "_get_tag_internal", None)
     if callable(getter):
         return getter(name, default)
-    return ctx_or_state.tags.get(name, default)
+    state = cast("SystemState", ctx_or_state)
+    return state.tags.get(name, default)
 
 
 def _raw_has_tag(ctx_or_state: ScanContext | SystemState, name: str) -> bool:
     checker = getattr(ctx_or_state, "_has_tag_internal", None)
     if callable(checker):
         return checker(name)
-    return name in ctx_or_state.tags
+    state = cast("SystemState", ctx_or_state)
+    return name in state.tags
 
 
 def _raw_get_memory(ctx_or_state: ScanContext | SystemState, key: str, default: Any) -> Any:
     getter = getattr(ctx_or_state, "_get_memory_internal", None)
     if callable(getter):
         return getter(key, default)
-    return ctx_or_state.memory.get(key, default)
+    state = cast("SystemState", ctx_or_state)
+    return state.memory.get(key, default)
 
 
 def _raw_has_memory(ctx_or_state: ScanContext | SystemState, key: str) -> bool:
     checker = getattr(ctx_or_state, "_has_memory_internal", None)
     if callable(checker):
         return checker(key)
-    return key in ctx_or_state.memory
+    state = cast("SystemState", ctx_or_state)
+    return key in state.memory
 
 
 class SystemPointRuntime:

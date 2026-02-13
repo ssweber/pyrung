@@ -1437,7 +1437,7 @@ class TestSearchInstruction:
             SearchInstruction(
                 condition="==",
                 value=1,
-                search_range=Int("NotARange"),  # type: ignore[arg-type]
+                search_range=Int("NotARange"),
                 result=Result,
                 found=Found,
             )

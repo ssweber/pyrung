@@ -70,13 +70,13 @@ class Tag:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+    def __eq__(self, other: object) -> Condition:
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
         return CompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+    def __ne__(self, other: object) -> Condition:
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
@@ -141,7 +141,7 @@ class Tag:
                     f"Cannot OR {type(other).__name__} with Tag. "
                     "Bitwise OR requires numeric/tag expression operands."
                 )
-            return cast(Any, other) | TagExpr(self)
+            return other | TagExpr(self)
 
         if isinstance(other, Tag | CondBase):
             return AnyCondition(other, self)
