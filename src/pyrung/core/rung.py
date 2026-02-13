@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from pyrung.core.condition import (
-    BitCondition,
     Condition,
+    _as_condition,
 )
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import Tag
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -41,19 +41,7 @@ class Rung:
         self._coils: set[Tag] = set()  # Tags that should reset when rung false
 
         for cond in conditions:
-            if isinstance(cond, Tag):
-                # BOOL tags become BitCondition (normally open contact)
-                if cond.type == TagType.BOOL:
-                    self._conditions.append(BitCondition(cond))
-                else:
-                    raise TypeError(
-                        f"Non-BOOL tag '{cond.name}' cannot be used directly as condition. "
-                        "Use comparison operators: tag == value, tag > 0, etc."
-                    )
-            elif isinstance(cond, Condition):
-                self._conditions.append(cond)
-            else:
-                raise TypeError(f"Expected Condition or Tag, got {type(cond)}")
+            self._conditions.append(_as_condition(cond))
 
     def add_instruction(self, instruction: Instruction) -> None:
         """Add an instruction to execute when conditions are true."""

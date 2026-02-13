@@ -6,6 +6,7 @@ from pyrung.click import TagMap, dd, ds
 from pyrung.click.validation import (
     CLK_EXPR_ONLY_IN_MATH,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
+    CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_PTR_CONTEXT_ONLY_COPY,
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
@@ -188,6 +189,68 @@ class TestExpressionInCondition:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.hints)
+
+
+class TestIntTruthinessInCondition:
+    def test_warn_mode_gives_hint(self):
+        Step = Tag("Step", TagType.INT)
+
+        def logic():
+            with Rung(Step):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED for f in report.hints)
+        assert not report.errors
+
+    def test_strict_mode_gives_error(self):
+        Step = Tag("Step", TagType.INT)
+
+        def logic():
+            with Rung(Step):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED for f in report.errors)
+        assert not report.hints
+
+    def test_explicit_compare_has_no_truthiness_finding(self):
+        Step = Tag("Step", TagType.INT)
+
+        def logic():
+            with Rung(Step != 0):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_grouped_any_of_emits_truthiness_finding(self):
+        Step = Tag("Step", TagType.INT)
+        Start = Bool("Start")
+
+        def logic():
+            from pyrung.core import any_of
+
+            with Rung(any_of(Step, Start)):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED for f in report.hints)
 
 
 # ---------------------------------------------------------------------------

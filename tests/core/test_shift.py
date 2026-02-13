@@ -284,3 +284,25 @@ class TestShiftBuilder:
         assert runner.current_state.tags["C1"] is True
         assert runner.current_state.tags["C2"] is False
         assert runner.current_state.tags["C3"] is False
+
+    def test_clock_rejects_int_tag_condition(self):
+        Data = Bool("Data")
+        ClockValue = Int("ClockValue")
+        Reset = Bool("Reset")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program():
+            with Rung(Data):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    shift(C.select(1, 3)).clock(ClockValue).reset(Reset)
+
+    def test_reset_rejects_int_tag_condition(self):
+        Data = Bool("Data")
+        Clock = Bool("Clock")
+        ResetValue = Int("ResetValue")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program():
+            with Rung(Data):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    shift(C.select(1, 3)).clock(Clock).reset(ResetValue)

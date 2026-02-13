@@ -31,6 +31,24 @@ with runner.active():
 runner.step()
 ```
 
+## INT Truthiness in Conditions
+
+Direct `INT` tags can be used as rung conditions and are treated as nonzero truthiness:
+
+```python
+Step = Int("Step")
+with Program() as logic:
+    with Rung(Step):  # equivalent to: with Rung(Step != 0)
+        out(Bool("Light"))
+```
+
+This applies to rung/branch condition composition (`Rung`, `branch`, `any_of`, `all_of`).
+It does not change helper-specific condition parameters (`count_*`, `on_delay().reset(...)`,
+`shift().clock(...).reset(...)`), which still require BOOL tags or explicit comparisons.
+
+For Click portability, `Program.validate("click", mode="strict", ...)` flags implicit INT
+truthiness and requires explicit comparisons.
+
 ## Escape Hatch Callbacks (`custom` / `acustom`)
 
 For logic that does not map well to built-in DSL instructions, pyrung provides two escape-hatch

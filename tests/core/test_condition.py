@@ -389,6 +389,32 @@ class TestAnyOf:
         state = SystemState().with_tags({"A": False, "B": False, "C": False})
         assert evaluate_condition(cond, state) is False
 
+    def test_any_of_with_int_truthiness(self):
+        """any_of treats INT tags as truthy when nonzero."""
+        from pyrung.core import any_of
+
+        Step = Int("Step")
+        Start = Bool("Start")
+        cond = any_of(Step, Start)
+
+        state = SystemState().with_tags({"Step": 2, "Start": False})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"Step": 0, "Start": False})
+        assert evaluate_condition(cond, state) is False
+
+    def test_any_of_rejects_dint_direct_tag(self):
+        """Direct non-INT numeric tags remain invalid in grouped helpers."""
+        import pytest
+
+        from pyrung.core import Dint, any_of
+
+        Step32 = Dint("Step32")
+        Start = Bool("Start")
+
+        with pytest.raises(TypeError, match="BOOL and INT"):
+            any_of(Step32, Start)
+
 
 class TestBitwiseOrOperator:
     """Test | operator for combining conditions (OR logic)."""
@@ -529,6 +555,20 @@ class TestAllOf:
         assert evaluate_condition(cond, state) is True
 
         state = SystemState().with_tags({"Step": 1, "Mode": 1})
+        assert evaluate_condition(cond, state) is False
+
+    def test_all_of_with_int_truthiness(self):
+        """all_of treats INT tags as truthy when nonzero."""
+        from pyrung.core import all_of
+
+        Step = Int("Step")
+        Ready = Bool("Ready")
+        cond = all_of(Step, Ready)
+
+        state = SystemState().with_tags({"Step": 1, "Ready": True})
+        assert evaluate_condition(cond, state) is True
+
+        state = SystemState().with_tags({"Step": 0, "Ready": True})
         assert evaluate_condition(cond, state) is False
 
 

@@ -153,7 +153,7 @@ unresolved-import = "ignore"
 
 [tool.codespell]
 # Add here as needed:
-# ignore-words-list = "foo,bar"
+ignore-words-list = "acustom"
 # skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]

@@ -196,6 +196,16 @@ class BitCondition(Condition):
         return bool(ctx.get_tag(self.tag.name, False))
 
 
+class IntTruthyCondition(Condition):
+    """INT truthiness contact - true when value is nonzero."""
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return int(ctx.get_tag(self.tag.name, self.tag.default)) != 0
+
+
 class NormallyClosedCondition(Condition):
     """Normally closed contact (XIO) - true when bit is off.
 
@@ -346,8 +356,11 @@ def _as_condition(cond: object) -> Condition:
     if isinstance(cond, Tag):
         if cond.type == TagType.BOOL:
             return BitCondition(cond)
+        if cond.type == TagType.INT:
+            return IntTruthyCondition(cond)
         raise TypeError(
-            f"Non-BOOL tag '{cond.name}' cannot be used directly as condition. "
+            f"Tag '{cond.name}' of type {cond.type.name} cannot be used directly as condition. "
+            "Direct tag conditions only support BOOL and INT. "
             "Use comparison operators: tag == value, tag > 0, etc."
         )
     if isinstance(cond, Condition):

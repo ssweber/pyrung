@@ -36,6 +36,7 @@ CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
 CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
+CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
 
@@ -278,6 +279,12 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
             )
         return "Move expression into math(expr, temp) and use temp in this context."
 
+    if code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED:
+        return (
+            "Click portability prefers explicit INT comparisons in conditions. "
+            "Rewrite as Rung(tag != 0) (or Rung(tag == 0) for inverted intent)."
+        )
+
     if code == CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED:
         block_name = str(meta.get("block_name", ""))
         if block_name:
@@ -377,6 +384,22 @@ def _evaluate_fact(
                     suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_MATH, fact, tag_map),
                 )
             )
+
+    if (
+        fact.value_kind == "condition"
+        and fact.metadata.get("condition_type") == "IntTruthyCondition"
+    ):
+        findings.append(
+            ClickFinding(
+                code=CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
+                severity=_route_severity(CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, mode),
+                message=f"Implicit INT truthiness used in condition at {location_str}.",
+                location=location_str,
+                suggestion=_build_suggestion(
+                    CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED, fact, tag_map
+                ),
+            )
+        )
 
     if fact.value_kind == "indirect_block_range":
         findings.append(

@@ -59,6 +59,66 @@ class TestRungConditions:
 
         assert new_state.tags["Light"] is True
 
+    def test_rung_with_int_truthiness_condition_nonzero(self):
+        """INT tags in rung conditions evaluate true when nonzero."""
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Step = Int("Step")
+        Light = Bool("Light")
+
+        rung = Rung(Step)
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Step": 1, "Light": False})
+        new_state = evaluate_rung(rung, state)
+
+        assert new_state.tags["Light"] is True
+
+    def test_rung_with_int_truthiness_condition_zero(self):
+        """INT tags in rung conditions evaluate false when zero."""
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Step = Int("Step")
+        Light = Bool("Light")
+
+        rung = Rung(Step)
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Step": 0, "Light": False})
+        new_state = evaluate_rung(rung, state)
+
+        assert new_state.tags["Light"] is False
+
+    def test_rung_with_int_truthiness_condition_negative(self):
+        """INT tags in rung conditions evaluate true when negative."""
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Step = Int("Step")
+        Light = Bool("Light")
+
+        rung = Rung(Step)
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Step": -1, "Light": False})
+        new_state = evaluate_rung(rung, state)
+
+        assert new_state.tags["Light"] is True
+
+    def test_rung_with_dint_direct_condition_rejected(self):
+        """Only BOOL and INT tags can be direct rung conditions."""
+        import pytest
+
+        from pyrung.core import Dint
+        from pyrung.core.rung import Rung
+
+        Step32 = Dint("Step32")
+
+        with pytest.raises(TypeError, match="BOOL and INT"):
+            Rung(Step32)
+
     def test_rung_with_multiple_conditions_all_true(self):
         """Rung executes when ALL conditions are true (AND logic)."""
         from pyrung.core.instruction import OutInstruction
@@ -257,6 +317,27 @@ class TestRungWithAnyOf:
 
         assert new_state.tags["Light"] is False
 
+    def test_rung_with_any_of_int_truthiness(self):
+        """any_of accepts INT tags and treats nonzero as true."""
+        from pyrung.core import any_of
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Step = Int("Step")
+        CmdStart = Bool("CmdStart")
+        Light = Bool("Light")
+
+        rung = Rung(any_of(Step, CmdStart))
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Step": 2, "CmdStart": False, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags({"Step": 0, "CmdStart": False, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False
+
     def test_rung_with_and_plus_any_of(self):
         """Rung with AND condition plus any_of (Step == 1, any_of(Start, CmdStart))."""
         from pyrung.core import any_of
@@ -392,6 +473,52 @@ class TestRungWithAllOf:
 
         state = SystemState().with_tags({"Ready": True, "Auto": False, "Light": False})
         new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False
+
+    def test_rung_with_all_of_int_truthiness(self):
+        """all_of accepts INT tags and treats nonzero as true."""
+        from pyrung.core import all_of
+        from pyrung.core.instruction import OutInstruction
+        from pyrung.core.rung import Rung
+
+        Step = Int("Step")
+        Auto = Bool("Auto")
+        Light = Bool("Light")
+
+        rung = Rung(all_of(Step, Auto))
+        rung.add_instruction(OutInstruction(Light))
+
+        state = SystemState().with_tags({"Step": 1, "Auto": True, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags({"Step": 0, "Auto": True, "Light": False})
+        new_state = evaluate_rung(rung, state)
+        assert new_state.tags["Light"] is False
+
+
+class TestRungBranchIntTruthiness:
+    """Branch conditions support INT truthiness via shared normalization."""
+
+    def test_branch_with_int_condition(self):
+        from pyrung.core import Program, Rung, branch, out
+        from tests.conftest import evaluate_program
+
+        Enable = Bool("Enable")
+        Step = Int("Step")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Enable):
+                with branch(Step):
+                    out(Light)
+
+        state = SystemState().with_tags({"Enable": True, "Step": 1, "Light": False})
+        new_state = evaluate_program(logic, state)
+        assert new_state.tags["Light"] is True
+
+        state = SystemState().with_tags({"Enable": True, "Step": 0, "Light": False})
+        new_state = evaluate_program(logic, state)
         assert new_state.tags["Light"] is False
 
 

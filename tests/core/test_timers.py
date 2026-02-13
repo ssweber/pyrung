@@ -14,6 +14,8 @@ Hardware-verified behaviors (Click PLC):
 - First scan includes current scan's dt (not 0 on first enable)
 """
 
+import pytest
+
 from pyrung.core import (
     Bool,
     Int,
@@ -896,3 +898,18 @@ class TestTimerAccumulatorOverflow:
         # Further scans stay clamped
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 32767
+
+
+class TestTimerConditionTypeGuards:
+    """Timer helper conditions remain BOOL-only for direct Tag inputs."""
+
+    def test_on_delay_reset_rejects_int_tag(self):
+        Enable = Bool("Enable")
+        Done = Bool("t.Done")
+        Acc = Int("td.Acc")
+        ResetValue = Int("ResetValue")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    on_delay(Done, Acc, setpoint=100).reset(ResetValue)

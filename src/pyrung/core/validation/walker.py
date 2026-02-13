@@ -31,6 +31,7 @@ from pyrung.core.condition import (
     IndirectCompareLe,
     IndirectCompareLt,
     IndirectCompareNe,
+    IntTruthyCondition,
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
@@ -300,7 +301,14 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
         return [("left", cond.left), ("right", cond.right)]
 
     if isinstance(
-        cond, (BitCondition, NormallyClosedCondition, RisingEdgeCondition, FallingEdgeCondition)
+        cond,
+        (
+            BitCondition,
+            IntTruthyCondition,
+            NormallyClosedCondition,
+            RisingEdgeCondition,
+            FallingEdgeCondition,
+        ),
     ):
         return [("tag", cond.tag)]
 

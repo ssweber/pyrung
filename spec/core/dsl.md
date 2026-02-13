@@ -74,9 +74,18 @@ with Rung(Button & Ready):
 with Rung(Step == 0):
 with Rung(Temperature >= 100.0):
 
+# INT truthiness (nonzero = True)
+with Rung(Step):               # equivalent to Step != 0
+with Rung(any_of(Step, Start))
+with Rung(all_of(Step, Ready))
+
 # Inline expressions (Python-native, validator may flag for hardware)
 with Rung((PressureA + PressureB) > 100):
 ```
+
+- Direct tag conditions support `BOOL` and `INT` tags.
+- `INT` direct conditions are coerced to nonzero truthiness.
+- Other tag types must use explicit comparisons.
 
 ### Branching (parallel paths)
 

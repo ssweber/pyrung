@@ -159,6 +159,30 @@ class TestExpressionCondition:
         assert right.metadata["expr_type"] == "LiteralExpr"
 
 
+class TestIntTruthyCondition:
+    """with Rung(IntTag) captures IntTruthyCondition and child tag metadata."""
+
+    def test_int_truthy_condition_fact(self):
+        with Program() as prog:
+            with Rung(A):
+                out(Bool("Light"))
+
+        facts = walk_program(prog)
+        cond = _first(facts, "condition")
+        assert cond.value_kind == "condition"
+        assert cond.metadata["condition_type"] == "IntTruthyCondition"
+
+    def test_int_truthy_condition_child_tag(self):
+        with Program() as prog:
+            with Rung(A):
+                out(Bool("Light"))
+
+        facts = walk_program(prog)
+        tag_fact = _first(facts, "condition.tag")
+        assert tag_fact.value_kind == "tag"
+        assert tag_fact.metadata["tag_type"] == "INT"
+
+
 # ---------------------------------------------------------------------------
 # 5. Branch path correctness
 # ---------------------------------------------------------------------------

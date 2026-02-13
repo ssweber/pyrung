@@ -4,6 +4,8 @@ Counters are edge-triggered instructions that must be the last in a rung (termin
 They manipulate both a done bit and an accumulator.
 """
 
+import pytest
+
 from pyrung.core import Bool, Dint, Int, Program, Rung, count_down, count_up, latch, out, rise
 
 
@@ -774,3 +776,41 @@ class TestDynamicSetpoints:
         runner.step()  # Acc goes to 11, but setpoint is now 5
         assert runner.current_state.tags["ctd.Counter_acc"] == 11
         assert runner.current_state.tags["ct.Counter"] is True  # Now done!
+
+
+class TestCounterConditionTypeGuards:
+    """Counter helper conditions remain BOOL-only for direct Tag inputs."""
+
+    def test_count_up_reset_rejects_int_tag(self):
+        Enable = Bool("Enable")
+        Done = Bool("ct.Done")
+        Acc = Dint("ctd.Acc")
+        ResetValue = Int("ResetValue")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    count_up(Done, Acc, setpoint=5).reset(ResetValue)
+
+    def test_count_up_down_rejects_int_tag(self):
+        Enable = Bool("Enable")
+        Done = Bool("ct.Done")
+        Acc = Dint("ctd.Acc")
+        DownValue = Int("DownValue")
+        Reset = Bool("Reset")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    count_up(Done, Acc, setpoint=5).down(DownValue).reset(Reset)
+
+    def test_count_down_reset_rejects_int_tag(self):
+        Enable = Bool("Enable")
+        Done = Bool("ct.Done")
+        Acc = Dint("ctd.Acc")
+        ResetValue = Int("ResetValue")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="Non-BOOL tag"):
+                    count_down(Done, Acc, setpoint=5).reset(ResetValue)
