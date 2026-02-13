@@ -10,6 +10,7 @@ allowed/disallowed usage and produces no severity levels.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import (
@@ -108,9 +109,9 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     "ResetInstruction": ("target",),
     "CopyInstruction": ("source", "target"),
     "BlockCopyInstruction": ("source", "dest"),
-    "MathInstruction": ("expression", "dest"),
+    "MathInstruction": ("expression", "dest", "mode"),
     "FillInstruction": ("value", "dest"),
-    "SearchInstruction": ("value", "search_range", "condition", "result", "found"),
+    "SearchInstruction": ("value", "search_range", "condition", "result", "found", "continuous"),
     "ShiftInstruction": (
         "bit_range",
         "data_condition",
@@ -142,12 +143,14 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
         "setpoint",
         "enable_condition",
         "reset_condition",
+        "time_unit",
     ),
     "OffDelayInstruction": (
         "done_bit",
         "accumulator",
         "setpoint",
         "enable_condition",
+        "time_unit",
     ),
     "CallInstruction": ("subroutine_name",),
     "ReturnInstruction": (),
@@ -204,13 +207,19 @@ def _classify_value(
 
     Returns (value_kind, value_type, summary, metadata).
     """
+    from pyrung.core.expression import format_expr
+
     # 1. IndirectExprRef (before IndirectRef — both are dataclasses, no subclass)
     if isinstance(obj, IndirectExprRef):
         return (
             "indirect_expr_ref",
             type(obj).__name__,
             f"IndirectExprRef({obj.block.name}[{type(obj.expr).__name__}])",
-            {"block_name": obj.block.name, "expr_type": type(obj.expr).__name__},
+            {
+                "block_name": obj.block.name,
+                "expr_type": type(obj.expr).__name__,
+                "expr_dsl": format_expr(obj.expr),
+            },
         )
 
     # 2. IndirectRef
@@ -228,7 +237,7 @@ def _classify_value(
             "expression",
             type(obj).__name__,
             f"Expression({type(obj).__name__})",
-            {"expr_type": type(obj).__name__},
+            {"expr_type": type(obj).__name__, "expr_dsl": format_expr(obj)},
         )
 
     # 4. IndirectBlockRange (before BlockRange)
@@ -275,7 +284,16 @@ def _classify_value(
     if isinstance(obj, (int, float, str)):
         return ("literal", type(obj).__name__, repr(obj), {})
 
-    # 9. Unknown
+    # 9. Enum values
+    if isinstance(obj, Enum):
+        return (
+            "literal",
+            type(obj).__name__,
+            f"{type(obj).__name__}.{obj.name}",
+            {"enum_value": obj.name},
+        )
+
+    # 10. Unknown
     return (
         "unknown",
         type(obj).__name__,
@@ -385,6 +403,19 @@ class _Walker:
                 branch_path + (branch_idx,),
             )
 
+        # Coil tags (sorted by name for deterministic order)
+        for coil_idx, coil_tag in enumerate(sorted(rung._coils, key=lambda t: t.name)):
+            self._walk_value(
+                coil_tag,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                None,
+                None,
+                f"coil[{coil_idx}]",
+            )
+
     # -- instruction traversal ---------------------------------------------
 
     def _walk_instruction(
@@ -432,6 +463,19 @@ class _Walker:
                 instr_idx,
                 class_name,
                 f"instruction.{field_name}",
+            )
+
+        # Capture oneshot flag for OneShotMixin instructions
+        if hasattr(instr, "oneshot"):
+            self._walk_value(
+                instr.oneshot,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                class_name,
+                "instruction.oneshot",
             )
 
     # -- value classification + recursive descent --------------------------

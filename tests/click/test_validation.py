@@ -438,3 +438,136 @@ class TestReportSummary:
 
         report_strict = validate_click_program(prog, tag_map, mode="strict")
         assert "error(s)" in report_strict.summary()
+
+
+# ---------------------------------------------------------------------------
+# Context-aware suggestion content tests
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestionContent:
+    """Suggestions contain context-specific content (block names, expressions, pointer names)."""
+
+    def test_ptr_context_only_copy_mentions_block_and_pointer(self):
+        Pointer = Tag("Pointer", TagType.INT)
+
+        def logic():
+            with Rung(dd[Pointer] > 5):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Pointer.map_to(ds[100])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r1_findings = [f for f in report.hints if f.code == CLK_PTR_CONTEXT_ONLY_COPY]
+        assert r1_findings
+        suggestion = r1_findings[0].suggestion
+        assert suggestion is not None
+        assert "DD" in suggestion
+        assert "Pointer" in suggestion
+
+    def test_ptr_pointer_must_be_ds_mentions_pointer_name_and_type(self):
+        Pointer = Tag("Pointer", TagType.DINT)
+        Dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                copy(dd[Pointer], Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Pointer.map_to(dd[50]), Dest.map_to(dd[1])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r2_findings = [f for f in report.hints if f.code == CLK_PTR_POINTER_MUST_BE_DS]
+        assert r2_findings
+        suggestion = r2_findings[0].suggestion
+        assert suggestion is not None
+        assert "Pointer" in suggestion
+        assert "DD" in suggestion
+
+    def test_ptr_ds_unverified_mentions_pointer_name(self):
+        Pointer = Tag("UnknownPtr", TagType.INT)
+        Dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                copy(dd[Pointer], Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Dest.map_to(dd[1])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r2b_findings = [f for f in report.hints if f.code == CLK_PTR_DS_UNVERIFIED]
+        assert r2b_findings
+        suggestion = r2b_findings[0].suggestion
+        assert suggestion is not None
+        assert "UnknownPtr" in suggestion
+
+    def test_ptr_expr_not_allowed_mentions_block_and_expr_dsl(self):
+        idx = Tag("idx", TagType.INT)
+        Dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                copy(dd[idx + 1], Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [idx.map_to(ds[100]), Dest.map_to(dd[1])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r3_findings = [f for f in report.hints if f.code == CLK_PTR_EXPR_NOT_ALLOWED]
+        assert r3_findings
+        suggestion = r3_findings[0].suggestion
+        assert suggestion is not None
+        assert "DD" in suggestion
+        assert "idx" in suggestion
+
+    def test_expr_only_in_math_mentions_expression_dsl(self):
+        A = Tag("A", TagType.INT)
+        B = Tag("B", TagType.INT)
+
+        def logic():
+            with Rung((A + B) > 10):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r4_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_MATH]
+        assert r4_findings
+        # At least one finding should mention the expression content
+        suggestions = [f.suggestion for f in r4_findings if f.suggestion is not None]
+        assert any("A" in s or "B" in s or "+" in s for s in suggestions)
+
+    def test_indirect_block_range_mentions_block_name(self):
+        Start = Tag("Start", TagType.INT)
+        End = Tag("End", TagType.INT)
+
+        def logic():
+            with Rung():
+                from pyrung.core.program import blockcopy
+
+                blockcopy(dd.select(Start, End), dd.select(100, 110))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        r5_findings = [f for f in report.hints if f.code == CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED]
+        assert r5_findings
+        suggestion = r5_findings[0].suggestion
+        assert suggestion is not None
+        assert "DD" in suggestion

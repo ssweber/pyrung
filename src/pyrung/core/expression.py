@@ -662,3 +662,84 @@ def lro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Rotate right function (16-bit): rro(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), _rotate_right_16, "rro")
+
+
+# =============================================================================
+# Expression Formatting (DSL-friendly text)
+# =============================================================================
+
+_BINARY_OP_SYMBOL: dict[type, str] = {
+    AddExpr: "+",
+    SubExpr: "-",
+    MulExpr: "*",
+    DivExpr: "/",
+    FloorDivExpr: "//",
+    ModExpr: "%",
+    PowExpr: "**",
+    AndExpr: "&",
+    OrExpr: "|",
+    XorExpr: "^",
+    LShiftExpr: "<<",
+    RShiftExpr: ">>",
+}
+
+_BINARY_TYPES: set[type] = set(_BINARY_OP_SYMBOL)
+
+_UNARY_PREFIX: dict[type, str] = {
+    NegExpr: "-",
+    PosExpr: "+",
+    InvertExpr: "~",
+}
+
+
+def _needs_parens(child: Expression) -> bool:
+    """Return True if a child expression needs parentheses inside a binary parent."""
+    return type(child) in _BINARY_TYPES
+
+
+def format_expr(expr: Expression) -> str:
+    """Convert an Expression tree to DSL-friendly text.
+
+    Examples:
+        TagExpr(Tag("DS1")) → "DS1"
+        LiteralExpr(42) → "42"
+        AddExpr(TagExpr(idx), LiteralExpr(1)) → "idx + 1"
+        MulExpr(AddExpr(...), LiteralExpr(2)) → "(A + B) * 2"
+        MathFuncExpr sqrt(X) → "sqrt(X)"
+        ShiftFuncExpr lsh(A, 3) → "lsh(A, 3)"
+    """
+    # Leaf nodes
+    if isinstance(expr, TagExpr):
+        return expr.tag.name
+    if isinstance(expr, LiteralExpr):
+        return repr(expr.value)
+    # ShiftFuncExpr — two-argument shift/rotate functions (before MathFuncExpr)
+    if isinstance(expr, ShiftFuncExpr):
+        return f"{expr.name}({format_expr(expr.value)}, {format_expr(expr.count)})"
+    # MathFuncExpr — single-argument math functions
+    if isinstance(expr, MathFuncExpr):
+        return f"{expr.name}({format_expr(expr.operand)})"
+    # abs()
+    if isinstance(expr, AbsExpr):
+        return f"abs({format_expr(expr.operand)})"
+    # Unary prefix operations (NegExpr, PosExpr, InvertExpr)
+    if isinstance(expr, (NegExpr, PosExpr, InvertExpr)):
+        prefix = _UNARY_PREFIX[type(expr)]
+        inner = format_expr(expr.operand)
+        if _needs_parens(expr.operand):
+            return f"{prefix}({inner})"
+        return f"{prefix}{inner}"
+    # Binary operations — dispatch via _BINARY_OP_SYMBOL
+    symbol = _BINARY_OP_SYMBOL.get(type(expr))
+    if symbol is not None:
+        left: Expression = expr.left  # type: ignore[attr]
+        right: Expression = expr.right  # type: ignore[attr]
+        left_str = format_expr(left)
+        right_str = format_expr(right)
+        if _needs_parens(left):
+            left_str = f"({left_str})"
+        if _needs_parens(right):
+            right_str = f"({right_str})"
+        return f"{left_str} {symbol} {right_str}"
+    # Unknown expression type — fallback
+    return repr(expr)

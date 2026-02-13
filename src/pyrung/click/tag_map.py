@@ -230,6 +230,7 @@ class TagMap:
         self._system_alias_forward: dict[str, _TagEntry] = {}
         self._system_read_only: dict[str, bool] = {}
         self._block_lookup: dict[int, _BlockEntry] = {}
+        self._block_by_name: dict[str, _BlockEntry] = {}
         self._slot_ids: set[int] = set()
         self._standalone_names: set[str] = set()
         self._block_slot_forward_by_id: dict[int, Tag] = {}
@@ -300,6 +301,7 @@ class TagMap:
                 self._block_entries.append(block_entry)
                 self._entries.append(block_entry)
                 self._block_lookup[block_id] = block_entry
+                self._block_by_name[source.name] = block_entry
                 for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
                     logical_slot = source[logical_addr]
                     hardware_slot = block_entry.hardware.block[hardware_addr]
@@ -554,6 +556,10 @@ class TagMap:
 
     def blocks(self) -> tuple[_BlockEntry, ...]:
         return self._block_entries_tuple
+
+    def block_entry_by_name(self, name: str) -> _BlockEntry | None:
+        """Look up a block entry by logical block name."""
+        return self._block_by_name.get(name)
 
     def validate(
         self,

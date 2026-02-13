@@ -382,3 +382,18 @@ def test_override_clear_returns_to_unset_default():
     override = mapping.get_override(slot)
     assert override is not None
     assert override.default is UNSET
+
+
+def test_block_entry_by_name_found():
+    alarms = Block("Alarm", TagType.BOOL, 1, 3)
+    mapping = TagMap({alarms: c.select(101, 103)})
+
+    entry = mapping.block_entry_by_name("Alarm")
+    assert entry is not None
+    assert entry.logical is alarms
+
+
+def test_block_entry_by_name_not_found():
+    mapping = TagMap(include_system=False)
+
+    assert mapping.block_entry_by_name("NoSuchBlock") is None

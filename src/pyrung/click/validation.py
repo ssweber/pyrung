@@ -119,20 +119,88 @@ def _resolve_pointer_memory_type(pointer_name: str, tag_map: TagMap) -> str | No
 # Suggestion text
 # ---------------------------------------------------------------------------
 
-_SUGGESTIONS: dict[str, str] = {
-    CLK_PTR_CONTEXT_ONLY_COPY: (
-        "Use direct tag addressing in this context; keep pointer usage in copy() only."
-    ),
-    CLK_PTR_POINTER_MUST_BE_DS: ("Use a DS tag as the pointer source for copy() addressing."),
-    CLK_PTR_EXPR_NOT_ALLOWED: (
-        "Replace computed pointer arithmetic with DS pointer tag updated separately."
-    ),
-    CLK_EXPR_ONLY_IN_MATH: ("Move expression into math(expr, temp) and use temp in this context."),
-    CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED: (
-        "Use a fixed BlockRange with literal start/end addresses for block copy operations."
-    ),
-    CLK_PTR_DS_UNVERIFIED: ("Use a DS tag as the pointer source for copy() addressing."),
-}
+
+def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
+    """Build a context-aware suggestion string for a finding code.
+
+    Uses fact.metadata and tag_map to produce specific, actionable hints.
+    Falls back to generic messages when metadata is unavailable.
+    """
+    meta = fact.metadata
+
+    if code == CLK_PTR_CONTEXT_ONLY_COPY:
+        block_name = str(meta.get("block_name", ""))
+        pointer_name = str(meta.get("pointer_name", ""))
+        if block_name and pointer_name:
+            return (
+                f"Pointer {block_name}[{pointer_name}] can only be used inside copy(). "
+                f"Use a direct tag reference here instead."
+            )
+        return "Use direct tag addressing in this context; keep pointer usage in copy() only."
+
+    if code == CLK_PTR_POINTER_MUST_BE_DS:
+        pointer_name = str(meta.get("pointer_name", ""))
+        resolved_type = (
+            _resolve_pointer_memory_type(pointer_name, tag_map) if pointer_name else None
+        )
+        if pointer_name and resolved_type:
+            return (
+                f"Pointer '{pointer_name}' is mapped to {resolved_type} memory. "
+                f"Remap it to a DS address so Click hardware can use it as a pointer."
+            )
+        return "Use a DS tag as the pointer source for copy() addressing."
+
+    if code == CLK_PTR_DS_UNVERIFIED:
+        pointer_name = str(meta.get("pointer_name", ""))
+        if pointer_name:
+            return (
+                f"Pointer '{pointer_name}' is not in the tag map — cannot verify it is DS. "
+                f"Map it to a DS address: {pointer_name}.map_to(ds[N])"
+            )
+        return "Use a DS tag as the pointer source for copy() addressing."
+
+    if code == CLK_PTR_EXPR_NOT_ALLOWED:
+        block_name = str(meta.get("block_name", ""))
+        expr_dsl = str(meta.get("expr_dsl", ""))
+        if block_name and expr_dsl:
+            # Try to get hardware offset for concrete fix
+            block_entry = tag_map.block_entry_by_name(block_name)
+            if block_entry is not None:
+                try:
+                    offset = tag_map.offset_for(block_entry.logical)
+                    return (
+                        f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
+                        f"Store the index in a DS tag and use copy(): "
+                        f"math({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
+                    )
+                except (KeyError, ValueError):
+                    pass
+            return (
+                f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
+                f"Pre-compute the index with math() into a DS pointer tag, "
+                f"then use {block_name}[Ptr]."
+            )
+        return "Replace computed pointer arithmetic with DS pointer tag updated separately."
+
+    if code == CLK_EXPR_ONLY_IN_MATH:
+        expr_dsl = str(meta.get("expr_dsl", ""))
+        if expr_dsl:
+            return (
+                f"Expression '{expr_dsl}' cannot be used directly here. "
+                f"Move it into math({expr_dsl}, temp) and use temp in this context."
+            )
+        return "Move expression into math(expr, temp) and use temp in this context."
+
+    if code == CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED:
+        block_name = str(meta.get("block_name", ""))
+        if block_name:
+            return (
+                f"Block '{block_name}' uses computed range bounds. "
+                f"Use a fixed BlockRange with literal start/end addresses instead."
+            )
+        return "Use a fixed BlockRange with literal start/end addresses for block copy operations."
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +233,7 @@ def _evaluate_fact(
                         f"Pointer (IndirectRef) used outside copy instruction at {location_str}."
                     ),
                     location=location_str,
-                    suggestion=_SUGGESTIONS[CLK_PTR_CONTEXT_ONLY_COPY],
+                    suggestion=_build_suggestion(CLK_PTR_CONTEXT_ONLY_COPY, fact, tag_map),
                 )
             )
         else:
@@ -183,7 +251,7 @@ def _evaluate_fact(
                             f"as DS at {location_str}."
                         ),
                         location=location_str,
-                        suggestion=_SUGGESTIONS[code],
+                        suggestion=_build_suggestion(code, fact, tag_map),
                     )
                 )
             elif memory_type != "DS":
@@ -197,7 +265,7 @@ def _evaluate_fact(
                             f"not DS at {location_str}."
                         ),
                         location=location_str,
-                        suggestion=_SUGGESTIONS[code],
+                        suggestion=_build_suggestion(code, fact, tag_map),
                     )
                 )
 
@@ -211,7 +279,7 @@ def _evaluate_fact(
                     f"Computed pointer expression (IndirectExprRef) not allowed at {location_str}."
                 ),
                 location=location_str,
-                suggestion=_SUGGESTIONS[CLK_PTR_EXPR_NOT_ALLOWED],
+                suggestion=_build_suggestion(CLK_PTR_EXPR_NOT_ALLOWED, fact, tag_map),
             )
         )
 
@@ -227,7 +295,7 @@ def _evaluate_fact(
                     severity=_route_severity(CLK_EXPR_ONLY_IN_MATH, mode),
                     message=(f"Expression used outside math instruction at {location_str}."),
                     location=location_str,
-                    suggestion=_SUGGESTIONS[CLK_EXPR_ONLY_IN_MATH],
+                    suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_MATH, fact, tag_map),
                 )
             )
 
@@ -242,7 +310,7 @@ def _evaluate_fact(
                     "Click hardware does not support computed block ranges."
                 ),
                 location=location_str,
-                suggestion=_SUGGESTIONS[CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED],
+                suggestion=_build_suggestion(CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED, fact, tag_map),
             )
         )
 
