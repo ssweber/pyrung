@@ -1,4 +1,4 @@
-"""Tests for the generic validation walker (Stage 1).
+﻿"""Tests for the generic validation walker (Stage 1).
 
 Covers all 8 test cases from the click-validation-stage-1-generic-walker-plan.
 """
@@ -15,6 +15,8 @@ from pyrung.core import (
     copy,
     math,
     out,
+    run_enabled_function,
+    run_function,
     subroutine,
 )
 from pyrung.core.condition import Condition
@@ -502,3 +504,63 @@ class TestCoilsCaptured:
         assert coil_facts
         assert coil_facts[0].value_kind == "tag"
         assert coil_facts[0].metadata["tag_name"] == "Light3"
+
+
+# ---------------------------------------------------------------------------
+# 13. Function-call instruction fields captured
+# ---------------------------------------------------------------------------
+
+
+class TestFunctionCallFieldsCaptured:
+    def test_run_function_ins_outs_are_captured(self):
+        Source = Int("Source")
+        Dest = Int("Dest")
+
+        def fn(value, offset):
+            return {"result": value}
+
+        with Program() as prog:
+            with Rung():
+                run_function(
+                    fn,
+                    ins={"value": Source, "offset": 3},
+                    outs={"result": Dest},
+                    oneshot=True,
+                )
+
+        facts = walk_program(prog)
+        assert _first(facts, "instruction.ins['value']").value_kind == "tag"
+        assert _first(facts, "instruction.ins['offset']").value_kind == "literal"
+        assert _first(facts, "instruction.outs['result']").value_kind == "tag"
+
+        fn_fact = _first(facts, "instruction._fn")
+        assert fn_fact.location.instruction_type == "FunctionCallInstruction"
+
+        oneshot = _first(facts, "instruction.oneshot")
+        assert oneshot.value_kind == "literal"
+        assert oneshot.summary == "True"
+
+    def test_run_enabled_function_enable_condition_is_captured(self):
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Dest = Int("Dest")
+
+        def fn(enabled, value):
+            _ = enabled
+            return {"result": value}
+
+        with Program() as prog:
+            with Rung(Enable):
+                run_enabled_function(
+                    fn,
+                    ins={"value": Source},
+                    outs={"result": Dest},
+                )
+
+        facts = walk_program(prog)
+        enable = _first(facts, "instruction._enable_condition")
+        assert enable.value_kind == "condition"
+        assert enable.location.instruction_type == "AsyncFunctionCallInstruction"
+        assert _first(facts, "instruction.ins['value']").value_kind == "tag"
+        assert _first(facts, "instruction.outs['result']").value_kind == "tag"
+

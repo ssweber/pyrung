@@ -1,4 +1,4 @@
-"""Tests for click_email acustom example callback."""
+﻿"""Tests for click_email run_enabled_function example."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, acustom
+from pyrung.core import Bool, Int, PLCRunner, Program, Rung, run_enabled_function
 
 
 def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
@@ -30,21 +30,23 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     Success = Bool("Success")
     Error = Bool("Error")
     ErrorCode = Int("ErrorCode")
+    email = click_email.EmailInstruction(
+        smtp_host="127.0.0.1",
+        smtp_port=25,
+        recipients=("test@example.com",),
+    )
 
     with Program() as logic:
         with Rung(Enable):
-            acustom(
-                click_email.email_instruction(
-                    subject_tag=Subject,
-                    body_tag=Body,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    error_code=ErrorCode,
-                    smtp_host="127.0.0.1",
-                    smtp_port=25,
-                    recipients=("test@example.com",),
-                )
+            run_enabled_function(
+                email,
+                ins={"subject": Subject, "body": Body},
+                outs={
+                    "sending": Sending,
+                    "success": Success,
+                    "error": Error,
+                    "error_code": ErrorCode,
+                },
             )
 
     runner = PLCRunner(logic=logic)
@@ -61,27 +63,17 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     )
     runner.step()
 
-    base = "_custom:email:Sending"
-    pending_key = f"{base}:pending"
-    prev_enabled_key = f"{base}:prev_enabled"
-    attempt_key = f"{base}:attempt"
-
     assert len(submissions) == 1
     assert runner.current_state.tags["Sending"] is True
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ErrorCode"] == 0
-    assert pending_key in runner.current_state.memory
-    assert prev_enabled_key in runner.current_state.memory
-    assert attempt_key in runner.current_state.memory
-    assert runner.current_state.memory[attempt_key] == 1
 
     runner.patch({"Enable": True})
     runner.step()
 
     assert len(submissions) == 1
     assert runner.current_state.tags["Sending"] is True
-    assert runner.current_state.memory[attempt_key] == 1
 
     futures[0].set_result(click_email._EmailResult(ok=True, error_code=0))
     runner.patch({"Enable": True})
@@ -92,8 +84,6 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     assert runner.current_state.tags["Success"] is True
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ErrorCode"] == 0
-    assert runner.current_state.memory[pending_key] is None
-    assert runner.current_state.memory[attempt_key] == 1
 
     runner.patch({"Enable": False})
     runner.step()
@@ -101,7 +91,6 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ErrorCode"] == 0
-    assert runner.current_state.memory[prev_enabled_key] is False
 
     runner.patch({"Enable": True})
     runner.step()
@@ -109,13 +98,12 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
     assert runner.current_state.tags["Sending"] is True
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
-    assert runner.current_state.memory[attempt_key] == 2
 
 
 def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.MonkeyPatch):
     import pyrung.examples.click_email as click_email
 
-    class _TrackingFuture(Future[click_email._EmailResult]):
+    class TrackingFuture(Future[click_email._EmailResult]):
         def __init__(self):
             super().__init__()
             self.cancel_calls = 0
@@ -124,7 +112,7 @@ def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.Monk
             self.cancel_calls += 1
             return super().cancel()
 
-    pending = _TrackingFuture()
+    pending = TrackingFuture()
 
     def fake_submit(**kwargs: object) -> Future[click_email._EmailResult]:
         _ = kwargs
@@ -139,21 +127,23 @@ def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.Monk
     Success = Bool("Success")
     Error = Bool("Error")
     ErrorCode = Int("ErrorCode")
+    email = click_email.EmailInstruction(
+        smtp_host="127.0.0.1",
+        smtp_port=25,
+        recipients=("test@example.com",),
+    )
 
     with Program() as logic:
         with Rung(Enable):
-            acustom(
-                click_email.email_instruction(
-                    subject_tag=Subject,
-                    body_tag=Body,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    error_code=ErrorCode,
-                    smtp_host="127.0.0.1",
-                    smtp_port=25,
-                    recipients=("test@example.com",),
-                )
+            run_enabled_function(
+                email,
+                ins={"subject": Subject, "body": Body},
+                outs={
+                    "sending": Sending,
+                    "success": Success,
+                    "error": Error,
+                    "error_code": ErrorCode,
+                },
             )
 
     runner = PLCRunner(logic=logic)
@@ -174,12 +164,9 @@ def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.Monk
     runner.patch({"Enable": False})
     runner.step()
 
-    base = "_custom:email:Sending"
-    pending_key = f"{base}:pending"
-
     assert pending.cancel_calls == 1
     assert runner.current_state.tags["Sending"] is False
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ErrorCode"] == 0
-    assert runner.current_state.memory[pending_key] is None
+

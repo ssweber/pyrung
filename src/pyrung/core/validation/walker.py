@@ -154,6 +154,8 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
         "time_unit",
     ),
     "ForLoopInstruction": ("count", "idx_tag"),
+    "FunctionCallInstruction": ("_fn",),
+    "AsyncFunctionCallInstruction": ("_fn", "_enable_condition"),
     "CallInstruction": ("subroutine_name",),
     "ReturnInstruction": (),
 }
@@ -411,6 +413,19 @@ class _Walker:
         instr_idx: int,
     ) -> None:
         class_name = type(instr).__name__
+
+        if class_name in {"FunctionCallInstruction", "AsyncFunctionCallInstruction"}:
+            self._walk_function_call_instruction(
+                instr,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                class_name,
+            )
+            return
+
         fields = _INSTRUCTION_FIELDS.get(class_name)
 
         if fields is None:
@@ -472,6 +487,70 @@ class _Walker:
                     branch_path,
                     instr_idx,
                 )
+
+    def _walk_function_call_instruction(
+        self,
+        instr: Any,
+        scope: FactScope,
+        subroutine: str | None,
+        rung_index: int,
+        branch_path: tuple[int, ...],
+        instr_idx: int,
+        class_name: str,
+    ) -> None:
+        # Function object and optional enable condition are captured via field map.
+        for field_name in _INSTRUCTION_FIELDS[class_name]:
+            self._walk_value(
+                getattr(instr, field_name),
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                class_name,
+                f"instruction.{field_name}",
+            )
+
+        # Dict entries are captured as explicit keyed paths for deterministic analysis.
+        ins = getattr(instr, "_ins", {})
+        if isinstance(ins, dict):
+            for key in sorted(ins):
+                self._walk_value(
+                    ins[key],
+                    scope,
+                    subroutine,
+                    rung_index,
+                    branch_path,
+                    instr_idx,
+                    class_name,
+                    f"instruction.ins[{key!r}]",
+                )
+
+        outs = getattr(instr, "_outs", {})
+        if isinstance(outs, dict):
+            for key in sorted(outs):
+                self._walk_value(
+                    outs[key],
+                    scope,
+                    subroutine,
+                    rung_index,
+                    branch_path,
+                    instr_idx,
+                    class_name,
+                    f"instruction.outs[{key!r}]",
+                )
+
+        if hasattr(instr, "oneshot"):
+            self._walk_value(
+                instr.oneshot,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                class_name,
+                "instruction.oneshot",
+            )
 
     # -- value classification + recursive descent --------------------------
 

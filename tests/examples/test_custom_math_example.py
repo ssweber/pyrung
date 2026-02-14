@@ -1,14 +1,14 @@
-"""Tests for custom_math example callbacks."""
+"""Tests for custom_math run_function example."""
 
 from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, custom
+from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, run_function
 from pyrung.examples.custom_math import weighted_average
 
 
-def test_weighted_average_callback_end_to_end():
+def test_weighted_average_end_to_end():
     Enable = Bool("Enable")
     Sensor1 = Int("Sensor1")
     Sensor2 = Int("Sensor2")
@@ -17,12 +17,10 @@ def test_weighted_average_callback_end_to_end():
 
     with Program() as logic:
         with Rung(Enable):
-            custom(
-                weighted_average(
-                    inputs=[Sensor1, Sensor2, Sensor3],
-                    weights=[0.5, 0.3, 0.2],
-                    output=Average,
-                )
+            run_function(
+                weighted_average,
+                ins={"sensor1": Sensor1, "sensor2": Sensor2, "sensor3": Sensor3},
+                outs={"result": Average},
             )
 
     runner = PLCRunner(logic=logic)
@@ -44,20 +42,26 @@ def test_weighted_average_zero_weight_sum_returns_zero():
     Enable = Bool("Enable")
     Sensor1 = Int("Sensor1")
     Sensor2 = Int("Sensor2")
+    Sensor3 = Int("Sensor3")
     Result = Real("Result")
 
     with Program() as logic:
         with Rung(Enable):
-            custom(
-                weighted_average(
-                    inputs=[Sensor1, Sensor2],
-                    weights=[0.0, 0.0],
-                    output=Result,
-                )
+            run_function(
+                weighted_average,
+                ins={
+                    "sensor1": Sensor1,
+                    "sensor2": Sensor2,
+                    "sensor3": Sensor3,
+                    "weight1": 0.0,
+                    "weight2": 0.0,
+                    "weight3": 0.0,
+                },
+                outs={"result": Result},
             )
 
     runner = PLCRunner(logic=logic)
-    runner.patch({"Enable": True, "Sensor1": 42, "Sensor2": 100, "Result": -1.0})
+    runner.patch({"Enable": True, "Sensor1": 42, "Sensor2": 100, "Sensor3": 7, "Result": -1.0})
     runner.step()
 
     assert runner.current_state.tags["Result"] == 0

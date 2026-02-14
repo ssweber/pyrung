@@ -1,18 +1,10 @@
-"""Asynchronous acustom() callback example for Click-style email behavior."""
+﻿"""Asynchronous run_enabled_function() example for Click-style email behavior."""
 
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-from pyrung.core.tag import Tag, TagType
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
-
-    from pyrung.core.context import ScanContext
-
+from typing import Any
 
 _EMAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pyrung-email")
 
@@ -55,129 +47,54 @@ def _submit_email_request(
     )
 
 
-def _clear_status(ctx: ScanContext, *, sending: Tag, success: Tag, error: Tag, error_code: Tag) -> None:
-    ctx.set_tags(
-        {
-            sending.name: False,
-            success.name: False,
-            error.name: False,
-            error_code.name: 0,
-        }
-    )
-
-
 def _cancel_pending_request(pending: Future[_EmailResult] | None) -> None:
-    if pending is None:
-        return
-    pending.cancel()
+    if pending is not None:
+        pending.cancel()
 
 
-def email_instruction(
-    *,
-    subject_tag: Tag,
-    body_tag: Tag,
-    sending: Tag,
-    success: Tag,
-    error: Tag,
-    error_code: Tag,
-    smtp_host: str,
-    smtp_port: int,
-    recipients: Iterable[str],
-) -> Callable[[ScanContext, bool], None]:
-    """Factory for an acustom callback that behaves like a Click email instruction."""
-    if sending.type != TagType.BOOL:
-        raise TypeError(f"sending tag '{sending.name}' must be BOOL")
-    if success.type != TagType.BOOL:
-        raise TypeError(f"success tag '{success.name}' must be BOOL")
-    if error.type != TagType.BOOL:
-        raise TypeError(f"error tag '{error.name}' must be BOOL")
-    if error_code.type not in {TagType.INT, TagType.DINT}:
-        raise TypeError(f"error_code tag '{error_code.name}' must be INT or DINT")
+class EmailInstruction:
+    """Callable instruction object for run_enabled_function()."""
 
-    recipients_tuple = tuple(recipients)
-    base = f"_custom:email:{sending.name}"
-    pending_key = f"{base}:pending"
-    prev_enabled_key = f"{base}:prev_enabled"
-    attempt_key = f"{base}:attempt"
+    def __init__(self, *, smtp_host: str, smtp_port: int, recipients: tuple[str, ...]):
+        self._smtp_host = smtp_host
+        self._smtp_port = smtp_port
+        self._recipients = recipients
+        self._pending: Future[_EmailResult] | None = None
 
-    def _execute(ctx: ScanContext, enabled: bool) -> None:
-        pending = ctx.get_memory(pending_key, None)
-        if pending is not None and not isinstance(pending, Future):
-            pending = None
-        prev_enabled = bool(ctx.get_memory(prev_enabled_key, False))
-        attempt = int(ctx.get_memory(attempt_key, 0))
-
+    def __call__(self, enabled: bool, subject: Any, body: Any) -> dict[str, Any]:
         if not enabled:
-            _cancel_pending_request(pending)
-            ctx.set_memory(pending_key, None)
-            ctx.set_memory(prev_enabled_key, False)
-            _clear_status(
-                ctx,
-                sending=sending,
-                success=success,
-                error=error,
-                error_code=error_code,
+            _cancel_pending_request(self._pending)
+            self._pending = None
+            return {"sending": False, "success": False, "error": False, "error_code": 0}
+
+        if self._pending is None:
+            self._pending = _submit_email_request(
+                subject=str(subject),
+                body=str(body),
+                smtp_host=self._smtp_host,
+                smtp_port=self._smtp_port,
+                recipients=self._recipients,
             )
-            return
+            return {"sending": True, "success": False, "error": False, "error_code": 0}
 
-        ctx.set_memory(prev_enabled_key, True)
-        rising = not prev_enabled
-
-        if rising and pending is None:
-            subject = str(ctx.get_tag(subject_tag.name, subject_tag.default))
-            body = str(ctx.get_tag(body_tag.name, body_tag.default))
-            pending = _submit_email_request(
-                subject=subject,
-                body=body,
-                smtp_host=smtp_host,
-                smtp_port=smtp_port,
-                recipients=recipients_tuple,
-            )
-            ctx.set_memory(pending_key, pending)
-            ctx.set_memory(attempt_key, attempt + 1)
-            ctx.set_tags(
-                {
-                    sending.name: True,
-                    success.name: False,
-                    error.name: False,
-                    error_code.name: 0,
-                }
-            )
-            return
-
-        if pending is None:
-            return
-
-        ctx.set_tag(sending.name, True)
-        if not pending.done():
-            return
+        if not self._pending.done():
+            return {"sending": True, "success": False, "error": False, "error_code": 0}
 
         try:
-            result = pending.result()
+            result = self._pending.result()
         except Exception:
             result = _EmailResult(ok=False, error_code=0)
 
-        ctx.set_memory(pending_key, None)
+        self._pending = None
         if result.ok:
-            ctx.set_tags(
-                {
-                    sending.name: False,
-                    success.name: True,
-                    error.name: False,
-                    error_code.name: 0,
-                }
-            )
-        else:
-            ctx.set_tags(
-                {
-                    sending.name: False,
-                    success.name: False,
-                    error.name: True,
-                    error_code.name: int(result.error_code),
-                }
-            )
-
-    return _execute
+            return {"sending": False, "success": True, "error": False, "error_code": 0}
+        return {
+            "sending": False,
+            "success": False,
+            "error": True,
+            "error_code": int(result.error_code),
+        }
 
 
-__all__ = ["email_instruction"]
+__all__ = ["EmailInstruction"]
+

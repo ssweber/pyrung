@@ -1,10 +1,11 @@
-"""Tests for Click portability validation (Stage 2)."""
+﻿"""Tests for Click portability validation (Stage 2)."""
 
 from __future__ import annotations
 
 from pyrung.click import TagMap, dd, ds
 from pyrung.click.validation import (
     CLK_EXPR_ONLY_IN_MATH,
+    CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_PTR_CONTEXT_ONLY_COPY,
@@ -15,7 +16,7 @@ from pyrung.click.validation import (
     validate_click_program,
 )
 from pyrung.core import Bool, Tag, TagType
-from pyrung.core.program import Program, Rung, copy, math, out
+from pyrung.core.program import Program, Rung, copy, math, out, run_enabled_function, run_function
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +44,7 @@ def _finding_codes(report: ClickValidationReport) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Test 1: Allowed case — copy(DD[Pointer], Dest) with DS pointer
+# Test 1: Allowed case â€” copy(DD[Pointer], Dest) with DS pointer
 # ---------------------------------------------------------------------------
 
 
@@ -275,7 +276,7 @@ class TestExpressionInCopy:
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Expression in math() — no violation
+# Test 7: Expression in math() â€” no violation
 # ---------------------------------------------------------------------------
 
 
@@ -503,6 +504,43 @@ class TestReportSummary:
         assert "error(s)" in report_strict.summary()
 
 
+class TestFunctionCallPortability:
+    def test_run_function_warn_mode_finding(self):
+        Src = Tag("Src", TagType.INT)
+        Dest = Tag("Dest", TagType.INT)
+
+        def fn(src):
+            return {"dest": src}
+
+        def logic():
+            with Rung():
+                run_function(fn, ins={"src": Src}, outs={"dest": Dest})
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_FUNCTION_CALL_NOT_PORTABLE for f in report.hints)
+
+    def test_run_enabled_function_strict_mode_error(self):
+        Src = Tag("Src", TagType.INT)
+        Dest = Tag("Dest", TagType.INT)
+
+        def fn(enabled, src):
+            _ = enabled
+            return {"dest": src}
+
+        def logic():
+            with Rung():
+                run_enabled_function(fn, ins={"src": Src}, outs={"dest": Dest})
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_FUNCTION_CALL_NOT_PORTABLE for f in report.errors)
+
+
 # ---------------------------------------------------------------------------
 # Context-aware suggestion content tests
 # ---------------------------------------------------------------------------
@@ -634,3 +672,4 @@ class TestSuggestionContent:
         suggestion = r5_findings[0].suggestion
         assert suggestion is not None
         assert "DD" in suggestion
+

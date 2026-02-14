@@ -1,4 +1,4 @@
-# Pyrung
+﻿# Pyrung
 
 A Python DSL (Domain Specific Language) for representing and simulating Ladder Logic. Pyrung provides a Pythonic way to write PLC programs for simulation, testing, and documentation purposes.
 
@@ -49,66 +49,64 @@ It does not change helper-specific condition parameters (`count_*`, `on_delay().
 For Click portability, `Program.validate("click", mode="strict", ...)` flags implicit INT
 truthiness and requires explicit comparisons.
 
-## Escape Hatch Callbacks (`custom` / `acustom`)
+## Function Call Instructions (`run_function` / `run_enabled_function`)
 
-For logic that does not map well to built-in DSL instructions, pyrung provides two escape-hatch
-instructions in `pyrung.core`:
+For logic that does not map cleanly to built-in ladder instructions, pyrung provides
+function-call instructions in `pyrung.core`:
 
-- `custom(fn, oneshot=False)`:
+- `run_function(fn, ins=None, outs=None, oneshot=False)`:
   - Runs only when rung power is true.
-  - Callback signature: `fn(ctx) -> None`
+  - Calls `fn(**resolved_inputs)` and maps returned dict keys to output tags.
   - Optional `oneshot=True` uses standard one-shot behavior.
-- `acustom(fn)`:
-  - Runs every scan (including rung-false scans) and receives rung state.
-  - Callback signature: `fn(ctx, enabled: bool) -> None`
+- `run_enabled_function(fn, ins=None, outs=None)`:
+  - Runs every scan (including rung-false scans) and passes rung state as `enabled`.
+  - Calls `fn(enabled, **resolved_inputs)` and maps returned dict keys to output tags.
   - Useful for async/stateful polling workflows.
 
-Both APIs validate callback compatibility and reject `async def` callbacks.
+Both APIs validate signatures and reject `async def` callables.
 
-### `custom()` Example (synchronous)
+### `run_function()` Example
 
 ```python
-from pyrung.core import Bool, Int, Program, Rung, custom
+from pyrung.core import Bool, Int, Program, Rung, run_function
 
 Enable = Bool("Enable")
 Raw = Int("Raw")
 Scaled = Int("Scaled")
 
-def scale(ctx):
-    raw = int(ctx.get_tag(Raw.name, 0))
-    ctx.set_tag(Scaled.name, raw * 2 + 5)
+def scale(raw):
+    return {"scaled": raw * 2 + 5}
 
 with Program() as logic:
     with Rung(Enable):
-        custom(scale)
+        run_function(scale, ins={"raw": Raw}, outs={"scaled": Scaled})
 ```
 
-### `acustom()` Example (scan-to-scan state machine)
+### `run_enabled_function()` Example
 
 ```python
-from pyrung.core import Bool, Int, Program, Rung, acustom
+from pyrung.core import Bool, Int, Program, Rung, run_enabled_function
 
 Enable = Bool("Enable")
 Busy = Bool("Busy")
 Count = Int("Count")
 
-def worker(ctx, enabled):
-    key = "_custom:worker:busy"
-    pending = bool(ctx.get_memory(key, False))
-    if enabled and not pending:
-        ctx.set_memory(key, True)
-        ctx.set_tag(Busy.name, True)
-        return
-    if enabled and pending:
-        n = int(ctx.get_tag(Count.name, 0))
-        ctx.set_tag(Count.name, n + 1)
-        return
-    ctx.set_memory(key, False)
-    ctx.set_tag(Busy.name, False)
+class Worker:
+    def __init__(self):
+        self.pending = False
+
+    def __call__(self, enabled):
+        if not enabled:
+            self.pending = False
+            return {"busy": False, "count": 0}
+        if not self.pending:
+            self.pending = True
+            return {"busy": True, "count": 0}
+        return {"busy": True, "count": 1}
 
 with Program() as logic:
     with Rung(Enable):
-        acustom(worker)
+        run_enabled_function(Worker(), outs={"busy": Busy, "count": Count})
 ```
 
 Reference examples:
@@ -142,3 +140,4 @@ Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intenti
 ## Documentation
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.
+

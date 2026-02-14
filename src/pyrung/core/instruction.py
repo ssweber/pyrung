@@ -1,4 +1,4 @@
-"""Instruction classes for the immutable PLC engine.
+﻿"""Instruction classes for the immutable PLC engine.
 
 Instructions execute within a ScanContext, writing to batched evolvers.
 All state modifications are collected and committed at scan end.
@@ -233,28 +233,58 @@ class OneShotMixin:
         self._has_executed = False
 
 
-class LambdaInstruction(OneShotMixin, Instruction):
-    """Escape-hatch instruction wrapping a user-provided synchronous callable."""
+def _fn_name(fn: Callable[..., Any]) -> str:
+    return getattr(fn, "__name__", type(fn).__name__)
 
-    def __init__(self, fn: Callable[[ScanContext], None], oneshot: bool = False):
+
+class FunctionCallInstruction(OneShotMixin, Instruction):
+    """Stateless function call: copy-in / execute / copy-out."""
+
+    def __init__(
+        self,
+        fn: Callable[..., dict[str, Any]],
+        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None,
+        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None,
+        oneshot: bool = False,
+    ):
         OneShotMixin.__init__(self, oneshot)
         self._fn = fn
+        self._ins = ins or {}
+        self._outs = outs or {}
 
     def execute(self, ctx: ScanContext) -> None:
         if not self.should_execute():
             return
-        self._fn(ctx)
+        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        result = self._fn(**kwargs)
+        if not self._outs:
+            return
+        if result is None:
+            raise TypeError(
+                f"run_function: {_fn_name(self._fn)!r} returned None but outs were declared"
+            )
+        for key, target in self._outs.items():
+            if key not in result:
+                raise KeyError(
+                    f"run_function: {_fn_name(self._fn)!r} missing key {key!r}; got {sorted(result)}"
+                )
+            resolved = resolve_tag_ctx(target, ctx)
+            ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
-class AsyncLambdaInstruction(Instruction):
-    """Escape-hatch instruction that always runs and receives rung enabled state."""
+class AsyncFunctionCallInstruction(Instruction):
+    """Always-execute function call with enabled flag."""
 
     def __init__(
         self,
-        fn: Callable[[ScanContext, bool], None],
+        fn: Callable[..., dict[str, Any]],
+        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None,
+        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None,
         enable_condition: Condition | None,
     ):
         self._fn = fn
+        self._ins = ins or {}
+        self._outs = outs or {}
         self._enable_condition = enable_condition
 
     def always_execute(self) -> bool:
@@ -264,7 +294,22 @@ class AsyncLambdaInstruction(Instruction):
         enabled = True
         if self._enable_condition is not None:
             enabled = bool(self._enable_condition.evaluate(ctx))
-        self._fn(ctx, enabled)
+        kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
+        result = self._fn(enabled, **kwargs)
+        if not self._outs:
+            return
+        if result is None:
+            raise TypeError(
+                f"run_enabled_function: {_fn_name(self._fn)!r} returned None but outs were declared"
+            )
+        for key, target in self._outs.items():
+            if key not in result:
+                raise KeyError(
+                    "run_enabled_function: "
+                    f"{_fn_name(self._fn)!r} missing key {key!r}; got {sorted(result)}"
+                )
+            resolved = resolve_tag_ctx(target, ctx)
+            ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):
@@ -1441,3 +1486,4 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
             word_tags[1].name: _truncate_to_tag_type(hi_word, word_tags[1]),
         }
         ctx.set_tags(updates)
+

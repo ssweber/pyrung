@@ -1,6 +1,7 @@
-"""Example callback factories for custom/acustom escape-hatch instructions."""
+﻿"""Example callables for run_function/run_enabled_function instructions."""
 
-from pyrung.examples.click_email import email_instruction
+from pyrung.examples.click_email import EmailInstruction
 from pyrung.examples.custom_math import weighted_average
 
-__all__ = ["email_instruction", "weighted_average"]
+__all__ = ["EmailInstruction", "weighted_average"]
+

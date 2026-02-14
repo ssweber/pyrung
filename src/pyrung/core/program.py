@@ -1,4 +1,4 @@
-"""Program and Rung context managers for the immutable PLC engine.
+﻿"""Program and Rung context managers for the immutable PLC engine.
 
 Provides DSL syntax for building PLC programs:
 
@@ -28,7 +28,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.instruction import (
-    AsyncLambdaInstruction,
+    AsyncFunctionCallInstruction,
     BlockCopyInstruction,
     CallInstruction,
     CopyInstruction,
@@ -36,7 +36,7 @@ from pyrung.core.instruction import (
     CountUpInstruction,
     FillInstruction,
     ForLoopInstruction,
-    LambdaInstruction,
+    FunctionCallInstruction,
     LatchInstruction,
     MathInstruction,
     OffDelayInstruction,
@@ -90,27 +90,45 @@ def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
     raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
 
 
-def _validate_custom_callback(fn: Any, *, func_name: str, required_args: int) -> None:
-    """Validate callback contract for custom/acustom DSL entry points."""
+def _validate_function_call(
+    fn: Any,
+    ins: dict[str, Any] | None,
+    outs: dict[str, Any] | None,
+    *,
+    func_name: str,
+    has_enabled: bool = False,
+) -> None:
+    """Validate callback contract for run_function/run_enabled_function DSL entry points."""
     if not callable(fn):
         raise TypeError(f"{func_name}() fn must be callable, got {type(fn).__name__}")
 
-    call_attr = fn.__call__
-    if inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(call_attr):
-        raise TypeError(f"{func_name}() callback must be synchronous (async def is not supported)")
+    if inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(type(fn).__call__):
+        raise TypeError(f"{func_name}() fn must be synchronous (async def is not supported)")
 
     try:
         signature = inspect.signature(fn)
     except (TypeError, ValueError) as exc:
-        raise TypeError(f"{func_name}() could not inspect callback signature") from exc
+        raise TypeError(f"{func_name}() could not inspect function signature") from exc
 
-    sentinel_args = tuple(object() for _ in range(required_args))
-    try:
-        signature.bind(*sentinel_args)
-    except TypeError as exc:
-        if func_name == "custom":
-            raise TypeError("custom() expects callable compatible with (ctx)") from exc
-        raise TypeError("acustom() expects callable compatible with (ctx, enabled)") from exc
+    if ins is not None:
+        if not isinstance(ins, dict):
+            raise TypeError(f"{func_name}() ins must be a dict, got {type(ins).__name__}")
+    elif has_enabled:
+        ins = {}
+
+    if ins is not None:
+        bind_kwargs = {k: object() for k in ins}
+        bind_args = (object(),) if has_enabled else ()
+        try:
+            signature.bind(*bind_args, **bind_kwargs)
+        except TypeError as exc:
+            raise TypeError(
+                f"{func_name}() ins keys {sorted(ins.keys())} incompatible with "
+                f"{getattr(fn, '__name__', repr(fn))!r} signature"
+            ) from exc
+
+    if outs is not None and not isinstance(outs, dict):
+        raise TypeError(f"{func_name}() outs must be a dict, got {type(outs).__name__}")
 
 
 class ForbiddenControlFlowError(RuntimeError):
@@ -604,19 +622,29 @@ def copy(
     return target
 
 
-def custom(fn: Callable[[ScanContext], None], oneshot: bool = False) -> None:
-    """Execute a synchronous custom callback when rung power is true."""
-    ctx = _require_rung_context("custom")
-    _validate_custom_callback(fn, func_name="custom", required_args=1)
-    ctx._rung.add_instruction(LambdaInstruction(fn, oneshot))
+def run_function(
+    fn: Callable[..., dict[str, Any]],
+    ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
+    outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
+    *,
+    oneshot: bool = False,
+) -> None:
+    """Execute a synchronous function when rung power is true."""
+    ctx = _require_rung_context("run_function")
+    _validate_function_call(fn, ins, outs, func_name="run_function")
+    ctx._rung.add_instruction(FunctionCallInstruction(fn, ins, outs, oneshot))
 
 
-def acustom(fn: Callable[[ScanContext, bool], None]) -> None:
-    """Execute a synchronous custom callback every scan with rung enabled state."""
-    ctx = _require_rung_context("acustom")
-    _validate_custom_callback(fn, func_name="acustom", required_args=2)
+def run_enabled_function(
+    fn: Callable[..., dict[str, Any]],
+    ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
+    outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
+) -> None:
+    """Execute a synchronous function every scan with rung enabled state."""
+    ctx = _require_rung_context("run_enabled_function")
+    _validate_function_call(fn, ins, outs, func_name="run_enabled_function", has_enabled=True)
     enable_condition = ctx._rung._get_combined_condition()
-    ctx._rung.add_instruction(AsyncLambdaInstruction(fn, enable_condition))
+    ctx._rung.add_instruction(AsyncFunctionCallInstruction(fn, ins, outs, enable_condition))
 
 
 def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
@@ -1586,3 +1614,4 @@ def off_delay(
     ctx = _require_rung_context("off_delay")
     enable_condition = ctx._rung._get_combined_condition()
     return OffDelayBuilder(done_bit, accumulator, setpoint, enable_condition, time_unit)
+

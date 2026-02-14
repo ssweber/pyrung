@@ -1,4 +1,4 @@
-"""Immutable PLC Engine.
+﻿"""Immutable PLC Engine.
 
 Redux-style architecture where logic is a pure function:
     Logic(Current_State) -> Next_State
@@ -42,7 +42,6 @@ from pyrung.core.program import (
     Program,
     Rung,
     SubroutineFunc,
-    acustom,
     all_of,
     any_of,
     blockcopy,
@@ -51,7 +50,6 @@ from pyrung.core.program import (
     copy,
     count_down,
     count_up,
-    custom,
     fall,
     fill,
     forloop,
@@ -67,6 +65,8 @@ from pyrung.core.program import (
     reset,
     return_,
     rise,
+    run_enabled_function,
+    run_function,
     search,
     shift,
     subroutine,
@@ -143,8 +143,8 @@ __all__ = [
     "latch",
     "reset",
     "copy",
-    "custom",
-    "acustom",
+    "run_function",
+    "run_enabled_function",
     "blockcopy",
     "fill",
     "pack_bits",
@@ -185,3 +185,4 @@ __all__ = [
     "lro",
     "rro",
 ]
+

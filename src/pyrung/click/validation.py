@@ -1,4 +1,4 @@
-"""Click portability validation for pyrung programs.
+﻿"""Click portability validation for pyrung programs.
 
 Consumes Stage 1 walker facts for R1-R5, and instruction context plus hardware
 profile data for Stage 3 (R6-R8).
@@ -39,6 +39,7 @@ CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
+CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
 
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
@@ -294,6 +295,12 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
             )
         return "Use a fixed BlockRange with literal start/end addresses for block copy."
 
+    if code == CLK_FUNCTION_CALL_NOT_PORTABLE:
+        return (
+            "Replace run_function/run_enabled_function with Click-portable instructions "
+            "(copy/math/timer/counter/send/receive)."
+        )
+
     return ""
 
 
@@ -416,6 +423,36 @@ def _evaluate_fact(
         )
 
     return findings
+
+
+# ---------------------------------------------------------------------------
+# Function-call portability rule
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_instruction_portability(
+    instruction: Any, base_location: ProgramLocation, mode: ValidationMode
+) -> list[ClickFinding]:
+    instruction_type = type(instruction).__name__
+    if instruction_type not in {"FunctionCallInstruction", "AsyncFunctionCallInstruction"}:
+        return []
+
+    location_text = _format_location(base_location)
+    return [
+        ClickFinding(
+            code=CLK_FUNCTION_CALL_NOT_PORTABLE,
+            severity=_route_severity(CLK_FUNCTION_CALL_NOT_PORTABLE, mode),
+            message=(
+                f"{instruction_type} is not Click-portable at {location_text}. "
+                "Click execution cannot run arbitrary Python callables."
+            ),
+            location=location_text,
+            suggestion=(
+                "Replace run_function/run_enabled_function with Click-portable instructions "
+                "(copy/math/timer/counter/send/receive)."
+            ),
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -755,6 +792,10 @@ def validate_click_program(
     for fact in facts.operands:
         findings.extend(_evaluate_fact(fact, tag_map, mode))
 
+    instruction_sites = _iter_instruction_sites(program)
+    for instruction, base_location in instruction_sites:
+        findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
+
     active_profile = profile if profile is not None else _load_default_profile()
 
     if active_profile is None:
@@ -767,7 +808,7 @@ def validate_click_program(
             )
         )
     else:
-        for instruction, base_location in _iter_instruction_sites(program):
+        for instruction, base_location in instruction_sites:
             findings.extend(_evaluate_r6(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_r7(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_r8(instruction, base_location, tag_map, active_profile, mode))
@@ -789,3 +830,4 @@ def validate_click_program(
         warnings=tuple(warnings),
         hints=tuple(hints),
     )
+

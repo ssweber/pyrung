@@ -1,30 +1,26 @@
-"""Synchronous custom() callback example for multi-step math."""
+"""Synchronous run_function() example for multi-step math."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING
-
-from pyrung.core.tag import Tag
-
-if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+from typing import Any
 
 
-def weighted_average(*, inputs: list[Tag], weights: list[float], output: Tag) -> Callable[[ScanContext], None]:
-    """Build a callback that computes a weighted average into ``output``."""
-    if len(inputs) != len(weights):
-        raise ValueError(
-            f"weighted_average() inputs/weights length mismatch: {len(inputs)} != {len(weights)}"
-        )
+def weighted_average(
+    sensor1: float,
+    sensor2: float,
+    sensor3: float,
+    weight1: float = 0.5,
+    weight2: float = 0.3,
+    weight3: float = 0.2,
+) -> dict[str, Any]:
+    """Compute a weighted average and return PLC output mapping."""
+    weight_sum = float(weight1 + weight2 + weight3)
+    if weight_sum == 0:
+        return {"result": 0.0}
 
-    def _execute(ctx: ScanContext) -> None:
-        total = sum(
-            float(ctx.get_tag(tag.name, tag.default)) * weight
-            for tag, weight in zip(inputs, weights, strict=True)
-        )
-        weight_sum = float(sum(weights))
-        result = total / weight_sum if weight_sum else 0
-        ctx.set_tag(output.name, result)
-
-    return _execute
+    total = (
+        float(sensor1) * float(weight1)
+        + float(sensor2) * float(weight2)
+        + float(sensor3) * float(weight3)
+    )
+    return {"result": total / weight_sum}
