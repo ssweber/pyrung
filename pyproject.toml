@@ -150,10 +150,12 @@ exclude = [
 # Note: unresolved-import is ignored because ty has issues with src-layout
 # projects and relative imports. The code runs correctly with Python.
 unresolved-import = "ignore"
+unused-ignore-comment = "error"
+
 
 [tool.codespell]
 # Add here as needed:
-ignore-words-list = "acustom"
+# ignore-words-list = ""
 # skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]

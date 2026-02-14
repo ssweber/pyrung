@@ -6,8 +6,14 @@ from funlog import log_calls
 from rich import get_console, reconfigure
 from rich import print as rprint
 
-# Use Path objects to ensure slashes are correct for the current OS/Shell
-SRC_PATHS = [str(Path("src")), str(Path("tests")), str(Path("devtools"))]
+# Use canonical absolute paths so ty behaves consistently on Windows regardless
+# of how cwd casing is typed (e.g., "Documents" vs "documents").
+PROJECT_ROOT = Path.cwd().resolve()
+SRC_PATHS = [
+    str(PROJECT_ROOT / "src"),
+    str(PROJECT_ROOT / "tests"),
+    str(PROJECT_ROOT / "devtools"),
+]
 DOC_PATHS = [str(Path("README.md"))]
 
 # No emojis on legacy windows.
@@ -28,7 +34,17 @@ def main():
     # 3. Ruff Formatter
     errcount += run(["ruff", "format", *SRC_PATHS])
 
-    errcount += run(["ty", "check", *SRC_PATHS])
+    errcount += run(
+        [
+            "ty",
+            "check",
+            "--project",
+            str(PROJECT_ROOT),
+            "--error",
+            "unused-ignore-comment",
+            *SRC_PATHS,
+        ]
+    )
 
     rprint()
 
