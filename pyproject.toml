@@ -160,6 +160,9 @@ ignore-words-list = "acustom"
 python_files = ["*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: networked or multi-process integration test",
+]
 testpaths = [
     "src",
     "tests",

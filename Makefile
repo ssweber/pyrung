@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test upgrade build clean docs docs-check
+.PHONY: default install lint test test-integration upgrade build clean docs docs-check
 
 default: install lint test
 
@@ -15,7 +15,10 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest
+	uv run pytest -m "not integration"
+
+test-integration:
+	uv run pytest -m integration
 
 upgrade:
 	uv sync --upgrade
