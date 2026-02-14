@@ -1,22 +1,24 @@
-"""Click TagMap integration tests for Struct and PackedStruct."""
+"""Click TagMap integration tests for @udt and @named_array."""
 
 from __future__ import annotations
+
+from typing import Any, cast
 
 import pyclickplc
 import pytest
 from pyclickplc.addresses import get_addr_key
 
 from pyrung.click import TagMap, c, ds
-from pyrung.core import Field, PackedStruct, Struct, TagType, auto
+from pyrung.core import Bool, Field, Int, auto, named_array, udt
 
 
-def test_struct_resolve_supports_block_and_instance_access():
-    alarms = Struct(
-        "Alarm",
-        count=3,
-        id=Field(TagType.INT, default=auto()),
-        On=Field(TagType.BOOL),
-    )
+def test_udt_resolve_supports_block_and_instance_access():
+    @udt(count=3)
+    class Alarm:
+        id: Int = auto()  # type: ignore[invalid-assignment]
+        On: Bool
+
+    alarms = cast(Any, Alarm)
     mapping = TagMap({alarms.id: ds.select(1001, 1003), alarms.On: c.select(1, 3)})
 
     assert mapping.resolve(alarms[2].id) == "DS1002"
@@ -24,15 +26,13 @@ def test_struct_resolve_supports_block_and_instance_access():
     assert mapping.resolve(alarms[3].On) == "C3"
 
 
-def test_packed_struct_width_gt_one_resolves_instance_slots_only():
-    alarms = PackedStruct(
-        "Alarm",
-        TagType.INT,
-        count=2,
-        pad=1,
-        id=Field(default=auto()),
-        val=Field(default=0),
-    )
+def test_named_array_width_gt_one_resolves_instance_slots_only():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
     mapping = TagMap([*alarms.map_to(ds.select(2001, 2006))])
 
     assert mapping.resolve(alarms[2].id) == "DS2004"
@@ -41,21 +41,20 @@ def test_packed_struct_width_gt_one_resolves_instance_slots_only():
         mapping.resolve(alarms.id, 2)
 
 
-def test_struct_and_packed_csv_export_include_expected_slot_metadata(tmp_path):
-    alarms = Struct(
-        "Alarm",
-        count=2,
-        id=Field(TagType.INT, default=auto(), retentive=True),
-        val=Field(TagType.INT, default=0),
-    )
-    alarm_ints = PackedStruct(
-        "AlarmPacked",
-        TagType.INT,
-        count=2,
-        pad=1,
-        id=Field(default=auto(), retentive=True),
-        val=Field(default=0),
-    )
+def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path):
+    @udt(count=2)
+    class Alarm:
+        id: Int = Field(default=auto(), retentive=True)  # type: ignore[invalid-assignment]
+        val: Int = 0  # type: ignore[invalid-assignment]
+
+    alarms = cast(Any, Alarm)
+
+    @named_array(Int, count=2, stride=3)
+    class AlarmPacked:
+        id = Field(default=auto(), retentive=True)
+        val = 0
+
+    alarm_ints = cast(Any, AlarmPacked)
     mapping = TagMap(
         [
             alarms.id.map_to(ds.select(3001, 3002)),

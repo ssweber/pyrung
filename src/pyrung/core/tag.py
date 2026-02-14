@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 from pyrung.core.live_binding import get_active_runner
 
@@ -535,122 +535,63 @@ def _is_class_declaration_context(stack_depth: int) -> bool:
         del frame
 
 
-def _tag_or_decl(
-    name: str | None, tag_type: TagType, retentive: bool, ctor_name: str
-) -> LiveTag | _AutoTagDecl:
-    if name is not None:
-        return LiveTag(name, tag_type, retentive)
-    if not _is_class_declaration_context(stack_depth=3):
-        raise TypeError(
-            f"{ctor_name}() without a name is only valid in a TagNamespace class body. "
-            f"Use {ctor_name}('TagName') or declare inside `class Tags(TagNamespace): ...`."
-        )
-    return _AutoTagDecl(tag_type, retentive)
+class _TagTypeBase(LiveTag):
+    """Base class for tag type marker constructors."""
+
+    _tag_type: ClassVar[TagType]
+    _default_retentive: ClassVar[bool]
+
+    def __init__(self, name: str | None = None, retentive: bool | None = None) -> None:
+        # __new__ returns LiveTag/_AutoTagDecl and bypasses this initializer.
+        return None
+
+    @overload
+    def __new__(cls, name: str, retentive: bool | None = None) -> LiveTag: ...
+
+    @overload
+    def __new__(cls, name: None = None, retentive: bool | None = None) -> _AutoTagDecl: ...
+
+    def __new__(
+        cls, name: str | None = None, retentive: bool | None = None
+    ) -> LiveTag | _AutoTagDecl:
+        if retentive is None:
+            retentive = cls._default_retentive
+        if name is not None:
+            return LiveTag(name, cls._tag_type, retentive)
+        if not _is_class_declaration_context(stack_depth=2):
+            raise TypeError(
+                f"{cls.__name__}() without a name is only valid in a TagNamespace class body. "
+                f"Use {cls.__name__}('TagName') or declare inside "
+                f"`class Tags(TagNamespace): ...`."
+            )
+        return _AutoTagDecl(cls._tag_type, retentive)
 
 
-@overload
-def Bool(name: str, retentive: bool = False) -> LiveTag: ...
+class Bool(_TagTypeBase):
+    _tag_type = TagType.BOOL
+    _default_retentive = False
 
 
-@overload
-def Bool(name: None = None, retentive: bool = False) -> _AutoTagDecl: ...
+class Int(_TagTypeBase):
+    _tag_type = TagType.INT
+    _default_retentive = True
 
 
-def Bool(name: str | None = None, retentive: bool = False) -> LiveTag | _AutoTagDecl:
-    """Create a BOOL tag (boolean).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default False.
-    """
-    return _tag_or_decl(name, TagType.BOOL, retentive, "Bool")
+class Dint(_TagTypeBase):
+    _tag_type = TagType.DINT
+    _default_retentive = True
 
 
-@overload
-def Int(name: str, retentive: bool = True) -> LiveTag: ...
+class Real(_TagTypeBase):
+    _tag_type = TagType.REAL
+    _default_retentive = True
 
 
-@overload
-def Int(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
+class Word(_TagTypeBase):
+    _tag_type = TagType.WORD
+    _default_retentive = False
 
 
-def Int(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
-    """Create an INT tag (16-bit signed integer).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default True.
-    """
-    return _tag_or_decl(name, TagType.INT, retentive, "Int")
-
-
-@overload
-def Dint(name: str, retentive: bool = True) -> LiveTag: ...
-
-
-@overload
-def Dint(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
-
-
-def Dint(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
-    """Create a DINT tag (32-bit signed integer).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default True.
-    """
-    return _tag_or_decl(name, TagType.DINT, retentive, "Dint")
-
-
-@overload
-def Real(name: str, retentive: bool = True) -> LiveTag: ...
-
-
-@overload
-def Real(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
-
-
-def Real(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
-    """Create a REAL tag (32-bit float).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default True.
-    """
-    return _tag_or_decl(name, TagType.REAL, retentive, "Real")
-
-
-@overload
-def Word(name: str, retentive: bool = False) -> LiveTag: ...
-
-
-@overload
-def Word(name: None = None, retentive: bool = False) -> _AutoTagDecl: ...
-
-
-def Word(name: str | None = None, retentive: bool = False) -> LiveTag | _AutoTagDecl:
-    """Create a WORD tag (16-bit unsigned).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default False.
-    """
-    return _tag_or_decl(name, TagType.WORD, retentive, "Word")
-
-
-@overload
-def Char(name: str, retentive: bool = True) -> LiveTag: ...
-
-
-@overload
-def Char(name: None = None, retentive: bool = True) -> _AutoTagDecl: ...
-
-
-def Char(name: str | None = None, retentive: bool = True) -> LiveTag | _AutoTagDecl:
-    """Create a CHAR tag (single ASCII character).
-
-    Args:
-        name: Tag name.
-        retentive: Whether value survives power cycles. Default True.
-    """
-    return _tag_or_decl(name, TagType.CHAR, retentive, "Char")
+class Char(_TagTypeBase):
+    _tag_type = TagType.CHAR
+    _default_retentive = True

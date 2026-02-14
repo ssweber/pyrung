@@ -1,4 +1,6 @@
-# Convert Struct/PackedStruct to @plc_block/@plc_pack Decorators
+# Convert Struct/PackedStruct to @udt/@named_array Decorators
+
+> Status (2026-02-14): Implemented. Finalized decision: use `@udt` and `@named_array` with `stride`-based gaps and no dummy "empty" fields.
 
 ## Context
 
@@ -8,27 +10,31 @@ alarms = Struct("Alarm", count=3, id=Field(TagType.INT), on=Field(TagType.BOOL))
 ```
 This plan replaces them with dataclass-style decorator declarations:
 ```python
-@plc_block(count=3)
+@udt(count=3)
 class Alarm:
     id: Int = auto()
     on: Bool
 ```
-This is more Pythonic, more readable, and makes `Int`/`Bool` proper classes (valid type annotations).
+This is more Pythonic, more readable, and makes the tag types (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) proper classes usable as type annotations.
 
 ## Decisions
 
-- **Class-based `Int`/`Bool`**: Refactor from functions to classes using `__new__`
+- **Class-based tag types**: Refactor all 6 tag constructors (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) from functions to classes using `__new__`
 - **No DT namespace**: Class names are the type markers
 - **`Field()` for retentive**: `id: Int = Field(default=auto(), retentive=True)`
 - **`int` maps to `INT`** (PLC convention)
 - **Remove Struct/PackedStruct outright** (no deprecation period)
 - **Runtime also accepts**: Python primitives (`bool`, `int`, `float`, `str`) and IEC strings
+- **Naming**: `@udt` (User Defined Type) for mixed-type structures, `@named_array` for single-type (instance-interleaved) structures. Both use snake_case to match Python decorator convention (`@dataclass`, `@contextmanager`).
+- **`stride` parameter**: The per-instance footprint in memory — distance from the start of one instance to the start of the next. Replaces the former `pad` concept. `@named_array(Int, count=10, stride=5)` means each instance occupies 5 slots (e.g., 1 defined field + 4 unmapped gaps).
+- **No "Empty" fields**: The runtime uses `stride` strictly for calculating memory offsets. Gaps between defined fields remain unmapped and do not generate dummy Python attributes.
+- **No annotations in `@named_array`**: Since the decorator's `base_type` argument already defines the type for all fields, annotations are not used. Fields are declared as bare names with optional defaults.
 
 ## Target API
 
 ```python
-# Mixed-type (field-grouped)
-@plc_block(count=3)
+# Mixed-type (field-grouped) — "User Defined Type"
+@udt(count=3)
 class Alarm:
     id: Int = auto(start=10, step=5)
     on: Bool
@@ -38,18 +44,18 @@ Alarm[1].id       # LiveTag "Alarm1_id"
 Alarm.id          # Block
 Alarm.field_names # ("id", "on", "val")
 
-# Single-type (instance-interleaved)
-@plc_pack(Int, count=2, pad=1)
+# Single-type (instance-interleaved) — "Named Array"
+@named_array(Int, count=2, stride=2)
 class Data:
-    id: Int = auto()
-    val: Int = 0
+    id = auto()
+    val = 0
 
 Data.map_to(ds.select(1, 6))  # packed mapping
 ```
 
 ---
 
-## Step 1: Refactor Int/Bool/etc. to classes
+## Step 1: Refactor tag type constructors to classes
 
 **File**: `src/pyrung/core/tag.py`
 
@@ -110,7 +116,7 @@ Click aliases (`Bit = Bool`, `Int2 = Dint`, `Float = Real`, `Hex = Word`, `Txt =
 
 **File**: `src/pyrung/core/struct.py`
 
-Add helper to resolve annotations to `TagType`:
+Add helper to resolve annotations to `TagType` (used by `@udt` only; `@named_array` gets its type from the decorator's `base_type` argument):
 
 ```python
 def _resolve_annotation(annotation, field_name: str) -> TagType:
@@ -122,11 +128,11 @@ def _resolve_annotation(annotation, field_name: str) -> TagType:
 
 Also add internal `_FieldSpec` dataclass for parsed field metadata.
 
-## Step 3: Implement @plc_block decorator
+## Step 3: Implement @udt decorator
 
 **File**: `src/pyrung/core/struct.py`
 
-`plc_block(*, count=1)` → decorator that:
+`udt(*, count=1)` → decorator that:
 1. Reads `cls.__annotations__` for field types
 2. Reads `cls.__dict__` for defaults (literal, `auto()`, `Field()`)
 3. Validates field names, count, auto() compatibility
@@ -140,19 +146,19 @@ Also add internal `_FieldSpec` dataclass for parsed field metadata.
 
 Reuse from current code: `_make_formatter`, `_make_default_factory`, `resolve_default`, `_RESERVED_FIELD_NAMES`, `_NUMERIC_TYPES`, `InstanceView`.
 
-## Step 4: Implement @plc_pack decorator
+## Step 4: Implement @named_array decorator
 
 **File**: `src/pyrung/core/struct.py`
 
-`plc_pack(base_type, *, count=1, pad=0)` → decorator that:
+`named_array(base_type, *, count=1, stride=1)` → decorator that:
 1. Resolves `base_type` (must be `_TagTypeBase` subclass)
-2. Same annotation/default parsing as plc_block
-3. Validates all fields match base type (annotations present but type comes from decorator arg)
-4. Adds padding fields (`empty1..emptyN`) with collision check
-5. Returns `_PackedStructRuntime` instance
+2. Reads field names and defaults from `cls.__dict__` (no `__annotations__` — type comes from `base_type`)
+3. Filters out dunder and private names to get the declared field list
+4. Uses `stride` strictly for offset calculation: instance *n* starts at `n * stride`. Gaps between defined fields remain unmapped (no dummy attributes)
+5. Returns `_NamedArrayRuntime` instance
 
-`_PackedStructRuntime` extends `_StructRuntime` behavior with:
-- `.type`, `.pad`, `.width`
+`_NamedArrayRuntime` extends `_StructRuntime` behavior with:
+- `.type`, `.stride`
 - `.map_to(target)` — copy exact logic from current `PackedStruct.map_to()`
 
 ## Step 5: Remove Struct/PackedStruct
@@ -166,7 +172,7 @@ Reuse from current code: `_make_formatter`, `_make_default_factory`, `resolve_de
 
 **File**: `src/pyrung/core/__init__.py`
 - Remove `Struct`, `PackedStruct` from imports and `__all__`
-- Add `plc_block`, `plc_pack` to imports and `__all__`
+- Add `udt`, `named_array` to imports and `__all__`
 
 **File**: `src/pyrung/click/__init__.py`
 - No changes needed (aliases `Bit = Bool` etc. still work since Bool is now a class)
@@ -174,15 +180,15 @@ Reuse from current code: `_make_formatter`, `_make_default_factory`, `resolve_de
 ## Step 7: Rewrite tests
 
 **Delete and replace**:
-- `tests/core/test_struct.py` → `tests/core/test_plc_block.py`
-- `tests/core/test_packed_struct.py` → `tests/core/test_plc_pack.py`
+- `tests/core/test_struct.py` → `tests/core/test_udt.py`
+- `tests/core/test_packed_struct.py` → `tests/core/test_named_array.py`
 - `tests/click/test_struct_mapping.py` → `tests/click/test_plc_mapping.py`
 
 **Add new**:
-- `tests/core/test_tag_type_classes.py` — test Int/Bool as classes (constructor, annotation, TagNamespace, errors)
+- `tests/core/test_tag_type_classes.py` — test all 6 tag type classes (constructor, annotation, TagNamespace, errors) and primitive mappings (`bool`→`BOOL`, `int`→`INT`, `float`→`REAL`, `str`→`CHAR`)
 
 **Update in place**:
-- `tests/core/test_live_tag_proxy.py` — change Struct/PackedStruct usage to @plc_block/@plc_pack
+- `tests/core/test_live_tag_proxy.py` — change Struct/PackedStruct usage to @udt/@named_array
 
 Port all test cases 1:1, just change syntax from builder to decorator style.
 
@@ -196,14 +202,14 @@ Port all test cases 1:1, just change syntax from builder to decorator style.
 
 | File | Action |
 |------|--------|
-| `src/pyrung/core/tag.py` | Refactor Int/Bool/etc. from functions to classes |
+| `src/pyrung/core/tag.py` | Refactor tag type constructors from functions to classes |
 | `src/pyrung/core/struct.py` | Add decorators, remove Struct/PackedStruct |
 | `src/pyrung/core/__init__.py` | Update exports |
-| `tests/core/test_struct.py` | Delete (replaced by test_plc_block.py) |
-| `tests/core/test_packed_struct.py` | Delete (replaced by test_plc_pack.py) |
-| `tests/core/test_plc_block.py` | New — port struct tests |
-| `tests/core/test_plc_pack.py` | New — port packed struct tests |
-| `tests/core/test_tag_type_classes.py` | New — Int/Bool class tests |
+| `tests/core/test_struct.py` | Delete (replaced by test_udt.py) |
+| `tests/core/test_packed_struct.py` | Delete (replaced by test_named_array.py) |
+| `tests/core/test_udt.py` | New — port struct tests |
+| `tests/core/test_named_array.py` | New — port packed struct tests |
+| `tests/core/test_tag_type_classes.py` | New — tag type class + primitive mapping tests |
 | `tests/core/test_live_tag_proxy.py` | Update struct usage |
 | `tests/click/test_struct_mapping.py` | Delete (replaced) |
 | `tests/click/test_plc_mapping.py` | New — port mapping tests |
@@ -214,6 +220,6 @@ Port all test cases 1:1, just change syntax from builder to decorator style.
 2. `make lint` — no lint/type errors
 3. Verify tag constructor behavior: `Int("name")` returns LiveTag
 4. Verify TagNamespace: `x = Int()` auto-names in class body
-5. Verify decorator: `@plc_block(count=3)` creates correct blocks/tags
-6. Verify packed mapping: `@plc_pack(Int, count=2, pad=1)` + `map_to()` works
+5. Verify decorator: `@udt(count=3)` creates correct blocks/tags
+6. Verify named array: `@named_array(Int, count=2, stride=2)` + `map_to()` works
 7. Verify Click integration: TagMap resolves decorated struct fields

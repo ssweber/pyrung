@@ -1,16 +1,17 @@
-"""Structured logical tag factories.
+"""Decorator-based structured logical tag factories.
 
-Struct creates mixed-type, field-grouped blocks.
-PackedStruct creates single-type, instance-grouped records with optional padding.
+`udt` creates mixed-type, field-grouped structures.
+`named_array` creates single-type, instance-interleaved structures.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sized
 from dataclasses import dataclass
 from typing import Any
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import LiveTag, MappingEntry, TagType
+from pyrung.core.tag import LiveTag, MappingEntry, TagType, _TagTypeBase
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -21,16 +22,35 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
-        "pad",
+        "stride",
         "type",
-        "width",
     }
 )
+_PRIMITIVE_TYPE_MAP = {
+    bool: TagType.BOOL,
+    int: TagType.INT,
+    float: TagType.REAL,
+    str: TagType.CHAR,
+}
+_STRING_TYPE_MAP = {
+    "bool": TagType.BOOL,
+    "bit": TagType.BOOL,
+    "int": TagType.INT,
+    "dint": TagType.DINT,
+    "int2": TagType.DINT,
+    "real": TagType.REAL,
+    "float": TagType.REAL,
+    "word": TagType.WORD,
+    "hex": TagType.WORD,
+    "char": TagType.CHAR,
+    "str": TagType.CHAR,
+    "txt": TagType.CHAR,
+}
 
 
 @dataclass(frozen=True)
 class Field:
-    """Field descriptor used by Struct and PackedStruct."""
+    """Field metadata used by `udt` and `named_array` declarations."""
 
     type: TagType | None = None
     default: Any = UNSET
@@ -43,6 +63,14 @@ class AutoDefault:
 
     start: int = 1
     step: int = 1
+
+
+@dataclass(frozen=True)
+class _FieldSpec:
+    name: str
+    type: TagType
+    default: object
+    retentive: bool
 
 
 def auto(*, start: int = 1, step: int = 1) -> AutoDefault:
@@ -60,9 +88,9 @@ def resolve_default(spec: object, index: int) -> object:
 
 
 class InstanceView:
-    """1-based indexed view into a Struct/PackedStruct instance."""
+    """1-based indexed view into one structure instance."""
 
-    def __init__(self, owner: Struct | PackedStruct, index: int):
+    def __init__(self, owner: _StructRuntime, index: int):
         self._owner = owner
         self._index = index
 
@@ -76,36 +104,33 @@ class InstanceView:
         return f"InstanceView({self._owner.name}[{self._index}])"
 
 
-class Struct:
-    """Mixed-type logical record factory with field-grouped layout."""
+class _StructRuntime:
+    """Runtime object returned by `@udt`."""
 
-    def __init__(self, name: str, *, count: int, **fields: Field):
+    def __init__(self, name: str, count: int, field_specs: tuple[_FieldSpec, ...]):
         _validate_name(name)
         _validate_count(count)
-        _validate_fields_present(fields)
-        _validate_field_names(fields)
+        _validate_fields_present(field_specs)
 
         self.name = name
         self.count = count
         self._field_specs: dict[str, Field] = {}
-        self._field_order: tuple[str, ...] = tuple(fields.keys())
+        self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
 
-        for field_name, field_spec in fields.items():
-            if not isinstance(field_spec, Field):
-                raise TypeError(f"Field {field_name!r} must be a Field descriptor.")
-            if field_spec.type is None:
-                raise ValueError(f"Struct field {field_name!r} requires a TagType.")
-            _validate_auto_default_allowed(field_name, field_spec.default, field_spec.type)
-
-            self._field_specs[field_name] = field_spec
-            self._blocks[field_name] = Block(
-                name=f"{name}.{field_name}",
+        for field_spec in field_specs:
+            self._field_specs[field_spec.name] = Field(
+                type=field_spec.type,
+                default=field_spec.default,
+                retentive=field_spec.retentive,
+            )
+            self._blocks[field_spec.name] = Block(
+                name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
                 start=1,
                 end=count,
                 retentive=field_spec.retentive,
-                address_formatter=_make_formatter(name, field_name),
+                address_formatter=_make_formatter(name, field_spec.name),
                 default_factory=_make_default_factory(field_spec.default),
             )
 
@@ -119,111 +144,63 @@ class Struct:
 
     def __getitem__(self, index: int) -> InstanceView:
         if not isinstance(index, int):
-            raise TypeError("Struct index must be an int.")
+            raise TypeError(f"{type(self).__name__} index must be an int.")
         if index < 1 or index > self.count:
-            raise IndexError(f"Struct index {index} out of range 1..{self.count}.")
+            raise IndexError(f"{type(self).__name__} index {index} out of range 1..{self.count}.")
         return InstanceView(self, index)
 
     def __getattr__(self, field_name: str) -> Block:
         block = self._blocks.get(field_name)
         if block is None:
-            raise AttributeError(f"Struct has no field {field_name!r}.")
+            raise AttributeError(f"{type(self).__name__} has no field {field_name!r}.")
         return block
 
     def __repr__(self) -> str:
-        return f"Struct({self.name!r}, count={self.count}, fields={self._field_order!r})"
+        return f"{type(self).__name__}({self.name!r}, count={self.count}, fields={self._field_order!r})"
 
 
-class PackedStruct:
-    """Single-type logical record factory with instance-grouped layout."""
+class _NamedArrayRuntime(_StructRuntime):
+    """Runtime object returned by `@named_array`."""
 
-    def __init__(self, name: str, type: TagType, *, count: int, pad: int = 0, **fields: Field):
-        _validate_name(name)
-        _validate_count(count)
-        _validate_pad(pad)
-        _validate_fields_present(fields)
-        _validate_field_names(fields)
-
-        self.name = name
-        self.type = type
-        self.count = count
-        self.pad = pad
-        self._field_specs: dict[str, Field] = {}
-        self._field_order: tuple[str, ...]
-        self._blocks: dict[str, Block] = {}
-
-        for field_name, field_spec in fields.items():
-            if not isinstance(field_spec, Field):
-                raise TypeError(f"Field {field_name!r} must be a Field descriptor.")
-            if field_spec.type is not None:
-                raise ValueError(
-                    f"PackedStruct field {field_name!r} cannot declare type; use PackedStruct type."
-                )
-            _validate_auto_default_allowed(field_name, field_spec.default, type)
-            self._field_specs[field_name] = field_spec
-
-        pad_names = tuple(f"empty{i}" for i in range(1, pad + 1))
-        for pad_name in pad_names:
-            if pad_name in fields:
-                raise ValueError(f"Padding field name {pad_name!r} collides with a user field.")
-            self._field_specs[pad_name] = Field()
-
-        self._field_order = tuple(fields.keys()) + pad_names
-        self.width = len(self._field_order)
-
-        for field_name in self._field_order:
-            field_spec = self._field_specs[field_name]
-            self._blocks[field_name] = Block(
-                name=f"{name}.{field_name}",
-                type=type,
-                start=1,
-                end=count,
-                retentive=field_spec.retentive,
-                address_formatter=_make_formatter(name, field_name),
-                default_factory=_make_default_factory(field_spec.default),
+    def __init__(
+        self,
+        name: str,
+        type: TagType,
+        *,
+        count: int,
+        stride: int,
+        field_specs: tuple[_FieldSpec, ...],
+    ):
+        _validate_stride(stride)
+        if stride < len(field_specs):
+            raise ValueError(
+                f"stride must be >= declared field count ({len(field_specs)}), got {stride}."
             )
 
-    @property
-    def fields(self) -> dict[str, Field]:
-        return dict(self._field_specs)
-
-    @property
-    def field_names(self) -> tuple[str, ...]:
-        return self._field_order
-
-    def __getitem__(self, index: int) -> InstanceView:
-        if not isinstance(index, int):
-            raise TypeError("PackedStruct index must be an int.")
-        if index < 1 or index > self.count:
-            raise IndexError(f"PackedStruct index {index} out of range 1..{self.count}.")
-        return InstanceView(self, index)
-
-    def __getattr__(self, field_name: str) -> Block:
-        block = self._blocks.get(field_name)
-        if block is None:
-            raise AttributeError(f"PackedStruct has no field {field_name!r}.")
-        return block
+        self.type = type
+        self.stride = stride
+        super().__init__(name=name, count=count, field_specs=field_specs)
 
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
-        """Map this packed layout to a hardware range."""
+        """Map this named-array layout to a hardware range."""
         if not isinstance(target, BlockRange):
-            raise TypeError("PackedStruct.map_to target must be a BlockRange.")
+            raise TypeError("named_array.map_to target must be a BlockRange.")
 
         hardware_addresses = tuple(target.addresses)
-        expected = self.count * self.width
+        expected = self.count * self.stride
         if len(hardware_addresses) != expected:
             raise ValueError(
-                f"PackedStruct {self.name!r} expects {expected} hardware slots, "
+                f"named_array {self.name!r} expects {expected} hardware slots, "
                 f"received {len(hardware_addresses)}."
             )
 
-        if self.width == 1:
+        if len(self._field_order) == 1 and self.stride == 1:
             field_name = self._field_order[0]
             return [self._blocks[field_name].map_to(target)]
 
         entries: list[MappingEntry] = []
         for index in range(1, self.count + 1):
-            base = (index - 1) * self.width
+            base = (index - 1) * self.stride
             for offset, field_name in enumerate(self._field_order):
                 logical = self._blocks[field_name][index]
                 hardware = target.block[hardware_addresses[base + offset]]
@@ -232,9 +209,132 @@ class PackedStruct:
 
     def __repr__(self) -> str:
         return (
-            f"PackedStruct({self.name!r}, {self.type}, count={self.count}, "
-            f"pad={self.pad}, fields={self._field_order!r})"
+            f"{type(self).__name__}({self.name!r}, {self.type}, count={self.count}, "
+            f"stride={self.stride}, fields={self._field_order!r})"
         )
+
+
+def udt(*, count: int = 1):
+    """Decorator that builds a mixed-type structured runtime from annotations."""
+    _validate_count(count)
+
+    def _decorator(cls: type[Any]) -> _StructRuntime:
+        name = cls.__name__
+        _validate_name(name)
+        field_specs = _parse_udt_fields(cls)
+        return _StructRuntime(name=name, count=count, field_specs=field_specs)
+
+    return _decorator
+
+
+def named_array(base_type: object, *, count: int = 1, stride: int = 1):
+    """Decorator that builds a single-type, instance-interleaved structured runtime."""
+    _validate_count(count)
+    _validate_stride(stride)
+    resolved_type = _resolve_annotation(base_type, "base_type")
+
+    def _decorator(cls: type[Any]) -> _NamedArrayRuntime:
+        name = cls.__name__
+        _validate_name(name)
+        field_specs = _parse_named_array_fields(cls, resolved_type)
+        return _NamedArrayRuntime(
+            name=name,
+            type=resolved_type,
+            count=count,
+            stride=stride,
+            field_specs=field_specs,
+        )
+
+    return _decorator
+
+
+def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
+    annotations = getattr(cls, "__annotations__", {})
+    if not isinstance(annotations, dict):
+        raise TypeError("UDT annotations must be a dict.")
+    _validate_fields_present(annotations)
+    _validate_field_names(annotations.keys())
+
+    parsed: list[_FieldSpec] = []
+    for field_name, annotation in annotations.items():
+        field_type = _resolve_annotation(annotation, field_name)
+        raw_default = cls.__dict__.get(field_name, UNSET)
+        parsed.append(_build_field_spec(field_name, field_type, raw_default, source="udt"))
+    return tuple(parsed)
+
+
+def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_FieldSpec, ...]:
+    parsed: list[_FieldSpec] = []
+    for field_name, value in cls.__dict__.items():
+        if _should_skip_named_array_attr(field_name, value):
+            continue
+        parsed.append(_build_field_spec(field_name, base_type, value, source="named_array"))
+
+    _validate_fields_present(parsed)
+    _validate_field_names(spec.name for spec in parsed)
+    return tuple(parsed)
+
+
+def _should_skip_named_array_attr(name: str, value: object) -> bool:
+    if name.startswith("__") and name.endswith("__"):
+        return True
+    if name.startswith("_"):
+        return True
+    if isinstance(value, (classmethod, staticmethod, property)):
+        return True
+    return callable(value)
+
+
+def _build_field_spec(
+    field_name: str, type: TagType, raw_default: object, *, source: str
+) -> _FieldSpec:
+    retentive = False
+    default_spec = raw_default
+
+    if isinstance(raw_default, Field):
+        if raw_default.type is not None and raw_default.type != type:
+            if source == "named_array":
+                raise ValueError(
+                    f"named_array field {field_name!r} cannot declare type; "
+                    "use the decorator base_type."
+                )
+            raise ValueError(
+                f"udt field {field_name!r} type mismatch: annotation resolves to {type.name}, "
+                f"but Field.type is {raw_default.type.name}."
+            )
+        retentive = raw_default.retentive
+        default_spec = raw_default.default
+
+    _validate_auto_default_allowed(field_name, default_spec, type)
+    return _FieldSpec(name=field_name, type=type, default=default_spec, retentive=retentive)
+
+
+def _resolve_annotation(annotation: object, field_name: str) -> TagType:
+    """Resolve an annotation/base type to TagType."""
+    if isinstance(annotation, TagType):
+        return annotation
+
+    if isinstance(annotation, str):
+        token = annotation.strip().split(".")[-1].strip().strip("'\"")
+        resolved = _STRING_TYPE_MAP.get(token.lower())
+        if resolved is not None:
+            return resolved
+        raise TypeError(
+            f"Field {field_name!r} annotation {annotation!r} is not supported. "
+            "Use Bool/Int/Dint/Real/Word/Char, bool/int/float/str, or IEC names."
+        )
+
+    if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
+        return annotation._tag_type
+
+    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)
+    if primitive is not None:
+        return primitive
+
+    raise TypeError(
+        f"Field {field_name!r} annotation {annotation!r} is not supported. "
+        "Use Bool/Int/Dint/Real/Word/Char, bool/int/float/str, or IEC names."
+    )
 
 
 def _make_default_factory(default_spec: object):
@@ -261,18 +361,18 @@ def _validate_count(count: int) -> None:
         raise ValueError(f"count must be an int >= 1, got {count!r}.")
 
 
-def _validate_pad(pad: int) -> None:
-    if not isinstance(pad, int) or pad < 0:
-        raise ValueError(f"pad must be an int >= 0, got {pad!r}.")
+def _validate_stride(stride: int) -> None:
+    if not isinstance(stride, int) or stride < 1:
+        raise ValueError(f"stride must be an int >= 1, got {stride!r}.")
 
 
-def _validate_fields_present(fields: dict[str, Field]) -> None:
+def _validate_fields_present(fields: Sized) -> None:
     if len(fields) == 0:
         raise ValueError("At least one field is required.")
 
 
-def _validate_field_names(fields: dict[str, Field]) -> None:
-    for field_name in fields:
+def _validate_field_names(field_names: Iterable[str]) -> None:
+    for field_name in field_names:
         if field_name in _RESERVED_FIELD_NAMES:
             raise ValueError(f"Field name {field_name!r} is reserved.")
 

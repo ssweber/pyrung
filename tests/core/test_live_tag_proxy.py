@@ -7,16 +7,15 @@ import pytest
 from pyrung.core import (
     Block,
     Bool,
-    Field,
     InputBlock,
     Int,
     OutputBlock,
-    PackedStruct,
     PLCRunner,
-    Struct,
     SystemState,
     TagType,
+    named_array,
     system,
+    udt,
 )
 
 
@@ -73,19 +72,19 @@ def test_live_value_supports_block_input_and_output_tags() -> None:
     assert runner.current_state.tags["Y1"] is True
 
 
-def test_live_value_supports_struct_and_packed_struct_instance_fields() -> None:
-    alarms = Struct(
-        "Alarm",
-        count=1,
-        id=Field(TagType.INT),
-        on=Field(TagType.BOOL),
-    )
-    sub_name = PackedStruct(
-        "SubName",
-        TagType.INT,
-        count=1,
-        xCall=Field(default=0),
-    )
+def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
+    @udt(count=1)
+    class Alarm:
+        id: Int
+        on: Bool
+
+    alarms = Alarm
+
+    @named_array(Int, count=1, stride=1)
+    class SubName:
+        xCall = 0
+
+    sub_name = SubName
 
     runner = PLCRunner(logic=[])
 

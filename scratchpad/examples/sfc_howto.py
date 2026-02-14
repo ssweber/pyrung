@@ -11,13 +11,10 @@ from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
     Bool,
-    Field,
     Int,
-    PackedStruct,
     PLCRunner,
     Program,
     Rung,
-    TagType,
     TimeMode,
     TimeUnit,
     any_of,
@@ -29,6 +26,7 @@ from pyrung.core import (
     reset,
     return_,
     subroutine,
+    named_array,
 )
 
 """
@@ -92,28 +90,26 @@ if ds.yourName_CurStep == X:
 # SubName__init - ds    # Internal initialization flag
 # SubName__ValStepIsOdd - ds # Flag indicating if current step is odd
 
-SubNameDs = PackedStruct(
-    "SubName",
-    TagType.INT,
-    count=1,
-    SubName_xCall=Field(default=0),
-    SubName_xInit=Field(default=0),
-    SubName_xReset=Field(default=0),
-    SubName_xPause=Field(default=0),
-    SubName_init=Field(default=0),
-    SubName_Error=Field(default=0),
-    SubName_ErrorStep=Field(default=0),
-    SubName_EnableLimit=Field(default=0),
-    SubName_Limit_Ts=Field(default=0),
-    SubName_ResetTmr=Field(default=0),
-    SubName_Trans=Field(default=0),
-    SubName_CurStep=Field(default=0),
-    SubName_StoredStep=Field(default=0),
-    SubName__x=Field(default=0),
-    SubName__init=Field(default=0),
-    SubName__ValStepIsOdd=Field(default=0),
-    one_time_operation_complete=Field(default=0),
-)
+@named_array(Int, count=1, stride=17)
+class SubNameDs:
+    SubName_xCall = 0
+    SubName_xInit = 0
+    SubName_xReset = 0
+    SubName_xPause = 0
+    SubName_init = 0
+    SubName_Error = 0
+    SubName_ErrorStep = 0
+    SubName_EnableLimit = 0
+    SubName_Limit_Ts = 0
+    SubName_ResetTmr = 0
+    SubName_Trans = 0
+    SubName_CurStep = 0
+    SubName_StoredStep = 0
+    SubName__x = 0
+    SubName__init = 0
+    SubName__ValStepIsOdd = 0
+    one_time_operation_complete = 0
+
 sub = SubNameDs[1]
 
 SubName_x = Bool("SubName_x")

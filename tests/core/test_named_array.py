@@ -1,0 +1,101 @@
+"""Tests for @named_array."""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+import pytest
+
+from pyrung.core import Block, BlockRange, Field, Int, Tag, TagType, auto, named_array
+from pyrung.core.tag import MappingEntry
+
+
+def test_named_array_stride_creates_unmapped_gaps():
+    @named_array(Int, count=2, stride=4)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    assert alarms.stride == 4
+    assert alarms.field_names == ("id", "val")
+    assert alarms[1].id.name == "Alarm1_id"
+    assert alarms[2].val.name == "Alarm2_val"
+
+
+def test_named_array_range_length_validation():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = Field()
+        val = Field()
+
+    alarms = cast(Any, Alarm)
+    hardware = Block("HW", TagType.INT, 1, 20)
+
+    with pytest.raises(ValueError, match="expects"):
+        alarms.map_to(hardware.select(1, 5))
+
+
+def test_named_array_interleaved_addresses_are_correct():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    hardware = Block("HW", TagType.INT, 1, 20)
+    entries = alarms.map_to(hardware.select(1, 6))
+
+    assert len(entries) == 4
+    assert [entry.source.name for entry in entries] == [
+        "Alarm1_id",
+        "Alarm1_val",
+        "Alarm2_id",
+        "Alarm2_val",
+    ]
+    assert all(isinstance(entry.source, Tag) for entry in entries)
+    assert all(isinstance(entry.target, Tag) for entry in entries)
+    targets = [cast(Tag, entry.target) for entry in entries]
+    assert [target.name for target in targets] == ["HW1", "HW2", "HW4", "HW5"]
+
+
+def test_named_array_width_one_emits_block_mapping():
+    @named_array(Int, count=3, stride=1)
+    class Single:
+        value = auto()
+
+    singles = cast(Any, Single)
+    hardware = Block("HW", TagType.INT, 1, 20)
+    entries = singles.map_to(hardware.select(10, 12))
+
+    assert len(entries) == 1
+    mapping = entries[0]
+    assert isinstance(mapping, MappingEntry)
+    assert isinstance(mapping.source, Block)
+    assert isinstance(mapping.target, BlockRange)
+    assert mapping.source is singles.value
+    assert mapping.target.start == 10
+    assert mapping.target.end == 12
+
+
+def test_named_array_width_greater_than_one_emits_tag_mappings():
+    @named_array(Int, count=2, stride=2)
+    class Alarm:
+        id = Field()
+        val = Field()
+
+    alarms = cast(Any, Alarm)
+    hardware = Block("HW", TagType.INT, 1, 20)
+    entries = alarms.map_to(hardware.select(1, 4))
+
+    assert len(entries) == 4
+    assert all(isinstance(entry.source, Tag) for entry in entries)
+    assert all(isinstance(entry.target, Tag) for entry in entries)
+
+
+def test_named_array_auto_default_restricted_by_base_type():
+    with pytest.raises(ValueError, match="not numeric"):
+
+        @named_array("BOOL", count=2)
+        class _Alarm:
+            id = auto()

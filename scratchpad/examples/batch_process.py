@@ -3,21 +3,34 @@ import asyncio
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
-    Bool, Field, Int, PackedStruct, PLCRunner, Program, Rung,
-    branch, TagType, TimeMode, TimeUnit, any_of, call, copy,
+    Bool, Int, PLCRunner, Program, Rung,
+    branch, TimeMode, TimeUnit, any_of, call, copy,
     latch, math, on_delay, reset, return_, subroutine,
+    named_array,
 )
 
-SubNameDs = PackedStruct(
-    "SubName", TagType.INT, count=1,
-    xCall=Field(default=0), xInit=Field(default=0), xReset=Field(default=0),
-    xPause=Field(default=0), init=Field(default=0), Error=Field(default=0),
-    ErrorStep=Field(default=0), EnableLimit=Field(default=0), Limit_Ts=Field(default=30),
-    ResetTmr=Field(default=0), Trans=Field(default=0), CurStep=Field(default=0),
-    StoredStep=Field(default=0), _x=Field(default=0), _init=Field(default=0),
-    _ValStepIsOdd=Field(default=0), Batch_Counter=Field(default=0),
-    Reject_Counter=Field(default=0), Quality_Mode=Field(default=0), FastProcess=Field(default=0),
-)
+@named_array(Int, count=1, stride=20)
+class SubNameDs:
+    xCall = 0
+    xInit = 0
+    xReset = 0
+    xPause = 0
+    init = 0
+    Error = 0
+    ErrorStep = 0
+    EnableLimit = 0
+    Limit_Ts = 30
+    ResetTmr = 0
+    Trans = 0
+    CurStep = 0
+    StoredStep = 0
+    _x = 0
+    _init = 0
+    _ValStepIsOdd = 0
+    Batch_Counter = 0
+    Reject_Counter = 0
+    Quality_Mode = 0
+    FastProcess = 0
 
 sub = SubNameDs[1]
 # Temp tag for batch parity calculation
