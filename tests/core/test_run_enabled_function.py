@@ -1,4 +1,4 @@
-﻿"""Tests for run_enabled_function() DSL instruction."""
+"""Tests for run_enabled_function() DSL instruction."""
 
 from __future__ import annotations
 
@@ -189,4 +189,3 @@ def test_run_enabled_function_ins_keys_must_match_signature():
             with Rung(Enable):
                 run_enabled_function(callback, ins={"a": 1, "b": 2}, outs={"out": Output})
     assert "run_enabled_function() ins keys" in str(exc_info.value)
-

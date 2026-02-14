@@ -1,4 +1,4 @@
-﻿"""Click portability validation for pyrung programs.
+"""Click portability validation for pyrung programs.
 
 Consumes Stage 1 walker facts for R1-R5, and instruction context plus hardware
 profile data for Stage 3 (R6-R8).
@@ -830,4 +830,3 @@ def validate_click_program(
         warnings=tuple(warnings),
         hints=tuple(hints),
     )
-

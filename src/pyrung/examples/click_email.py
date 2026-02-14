@@ -1,4 +1,4 @@
-﻿"""Asynchronous run_enabled_function() example for Click-style email behavior."""
+"""Asynchronous run_enabled_function() example for Click-style email behavior."""
 
 from __future__ import annotations
 
@@ -97,4 +97,3 @@ class EmailInstruction:
 
 
 __all__ = ["EmailInstruction"]
-

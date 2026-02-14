@@ -1,4 +1,4 @@
-﻿"""Immutable PLC Engine.
+"""Immutable PLC Engine.
 
 Redux-style architecture where logic is a pure function:
     Logic(Current_State) -> Next_State
@@ -185,4 +185,3 @@ __all__ = [
     "lro",
     "rro",
 ]
-

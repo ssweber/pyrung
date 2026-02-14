@@ -1,4 +1,4 @@
-﻿"""Instruction classes for the immutable PLC engine.
+"""Instruction classes for the immutable PLC engine.
 
 Instructions execute within a ScanContext, writing to batched evolvers.
 All state modifications are collected and committed at scan end.
@@ -1486,4 +1486,3 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
             word_tags[1].name: _truncate_to_tag_type(hi_word, word_tags[1]),
         }
         ctx.set_tags(updates)
-

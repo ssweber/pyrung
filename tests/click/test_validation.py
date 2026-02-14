@@ -1,4 +1,4 @@
-﻿"""Tests for Click portability validation (Stage 2)."""
+"""Tests for Click portability validation (Stage 2)."""
 
 from __future__ import annotations
 
@@ -672,4 +672,3 @@ class TestSuggestionContent:
         suggestion = r5_findings[0].suggestion
         assert suggestion is not None
         assert "DD" in suggestion
-

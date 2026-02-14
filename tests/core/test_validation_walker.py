@@ -1,4 +1,4 @@
-﻿"""Tests for the generic validation walker (Stage 1).
+"""Tests for the generic validation walker (Stage 1).
 
 Covers all 8 test cases from the click-validation-stage-1-generic-walker-plan.
 """
@@ -563,4 +563,3 @@ class TestFunctionCallFieldsCaptured:
         assert enable.location.instruction_type == "AsyncFunctionCallInstruction"
         assert _first(facts, "instruction.ins['value']").value_kind == "tag"
         assert _first(facts, "instruction.outs['result']").value_kind == "tag"
-

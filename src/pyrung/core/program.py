@@ -1,4 +1,4 @@
-﻿"""Program and Rung context managers for the immutable PLC engine.
+"""Program and Rung context managers for the immutable PLC engine.
 
 Provides DSL syntax for building PLC programs:
 
@@ -1614,4 +1614,3 @@ def off_delay(
     ctx = _require_rung_context("off_delay")
     enable_condition = ctx._rung._get_combined_condition()
     return OffDelayBuilder(done_bit, accumulator, setpoint, enable_condition, time_unit)
-

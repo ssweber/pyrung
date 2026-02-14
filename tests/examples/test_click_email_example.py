@@ -1,4 +1,4 @@
-﻿"""Tests for click_email run_enabled_function example."""
+"""Tests for click_email run_enabled_function example."""
 
 from __future__ import annotations
 
@@ -169,4 +169,3 @@ def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.Monk
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ErrorCode"] == 0
-
