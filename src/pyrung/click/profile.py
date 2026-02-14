@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 
 class HardwareProfile(Protocol):
@@ -19,7 +19,7 @@ class ClickHardwareProfileAdapter:
     """Adapter over pyclickplc's default hardware profile object."""
 
     def __init__(self, profile: object):
-        self._profile = profile
+        self._profile = cast(HardwareProfile, profile)
 
     def is_writable(self, memory_type: str, address: int | None = None) -> bool:
         return bool(self._profile.is_writable(memory_type, address))

@@ -119,7 +119,12 @@ class PLCRunner:
         finally:
             reset_active_runner(token)
 
-    def patch(self, tags: Mapping[str | Tag, bool | int | float | str]) -> None:
+    def patch(
+        self,
+        tags: Mapping[str, bool | int | float | str]
+        | Mapping[Tag, bool | int | float | str]
+        | Mapping[str | Tag, bool | int | float | str],
+    ) -> None:
         """Queue tag values for next scan (one-shot).
 
         Values are applied at the start of the next step() call,

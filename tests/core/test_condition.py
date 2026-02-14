@@ -606,7 +606,7 @@ class TestGroupedAnyOf:
         C = Bool("C")
 
         with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
-            any_of((A, B), C)
+            any_of((A, B), C)  # type: ignore[arg-type]
 
     def test_any_of_rejects_list_group(self):
         """List groups must be written explicitly with all_of() or &."""
@@ -619,7 +619,7 @@ class TestGroupedAnyOf:
         C = Bool("C")
 
         with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
-            any_of([A, B], C)
+            any_of([A, B], C)  # type: ignore[arg-type]
 
 
 class TestBitwiseAndOperator:

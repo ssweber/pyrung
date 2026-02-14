@@ -1,6 +1,6 @@
 """Click-style constructor aliases and prebuilt memory blocks."""
 
-from typing import Any
+from typing import Any, cast
 
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
@@ -79,7 +79,12 @@ txt = _block_from_bank_config(BANKS["TXT"])
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.send_receive import receive, send
 from pyrung.click.tag_map import TagMap
-from pyrung.click.validation import ClickFinding, ClickValidationReport, validate_click_program
+from pyrung.click.validation import (
+    ClickFinding,
+    ClickValidationReport,
+    ValidationMode,
+    validate_click_program,
+)
 
 
 def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: Any) -> Any:
@@ -88,7 +93,10 @@ def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: 
         raise TypeError("Program.validate('click', ...) requires keyword argument 'tag_map'.")
     if not isinstance(tag_map, TagMap):
         raise TypeError("Program.validate('click', ...) expects tag_map=TagMap(...).")
-    return validate_click_program(program, tag_map=tag_map, mode=mode, **kwargs)
+    if mode not in {"warn", "strict"}:
+        raise ValueError("Program.validate('click', ...) mode must be 'warn' or 'strict'.")
+    validated_mode = cast(ValidationMode, mode)
+    return validate_click_program(program, tag_map=tag_map, mode=validated_mode, **kwargs)
 
 
 Program.register_dialect("click", _click_dialect_validator)

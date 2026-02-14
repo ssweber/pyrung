@@ -156,7 +156,7 @@ def test_run_enabled_function_async_function_rejected():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_enabled_function(callback)
+                run_enabled_function(callback)  # type: ignore[arg-type]
     assert (
         str(exc_info.value)
         == "run_enabled_function() fn must be synchronous (async def is not supported)"

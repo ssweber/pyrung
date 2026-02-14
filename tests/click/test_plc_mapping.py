@@ -15,7 +15,7 @@ from pyrung.core import Bool, Field, Int, auto, named_array, udt
 def test_udt_resolve_supports_block_and_instance_access():
     @udt(count=3)
     class Alarm:
-        id: Int = auto()  # type: ignore[invalid-assignment]
+        id: Int = auto()
         On: Bool
 
     alarms = cast(Any, Alarm)
@@ -44,8 +44,8 @@ def test_named_array_width_gt_one_resolves_instance_slots_only():
 def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path):
     @udt(count=2)
     class Alarm:
-        id: Int = Field(default=auto(), retentive=True)  # type: ignore[invalid-assignment]
-        val: Int = 0  # type: ignore[invalid-assignment]
+        id: int = cast(Any, Field(default=auto(), retentive=True))
+        val: int = 0
 
     alarms = cast(Any, Alarm)
 

@@ -494,13 +494,13 @@ class IndirectRef:
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
 
-    def __eq__(self, other: object) -> Condition:
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
         """Create equality comparison condition."""
         from pyrung.core.condition import IndirectCompareEq
 
         return IndirectCompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import IndirectCompareNe
 

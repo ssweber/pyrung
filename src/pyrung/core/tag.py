@@ -75,13 +75,13 @@ class Tag:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: object) -> Condition:
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
         return CompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
@@ -161,6 +161,17 @@ class Tag:
             f"Cannot use Tag '{self.name}' as boolean. "
             "Use it in a Rung condition instead: Rung(tag) or Rung(tag == value)"
         )
+
+    @property
+    def value(self) -> Any:
+        """Read/write value through the currently active runner context."""
+        runner = _require_active_runner(self.name)
+        return runner._peek_live_tag_value(self.name, self.default)
+
+    @value.setter
+    def value(self, new_value: Any) -> None:
+        runner = _require_active_runner(self.name)
+        runner.patch({self.name: new_value})
 
     def map_to(self, target: Tag) -> MappingEntry:
         """Create a logical-to-hardware mapping entry."""
@@ -356,23 +367,7 @@ def _require_active_runner(tag_name: str):
     return runner
 
 
-class _LiveValueMixin:
-    """Add staged read/write value access through the active PLCRunner."""
-
-    @property
-    def value(self) -> Any:
-        tag = cast(Any, self)
-        runner = _require_active_runner(tag.name)
-        return runner._peek_live_tag_value(tag.name, tag.default)
-
-    @value.setter
-    def value(self, new_value: Any) -> None:
-        tag = cast(Any, self)
-        runner = _require_active_runner(tag.name)
-        runner.patch({tag.name: new_value})
-
-
-class LiveTag(_LiveValueMixin, Tag):
+class LiveTag(Tag):
     """Tag with runner-bound staged value access via .value."""
 
 
@@ -451,7 +446,7 @@ class TagNamespace:
     """Base class for opt-in class-based auto tag naming declarations."""
 
     _PYRUNG_IS_TAG_NAMESPACE = True
-    __pyrung_tags__: Mapping[str, LiveTag] = MappingProxyType({})
+    __pyrung_tags__: dict[str, LiveTag] = cast(dict[str, LiveTag], MappingProxyType({}))
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -491,7 +486,7 @@ class TagNamespace:
 
         merged = dict(inherited_tags)
         merged.update(local_tags)
-        cls.__pyrung_tags__ = MappingProxyType(merged)
+        cls.__pyrung_tags__ = cast(dict[str, LiveTag], MappingProxyType(merged))
 
     @classmethod
     def tags(cls) -> dict[str, LiveTag]:

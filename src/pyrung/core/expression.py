@@ -668,7 +668,22 @@ def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 # Expression Formatting (DSL-friendly text)
 # =============================================================================
 
-_BINARY_OP_SYMBOL: dict[type, str] = {
+_BINARY_EXPR_TYPES = (
+    AddExpr,
+    SubExpr,
+    MulExpr,
+    DivExpr,
+    FloorDivExpr,
+    ModExpr,
+    PowExpr,
+    AndExpr,
+    OrExpr,
+    XorExpr,
+    LShiftExpr,
+    RShiftExpr,
+)
+
+_BINARY_OP_SYMBOL: dict[type[Expression], str] = {
     AddExpr: "+",
     SubExpr: "-",
     MulExpr: "*",
@@ -683,8 +698,6 @@ _BINARY_OP_SYMBOL: dict[type, str] = {
     RShiftExpr: ">>",
 }
 
-_BINARY_TYPES: set[type] = set(_BINARY_OP_SYMBOL)
-
 _UNARY_PREFIX: dict[type, str] = {
     NegExpr: "-",
     PosExpr: "+",
@@ -694,7 +707,7 @@ _UNARY_PREFIX: dict[type, str] = {
 
 def _needs_parens(child: Expression) -> bool:
     """Return True if a child expression needs parentheses inside a binary parent."""
-    return type(child) in _BINARY_TYPES
+    return isinstance(child, _BINARY_EXPR_TYPES)
 
 
 def format_expr(expr: Expression) -> str:
@@ -730,10 +743,10 @@ def format_expr(expr: Expression) -> str:
             return f"{prefix}({inner})"
         return f"{prefix}{inner}"
     # Binary operations — dispatch via _BINARY_OP_SYMBOL
-    symbol = _BINARY_OP_SYMBOL.get(type(expr))
-    if symbol is not None:
-        left: Expression = expr.left  # type: ignore[attr]
-        right: Expression = expr.right  # type: ignore[attr]
+    if isinstance(expr, _BINARY_EXPR_TYPES):
+        symbol = _BINARY_OP_SYMBOL[type(expr)]
+        left = expr.left
+        right = expr.right
         left_str = format_expr(left)
         right_str = format_expr(right)
         if _needs_parens(left):

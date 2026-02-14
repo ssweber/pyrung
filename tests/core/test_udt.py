@@ -34,8 +34,8 @@ def test_udt_uses_expected_tag_name_pattern():
 def test_udt_literal_and_auto_defaults_resolve_per_instance():
     @udt(count=3)
     class Alarm:
-        id: Int = auto(start=10, step=5)  # type: ignore[invalid-assignment]
-        val: Int = 7  # type: ignore[invalid-assignment]
+        id: Int = auto(start=10, step=5)
+        val: int = 7
         Time: Int
 
     alarms = cast(Any, Alarm)
@@ -82,7 +82,7 @@ def test_udt_rejects_auto_default_for_non_numeric_type():
 
         @udt(count=1)
         class _BadAuto:
-            flag: Bool = auto()  # type: ignore[invalid-assignment]
+            flag: Bool = auto()
 
 
 def test_instance_view_validates_index_and_missing_attributes():

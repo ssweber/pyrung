@@ -457,7 +457,7 @@ class TestStrictDslControlFlowGuard:
 
         with pytest.raises(ForbiddenControlFlowError, match="Use `nc\\(\\)`"):
             with Program():
-                with Rung(not A):
+                with Rung(not A):  # type: ignore[arg-type]
                     out(Light)
 
     def test_context_manager_rejects_for_loop(self):

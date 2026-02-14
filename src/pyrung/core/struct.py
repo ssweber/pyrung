@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sized
+from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +56,15 @@ class Field:
     default: Any = UNSET
     retentive: bool = False
 
+    def __new__(
+        cls,
+        type: TagType | None = None,
+        default: Any = UNSET,
+        retentive: bool = False,
+    ) -> Any:
+        _ = (type, default, retentive)
+        return super().__new__(cls)
+
 
 @dataclass(frozen=True)
 class AutoDefault:
@@ -73,7 +82,7 @@ class _FieldSpec:
     retentive: bool
 
 
-def auto(*, start: int = 1, step: int = 1) -> AutoDefault:
+def auto(*, start: int = 1, step: int = 1) -> Any:
     """Create a per-instance numeric default sequence descriptor."""
     return AutoDefault(start=start, step=step)
 
@@ -214,7 +223,7 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1):
+def udt(*, count: int = 1) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
@@ -227,7 +236,9 @@ def udt(*, count: int = 1):
     return _decorator
 
 
-def named_array(base_type: object, *, count: int = 1, stride: int = 1):
+def named_array(
+    base_type: object, *, count: int = 1, stride: int = 1
+) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
     _validate_stride(stride)
