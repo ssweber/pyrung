@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pyclickplc import DataviewFile, DataviewRow, write_cdv
+from pyclickplc import DataviewFile, DataviewRow, run_server_tui, write_cdv
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
@@ -158,10 +158,23 @@ async def run_server():
     print(f"Exported Click addresses: {csv_path}")
     print(f"Exported Click DataView: {cdv_path}")
     server = ClickServer(ClickDataProvider(runner, tag_map), host="127.0.0.1", port=5020)
-    await server.start()
-    while True:
-        runner.step()
-        await asyncio.sleep(0.01)
+    stop_event = asyncio.Event()
+
+    async def _scan_loop() -> None:
+        while not stop_event.is_set():
+            runner.step()
+            await asyncio.sleep(0.01)
+
+    scan_task = asyncio.create_task(_scan_loop(), name="batch-process-scan-loop")
+    try:
+        await run_server_tui(server)
+    finally:
+        stop_event.set()
+        scan_task.cancel()
+        try:
+            await scan_task
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     asyncio.run(run_server())
