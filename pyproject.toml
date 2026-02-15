@@ -55,6 +55,12 @@ dev = [
     "ty>=0.0.14",
     "funlog>=0.2.0",
 ]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.0",
+    "mkdocstrings[python]>=0.30.0",
+    "mkdocs-gen-files>=0.5.0",
+]
 
 [project.scripts]
 # Add script entry points here:
