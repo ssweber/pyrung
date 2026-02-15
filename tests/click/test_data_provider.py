@@ -5,8 +5,24 @@ from __future__ import annotations
 import pytest
 from pyclickplc.server import MemoryDataProvider
 
-from pyrung.click import ClickDataProvider, TagMap, c, ds, txt, x
-from pyrung.core import Block, PLCRunner, SystemState, Tag, TagType
+from pyrung.click import ClickDataProvider, TagMap, c, ds, txt, x, y
+from pyrung.core import Block, PLCRunner, Program, Rung, SystemState, Tag, TagType, out
+
+
+def _write_slot_word(provider: ClickDataProvider, bank: str, start: int, word: int) -> None:
+    for bit_index in range(16):
+        provider.write(f"{bank}{start + bit_index:03d}", bool((word >> bit_index) & 0x1))
+
+
+def _assert_slot_bits(
+    provider: ClickDataProvider,
+    bank: str,
+    start: int,
+    word: int,
+) -> None:
+    for bit_index in range(16):
+        expected = bool((word >> bit_index) & 0x1)
+        assert provider.read(f"{bank}{start + bit_index:03d}") is expected
 
 
 def test_read_mapped_standalone_tag_returns_runner_state_value():
@@ -77,22 +93,113 @@ def test_unmapped_addresses_delegate_to_fallback_provider():
     assert fallback.read("DS1") == 42
 
 
-def test_xd_and_yd_addresses_are_fallback_only_even_if_mapped():
-    raw_input = Tag("RawInputWord", TagType.WORD, default=7)
-    mapping = TagMap({raw_input: Tag("XD0", TagType.WORD)})
-    runner = PLCRunner(logic=[], initial_state=SystemState().with_tags({"RawInputWord": 1234}))
+def test_xd0_reflects_x001_to_x016_bit_image():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    _write_slot_word(provider, "X", 1, 0xA55A)
+    assert provider.read("XD0") == 0xA55A
+
+
+
+def test_xd0u_reflects_x021_to_x036_bit_image():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    _write_slot_word(provider, "X", 21, 0x0F0F)
+    assert provider.read("XD0u") == 0x0F0F
+
+
+def test_xd1_reflects_x101_to_x116_bit_image():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    _write_slot_word(provider, "X", 101, 0xC33C)
+    assert provider.read("XD1") == 0xC33C
+
+
+def test_yd0_reflects_y001_to_y016_bit_image():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    _write_slot_word(provider, "Y", 1, 0x55AA)
+    assert provider.read("YD0") == 0x55AA
+
+
+def test_write_yd0_fans_out_to_y001_to_y016_after_next_scan():
+    outputs = Block("Out", TagType.BOOL, 1, 16)
+    mapping = TagMap({outputs: y.select(1, 16)})
+    runner = PLCRunner(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+
+    provider.write("YD0", 0xA55A)
+    assert provider.read("YD0") == 0
+
+    runner.step()
+    _assert_slot_bits(provider, "Y", 1, 0xA55A)
+    assert provider.read("YD0") == 0xA55A
+
+
+def test_write_yd0u_fans_out_to_y021_to_y036_after_next_scan():
+    outputs = Block("UpperOut", TagType.BOOL, 1, 16)
+    mapping = TagMap({outputs: y.select(21, 36)})
+    runner = PLCRunner(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+
+    provider.write("YD0u", 0x5AA5)
+    assert provider.read("YD0u") == 0
+
+    runner.step()
+    _assert_slot_bits(provider, "Y", 21, 0x5AA5)
+    assert provider.read("YD0u") == 0x5AA5
+
+
+def test_write_xd0_raises_value_error():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    with pytest.raises(ValueError):
+        provider.write("XD0", 0x1234)
+
+
+def test_yd_write_can_be_overwritten_by_rung_outputs_in_same_scan():
+    drive = Tag("Drive", TagType.BOOL)
+    mapping = TagMap({drive: y[1]})
+
+    with Program() as logic:
+        with Rung():
+            out(drive)
+
+    runner = PLCRunner(logic=logic, initial_state=SystemState().with_tags({"Drive": False}))
+    provider = ClickDataProvider(runner, mapping)
+    provider.write("YD0", 0)
+
+    runner.step()
+    assert provider.read("Y001") is True
+    assert provider.read("YD0") == 0x0001
+
+
+def test_yd_read_normalizes_case_and_format():
+    provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
+    provider.write("y1", True)
+    provider.write("Y021", True)
+    provider.write("Y036", True)
+
+    assert provider.read("yd0") == 0x0001
+    assert provider.read("YD0") == 0x0001
+    assert provider.read("yd0u") == 0x8001
+
+
+def test_non_xy_banks_preserve_existing_runtime_behavior():
+    valve = Tag("Valve", TagType.BOOL)
+    letter = Tag("Letter", TagType.CHAR)
+    mapping = TagMap({valve: c[1], letter: txt[1]})
     fallback = MemoryDataProvider()
+    runner = PLCRunner(logic=[])
     provider = ClickDataProvider(runner, mapping, fallback=fallback)
 
-    assert provider.read("XD0") == 0
+    provider.write("C1", True)
+    provider.write("DS1", 42)
+    provider.write("TXT1", "A")
 
-    provider.write("XD0", 0x1234)
-    provider.write("YD0", 0x2345)
+    assert provider.read("C1") is False
+    assert provider.read("DS1") == 42
+    assert provider.read("TXT1") == ""
 
-    assert provider.read("XD0") == 0x1234
-    assert provider.read("YD0") == 0x2345
     runner.step()
-    assert runner.current_state.tags["RawInputWord"] == 1234
+    assert provider.read("C1") is True
+    assert provider.read("DS1") == 42
+    assert provider.read("TXT1") == "A"
 
 
 def test_mapped_txt_write_accepts_string_and_becomes_visible_after_next_scan():

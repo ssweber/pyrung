@@ -224,6 +224,18 @@ server = ClickServer(provider, port=502)
 Values flow as raw primitives through the adapter — no rich type wrapping needed
 on the server path. See `spec/HANDOFF.md` for the full data flow diagram.
 
+Runtime address contract for mirrored bit-image words:
+
+- `XD*` reads are computed from the current `X*` bit image.
+- `YD*` reads are computed from the current `Y*` bit image.
+- `YD*` writes fan out to the corresponding `Y*` bits (mapped slots are queued through `runner.patch` and become visible after the next scan start).
+- `XD*` writes are rejected (read-only input-register behavior).
+- Slot windows are fixed 16-bit groups from sparse X/Y ranges:
+  - slot 0: `001..016` (`XD0`/`YD0`)
+  - slot 1: `021..036` (`XD0u`/`YD0u`)
+  - slots 2..9: `101..116`, `201..216`, ..., `801..816` (`XD1..XD8` / `YD1..YD8`)
+- Bit order is little-endian within each word (`bit0 = *01`, `bit15 = *16`).
+
 ### Communication Instructions (`send` / `receive`)
 
 `pyrung.click` now exports CLICK-address-aware communication instructions:
@@ -297,7 +309,6 @@ Current scope:
 - **TagMap.offset_for():** Given a Block, return the offset between logical indices and hardware addresses. E.g., `Alarms` at logical 1–99 mapped to C101–199, offset = 100.
 - **Validation report sections:** Mapping status, mapping errors, hardware hints, summary. Port from original SPEC.md with updated terminology (Block not MemoryBank).
 - **Bank compatibility matrix:** Which Click banks can be compared, used together in blockcopy, etc. This comes from pyclickplc.
-- **XD/YD addressing:** Click's XD/YD pseudo-addresses for reading discrete inputs/outputs as words. How does this surface?
 - **Interleaved pairs:** Click's DD/DH/DF interleaving. Document how this affects mapping validation.
 - **Tag name validation at map time:** Names validated against `pyclickplc.validation` rules (24-char max, forbidden chars, reserved words). Errors vs warnings.
 - **SC/SD (system) blocks:** Are these read-only? Can you map user tags to them? Probably no — they're system-provided.
