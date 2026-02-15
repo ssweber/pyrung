@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyclickplc.addresses import parse_address
 
+from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import Tag
 from pyrung.core.validation.walker import ProgramLocation, walk_program
@@ -46,6 +47,7 @@ CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
 CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
+CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,7 @@ _R6_WRITE_TARGETS: frozenset[tuple[str, str]] = frozenset(
         ("PackWordsInstruction", "dest"),
         ("UnpackToBitsInstruction", "bit_block"),
         ("UnpackToWordsInstruction", "word_block"),
+        ("PackTextInstruction", "dest"),
     }
 )
 
@@ -322,6 +325,7 @@ def _evaluate_fact(
     if fact.value_kind == "indirect_ref":
         allowed = loc.instruction_type == "CopyInstruction" and loc.arg_path in {
             "instruction.source",
+            "instruction.source.source",
             "instruction.target",
         }
         if not allowed:
@@ -522,6 +526,9 @@ def _unique_slots(slots: list[_ResolvedSlot]) -> tuple[_ResolvedSlot, ...]:
 
 
 def _resolve_operand_slots(value: Any, tag_map: TagMap) -> _OperandResolution:
+    if isinstance(value, CopyModifier):
+        return _resolve_operand_slots(value.source, tag_map)
+
     if isinstance(value, Tag):
         resolved = _resolve_direct_tag(value, tag_map)
         if resolved is None:
@@ -774,6 +781,53 @@ def _evaluate_r8(
     return findings
 
 
+def _evaluate_pack_text(
+    instruction: Any,
+    base_location: ProgramLocation,
+    tag_map: TagMap,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    if type(instruction).__name__ != "PackTextInstruction":
+        return []
+
+    findings: list[ClickFinding] = []
+    source_location = _instruction_location(base_location, "instruction.source_range")
+    dest_location = _instruction_location(base_location, "instruction.dest")
+
+    source_resolution = _resolve_operand_slots(instruction.source_range, tag_map)
+    dest_resolution = _resolve_operand_slots(instruction.dest, tag_map)
+
+    if source_resolution.unresolved:
+        findings.append(_unresolved_finding(source_location, mode, "source bank unresolved"))
+    if dest_resolution.unresolved:
+        findings.append(_unresolved_finding(dest_location, mode, "destination bank unresolved"))
+    if source_resolution.unresolved or dest_resolution.unresolved:
+        return findings
+
+    if not source_resolution.slots or not dest_resolution.slots:
+        return findings
+
+    allowed_dest_banks = {"DS", "DD", "DH", "DF", "TD", "CTD"}
+    for source_slot in source_resolution.slots:
+        for dest_slot in dest_resolution.slots:
+            if source_slot.memory_type == "TXT" and dest_slot.memory_type in allowed_dest_banks:
+                continue
+            location_text = _format_location(dest_location)
+            findings.append(
+                ClickFinding(
+                    code=CLK_PACK_TEXT_BANK_INCOMPATIBLE,
+                    severity=_route_severity(CLK_PACK_TEXT_BANK_INCOMPATIBLE, mode),
+                    message=(
+                        "pack_text is incompatible for "
+                        f"{source_slot.memory_type} -> {dest_slot.memory_type} at {location_text}."
+                    ),
+                    location=location_text,
+                )
+            )
+
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -812,6 +866,7 @@ def validate_click_program(
             findings.extend(_evaluate_r6(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_r7(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_r8(instruction, base_location, tag_map, active_profile, mode))
+            findings.extend(_evaluate_pack_text(instruction, base_location, tag_map, mode))
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []

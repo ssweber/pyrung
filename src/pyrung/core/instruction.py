@@ -6,12 +6,15 @@ All state modifications are collected and committed at scan end.
 
 from __future__ import annotations
 
+import math
+import re
 import struct
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from operator import eq, ge, gt, le, lt, ne
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
@@ -38,6 +41,7 @@ _SEARCH_OPERATOR_MAP = {
     ">": gt,
     ">=": ge,
 }
+_TAG_SUFFIX_RE = re.compile(r"^(.*?)(\d+)$")
 
 
 def _clamp_dint(value: int) -> int:
@@ -203,6 +207,170 @@ def resolve_coil_targets_ctx(
         return resolve_block_range_tags_ctx(target, ctx)
     raise TypeError(f"Expected Tag, BlockRange, or IndirectBlockRange, got {type(target).__name__}")
 
+
+def _set_fault_out_of_range(ctx: ScanContext) -> None:
+    from pyrung.core.system_points import system
+
+    ctx._set_tag_internal(system.fault.out_of_range.name, True)
+
+
+def _set_fault_address_error(ctx: ScanContext) -> None:
+    from pyrung.core.system_points import system
+
+    ctx._set_tag_internal(system.fault.address_error.name, True)
+
+
+def _ascii_char_from_code(code: int) -> str:
+    if code < 0 or code > 127:
+        raise ValueError("ASCII code out of range")
+    return chr(code)
+
+
+def _as_single_ascii_char(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("CHAR value must be a string")
+    if value == "":
+        return value
+    if len(value) != 1 or ord(value) > 127:
+        raise ValueError("CHAR value must be blank or one ASCII character")
+    return value
+
+
+def _text_from_source_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    raise ValueError("text conversion source must resolve to str")
+
+
+def _sequential_tags(start_tag: Tag, count: int) -> list[Tag]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return [start_tag]
+
+    match = _TAG_SUFFIX_RE.match(start_tag.name)
+    if match is None:
+        raise ValueError(f"Cannot expand sequential destination from {start_tag.name!r}")
+
+    prefix, suffix = match.groups()
+    width = len(suffix)
+    base = int(suffix)
+    tags = [start_tag]
+    for offset in range(1, count):
+        addr = base + offset
+        name = f"{prefix}{addr:0{width}d}"
+        tags.append(
+            Tag(
+                name=name,
+                type=start_tag.type,
+                retentive=start_tag.retentive,
+                default=start_tag.default,
+            )
+        )
+    return tags
+
+
+def _termination_char(termination_code: int | str | None) -> str:
+    if termination_code is None:
+        return ""
+    if isinstance(termination_code, str):
+        if len(termination_code) != 1:
+            raise ValueError("termination_code must be one character or int ASCII code")
+        return _as_single_ascii_char(termination_code)
+    if not isinstance(termination_code, int):
+        raise TypeError("termination_code must be int, str, or None")
+    return _ascii_char_from_code(termination_code)
+
+
+def _store_numeric_text_digits(text: str, targets: list[Tag], *, mode: str) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if len(text) != len(targets):
+        raise ValueError("source/destination text length mismatch")
+
+    for char, target in zip(text, targets, strict=True):
+        if mode == "value":
+            if char < "0" or char > "9":
+                raise ValueError("Copy Character Value accepts only digits 0-9")
+            numeric = ord(char) - ord("0")
+        elif mode == "ascii":
+            if ord(char) > 127:
+                raise ValueError("Copy ASCII Code Value accepts ASCII only")
+            numeric = ord(char)
+        else:
+            raise ValueError(f"Unsupported text->numeric mode: {mode}")
+        updates[target.name] = _store_copy_value_to_tag_type(numeric, target)
+    return updates
+
+
+def _format_int_text(value: int, width: int, suppress_zero: bool, *, signed: bool = True) -> str:
+    if suppress_zero:
+        return str(value)
+    if not signed:
+        return f"{value:0{width}X}"
+    if value < 0:
+        return f"-{abs(value):0{width}d}"
+    return f"{value:0{width}d}"
+
+
+def _render_text_from_numeric(
+    value: Any,
+    *,
+    source_tag: Tag | None,
+    suppress_zero: bool,
+    exponential: bool,
+) -> str:
+    from pyrung.core.tag import TagType
+
+    source_type = source_tag.type if source_tag is not None else None
+    if source_type == TagType.REAL or isinstance(value, float):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise ValueError("REAL source is not finite")
+        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"
+
+    number = int(value)
+    if source_type == TagType.WORD:
+        return _format_int_text(number & 0xFFFF, 4, suppress_zero, signed=False)
+    if source_type == TagType.DINT:
+        return _format_int_text(number, 10, suppress_zero)
+    if source_type == TagType.INT:
+        return _format_int_text(number, 5, suppress_zero)
+    return str(number) if suppress_zero else f"{number:05d}"
+
+
+def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
+    from pyrung.core.tag import TagType
+
+    if text == "":
+        raise ValueError("empty text cannot be parsed")
+
+    if dest_tag.type in {TagType.INT, TagType.DINT}:
+        if not re.fullmatch(r"[+-]?\d+", text):
+            raise ValueError("integer parse failed")
+        parsed = int(text, 10)
+        if dest_tag.type == TagType.INT and (parsed < _INT_MIN or parsed > _INT_MAX):
+            raise ValueError("integer out of INT range")
+        if dest_tag.type == TagType.DINT and (parsed < _DINT_MIN or parsed > _DINT_MAX):
+            raise ValueError("integer out of DINT range")
+        return parsed
+
+    if dest_tag.type == TagType.WORD:
+        if not re.fullmatch(r"[0-9A-Fa-f]+", text):
+            raise ValueError("hex parse failed")
+        parsed = int(text, 16)
+        if parsed < 0 or parsed > 0xFFFF:
+            raise ValueError("hex out of WORD range")
+        return parsed
+
+    if dest_tag.type == TagType.REAL:
+        parsed = float(text)
+        if not math.isfinite(parsed):
+            raise ValueError("REAL parse produced non-finite value")
+        # Ensure value can round-trip to 32-bit float
+        struct.pack("<f", parsed)
+        return parsed
+
+    raise TypeError(f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}")
 
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
@@ -422,16 +590,170 @@ class CopyInstruction(OneShotMixin, Instruction):
         if not self.should_execute():
             return
 
-        # Resolve source value (handles Tag, IndirectRef, or literal)
-        value = resolve_tag_or_value_ctx(self.source, ctx)
+        try:
+            resolved_target = resolve_tag_ctx(self.target, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+        except TypeError:
+            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-        # Resolve target tag (handles Tag or IndirectRef)
-        resolved_target = resolve_tag_ctx(self.target, ctx)
+            if isinstance(self.target, (IndirectRef, IndirectExprRef)):
+                _set_fault_address_error(ctx)
+                return
+            raise
 
-        # Copy-family store semantics: clamp signed integer overflow.
+        if isinstance(self.source, CopyModifier):
+            self._execute_modifier_copy(ctx, resolved_target, self.source)
+            return
+
+        try:
+            value = resolve_tag_or_value_ctx(self.source, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+        except TypeError:
+            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+            if isinstance(self.source, (IndirectRef, IndirectExprRef)):
+                _set_fault_address_error(ctx)
+                return
+            raise
+
         value = _store_copy_value_to_tag_type(value, resolved_target)
-
         ctx.set_tag(resolved_target.name, value)
+
+    def _execute_modifier_copy(
+        self, ctx: ScanContext, resolved_target: Tag, modifier: CopyModifier
+    ) -> None:
+        mode = modifier.mode
+        if mode in {"value", "ascii"}:
+            self._copy_text_to_numeric(ctx, resolved_target, modifier, mode=mode)
+            return
+        if mode == "text":
+            self._copy_numeric_to_text(ctx, resolved_target, modifier)
+            return
+        if mode == "binary":
+            self._copy_binary_to_text(ctx, resolved_target, modifier)
+            return
+        _set_fault_out_of_range(ctx)
+
+    def _copy_text_to_numeric(
+        self,
+        ctx: ScanContext,
+        resolved_target: Tag,
+        modifier: CopyModifier,
+        *,
+        mode: str,
+    ) -> None:
+        try:
+            source_value = resolve_tag_or_value_ctx(modifier.source, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+        except TypeError:
+            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+            if isinstance(modifier.source, (IndirectRef, IndirectExprRef)):
+                _set_fault_address_error(ctx)
+            else:
+                _set_fault_out_of_range(ctx)
+            return
+        except ValueError:
+            _set_fault_out_of_range(ctx)
+            return
+
+        try:
+            text = _text_from_source_value(source_value)
+            targets = _sequential_tags(resolved_target, len(text))
+            updates = _store_numeric_text_digits(text, targets, mode=mode)
+        except (TypeError, ValueError):
+            _set_fault_out_of_range(ctx)
+            return
+        ctx.set_tags(updates)
+
+    def _copy_numeric_to_text(
+        self, ctx: ScanContext, resolved_target: Tag, modifier: CopyModifier
+    ) -> None:
+        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+        from pyrung.core.tag import TagType
+
+        if resolved_target.type != TagType.CHAR:
+            _set_fault_out_of_range(ctx)
+            return
+
+        source_tag: Tag | None = None
+        try:
+            if isinstance(modifier.source, Tag):
+                source_tag = modifier.source
+            elif isinstance(modifier.source, (IndirectRef, IndirectExprRef)):
+                source_tag = resolve_tag_ctx(modifier.source, ctx)
+            value = resolve_tag_or_value_ctx(modifier.source, ctx)
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+        except TypeError:
+            if isinstance(modifier.source, (IndirectRef, IndirectExprRef)):
+                _set_fault_address_error(ctx)
+            else:
+                _set_fault_out_of_range(ctx)
+            return
+        except ValueError:
+            _set_fault_out_of_range(ctx)
+            return
+
+        try:
+            rendered = _render_text_from_numeric(
+                value,
+                source_tag=source_tag,
+                suppress_zero=modifier.suppress_zero,
+                exponential=modifier.exponential,
+            )
+            rendered += _termination_char(modifier.termination_code)
+            targets = _sequential_tags(resolved_target, len(rendered))
+            updates = {
+                target.name: _as_single_ascii_char(char)
+                for target, char in zip(targets, rendered, strict=True)
+            }
+        except (TypeError, ValueError, OverflowError):
+            _set_fault_out_of_range(ctx)
+            return
+
+        ctx.set_tags(updates)
+
+    def _copy_binary_to_text(
+        self, ctx: ScanContext, resolved_target: Tag, modifier: CopyModifier
+    ) -> None:
+        from pyrung.core.tag import TagType
+
+        if resolved_target.type != TagType.CHAR:
+            _set_fault_out_of_range(ctx)
+            return
+
+        try:
+            value = int(resolve_tag_or_value_ctx(modifier.source, ctx))
+        except IndexError:
+            _set_fault_address_error(ctx)
+            return
+        except TypeError:
+            from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+            if isinstance(modifier.source, (IndirectRef, IndirectExprRef)):
+                _set_fault_address_error(ctx)
+            else:
+                _set_fault_out_of_range(ctx)
+            return
+        except ValueError:
+            _set_fault_out_of_range(ctx)
+            return
+
+        try:
+            char = _ascii_char_from_code(value & 0xFF)
+        except ValueError:
+            _set_fault_out_of_range(ctx)
+            return
+
+        ctx.set_tag(resolved_target.name, char)
 
 
 class CallInstruction(Instruction):
@@ -861,8 +1183,13 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         if not self.should_execute():
             return
 
-        src_tags = resolve_block_range_tags_ctx(self.source, ctx)
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+
+        if isinstance(self.source, CopyModifier):
+            self._execute_modifier_block_copy(ctx, self.source, dst_tags)
+            return
+
+        src_tags = resolve_block_range_tags_ctx(self.source, ctx)
 
         if len(src_tags) != len(dst_tags):
             raise ValueError(
@@ -875,6 +1202,63 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
             value = ctx.get_tag(src_tag.name, src_tag.default)
             updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)
+
+    def _execute_modifier_block_copy(
+        self, ctx: ScanContext, modifier: CopyModifier, dst_tags: list[Tag]
+    ) -> None:
+        src_tags = resolve_block_range_tags_ctx(modifier.source, ctx)
+        if len(src_tags) != len(dst_tags):
+            raise ValueError(
+                f"BlockCopy length mismatch: source has {len(src_tags)} elements, "
+                f"dest has {len(dst_tags)} elements"
+            )
+
+        try:
+            if modifier.mode in {"value", "ascii"}:
+                updates = {}
+                for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+                    char = _as_single_ascii_char(ctx.get_tag(src_tag.name, src_tag.default))
+                    if char == "":
+                        raise ValueError("empty CHAR cannot be converted to numeric")
+                    updates[dst_tag.name] = _store_numeric_text_digits(
+                        char, [dst_tag], mode=modifier.mode
+                    )[dst_tag.name]
+                ctx.set_tags(updates)
+                return
+
+            if modifier.mode == "text":
+                rendered = "".join(
+                    _render_text_from_numeric(
+                        ctx.get_tag(src_tag.name, src_tag.default),
+                        source_tag=src_tag,
+                        suppress_zero=modifier.suppress_zero,
+                        exponential=modifier.exponential,
+                    )
+                    for src_tag in src_tags
+                )
+                rendered += _termination_char(modifier.termination_code)
+                if len(rendered) != len(dst_tags):
+                    raise ValueError("formatted text length does not match destination range")
+                updates = {
+                    dst.name: _as_single_ascii_char(char)
+                    for dst, char in zip(dst_tags, rendered, strict=True)
+                }
+                ctx.set_tags(updates)
+                return
+
+            if modifier.mode == "binary":
+                updates = {}
+                for src_tag, dst_tag in zip(src_tags, dst_tags, strict=True):
+                    updates[dst_tag.name] = _ascii_char_from_code(
+                        int(ctx.get_tag(src_tag.name, src_tag.default)) & 0xFF
+                    )
+                ctx.set_tags(updates)
+                return
+        except (IndexError, TypeError, ValueError, OverflowError):
+            _set_fault_out_of_range(ctx)
+            return
+
+        _set_fault_out_of_range(ctx)
 
 
 def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
@@ -1023,13 +1407,75 @@ class FillInstruction(OneShotMixin, Instruction):
         if not self.should_execute():
             return
 
-        value = resolve_tag_or_value_ctx(self.value, ctx)
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
+        if isinstance(self.value, CopyModifier):
+            self._execute_modifier_fill(ctx, self.value, dst_tags)
+            return
+
+        value = resolve_tag_or_value_ctx(self.value, ctx)
 
         updates = {}
         for dst_tag in dst_tags:
-            updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
+            if dst_tag.type.name == "CHAR":
+                updates[dst_tag.name] = _as_single_ascii_char(value)
+            else:
+                updates[dst_tag.name] = _store_copy_value_to_tag_type(value, dst_tag)
         ctx.set_tags(updates)
+
+    def _execute_modifier_fill(
+        self, ctx: ScanContext, modifier: CopyModifier, dst_tags: list[Tag]
+    ) -> None:
+        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+        from pyrung.core.tag import TagType
+
+        if not dst_tags:
+            return
+
+        if modifier.mode in {"value", "ascii"}:
+            text = _text_from_source_value(resolve_tag_or_value_ctx(modifier.source, ctx))
+            if len(text) != 1:
+                raise ValueError("fill text->numeric conversion requires a single source character")
+            numeric = _store_numeric_text_digits(text, [dst_tags[0]], mode=modifier.mode)[
+                dst_tags[0].name
+            ]
+            updates = {tag.name: _store_copy_value_to_tag_type(numeric, tag) for tag in dst_tags}
+            ctx.set_tags(updates)
+            return
+
+        if modifier.mode == "text":
+            if any(tag.type != TagType.CHAR for tag in dst_tags):
+                raise TypeError("fill(as_text(...)) requires CHAR destination range")
+
+            source_tag: Tag | None = None
+            if isinstance(modifier.source, Tag):
+                source_tag = modifier.source
+            elif isinstance(modifier.source, (IndirectRef, IndirectExprRef)):
+                source_tag = resolve_tag_ctx(modifier.source, ctx)
+
+            rendered = _render_text_from_numeric(
+                resolve_tag_or_value_ctx(modifier.source, ctx),
+                source_tag=source_tag,
+                suppress_zero=modifier.suppress_zero,
+                exponential=modifier.exponential,
+            )
+            rendered += _termination_char(modifier.termination_code)
+            if len(rendered) > len(dst_tags):
+                raise ValueError("formatted fill text exceeds destination range")
+
+            updates: dict[str, Any] = {}
+            for idx, dst in enumerate(dst_tags):
+                updates[dst.name] = _as_single_ascii_char(rendered[idx]) if idx < len(rendered) else ""
+            ctx.set_tags(updates)
+            return
+
+        if modifier.mode == "binary":
+            code = int(resolve_tag_or_value_ctx(modifier.source, ctx)) & 0xFF
+            char = _ascii_char_from_code(code)
+            updates = {tag.name: char for tag in dst_tags}
+            ctx.set_tags(updates)
+            return
+
+        raise ValueError(f"Unsupported fill modifier mode: {modifier.mode}")
 
 
 class SearchInstruction(OneShotMixin, Instruction):
@@ -1386,6 +1832,51 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         else:
             value = _truncate_to_tag_type(packed, dest_tag)
         ctx.set_tag(dest_tag.name, value)
+
+
+class PackTextInstruction(OneShotMixin, Instruction):
+    """Pack Copy text mode: parse CHAR range into a numeric destination."""
+
+    def __init__(
+        self, source_range: Any, dest: Any, *, allow_whitespace: bool = False, oneshot: bool = False
+    ):
+        OneShotMixin.__init__(self, oneshot)
+        self.source_range = source_range
+        self.dest = dest
+        self.allow_whitespace = bool(allow_whitespace)
+
+    def execute(self, ctx: ScanContext) -> None:
+        if not self.should_execute():
+            return
+
+        from pyrung.core.tag import TagType
+
+        dest_tag = resolve_tag_ctx(self.dest, ctx)
+        if dest_tag.type not in {TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL}:
+            raise TypeError(
+                f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}"
+            )
+
+        src_tags = resolve_block_range_tags_ctx(self.source_range, ctx)
+        for src in src_tags:
+            if src.type != TagType.CHAR:
+                raise TypeError(
+                    f"pack_text source range must contain only CHAR tags; got {src.type.name} at {src.name}"
+                )
+
+        try:
+            text = "".join(_as_single_ascii_char(ctx.get_tag(src.name, src.default)) for src in src_tags)
+            if not self.allow_whitespace and text != text.strip():
+                _set_fault_out_of_range(ctx)
+                return
+            if self.allow_whitespace:
+                text = text.strip()
+            parsed = _parse_pack_text_value(text, dest_tag)
+        except (TypeError, ValueError, OverflowError):
+            _set_fault_out_of_range(ctx)
+            return
+
+        ctx.set_tag(dest_tag.name, _store_copy_value_to_tag_type(parsed, dest_tag))
 
 
 class UnpackToBitsInstruction(OneShotMixin, Instruction):

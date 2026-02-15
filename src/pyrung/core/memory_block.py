@@ -382,6 +382,18 @@ class BlockRange:
         """Return this same window with address iteration reversed."""
         return BlockRange(self.block, self.start, self.end, not self.reverse_order)
 
+    def as_value(self) -> Any:
+        """Wrap this range for TXT->numeric character-value conversion."""
+        from pyrung.core.copy_modifiers import as_value
+
+        return as_value(self)
+
+    def as_ascii(self) -> Any:
+        """Wrap this range for TXT->numeric ASCII-code conversion."""
+        from pyrung.core.copy_modifiers import as_ascii
+
+        return as_ascii(self)
+
     def __len__(self) -> int:
         return len(self.addresses)
 
@@ -429,6 +441,18 @@ class IndirectBlockRange:
             end_expr=self.end_expr,
             reverse_order=not self.reverse_order,
         )
+
+    def as_value(self) -> Any:
+        """Wrap this range for TXT->numeric character-value conversion."""
+        from pyrung.core.copy_modifiers import as_value
+
+        return as_value(self)
+
+    def as_ascii(self) -> Any:
+        """Wrap this range for TXT->numeric ASCII-code conversion."""
+        from pyrung.core.copy_modifiers import as_ascii
+
+        return as_ascii(self)
 
     @staticmethod
     def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:

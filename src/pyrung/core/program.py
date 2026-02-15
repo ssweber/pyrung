@@ -43,6 +43,7 @@ from pyrung.core.instruction import (
     OnDelayInstruction,
     OutInstruction,
     PackBitsInstruction,
+    PackTextInstruction,
     PackWordsInstruction,
     ResetInstruction,
     ReturnInstruction,
@@ -694,6 +695,20 @@ def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
     """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
     ctx = _require_rung_context("pack_words")
     ctx._rung.add_instruction(PackWordsInstruction(word_block, dest, oneshot))
+
+
+def pack_text(
+    source_range: Any,
+    dest: Any,
+    *,
+    allow_whitespace: bool = False,
+    oneshot: bool = False,
+) -> None:
+    """Pack Copy text mode: parse a TXT/CHAR range into a numeric destination."""
+    ctx = _require_rung_context("pack_text")
+    ctx._rung.add_instruction(
+        PackTextInstruction(source_range, dest, allow_whitespace=allow_whitespace, oneshot=oneshot)
+    )
 
 
 def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:

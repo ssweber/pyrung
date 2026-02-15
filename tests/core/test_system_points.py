@@ -6,7 +6,21 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import Bool, PLCRunner, Program, Rung, TimeMode, copy, out, system
+from pyrung.core import (
+    Block,
+    Bool,
+    Int,
+    PLCRunner,
+    Program,
+    Rung,
+    TagType,
+    TimeMode,
+    as_binary,
+    as_value,
+    copy,
+    out,
+    system,
+)
 
 
 class _FrozenDateTime(datetime):
@@ -168,3 +182,40 @@ def test_read_only_system_points_reject_logic_and_patch_writes():
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.patch({system.sys.always_on.name: False})
+
+
+def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
+    CH = Block("CH", TagType.CHAR, 1, 10)
+    Dest = Int("Dest")
+    Enable = Bool("Enable")
+
+    with Program() as program:
+        with Rung(Enable):
+            copy(as_value(CH[1]), Dest, oneshot=True)
+
+    runner = PLCRunner(logic=program)
+    runner.patch({"Enable": True, "CH1": "A"})
+    runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is False
+
+
+def test_fault_address_error_auto_clears_next_scan_when_not_retriggered():
+    DS = Block("DS", TagType.INT, 1, 10)
+    CH = Block("CH", TagType.CHAR, 1, 10)
+    Pointer = Int("Pointer")
+    Enable = Bool("Enable")
+
+    with Program() as program:
+        with Rung(Enable):
+            copy(as_binary(DS[Pointer]), CH[1], oneshot=True)
+
+    runner = PLCRunner(logic=program)
+    runner.patch({"Enable": True, "Pointer": 999})
+    runner.step()
+    assert runner.current_state.tags[system.fault.address_error.name] is True
+
+    runner.step()
+    assert runner.current_state.tags[system.fault.address_error.name] is False

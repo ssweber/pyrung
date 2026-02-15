@@ -563,3 +563,44 @@ class TestFunctionCallFieldsCaptured:
         assert enable.location.instruction_type == "AsyncFunctionCallInstruction"
         assert _first(facts, "instruction.ins['value']").value_kind == "tag"
         assert _first(facts, "instruction.outs['result']").value_kind == "tag"
+
+
+class TestCopyModifierAndPackTextFacts:
+    def test_copy_modifier_is_first_class_operand_and_recurses_source(self):
+        from pyrung.core import as_value
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Int("Dest")
+
+        with Program() as prog:
+            with Rung():
+                copy(as_value(CH[1]), Dest)
+
+        facts = walk_program(prog)
+        wrapped = _first(facts, "instruction.source")
+        inner = _first(facts, "instruction.source.source")
+
+        assert wrapped.value_kind == "copy_modifier"
+        assert wrapped.metadata["mode"] == "value"
+        assert inner.value_kind == "tag"
+        assert inner.metadata["tag_name"] == "CH1"
+
+    def test_pack_text_fields_captured(self):
+        from pyrung.core.program import pack_text
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Int("DestTextPack")
+
+        with Program() as prog:
+            with Rung():
+                pack_text(CH.select(1, 3), Dest, allow_whitespace=True)
+
+        facts = walk_program(prog)
+        src = _first(facts, "instruction.source_range")
+        dest = _first(facts, "instruction.dest")
+        allow_ws = _first(facts, "instruction.allow_whitespace")
+
+        assert src.value_kind == "block_range"
+        assert dest.value_kind == "tag"
+        assert allow_ws.value_kind == "literal"
+        assert allow_ws.summary == "True"

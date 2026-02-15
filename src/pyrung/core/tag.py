@@ -177,6 +177,41 @@ class Tag:
         """Create a logical-to-hardware mapping entry."""
         return MappingEntry(source=self, target=target)
 
+    def as_value(self) -> Any:
+        """Wrap this tag for text->numeric character-value conversion."""
+        from pyrung.core.copy_modifiers import as_value
+
+        return as_value(self)
+
+    def as_ascii(self) -> Any:
+        """Wrap this tag for text->numeric ASCII-code conversion."""
+        from pyrung.core.copy_modifiers import as_ascii
+
+        return as_ascii(self)
+
+    def as_text(
+        self,
+        *,
+        suppress_zero: bool = True,
+        exponential: bool = False,
+        termination_code: int | str | None = None,
+    ) -> Any:
+        """Wrap this tag for numeric->text conversion."""
+        from pyrung.core.copy_modifiers import as_text
+
+        return as_text(
+            self,
+            suppress_zero=suppress_zero,
+            exponential=exponential,
+            termination_code=termination_code,
+        )
+
+    def as_binary(self) -> Any:
+        """Wrap this tag for numeric->text binary-copy conversion."""
+        from pyrung.core.copy_modifiers import as_binary
+
+        return as_binary(self)
+
     # =========================================================================
     # Arithmetic Operators -> Expression
     # =========================================================================

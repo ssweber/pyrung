@@ -209,6 +209,22 @@ class TestRungDSL:
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Dest"] == 0x56781234
 
+    def test_rung_with_pack_text(self):
+        """pack_text() parses a CHAR range into a numeric destination."""
+        from pyrung.core.program import Program, Rung, pack_text
+
+        Button = Bool("Button")
+        CH = Block("CH", TagType.CHAR, 1, 100)
+        Dest = Int("Dest")
+
+        with Program() as prog:
+            with Rung(Button):
+                pack_text(CH.select(1, 3), Dest)
+
+        state = SystemState().with_tags({"Button": True, "CH1": "1", "CH2": "2", "CH3": "3"})
+        new_state = evaluate_rung(prog.rungs[0], state)
+        assert new_state.tags["Dest"] == 123
+
     def test_rung_with_unpack_to_bits(self):
         """unpack_to_bits() adds UNPACK_TO_BITS instruction."""
         from pyrung.core.program import Program, Rung, unpack_to_bits
@@ -635,9 +651,10 @@ class TestPublicExports:
     """Test public core exports."""
 
     def test_pack_unpack_exports(self):
-        from pyrung.core import pack_bits, pack_words, unpack_to_bits, unpack_to_words
+        from pyrung.core import pack_bits, pack_text, pack_words, unpack_to_bits, unpack_to_words
 
         assert callable(pack_bits)
+        assert callable(pack_text)
         assert callable(pack_words)
         assert callable(unpack_to_bits)
         assert callable(unpack_to_words)
@@ -651,6 +668,20 @@ class TestPublicExports:
         from pyrung.core import ForbiddenControlFlowError
 
         assert issubclass(ForbiddenControlFlowError, RuntimeError)
+
+    def test_copy_modifier_exports(self):
+        from pyrung.core import as_ascii, as_binary, as_text, as_value
+
+        assert callable(as_value)
+        assert callable(as_ascii)
+        assert callable(as_text)
+        assert callable(as_binary)
+
+    def test_no_copy_text_or_unpack_text_exports(self):
+        import pyrung.core as core
+
+        assert not hasattr(core, "copy_text")
+        assert not hasattr(core, "unpack_text")
 
 
 class TestCastingReferenceExamples:

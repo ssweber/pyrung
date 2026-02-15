@@ -15,7 +15,7 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Bool, Tag, TagType
+from pyrung.core import Bool, Tag, TagType, as_value
 from pyrung.core.program import Program, Rung, copy, math, out, run_enabled_function, run_function
 
 # ---------------------------------------------------------------------------
@@ -672,3 +672,20 @@ class TestSuggestionContent:
         suggestion = r5_findings[0].suggestion
         assert suggestion is not None
         assert "DD" in suggestion
+
+
+class TestWrappedCopySources:
+    def test_wrapped_indirect_ref_stays_in_copy_context(self):
+        Pointer = Tag("Pointer", TagType.INT)
+        Dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                copy(as_value(dd[Pointer]), Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Pointer.map_to(ds[100]), Dest.map_to(dd[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        codes = _finding_codes(report)
+        assert CLK_PTR_CONTEXT_ONLY_COPY not in codes

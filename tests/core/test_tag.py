@@ -323,3 +323,34 @@ class TestTagComparison:
         # When used in Rung(), a BOOL tag becomes a normally open contact.
         # Rung behavior is tested in test_rung.py.
         assert Button.type == TagType.BOOL
+
+
+class TestTagCopyModifierHelpers:
+    def test_as_value_helper(self):
+        from pyrung.core import Char
+        from pyrung.core.copy_modifiers import CopyModifier
+
+        modifier = Char("CH1").as_value()
+        assert isinstance(modifier, CopyModifier)
+        assert modifier.mode == "value"
+
+    def test_as_ascii_helper(self):
+        from pyrung.core import Char
+
+        modifier = Char("CH1").as_ascii()
+        assert modifier.mode == "ascii"
+
+    def test_as_text_helper_and_options(self):
+        from pyrung.core import Int
+
+        modifier = Int("DS1").as_text(suppress_zero=False, exponential=True, termination_code=13)
+        assert modifier.mode == "text"
+        assert modifier.suppress_zero is False
+        assert modifier.exponential is True
+        assert modifier.termination_code == 13
+
+    def test_as_binary_helper(self):
+        from pyrung.core import Int
+
+        modifier = Int("DS1").as_binary()
+        assert modifier.mode == "binary"

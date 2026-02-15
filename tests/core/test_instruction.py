@@ -1673,3 +1673,179 @@ class TestSearchInstruction:
 
         assert new_state.tags["Result"] == -1
         assert new_state.tags["Found"] is False
+
+
+class TestCopyTextModifiers:
+    def test_copy_as_value_expands_sequential_destinations(self):
+        from pyrung.core.copy_modifiers import as_value
+        from pyrung.core.instruction import CopyInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        instr = CopyInstruction(as_value("123"), DS[1])
+        new_state = execute(instr, SystemState())
+
+        assert new_state.tags["DS1"] == 1
+        assert new_state.tags["DS2"] == 2
+        assert new_state.tags["DS3"] == 3
+
+    def test_copy_as_value_non_digit_sets_out_of_range_and_skips_write(self):
+        from pyrung.core.copy_modifiers import as_value
+        from pyrung.core.instruction import CopyInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        instr = CopyInstruction(as_value("1A3"), DS[1])
+        new_state = execute(instr, SystemState().with_tags({"DS1": 9, "DS2": 9, "DS3": 9}))
+
+        assert new_state.tags["fault.out_of_range"] is True
+        assert new_state.tags["DS1"] == 9
+        assert new_state.tags["DS2"] == 9
+        assert new_state.tags["DS3"] == 9
+
+    def test_copy_as_ascii_converts_char_codes(self):
+        from pyrung.core.copy_modifiers import as_ascii
+        from pyrung.core.instruction import CopyInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        instr = CopyInstruction(as_ascii("AZ"), DS[1])
+        new_state = execute(instr, SystemState())
+
+        assert new_state.tags["DS1"] == 65
+        assert new_state.tags["DS2"] == 90
+
+    def test_copy_as_text_do_not_suppress_zero(self):
+        from pyrung.core.copy_modifiers import as_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(as_text(Source, suppress_zero=False), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
+
+        assert new_state.tags["CH1"] == "0"
+        assert new_state.tags["CH2"] == "0"
+        assert new_state.tags["CH3"] == "1"
+        assert new_state.tags["CH4"] == "2"
+        assert new_state.tags["CH5"] == "3"
+
+    def test_copy_as_text_with_termination_code(self):
+        from pyrung.core.copy_modifiers import as_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(as_text(Source, termination_code=13), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 5}))
+
+        assert new_state.tags["CH1"] == "5"
+        assert ord(new_state.tags["CH2"]) == 13
+
+    def test_copy_as_binary_low_byte_ascii(self):
+        from pyrung.core.copy_modifiers import as_binary
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(as_binary(Source), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
+
+        assert new_state.tags["CH1"] == "{"
+
+    def test_copy_pointer_resolution_error_sets_address_error_only(self):
+        from pyrung.core.copy_modifiers import as_binary
+        from pyrung.core.instruction import CopyInstruction
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        Pointer = Int("Pointer")
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        instr = CopyInstruction(as_binary(DS[Pointer]), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Pointer": 999}))
+
+        assert new_state.tags["fault.address_error"] is True
+        assert new_state.tags.get("fault.out_of_range", False) is False
+        assert "CH1" not in new_state.tags
+
+
+class TestBlockCopyTextModes:
+    def test_blockcopy_as_value_text_to_numeric(self):
+        from pyrung.core.copy_modifiers import as_value
+        from pyrung.core.instruction import BlockCopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        DS = Block("DS", TagType.INT, 1, 10)
+        instr = BlockCopyInstruction(as_value(CH.select(1, 3)), DS.select(1, 3))
+        state = SystemState().with_tags({"CH1": "1", "CH2": "2", "CH3": "3"})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["DS1"] == 1
+        assert new_state.tags["DS2"] == 2
+        assert new_state.tags["DS3"] == 3
+
+    def test_blockcopy_as_value_failure_sets_out_of_range_no_partial_write(self):
+        from pyrung.core.copy_modifiers import as_value
+        from pyrung.core.instruction import BlockCopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        DS = Block("DS", TagType.INT, 1, 10)
+        instr = BlockCopyInstruction(as_value(CH.select(1, 3)), DS.select(1, 3))
+        state = SystemState().with_tags({"CH1": "1", "CH2": "A", "CH3": "3", "DS1": 9, "DS2": 9, "DS3": 9})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["fault.out_of_range"] is True
+        assert new_state.tags["DS1"] == 9
+        assert new_state.tags["DS2"] == 9
+        assert new_state.tags["DS3"] == 9
+        assert new_state.tags.get("fault.address_error", False) is False
+
+
+class TestPackTextInstruction:
+    def test_pack_text_parses_int(self):
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Int("Dest")
+        instr = PackTextInstruction(CH.select(1, 3), Dest)
+        state = SystemState().with_tags({"CH1": "1", "CH2": "2", "CH3": "3"})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == 123
+
+    def test_pack_text_real_exponential(self):
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Real("Dest")
+        instr = PackTextInstruction(CH.select(1, 6), Dest)
+        state = SystemState().with_tags({"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2", "CH5": "", "CH6": ""})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == pytest.approx(0.01)
+
+    def test_pack_text_word_hex(self):
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Word("Dest")
+        instr = PackTextInstruction(CH.select(1, 4), Dest)
+        state = SystemState().with_tags({"CH1": "A", "CH2": "B", "CH3": "C", "CH4": "D"})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == 0xABCD
+
+    def test_pack_text_whitespace_rejected_without_option(self):
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Int("Dest")
+        instr = PackTextInstruction(CH.select(1, 3), Dest, allow_whitespace=False)
+        state = SystemState().with_tags({"CH1": " ", "CH2": "1", "CH3": "2", "Dest": 77})
+        new_state = execute(instr, state)
+        assert new_state.tags["fault.out_of_range"] is True
+        assert new_state.tags["Dest"] == 77
+
+    def test_pack_text_allow_whitespace_trims_without_fault(self):
+        from pyrung.core.instruction import PackTextInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Dest = Int("Dest")
+        instr = PackTextInstruction(CH.select(1, 3), Dest, allow_whitespace=True)
+        state = SystemState().with_tags({"CH1": " ", "CH2": "1", "CH3": "2"})
+        new_state = execute(instr, state)
+        assert new_state.tags["Dest"] == 12
+        assert new_state.tags.get("fault.out_of_range", False) is False

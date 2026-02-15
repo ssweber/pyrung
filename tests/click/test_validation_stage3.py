@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.click import TagMap, c, ds, sc, t, td, x, y
+from pyrung.click import TagMap, c, ds, sc, t, td, txt, x, y
 from pyrung.click import validation as click_validation
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
@@ -10,11 +10,12 @@ from pyrung.click.validation import (
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_EXPR_ONLY_IN_MATH,
+    CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
-from pyrung.core import Bool, Int
-from pyrung.core.program import Program, Rung, copy, forloop, on_delay, out
+from pyrung.core import Bool, Int, as_value
+from pyrung.core.program import Program, Rung, copy, forloop, on_delay, out, pack_text
 
 
 def _build_program(fn):
@@ -193,3 +194,48 @@ def test_program_and_tagmap_validation_facades_match_direct():
 
     assert _codes(direct) == _codes(via_program)
     assert _codes(direct) == _codes(via_tag_map)
+
+
+def test_pack_text_stage3_compatible_banks():
+    source = txt.select(1, 3)
+    dest = Int("Dest")
+
+    def logic():
+        with Rung():
+            pack_text(source, dest)
+
+    prog = _build_program(logic)
+    tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_PACK_TEXT_BANK_INCOMPATIBLE not in _codes(report)
+
+
+def test_pack_text_stage3_incompatible_source_bank():
+    dest = Int("Dest")
+
+    def logic():
+        with Rung():
+            pack_text(ds.select(1, 2), dest)
+
+    prog = _build_program(logic)
+    tag_map = TagMap([dest.map_to(ds[2])], include_system=False)
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_PACK_TEXT_BANK_INCOMPATIBLE in _codes(report)
+
+
+def test_wrapped_copy_source_keeps_copy_context_rules():
+    pointer = Int("Pointer")
+    dest = Int("Dest")
+
+    def logic():
+        with Rung():
+            copy(as_value(txt[pointer]), dest)
+
+    prog = _build_program(logic)
+    tag_map = TagMap([pointer.map_to(ds[100]), dest.map_to(ds[1])], include_system=False)
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    codes = _codes(report)
+    assert "CLK_PTR_CONTEXT_ONLY_COPY" not in codes

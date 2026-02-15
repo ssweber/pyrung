@@ -35,6 +35,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
+from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.expression import (
     ExprCompareEq,
     ExprCompareGe,
@@ -68,6 +69,7 @@ ValueKind = Literal[
     "block_range",
     "indirect_block_range",
     "condition",
+    "copy_modifier",
     "literal",
     "unknown",
 ]
@@ -121,6 +123,7 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "PackBitsInstruction": ("bit_block", "dest"),
     "PackWordsInstruction": ("word_block", "dest"),
+    "PackTextInstruction": ("source_range", "dest", "allow_whitespace"),
     "UnpackToBitsInstruction": ("source", "bit_block"),
     "UnpackToWordsInstruction": ("source", "word_block"),
     "CountUpInstruction": (
@@ -232,7 +235,21 @@ def _classify_value(
             {"condition_type": type(obj).__name__},
         )
 
-    # 7. Tag
+    # 7. CopyModifier wrapper
+    if isinstance(obj, CopyModifier):
+        metadata: dict[str, str | int | bool] = {"mode": obj.mode}
+        if obj.mode == "text":
+            metadata["suppress_zero"] = bool(obj.suppress_zero)
+            metadata["exponential"] = bool(obj.exponential)
+            metadata["has_termination_code"] = obj.termination_code is not None
+        return (
+            "copy_modifier",
+            type(obj).__name__,
+            f"CopyModifier({obj.mode})",
+            metadata,
+        )
+
+    # 8. Tag
     if isinstance(obj, Tag):
         return (
             "tag",
@@ -241,7 +258,7 @@ def _classify_value(
             {"tag_name": obj.name, "tag_type": obj.type.name},
         )
 
-    # 8. Literal scalars (bool before int since bool is subclass of int)
+    # 9. Literal scalars (bool before int since bool is subclass of int)
     if isinstance(obj, bool):
         return ("literal", "bool", repr(obj), {})
     if obj is None:
@@ -249,7 +266,7 @@ def _classify_value(
     if isinstance(obj, (int, float, str)):
         return ("literal", type(obj).__name__, repr(obj), {})
 
-    # 9. Enum values
+    # 10. Enum values
     if isinstance(obj, Enum):
         return (
             "literal",
@@ -258,7 +275,7 @@ def _classify_value(
             {"enum_value": obj.name},
         )
 
-    # 10. Unknown
+    # 11. Unknown
     return (
         "unknown",
         type(obj).__name__,
@@ -605,6 +622,18 @@ class _Walker:
                     instr_type,
                     f"{arg_path}.{child_name}",
                 )
+
+        if kind == "copy_modifier" and isinstance(obj, CopyModifier):
+            self._walk_value(
+                obj.source,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                instr_type,
+                f"{arg_path}.source",
+            )
 
 
 # ---------------------------------------------------------------------------

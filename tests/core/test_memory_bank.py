@@ -839,3 +839,22 @@ class TestEdgeCases:
 
         assert indirect1.block == indirect2.block
         assert indirect1.pointer == indirect2.pointer
+
+
+class TestBlockRangeCopyModifierHelpers:
+    def test_block_range_as_value(self):
+        from pyrung.core.copy_modifiers import CopyModifier
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        wrapped = CH.select(1, 3).as_value()
+        assert isinstance(wrapped, CopyModifier)
+        assert wrapped.mode == "value"
+
+    def test_indirect_block_range_as_ascii(self):
+        from pyrung.core.copy_modifiers import CopyModifier
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Start = Int("Start")
+        wrapped = CH.select(Start, 3).as_ascii()
+        assert isinstance(wrapped, CopyModifier)
+        assert wrapped.mode == "ascii"

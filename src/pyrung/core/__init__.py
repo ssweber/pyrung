@@ -8,6 +8,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 """
 
 from pyrung.core.context import ScanContext
+from pyrung.core.copy_modifiers import as_ascii, as_binary, as_text, as_value
 from pyrung.core.expression import (
     PI,
     Expression,
@@ -60,6 +61,7 @@ from pyrung.core.program import (
     on_delay,
     out,
     pack_bits,
+    pack_text,
     pack_words,
     program,
     reset,
@@ -148,6 +150,7 @@ __all__ = [
     "blockcopy",
     "fill",
     "pack_bits",
+    "pack_text",
     "pack_words",
     "unpack_to_bits",
     "unpack_to_words",
@@ -166,6 +169,11 @@ __all__ = [
     "fall",
     "all_of",
     "any_of",
+    # Copy modifiers
+    "as_value",
+    "as_ascii",
+    "as_text",
+    "as_binary",
     # Expressions
     "Expression",
     "PI",
