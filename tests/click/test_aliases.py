@@ -34,7 +34,26 @@ def test_click_aliases_not_exported_from_core():
 def test_click_prebuilt_blocks_are_exported():
     click = importlib.import_module("pyrung.click")
 
-    for name in ("x", "y", "c", "t", "ct", "sc", "ds", "dd", "dh", "df", "td", "ctd", "sd", "txt"):
+    for name in (
+        "x",
+        "y",
+        "c",
+        "t",
+        "ct",
+        "sc",
+        "ds",
+        "dd",
+        "dh",
+        "df",
+        "xd",
+        "yd",
+        "xdu",
+        "ydu",
+        "td",
+        "ctd",
+        "sd",
+        "txt",
+    ):
         assert hasattr(click, name)
 
 
@@ -45,26 +64,40 @@ def test_click_send_receive_are_exported():
 
 
 def test_click_prebuilt_block_classes_and_identity_names():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, y
+    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xdu, y, yd, ydu
 
     assert isinstance(x, InputBlock)
+    assert isinstance(xd, InputBlock)
     assert isinstance(y, OutputBlock)
+    assert isinstance(yd, OutputBlock)
+    assert isinstance(xdu, InputTag)
+    assert isinstance(ydu, OutputTag)
     for block in (c, t, ct, sc, ds, dd, dh, df, td, ctd, sd, txt):
         assert isinstance(block, Block)
 
     assert x.name == "X"
     assert y.name == "Y"
+    assert xd.name == "XD"
+    assert yd.name == "YD"
     assert ds.name == "DS"
     assert txt.name == "TXT"
 
 
 def test_click_prebuilt_canonical_tag_names():
-    from pyrung.click import c, ds, x, y
+    from pyrung.click import c, ds, x, xd, xdu, y, yd, ydu
 
     assert x[1].name == "X001"
     assert y[1].name == "Y001"
     assert c[1].name == "C1"
     assert ds[1].name == "DS1"
+    assert xd[0].name == "XD0"
+    assert xd[1].name == "XD1"
+    assert xd[3].name == "XD3"
+    assert xdu.name == "XD0u"
+    assert yd[0].name == "YD0"
+    assert yd[1].name == "YD1"
+    assert yd[3].name == "YD3"
+    assert ydu.name == "YD0u"
 
 
 def test_click_sparse_x_select_and_gap_rejection():
@@ -79,8 +112,23 @@ def test_click_sparse_x_select_and_gap_rejection():
         x[17]
 
 
+def test_click_xd_yd_display_indexed_select():
+    from pyrung.click import xd, yd
+
+    assert tuple(xd.select(0, 4).addresses) == (0, 1, 2, 3, 4)
+    assert [tag.name for tag in xd.select(0, 4)] == ["XD0", "XD1", "XD2", "XD3", "XD4"]
+    assert tuple(yd.select(0, 4).addresses) == (0, 1, 2, 3, 4)
+    assert [tag.name for tag in yd.select(0, 4)] == ["YD0", "YD1", "YD2", "YD3", "YD4"]
+    assert xd[8].name == "XD8"
+    assert yd[8].name == "YD8"
+    with pytest.raises(IndexError):
+        xd[9]
+    with pytest.raises(IndexError):
+        yd[9]
+
+
 def test_click_prebuilt_type_and_retentive_defaults():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, y
+    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xdu, y, yd, ydu
 
     expected: dict[str, tuple[TagType, bool]] = {
         "x": (TagType.BOOL, False),
@@ -93,6 +141,8 @@ def test_click_prebuilt_type_and_retentive_defaults():
         "dd": (TagType.DINT, True),
         "dh": (TagType.WORD, True),
         "df": (TagType.REAL, True),
+        "xd": (TagType.WORD, False),
+        "yd": (TagType.WORD, False),
         "td": (TagType.INT, False),
         "ctd": (TagType.DINT, True),
         "sd": (TagType.INT, False),
@@ -109,6 +159,8 @@ def test_click_prebuilt_type_and_retentive_defaults():
         "dd": dd,
         "dh": dh,
         "df": df,
+        "xd": xd,
+        "yd": yd,
         "td": td,
         "ctd": ctd,
         "sd": sd,
@@ -120,10 +172,19 @@ def test_click_prebuilt_type_and_retentive_defaults():
         assert block.type == expected_type
         assert block.retentive is expected_retentive
 
+    assert xdu.type == TagType.WORD
+    assert ydu.type == TagType.WORD
+    assert xdu.retentive is False
+    assert ydu.retentive is False
+
 
 def test_click_prebuilt_tag_classes():
-    from pyrung.click import ds, x, y
+    from pyrung.click import ds, x, xd, xdu, y, yd, ydu
 
     assert isinstance(x[1], InputTag)
+    assert isinstance(xd[0], InputTag)
+    assert isinstance(xdu, InputTag)
     assert isinstance(y[1], OutputTag)
+    assert isinstance(yd[0], OutputTag)
+    assert isinstance(ydu, OutputTag)
     assert isinstance(ds[1], Tag)

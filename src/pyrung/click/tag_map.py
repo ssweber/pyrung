@@ -80,6 +80,42 @@ def _tag_type_for_memory_type(memory_type: str) -> TagType:
     return _DATA_TYPE_TO_TAG_TYPE[config.data_type]
 
 
+def _compress_addresses_to_ranges(addresses: list[int]) -> tuple[tuple[int, int], ...] | None:
+    if not addresses:
+        return None
+
+    ranges: list[tuple[int, int]] = []
+    lo = hi = addresses[0]
+    for addr in addresses[1:]:
+        if addr == hi + 1:
+            hi = addr
+            continue
+        ranges.append((lo, hi))
+        lo = hi = addr
+    ranges.append((lo, hi))
+    return tuple(ranges)
+
+
+def _valid_ranges_for_bank(memory_type: str) -> tuple[tuple[int, int], ...] | None:
+    config = BANKS[memory_type]
+    if config.valid_ranges is not None:
+        return config.valid_ranges
+    if memory_type not in {"XD", "YD"}:
+        return None
+
+    # XD/YD expose a sparse MDB address set where XD0u/YD0u maps to address 1.
+    valid_addresses: list[int] = []
+    for addr in range(config.min_addr, config.max_addr + 1):
+        display = format_address_display(memory_type, addr)
+        try:
+            parsed_bank, parsed_addr = parse_address(display)
+        except ValueError:
+            continue
+        if parsed_bank == memory_type and parsed_addr == addr:
+            valid_addresses.append(addr)
+    return _compress_addresses_to_ranges(valid_addresses)
+
+
 def _hardware_block_for(memory_type: str) -> Block | InputBlock | OutputBlock:
     cached = _HARDWARE_BLOCK_CACHE.get(memory_type)
     if cached is not None:
@@ -90,10 +126,10 @@ def _hardware_block_for(memory_type: str) -> Block | InputBlock | OutputBlock:
     tag_type = _tag_type_for_memory_type(config.name)
     start = config.min_addr
     end = config.max_addr
-    valid_ranges = config.valid_ranges
+    valid_ranges = _valid_ranges_for_bank(memory_type)
     formatter = format_address_display
 
-    if memory_type == "X":
+    if memory_type in {"X", "XD"}:
         block = InputBlock(
             name=name,
             type=tag_type,
@@ -102,7 +138,7 @@ def _hardware_block_for(memory_type: str) -> Block | InputBlock | OutputBlock:
             valid_ranges=valid_ranges,
             address_formatter=formatter,
         )
-    elif memory_type == "Y":
+    elif memory_type in {"Y", "YD"}:
         block = OutputBlock(
             name=name,
             type=tag_type,

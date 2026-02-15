@@ -74,7 +74,7 @@ math(DS1 * DS2 + DS3, Result)  # 200*200=40000, +30000=70000 in intermediate
 
 | Case | Behavior |
 |------|----------|
-| Division by zero | Result = 0, SC40 flag set |
+| Division by zero | Result = 0, `system.fault.division_error` set (Click `SC40`) |
 | Integer division | Truncates toward zero (`-7 / 2 = -3`, not -4) |
 
 **Mode parameter:**
@@ -89,6 +89,18 @@ math(DS1 * DS2 + DS3, Result)  # 200*200=40000, +30000=70000 in intermediate
 # FFFFh + 1h = 0h (wraps at 16-bit unsigned boundary)
 math(MaskA & MaskB, MaskResult, mode="hex")
 ```
+
+#### Math Error Flags (System Namespace)
+
+Math-related runtime status should be documented in core using system points:
+
+| System tag | Click mapping | Meaning | Math behavior |
+|------------|---------------|---------|---------------|
+| `system.fault.division_error` | `SC40` | Divide-by-zero occurred | Result forced to `0` for that math evaluation |
+| `system.fault.out_of_range` | `SC43` | Overflow/underflow or conversion out of range | Math result wraps to destination width |
+| `system.fault.math_operation_error` | `SC46` | Invalid math operands/register values | Fatal condition; transitions PLC to stop mode |
+
+Related note: `system.fault.address_error` (`SC44`) is pointer/addressing related and applies to copy/pointer scenarios, not normal `math()` evaluation.
 
 ### Type Conversion (via copy modifiers)
 

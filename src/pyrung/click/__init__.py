@@ -5,7 +5,19 @@ from typing import Any, cast
 from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, BankConfig, DataType
 
-from pyrung.core import Block, Bool, Char, Dint, InputBlock, OutputBlock, Real, TagType, Word
+from pyrung.core import (
+    Block,
+    Bool,
+    Char,
+    Dint,
+    InputBlock,
+    InputTag,
+    OutputBlock,
+    OutputTag,
+    Real,
+    TagType,
+    Word,
+)
 from pyrung.core.program import Program
 from pyrung.core.tag import MappingEntry
 
@@ -25,6 +37,15 @@ CLICK_TO_IEC: dict[DataType, TagType] = {
 }
 
 
+def _click_address_formatter(name: str, addr: int) -> str:
+    if name in {"X", "Y"}:
+        return f"{name}{addr:03d}"
+    if name in {"XD", "YD"}:
+        # Display-indexed API: XD0..XD8 / YD0..YD8.
+        return f"{name}{addr}"
+    return format_address_display(name, addr)
+
+
 def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBlock:
     name = config.name
     tag_type = CLICK_TO_IEC[config.data_type]
@@ -32,23 +53,29 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
     end = config.max_addr
     valid_ranges = config.valid_ranges
 
-    if name == "X":
+    if name in {"XD", "YD"}:
+        # Ergonomic display-indexed contract for click dialect users.
+        start = 0
+        end = 8
+        valid_ranges = None
+
+    if name in {"X", "XD"}:
         return InputBlock(
             name=name,
             type=tag_type,
             start=start,
             end=end,
             valid_ranges=valid_ranges,
-            address_formatter=format_address_display,
+            address_formatter=_click_address_formatter,
         )
-    if name == "Y":
+    if name in {"Y", "YD"}:
         return OutputBlock(
             name=name,
             type=tag_type,
             start=start,
             end=end,
             valid_ranges=valid_ranges,
-            address_formatter=format_address_display,
+            address_formatter=_click_address_formatter,
         )
     return Block(
         name=name,
@@ -57,7 +84,7 @@ def _block_from_bank_config(config: BankConfig) -> Block | InputBlock | OutputBl
         end=end,
         retentive=DEFAULT_RETENTIVE[name],
         valid_ranges=valid_ranges,
-        address_formatter=format_address_display,
+        address_formatter=_click_address_formatter,
     )
 
 
@@ -71,6 +98,10 @@ ds = _block_from_bank_config(BANKS["DS"])
 dd = _block_from_bank_config(BANKS["DD"])
 dh = _block_from_bank_config(BANKS["DH"])
 df = _block_from_bank_config(BANKS["DF"])
+xd = _block_from_bank_config(BANKS["XD"])
+yd = _block_from_bank_config(BANKS["YD"])
+xdu = InputTag("XD0u", TagType.WORD, retentive=False)
+ydu = OutputTag("YD0u", TagType.WORD, retentive=False)
 td = _block_from_bank_config(BANKS["TD"])
 ctd = _block_from_bank_config(BANKS["CTD"])
 sd = _block_from_bank_config(BANKS["SD"])
@@ -117,6 +148,10 @@ __all__ = [
     "dd",
     "dh",
     "df",
+    "xd",
+    "yd",
+    "xdu",
+    "ydu",
     "td",
     "ctd",
     "sd",
