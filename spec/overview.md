@@ -189,14 +189,18 @@ pyrung uses IEC 61131-3 standard type names as the canonical `TagType` enum. Cli
 Every PLC scan follows this sequence:
 
 ```
-1. READ INPUTS     InputBlock values copied from external source
-2. EXECUTE LOGIC   Rungs evaluated top-to-bottom, left-to-right
-3. WRITE OUTPUTS   OutputBlock values pushed to external sink
+1. READ INPUTS      InputBlock values copied from external source
+2. APPLY FORCES     Pre-logic force pass (debug override behavior)
+3. EXECUTE LOGIC    Rungs evaluated top-to-bottom, left-to-right
+4. APPLY FORCES     Post-logic force pass (re-assert prepared force values)
+5. WRITE OUTPUTS    OutputBlock values pushed to external sink
 ```
 
 ### In-scan visibility
 
 All in-memory writes — including to OutputBlock tags — are visible to subsequent rungs **immediately within the same scan**. This is standard PLC behavior. "Output" refers to the direction toward physical hardware, not to read/write access within logic.
+
+For forced tags, the pre-logic pass sets the value at scan start and the post-logic pass re-applies it at scan end. IEC assignments may temporarily change that value mid-scan.
 
 ### .immediate
 
@@ -291,6 +295,6 @@ clickplc-config (standalone)
 | `core/dsl.md` | Program, Rung, conditions, branch, subroutine, call. | Handoff |
 | `core/instructions.md` | All instructions: out, latch, copy, math, timers, counters, etc. | Handoff |
 | `core/engine.md` | SystemState, PLCRunner, TimeMode, step/run/patch, scan cycle. | Handoff |
-| `core/debug.md` | force, when().pause(), monitor, history, seek, rewind, diff, fork_from. | Handoff |
+| `core/debug.md` | force, when().pause(), monitor, history, seek, rewind, diff, fork_from. | Draft |
 | `dialects/click.md` | Pre-built blocks, TagMap, validation, nickname I/O, clickplc-config bridge. | Handoff |
 | `dialects/circuit.md` | P1AM model, slot/channel, codegen, circuitpython validation. | Handoff |

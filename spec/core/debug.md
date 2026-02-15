@@ -1,122 +1,240 @@
-# Core Debug — Handoff Brief
+﻿# Core Debug - Specification
 
-> **Status:** Handoff — decisions captured, needs full spec writeup.
-> **Depends on:** `core/engine.md` (PLCRunner, SystemState, history)
-> **Implementation milestone:** 11 (Advanced Features)
+> **Status:** Draft specification (milestone 11 scope)
+> **Depends on:** `core/engine.md`, `core/dsl.md`
 
 ---
 
 ## Scope
 
-The debugging, inspection, and time-travel API. This is what makes pyrung more than a PLC simulator — it's a PLC *debugger*. Forces, breakpoints, observers, history navigation, and execution branching.
+Debugging and inspection APIs on top of `PLCRunner`:
+
+- force (Click "override")
+- breakpoints and snapshot labels
+- monitors
+- history and playhead navigation
+- rung inspection
+- diff and fork
 
 ---
 
-## Decisions Made
+## Terminology
 
-### Force (Override Logic Outputs)
+- API term is **force**.
+- In Click UI/docs this corresponds to **override (OVR)**.
+
+---
+
+## Public API
 
 ```python
-# Context manager: force active for duration
-with runner.force({"Safety_Guard": True, "Watchdog_OK": True}):
-    runner.run(cycles=100)
-
-# Manual toggle (for UI use)
+# force
 runner.add_force(tag, value)
 runner.remove_force(tag)
-```
+runner.clear_forces()
+with runner.force({tag_or_name: value, ...}):
+    ...
 
-- Forces override logic outputs. The engine evaluates logic normally but the forced value replaces whatever logic produced.
-- Forces persist across scans until removed (unlike `patch`, which is one-shot).
-- `force` context manager auto-removes on exit.
-- Multiple forces can be active simultaneously.
+# breakpoints
+runner.when(predicate).pause()
+runner.when(predicate).snapshot("label")
 
-### Breakpoints (Predicate Halts)
+# monitors
+runner.monitor(tag, callback)
 
-```python
-runner.when(predicate).pause()             # Halt when condition met
-runner.when(predicate).snapshot(label)     # Bookmark history when condition met
-```
+# history
+runner.history.at(scan_id)
+runner.history.range(start_scan_id, end_scan_id)
+runner.history.latest(n)
+runner.history.find(label)
+runner.history.find_all(label)
 
-- `predicate` is `Callable[[SystemState], bool]`.
-- `.pause()` stops execution (from `run()` / `run_for()` / `run_until()`).
-- `.snapshot(label)` doesn't halt — it tags the history entry with a label for later retrieval.
-- Multiple breakpoints can be active simultaneously.
+# time travel
+runner.seek(scan_id)
+runner.rewind(seconds)
+runner.playhead
 
-### Observers (Tag Change Monitoring)
-
-```python
-runner.monitor(tag_name, callback)
-# callback(current_value, previous_value) fires when tag changes
-```
-
-- Fires after each scan where the monitored tag's value differs from previous scan.
-- Useful for logging, assertions in tests, GUI updates.
-
-### Rung Inspection
-
-```python
-runner.inspect(rung_id)
-# Returns live object data: conditions evaluated, power state, instruction results
-```
-
-- For visualization: a GUI can call `inspect` to render rung state at any historical point.
-- Related to the `render(state)` protocol on Rung/Contact/Coil objects (see `dsl.md`).
-
-### History Buffer
-
-```python
-runner.history.at(scan_id)            # Retrieve specific snapshot
-runner.history.range(start, end)      # Slice of snapshots
-runner.history.latest(n)              # Last N snapshots
-```
-
-- History is a list of immutable `SystemState` snapshots.
-- Grows with every `step()`.
-- Can be bounded (ring buffer) for long-running simulations.
-
-### Time Travel (Read-Only Navigation)
-
-```python
-runner.seek(scan_id)                  # Move playhead for inspection
-runner.rewind(seconds=N)              # Jump back N seconds of simulation time
-runner.playhead                       # Current inspection position
-```
-
-- `seek` and `rewind` are for inspection only.
-- They move the playhead but don't affect execution.
-- `step()` always appends to the end of history regardless of playhead position.
-
-### Diff
-
-```python
+# inspection / diff / fork
+runner.inspect(rung_id, scan_id=None)
 runner.diff(scan_a, scan_b)
-# Returns dict of {tag_name: (old_value, new_value)} for tags that changed
+runner.fork_from(scan_id)
 ```
 
-### Fork (Branching Execution)
-
-```python
-alt_runner = runner.fork_from(scan_id=50)
-alt_runner.patch({"X": True})
-alt_runner.run(cycles=10)
-```
-
-- Creates a new `PLCRunner` with history starting at the specified scan.
-- The new runner is independent — changes don't affect the original.
-- Same program, fresh execution from a historical state.
+`tag` accepts `str` or `Tag`.
 
 ---
 
-## Needs Specification
+## Force Semantics
 
-- **Force interaction with `out`:** If `Motor` is forced True and a rung does `out(Motor)` with rung power False, the force wins. But does the engine evaluate the rung at all? (Yes — it evaluates, then the force overrides the output. This matters for `inspect()`.)
-- **Force + patch interaction:** What if a tag is both forced and patched? Force wins? Error?
-- **Breakpoint removal:** How do you remove a breakpoint? Return a handle from `when()`?
-- **History memory management:** Is there a max history size? Ring buffer? Configurable? What happens when it's exceeded?
-- **History + labeled snapshots:** How does `snapshot(label)` interact with history retrieval? `runner.history.find(label)`?
-- **Monitor cleanup:** How do you remove a monitor? Return a handle? `unmonitor(tag)`?
-- **Fork state:** Does `fork_from` copy forces? Breakpoints? Monitors? (Probably: no, no, no — clean slate except for program + state.)
-- **Seek + inspect:** When playhead is at scan 50, does `inspect(rung_id)` show the state at scan 50? (Yes — that's the point.)
-- **Diff performance:** For large tag sets, diff could be expensive. Optimize with change tracking? Or is this premature?
-- **Serialization:** Can history be saved to disk? For replaying sessions, sharing bug reports, etc. This is powerful but can be future work.
+### Supported targets
+
+- Any writable tag may be forced (`bool`, `int`, `float`, `str`).
+- Read-only system points cannot be forced (`ValueError`).
+
+### Persistence
+
+- Forces persist across scans until removed.
+- Multiple forces may be active.
+- `with runner.force({...})` is temporary and restores the exact previous force map on exit (nested-safe).
+
+### Scan cycle integration
+
+Force is applied before and after code execution:
+
+1. Read inputs
+2. Apply force values
+3. Process code
+4. Apply force values
+5. Write outputs
+
+At each force pass, all prepared force values are written by the runtime system,
+regardless of whether those variables are used in the task/program.
+
+Mapped to core engine phases:
+
+```
+0. SCAN START
+1. APPLY PATCH
+2. READ INPUTS
+3. APPLY FORCES (pre-logic)
+4. EXECUTE LOGIC
+5. APPLY FORCES (post-logic)
+6. WRITE OUTPUTS
+7. ADVANCE CLOCK
+8. SNAPSHOT/HISTORY
+```
+
+### In-cycle behavior
+
+- Pre-logic force pass writes prepared values before IEC code begins.
+- IEC code may assign different values during processing.
+- External client writes (if present in a runtime integration) may also overwrite values mid-cycle.
+- Mid-cycle reads observe the current in-cycle value (including IEC assignments).
+- Post-logic force pass writes prepared values again before output write.
+- Therefore, force does **not** lock a variable to one value for the entire cycle; it reasserts at cycle boundaries.
+
+### Force and patch
+
+- `patch` remains one-shot and is consumed as usual.
+- If a tag is both patched and forced in the same scan, the pre-logic force pass overwrites the patched value.
+
+### Force and edge detection
+
+- `rise()` / `fall()` evaluate whatever value is present when that condition is evaluated.
+- Since forced variables may diverge mid-cycle, edges can reflect IEC assignments during the scan.
+- Across scans, the committed post-force value is what carries into the next cycle.
+
+---
+
+## Breakpoints and Snapshot Labels
+
+- Predicate type: `Callable[[SystemState], bool]`.
+- Predicate is evaluated on each committed scan snapshot.
+- `pause()` halts `run()`, `run_for()`, or `run_until()` after committing the triggering scan.
+- `snapshot(label)` tags the triggering scan and does not halt.
+- Each registration returns a handle with `remove()`, `enable()`, `disable()`, and `id`.
+- Multiple breakpoints can be active simultaneously.
+
+Label lookup:
+
+- `history.find(label)` returns the most recent labeled snapshot or `None`.
+- `history.find_all(label)` returns all matches oldest-to-newest.
+
+---
+
+## Monitors
+
+```python
+runner.monitor(tag, callback)
+# callback(current_value, previous_value)
+```
+
+- Fires after each committed scan when value changed vs previous committed scan.
+- Multiple monitors per tag are allowed.
+- Returns a handle with `remove()`, `enable()`, `disable()`, and `id`.
+- Callback exceptions propagate to caller.
+
+---
+
+## Rung Inspection
+
+```python
+runner.inspect(rung_id, scan_id=None) -> RungTrace
+```
+
+- If `scan_id` is omitted, inspect uses `runner.playhead`.
+- `rung_id` is rung order index (0-based) in the compiled program.
+- Inspection is read-only.
+
+`RungTrace` includes at minimum:
+
+- `scan_id`, `rung_id`, `powered`
+- condition results in evaluation order
+- instruction results in execution order
+- attempted writes and force re-apply events (pre-logic and post-logic)
+
+Missing scan/rung trace raises `KeyError`.
+
+---
+
+## History and Playhead
+
+History stores immutable `SystemState` snapshots (including initial state).
+
+### Access
+
+- `at(scan_id)` returns one snapshot (`KeyError` if absent/evicted).
+- `range(start, end)` returns snapshots where `start <= scan_id < end`.
+- `latest(n)` returns oldest-to-newest among the last `n`.
+
+### Capacity
+
+- Configurable `history_limit: int | None` (`None` = unbounded).
+- When limit is exceeded, oldest scans are evicted (ring buffer behavior).
+- Labels and traces for evicted scans are evicted too.
+- If playhead points to an evicted scan, it moves to oldest retained scan.
+
+### Time travel
+
+- `playhead` is the current inspection `scan_id`.
+- `seek(scan_id)` moves playhead to retained scan.
+- `rewind(seconds)` moves backward from playhead timestamp to nearest retained scan with `timestamp <= target`.
+- Execution is independent of playhead: `step()` always appends at history tip.
+
+---
+
+## Diff
+
+```python
+runner.diff(scan_a, scan_b) -> dict[str, tuple[Any, Any]]
+```
+
+- Compares tag values only (`tags`, not `memory`).
+- Includes keys with changed values.
+- Missing keys are treated as `None`.
+- Deterministic key order (sorted by tag name).
+- Missing scans raise `KeyError`.
+
+---
+
+## Fork
+
+```python
+alt_runner = runner.fork_from(scan_id)
+```
+
+Creates an independent runner with:
+
+- same program logic
+- same time-mode configuration
+- initial state from the selected snapshot
+- clean debug runtime state (no forces, breakpoints, monitors, labels, or pending patches)
+- history containing only the fork snapshot initially
+
+---
+
+## Out of Scope (Milestone 11)
+
+- on-disk history/session serialization
+- remote debugger protocol
+- GUI-specific rendering schema beyond `inspect()` trace data

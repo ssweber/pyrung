@@ -67,7 +67,11 @@ with runner.active():
 - `.value` requires an explicit active scope (`with runner.active(): ...`) and
   raises `RuntimeError` when used outside that scope.
 
-Force is in `core/debug.md`.
+Force is specified in `core/debug.md`. Engine-level integration is:
+
+- Force can be active for any writable tag.
+- Force is applied pre-logic and post-logic in each scan.
+- IEC assignments may temporarily diverge forced variables during logic execution.
 
 ### Time Modes
 
@@ -90,12 +94,14 @@ Every `step()` executes:
 0. SCAN START       Dialect-specific resets (e.g., Click clears SC40/SC43/SC44)
 1. APPLY PATCH      Pending patch values written to tags
 2. READ INPUTS      InputBlock: copy from external source (or from patch for simulation)
-3. EXECUTE LOGIC    Evaluate rungs top-to-bottom
+3. APPLY FORCES     Pre-logic force pass (debug override behavior)
+4. EXECUTE LOGIC    Evaluate rungs top-to-bottom
    - Each rung: evaluate conditions, execute instructions if True
    - All writes to tags/memory are immediately visible to subsequent rungs
-4. WRITE OUTPUTS    OutputBlock: push values to external sink (no-op in pure simulation)
-5. ADVANCE CLOCK    scan_id += 1, timestamp updated per TimeMode
-6. SNAPSHOT          New SystemState appended to history
+5. APPLY FORCES     Post-logic force pass (re-assert prepared force values)
+6. WRITE OUTPUTS    OutputBlock: push values to external sink (no-op in pure simulation)
+7. ADVANCE CLOCK    scan_id += 1, timestamp updated per TimeMode
+8. SNAPSHOT         New SystemState appended to history
 ```
 
 ### Numeric Handling (Hardware-Verified)
