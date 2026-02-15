@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -99,3 +99,27 @@ def test_named_array_auto_default_restricted_by_base_type():
         @named_array("BOOL", count=2)
         class _Alarm:
             id = auto()
+
+
+def test_named_array_allows_underscored_field_names():
+    @named_array(Int, count=1, stride=2)
+    class Alarm:
+        _x = 0
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    assert alarms.field_names == ("_x", "val")
+    assert alarms[1]._x.name == "Alarm1__x"
+    assert alarms[1].val.name == "Alarm1_val"
+
+
+def test_named_array_skips_classvar_fields():
+    @named_array(Int, count=1, stride=1)
+    class Alarm:
+        _meta: ClassVar[int] = 123
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    assert alarms.field_names == ("val",)
+    with pytest.raises(AttributeError):
+        _ = alarms._meta

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.tag import LiveTag, MappingEntry, TagType, _TagTypeBase
@@ -263,11 +263,23 @@ def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     if not isinstance(annotations, dict):
         raise TypeError("UDT annotations must be a dict.")
-    _validate_fields_present(annotations)
-    _validate_field_names(annotations.keys())
+
+    classvar_names = {
+        field_name
+        for field_name, annotation in annotations.items()
+        if _is_classvar_annotation(annotation)
+    }
+    field_annotations = {
+        field_name: annotation
+        for field_name, annotation in annotations.items()
+        if field_name not in classvar_names
+    }
+
+    _validate_fields_present(field_annotations)
+    _validate_field_names(field_annotations.keys())
 
     parsed: list[_FieldSpec] = []
-    for field_name, annotation in annotations.items():
+    for field_name, annotation in field_annotations.items():
         field_type = _resolve_annotation(annotation, field_name)
         raw_default = cls.__dict__.get(field_name, UNSET)
         parsed.append(_build_field_spec(field_name, field_type, raw_default, source="udt"))
@@ -275,9 +287,18 @@ def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
 
 
 def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_FieldSpec, ...]:
+    annotations = getattr(cls, "__annotations__", {})
+    classvar_names: set[str] = set()
+    if isinstance(annotations, dict):
+        classvar_names = {
+            field_name
+            for field_name, annotation in annotations.items()
+            if _is_classvar_annotation(annotation)
+        }
+
     parsed: list[_FieldSpec] = []
     for field_name, value in cls.__dict__.items():
-        if _should_skip_named_array_attr(field_name, value):
+        if _should_skip_named_array_attr(field_name, value, classvar_names=classvar_names):
             continue
         parsed.append(_build_field_spec(field_name, base_type, value, source="named_array"))
 
@@ -286,10 +307,29 @@ def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_Fiel
     return tuple(parsed)
 
 
-def _should_skip_named_array_attr(name: str, value: object) -> bool:
+def _is_classvar_annotation(annotation: object) -> bool:
+    origin = get_origin(annotation)
+    if origin is ClassVar or annotation is ClassVar:
+        return True
+
+    if isinstance(annotation, str):
+        normalized = annotation.replace(" ", "")
+        return (
+            normalized == "ClassVar"
+            or normalized.startswith("ClassVar[")
+            or normalized == "typing.ClassVar"
+            or normalized.startswith("typing.ClassVar[")
+        )
+
+    return False
+
+
+def _should_skip_named_array_attr(
+    name: str, value: object, *, classvar_names: set[str]
+) -> bool:
     if name.startswith("__") and name.endswith("__"):
         return True
-    if name.startswith("_"):
+    if name in classvar_names:
         return True
     if isinstance(value, (classmethod, staticmethod, property)):
         return True

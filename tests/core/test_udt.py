@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -99,3 +99,27 @@ def test_instance_view_validates_index_and_missing_attributes():
 
     with pytest.raises(AttributeError, match="no field"):
         _ = alarms[1].missing
+
+
+def test_udt_allows_underscored_fields():
+    @udt(count=1)
+    class Alarm:
+        _x: Int = 0
+        val: Int = 1
+
+    alarms = cast(Any, Alarm)
+    assert alarms.field_names == ("_x", "val")
+    assert alarms[1]._x.name == "Alarm1__x"
+    assert alarms[1].val.name == "Alarm1_val"
+
+
+def test_udt_skips_classvar_fields():
+    @udt(count=1)
+    class Alarm:
+        _meta: ClassVar[int] = 123
+        val: Int = 1
+
+    alarms = cast(Any, Alarm)
+    assert alarms.field_names == ("val",)
+    with pytest.raises(AttributeError):
+        _ = alarms._meta

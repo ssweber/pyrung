@@ -1,5 +1,8 @@
 from __future__ import annotations
 import asyncio
+from pathlib import Path
+
+from pyclickplc import DataviewFile, DataviewRow, write_cdv
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
@@ -127,10 +130,34 @@ def build_mapping() -> TagMap:
         Fill_Acc.map_to(td[302]), Heat_Acc.map_to(td[303]), Check_Acc.map_to(td[304]), Comp_Acc.map_to(td[305]), Rej_Acc.map_to(td[306]),
     ])
 
+
+def export_click_addresses(tag_map: TagMap) -> tuple[Path, Path]:
+    base_dir = Path(__file__).parent
+    csv_path = base_dir / "batch_process_click_addresses.csv"
+    cdv_path = base_dir / "batch_process_click_addresses.cdv"
+
+    tag_map.to_nickname_file(csv_path)
+
+    rows = [
+        DataviewRow(address=slot.hardware_address)
+        for slot in tag_map.mapped_slots()
+        if slot.source == "user"
+    ]
+    for row in rows:
+        row.update_data_type()
+
+    write_cdv(cdv_path, DataviewFile(rows=rows))
+    return csv_path, cdv_path
+
+
 async def run_server():
     runner = PLCRunner(logic=main())
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
-    server = ClickServer(ClickDataProvider(runner, build_mapping()), host="127.0.0.1", port=5020)
+    tag_map = build_mapping()
+    csv_path, cdv_path = export_click_addresses(tag_map)
+    print(f"Exported Click addresses: {csv_path}")
+    print(f"Exported Click DataView: {cdv_path}")
+    server = ClickServer(ClickDataProvider(runner, tag_map), host="127.0.0.1", port=5020)
     await server.start()
     while True:
         runner.step()
