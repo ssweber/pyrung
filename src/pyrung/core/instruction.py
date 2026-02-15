@@ -214,6 +214,12 @@ def _set_fault_out_of_range(ctx: ScanContext) -> None:
     ctx._set_tag_internal(system.fault.out_of_range.name, True)
 
 
+def _set_fault_division_error(ctx: ScanContext) -> None:
+    from pyrung.core.system_points import system
+
+    ctx._set_tag_internal(system.fault.division_error.name, True)
+
+
 def _set_fault_address_error(ctx: ScanContext) -> None:
     from pyrung.core.system_points import system
 
@@ -1347,6 +1353,30 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     return value
 
 
+def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
+    """Return True if math result exceeds destination storage range."""
+    from pyrung.core.tag import TagType
+
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+
+    try:
+        int_value = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+    if mode == "hex":
+        return int_value < 0 or int_value > 0xFFFF
+
+    if dest.type == TagType.INT:
+        return int_value < _INT_MIN or int_value > _INT_MAX
+    if dest.type == TagType.DINT:
+        return int_value < _DINT_MIN or int_value > _DINT_MAX
+    if dest.type == TagType.WORD:
+        return int_value < 0 or int_value > 0xFFFF
+    return False
+
+
 class MathInstruction(OneShotMixin, Instruction):
     """Math instruction.
 
@@ -1379,7 +1409,16 @@ class MathInstruction(OneShotMixin, Instruction):
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)
         except ZeroDivisionError:
+            _set_fault_division_error(ctx)
             value = 0
+
+        # Expression division may return non-finite sentinels for divide-by-zero.
+        if isinstance(value, float) and not math.isfinite(value):
+            _set_fault_division_error(ctx)
+            value = 0
+
+        if _math_out_of_range_for_dest(value, self.dest, self.mode):
+            _set_fault_out_of_range(ctx)
 
         # Truncate to destination type
         value = _truncate_to_tag_type(value, self.dest, self.mode)

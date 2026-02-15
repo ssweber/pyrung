@@ -18,6 +18,7 @@ from pyrung.core import (
     as_binary,
     as_value,
     copy,
+    math,
     out,
     system,
 )
@@ -182,6 +183,46 @@ def test_read_only_system_points_reject_logic_and_patch_writes():
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.patch({system.sys.always_on.name: False})
+
+
+def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+    Enable = Bool("Enable")
+
+    with Program() as program:
+        with Rung(Enable):
+            math(A / B, Result, oneshot=True)
+
+    runner = PLCRunner(logic=program)
+    runner.patch({"Enable": True, "A": 100, "B": 0})
+    runner.step()
+    assert runner.current_state.tags["Result"] == 0
+    assert runner.current_state.tags[system.fault.division_error.name] is True
+
+    runner.step()
+    assert runner.current_state.tags[system.fault.division_error.name] is False
+
+
+def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered():
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+    Enable = Bool("Enable")
+
+    with Program() as program:
+        with Rung(Enable):
+            math(A + B, Result, oneshot=True)
+
+    runner = PLCRunner(logic=program)
+    runner.patch({"Enable": True, "A": 30000, "B": 30000})
+    runner.step()
+    assert runner.current_state.tags["Result"] == -5536
+    assert runner.current_state.tags[system.fault.out_of_range.name] is True
+
+    runner.step()
+    assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
 def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
