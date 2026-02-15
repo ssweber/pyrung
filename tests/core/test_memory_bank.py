@@ -64,11 +64,11 @@ class TestBlock:
         assert tag1.name == "DS100"
         assert tag2.name == "DS101"
 
-    def test_zero_index_raises(self):
-        """Address 0 raises IndexError."""
+    def test_zero_index_out_of_range_when_start_is_1(self):
+        """Address 0 is out of range when block starts at 1."""
         DS = Block("DS", TagType.INT, 1, 4500)
 
-        with pytest.raises(IndexError, match="Address 0 is not valid"):
+        with pytest.raises(IndexError, match="out of range"):
             DS[0]
 
     def test_range_validation_low(self):
@@ -128,10 +128,18 @@ class TestBlock:
         DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
         assert DS[1].retentive is True
 
-    def test_start_must_be_at_least_1(self):
-        """start < 1 raises ValueError."""
-        with pytest.raises(ValueError, match="start must be >= 1"):
-            Block("DS", TagType.INT, 0, 100)
+    def test_start_must_be_at_least_0(self):
+        """start < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="start must be >= 0"):
+            Block("DS", TagType.INT, -1, 100)
+
+    def test_zero_start_allows_zero_address(self):
+        """Blocks can start at 0 and allow address 0."""
+        DS = Block("DS", TagType.INT, 0, 100)
+        tag = DS[0]
+
+        assert tag.name == "DS0"
+        assert tag.type == TagType.INT
 
     def test_end_must_be_ge_start(self):
         """end < start raises ValueError."""
@@ -251,6 +259,13 @@ class TestSelect:
         assert len(block) == 1
         tags = block.tags()
         assert tags[0].name == "DS100"
+
+    def test_select_allows_zero_when_start_is_zero(self):
+        """select(0, n) is valid when block start is 0."""
+        DS = Block("DS", TagType.INT, 0, 100)
+        block = DS.select(0, 2)
+
+        assert tuple(block.addresses) == (0, 1, 2)
 
     def test_select_repr(self):
         """BlockRange has useful repr."""
@@ -432,6 +447,15 @@ class TestIndirectRef:
         resolved = indirect.resolve(state)
 
         assert resolved.name == "DS50"
+
+    def test_resolve_zero_pointer_when_block_starts_at_zero(self):
+        """Pointer value 0 resolves when block start is 0."""
+        DS = Block("DS", TagType.INT, 0, 100)
+        Index = Tag("Index", TagType.INT, default=0)
+        indirect = DS[Index]
+
+        resolved = indirect.resolve(SystemState())
+        assert resolved.name == "DS0"
 
     def test_resolve_out_of_range(self):
         """resolve() raises IndexError for out-of-range pointer."""

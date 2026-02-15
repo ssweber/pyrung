@@ -61,8 +61,8 @@ class Block:
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
-        if self.start < 1:
-            raise ValueError(f"start must be >= 1, got {self.start}")
+        if self.start < 0:
+            raise ValueError(f"start must be >= 0, got {self.start}")
         if self.end < self.start:
             raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
         if self.valid_ranges is None:
@@ -103,7 +103,7 @@ class Block:
             - slice: raises TypeError
 
         Raises:
-            IndexError: If int address is 0 or out of range.
+            IndexError: If int address is out of range.
             TypeError: If key is a slice or invalid type.
         """
         from pyrung.core.expression import Expression
@@ -147,8 +147,6 @@ class Block:
         return any(lo <= addr <= hi for lo, hi in self.valid_ranges)
 
     def _validate_address(self, addr: int) -> None:
-        if addr == 0:
-            raise IndexError("Address 0 is not valid; addresses start at 1")
         if addr < self.start or addr > self.end:
             raise IndexError(
                 f"Address {addr} out of range for {self.name} block "
@@ -161,8 +159,6 @@ class Block:
             )
 
     def _validate_window_bound(self, addr: int, label: str) -> None:
-        if addr == 0:
-            raise IndexError("Address 0 is not valid; addresses start at 1")
         if addr < self.start or addr > self.end:
             raise IndexError(
                 f"{label} address {addr} out of range for {self.name} block "
