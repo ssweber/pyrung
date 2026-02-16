@@ -11,6 +11,8 @@ import math
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core._source import _capture_source
+
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.tag import Tag
@@ -140,22 +142,34 @@ class Expression(ABC):
     # =========================================================================
 
     def __eq__(self, other: object) -> ExprCompareEq:  # type: ignore[override]
-        return ExprCompareEq(self, _wrap(other))
+        cond = ExprCompareEq(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __ne__(self, other: object) -> ExprCompareNe:  # type: ignore[override]
-        return ExprCompareNe(self, _wrap(other))
+        cond = ExprCompareNe(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __lt__(self, other: Expression | Numeric) -> ExprCompareLt:
-        return ExprCompareLt(self, _wrap(other))
+        cond = ExprCompareLt(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __le__(self, other: Expression | Numeric) -> ExprCompareLe:
-        return ExprCompareLe(self, _wrap(other))
+        cond = ExprCompareLe(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __gt__(self, other: Expression | Numeric) -> ExprCompareGt:
-        return ExprCompareGt(self, _wrap(other))
+        cond = ExprCompareGt(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __ge__(self, other: Expression | Numeric) -> ExprCompareGe:
-        return ExprCompareGe(self, _wrap(other))
+        cond = ExprCompareGe(self, _wrap(other))
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
 
 # =============================================================================

@@ -19,6 +19,7 @@ from collections.abc import Callable
 from types import FrameType
 from typing import TYPE_CHECKING, Any, ClassVar, overload
 
+from pyrung.core._source import _capture_source, _capture_with_end_line
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -535,7 +536,16 @@ class Rung:
     """
 
     def __init__(self, *conditions: Condition | Tag) -> None:
-        self._rung = RungLogic(*conditions)
+        source_file, source_line = _capture_source(depth=2)
+        self._rung = RungLogic(*conditions, source_file=source_file, source_line=source_line)
+
+        # Direct Tag conditions are converted internally and would otherwise
+        # have no source metadata.
+        for condition in self._rung._conditions:
+            if condition.source_file is None:
+                condition.source_file = source_file
+            if condition.source_line is None:
+                condition.source_line = source_line
 
     def __enter__(self) -> Rung:
         _rung_stack.append(self)
@@ -543,6 +553,11 @@ class Rung:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         _rung_stack.pop()
+        self._rung.end_line = _capture_with_end_line(
+            self._rung.source_file,
+            self._rung.source_line,
+            context_name="Rung",
+        )
         # Add rung to current program
         prog = Program.current()
         if prog is not None:
@@ -566,9 +581,12 @@ def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
             out(Y.select(1, 4))
     """
     ctx = _require_rung_context("out")
+    source_file, source_line = _capture_source(depth=2)
     for coil_tag in _iter_coil_tags(target):
         ctx._rung.register_coil(coil_tag)
-    ctx._rung.add_instruction(OutInstruction(target, oneshot))
+    instr = OutInstruction(target, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return target
 
 
@@ -584,8 +602,11 @@ def latch(target: Tag | BlockRange) -> Tag | BlockRange:
             latch(C.select(1, 8))
     """
     ctx = _require_rung_context("latch")
+    source_file, source_line = _capture_source(depth=2)
     _iter_coil_tags(target)
-    ctx._rung.add_instruction(LatchInstruction(target))
+    instr = LatchInstruction(target)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return target
 
 
@@ -600,8 +621,11 @@ def reset(target: Tag | BlockRange) -> Tag | BlockRange:
             reset(C.select(1, 8))
     """
     ctx = _require_rung_context("reset")
+    source_file, source_line = _capture_source(depth=2)
     _iter_coil_tags(target)
-    ctx._rung.add_instruction(ResetInstruction(target))
+    instr = ResetInstruction(target)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return target
 
 
@@ -619,7 +643,10 @@ def copy(
             copy(5, StepNumber)
     """
     ctx = _require_rung_context("copy")
-    ctx._rung.add_instruction(CopyInstruction(source, target, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = CopyInstruction(source, target, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return target
 
 
@@ -632,8 +659,11 @@ def run_function(
 ) -> None:
     """Execute a synchronous function when rung power is true."""
     ctx = _require_rung_context("run_function")
+    source_file, source_line = _capture_source(depth=2)
     _validate_function_call(fn, ins, outs, func_name="run_function")
-    ctx._rung.add_instruction(FunctionCallInstruction(fn, ins, outs, oneshot))
+    instr = FunctionCallInstruction(fn, ins, outs, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def run_enabled_function(
@@ -643,9 +673,12 @@ def run_enabled_function(
 ) -> None:
     """Execute a synchronous function every scan with rung enabled state."""
     ctx = _require_rung_context("run_enabled_function")
+    source_file, source_line = _capture_source(depth=2)
     _validate_function_call(fn, ins, outs, func_name="run_enabled_function", has_enabled=True)
     enable_condition = ctx._rung._get_combined_condition()
-    ctx._rung.add_instruction(AsyncFunctionCallInstruction(fn, ins, outs, enable_condition))
+    instr = AsyncFunctionCallInstruction(fn, ins, outs, enable_condition)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
@@ -664,7 +697,10 @@ def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
         oneshot: If True, execute only once per rung activation.
     """
     ctx = _require_rung_context("blockcopy")
-    ctx._rung.add_instruction(BlockCopyInstruction(source, dest, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = BlockCopyInstruction(source, dest, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
@@ -682,19 +718,28 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
         oneshot: If True, execute only once per rung activation.
     """
     ctx = _require_rung_context("fill")
-    ctx._rung.add_instruction(FillInstruction(value, dest, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = FillInstruction(value, dest, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def pack_bits(bit_block: Any, dest: Any, oneshot: bool = False) -> None:
     """Pack BOOL tags from a BlockRange into a register destination."""
     ctx = _require_rung_context("pack_bits")
-    ctx._rung.add_instruction(PackBitsInstruction(bit_block, dest, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = PackBitsInstruction(bit_block, dest, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
     """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
     ctx = _require_rung_context("pack_words")
-    ctx._rung.add_instruction(PackWordsInstruction(word_block, dest, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = PackWordsInstruction(word_block, dest, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def pack_text(
@@ -706,21 +751,33 @@ def pack_text(
 ) -> None:
     """Pack Copy text mode: parse a TXT/CHAR range into a numeric destination."""
     ctx = _require_rung_context("pack_text")
-    ctx._rung.add_instruction(
-        PackTextInstruction(source_range, dest, allow_whitespace=allow_whitespace, oneshot=oneshot)
+    source_file, source_line = _capture_source(depth=2)
+    instr = PackTextInstruction(
+        source_range,
+        dest,
+        allow_whitespace=allow_whitespace,
+        oneshot=oneshot,
     )
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:
     """Unpack a register source into BOOL tags in a BlockRange."""
     ctx = _require_rung_context("unpack_to_bits")
-    ctx._rung.add_instruction(UnpackToBitsInstruction(source, bit_block, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = UnpackToBitsInstruction(source, bit_block, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None:
     """Unpack a 32-bit register source into two 16-bit tags in a BlockRange."""
     ctx = _require_rung_context("unpack_to_words")
-    ctx._rung.add_instruction(UnpackToWordsInstruction(source, word_block, oneshot))
+    source_file, source_line = _capture_source(depth=2)
+    instr = UnpackToWordsInstruction(source, word_block, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
@@ -749,7 +806,10 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
         The dest tag.
     """
     ctx = _require_rung_context("math")
-    ctx._rung.add_instruction(MathInstruction(expression, dest, oneshot, mode))
+    source_file, source_line = _capture_source(depth=2)
+    instr = MathInstruction(expression, dest, oneshot, mode)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return dest
 
 
@@ -785,9 +845,10 @@ def search(
         raise TypeError(f"search() result must be INT or DINT, got {result.type.name}")
 
     ctx = _require_rung_context("search")
-    ctx._rung.add_instruction(
-        SearchInstruction(condition, value, search_range, result, found, continuous, oneshot)
-    )
+    source_file, source_line = _capture_source(depth=2)
+    instr = SearchInstruction(condition, value, search_range, result, found, continuous, oneshot)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
     return result
 
 
@@ -798,11 +859,15 @@ class ShiftBuilder:
         self,
         bit_range: BlockRange | IndirectBlockRange,
         data_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
     ):
         self._bit_range = bit_range
         self._data_condition = data_condition
         self._clock_condition: Condition | Tag | None = None
         self._rung = _require_rung_context("shift")
+        self._source_file = source_file
+        self._source_line = source_line
 
     def clock(self, condition: Condition | Tag) -> ShiftBuilder:
         """Set the shift clock trigger condition."""
@@ -820,6 +885,7 @@ class ShiftBuilder:
             clock_condition=self._clock_condition,
             reset_condition=condition,
         )
+        instr.source_file, instr.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instr)
         return self._bit_range
 
@@ -844,7 +910,8 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
 
     ctx = _require_rung_context("shift")
     data_condition = ctx._rung._get_combined_condition()
-    return ShiftBuilder(bit_range, data_condition)
+    source_file, source_line = _capture_source(depth=2)
+    return ShiftBuilder(bit_range, data_condition, source_file, source_line)
 
 
 # ============================================================================
@@ -861,7 +928,9 @@ def nc(tag: Tag) -> NormallyClosedCondition:
         with Rung(StartButton, nc(StopButton)):
             latch(MotorRunning)
     """
-    return NormallyClosedCondition(tag)
+    cond = NormallyClosedCondition(tag)
+    cond.source_file, cond.source_line = _capture_source(depth=2)
+    return cond
 
 
 def rise(tag: Tag) -> RisingEdgeCondition:
@@ -873,7 +942,9 @@ def rise(tag: Tag) -> RisingEdgeCondition:
         with Rung(rise(Button)):
             latch(MotorRunning)  # Latches on button press, not while held
     """
-    return RisingEdgeCondition(tag)
+    cond = RisingEdgeCondition(tag)
+    cond.source_file, cond.source_line = _capture_source(depth=2)
+    return cond
 
 
 def fall(tag: Tag) -> FallingEdgeCondition:
@@ -885,7 +956,9 @@ def fall(tag: Tag) -> FallingEdgeCondition:
         with Rung(fall(Button)):
             reset(MotorRunning)  # Resets when button is released
     """
-    return FallingEdgeCondition(tag)
+    cond = FallingEdgeCondition(tag)
+    cond.source_file, cond.source_line = _capture_source(depth=2)
+    return cond
 
 
 def any_of(
@@ -914,7 +987,14 @@ def any_of(
     Returns:
         AnyCondition that evaluates True if any sub-condition is True.
     """
-    return AnyCondition(*conditions)
+    cond = AnyCondition(*conditions)
+    cond.source_file, cond.source_line = _capture_source(depth=2)
+    for child in cond.conditions:
+        if child.source_file is None:
+            child.source_file = cond.source_file
+        if child.source_line is None:
+            child.source_line = cond.source_line
+    return cond
 
 
 def all_of(
@@ -933,7 +1013,14 @@ def all_of(
         with Rung((Ready & AutoMode) | RemoteStart):
             out(StartPermissive)
     """
-    return AllCondition(*conditions)
+    cond = AllCondition(*conditions)
+    cond.source_file, cond.source_line = _capture_source(depth=2)
+    for child in cond.conditions:
+        if child.source_file is None:
+            child.source_file = cond.source_file
+        if child.source_line is None:
+            child.source_line = cond.source_line
+    return cond
 
 
 def call(target: str | SubroutineFunc) -> None:
@@ -961,6 +1048,7 @@ def call(target: str | SubroutineFunc) -> None:
                 call(init_sequence)
     """
     ctx = _require_rung_context("call")
+    source_file, source_line = _capture_source(depth=2)
     prog = Program.current()
     if prog is None:
         raise RuntimeError("call() must be used inside a Program context")
@@ -972,7 +1060,9 @@ def call(target: str | SubroutineFunc) -> None:
     else:
         name = target
 
-    ctx._rung.add_instruction(CallInstruction(name, prog))
+    instr = CallInstruction(name, prog)
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def return_() -> None:
@@ -984,10 +1074,13 @@ def return_() -> None:
                 return_()
     """
     ctx = _require_rung_context("return_")
+    source_file, source_line = _capture_source(depth=2)
     prog = Program.current()
     if prog is None or prog._current_subroutine is None:
         raise RuntimeError("return_() must be used inside a subroutine")
-    ctx._rung.add_instruction(ReturnInstruction())
+    instr = ReturnInstruction()
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 # ============================================================================
@@ -1156,13 +1249,21 @@ def subroutine(name: str, *, strict: bool = True) -> Subroutine:
 class ForLoop:
     """Context manager for a repeated instruction block within a rung."""
 
-    def __init__(self, count: Tag | int, oneshot: bool = False) -> None:
+    def __init__(
+        self,
+        count: Tag | int,
+        oneshot: bool = False,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
         self.count = count
         self.oneshot = oneshot
         self.idx = Tag("_forloop_idx", TagType.DINT)
         self._parent_ctx: Rung | None = None
         self._capture_rung: RungLogic | None = None
         self._capture_ctx: Rung | None = None
+        self._source_file = source_file
+        self._source_line = source_line
 
     def __enter__(self) -> ForLoop:
         global _forloop_active
@@ -1174,7 +1275,10 @@ class ForLoop:
         _forloop_active = True
 
         # Capture body instructions to a temporary rung (like Branch capture).
-        self._capture_rung = RungLogic()
+        self._capture_rung = RungLogic(
+            source_file=self._source_file,
+            source_line=self._source_line,
+        )
         self._capture_ctx = Rung.__new__(Rung)
         self._capture_ctx._rung = self._capture_rung
         _rung_stack.append(self._capture_ctx)
@@ -1190,6 +1294,12 @@ class ForLoop:
         if self._parent_ctx is None or self._capture_rung is None:
             return
 
+        self._capture_rung.end_line = _capture_with_end_line(
+            self._source_file,
+            self._source_line,
+            context_name="forloop",
+        )
+
         instruction = ForLoopInstruction(
             count=self.count,
             idx_tag=self.idx,
@@ -1197,6 +1307,7 @@ class ForLoop:
             coils=self._capture_rung._coils,
             oneshot=self.oneshot,
         )
+        instruction.source_file, instruction.source_line = self._source_file, self._source_line
         self._parent_ctx._rung.add_instruction(instruction)
 
         # Register child OUT targets on parent rung so rung-false resets still apply.
@@ -1212,7 +1323,8 @@ def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:
             with forloop(10) as loop:
                 copy(Source[loop.idx + 1], Dest[loop.idx + 1])
     """
-    return ForLoop(count, oneshot=oneshot)
+    source_file, source_line = _capture_source(depth=2)
+    return ForLoop(count, oneshot=oneshot, source_file=source_file, source_line=source_line)
 
 
 # ============================================================================
@@ -1234,7 +1346,12 @@ class Branch:
                 copy(1, Step, oneshot=True)
     """
 
-    def __init__(self, *conditions: Condition | Tag) -> None:
+    def __init__(
+        self,
+        *conditions: Condition | Tag,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
         """Create a branch with additional conditions.
 
         Args:
@@ -1245,6 +1362,8 @@ class Branch:
         self._branch_rung: RungLogic | None = None
         self._parent_ctx: Rung | None = None
         self._branch_ctx: Rung | None = None
+        self._source_file = source_file
+        self._source_line = source_line
 
     def __enter__(self) -> Branch:
         if _forloop_active:
@@ -1259,7 +1378,16 @@ class Branch:
         # This ensures terminal instructions (counters, timers) see the full condition chain
         parent_conditions = self._parent_ctx._rung._conditions
         combined_conditions = parent_conditions + self._conditions
-        self._branch_rung = RungLogic(*combined_conditions)
+        self._branch_rung = RungLogic(
+            *combined_conditions,
+            source_file=self._source_file,
+            source_line=self._source_line,
+        )
+        for condition in self._branch_rung._conditions:
+            if condition.source_file is None:
+                condition.source_file = self._source_file
+            if condition.source_line is None:
+                condition.source_line = self._source_line
 
         # Push a new "fake" rung context so instructions go to the branch
         self._branch_ctx = Rung.__new__(Rung)
@@ -1274,6 +1402,11 @@ class Branch:
 
         # Add the branch as a nested rung to the parent
         if self._parent_ctx is not None and self._branch_rung is not None:
+            self._branch_rung.end_line = _capture_with_end_line(
+                self._source_file,
+                self._source_line,
+                context_name="branch",
+            )
             self._parent_ctx._rung.add_branch(self._branch_rung)
 
 
@@ -1297,7 +1430,8 @@ def branch(*conditions: Condition | Tag) -> Branch:
     Returns:
         Branch context manager.
     """
-    return Branch(*conditions)
+    source_file, source_line = _capture_source(depth=2)
+    return Branch(*conditions, source_file=source_file, source_line=source_line)
 
 
 # Backwards compatibility alias
@@ -1317,7 +1451,15 @@ class CountUpBuilder:
         count_up(done, acc, setpoint=50).down(down_cond).reset(reset_tag)
     """
 
-    def __init__(self, done_bit: Tag, accumulator: Tag, setpoint: Tag | int, up_condition: Any):
+    def __init__(
+        self,
+        done_bit: Tag,
+        accumulator: Tag,
+        setpoint: Tag | int,
+        up_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ):
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
@@ -1325,6 +1467,8 @@ class CountUpBuilder:
         self._down_condition: Condition | Tag | None = None
         self._reset_condition: Condition | Tag | None = None
         self._rung = _require_rung_context("count_up")
+        self._source_file = source_file
+        self._source_line = source_line
 
     def down(self, condition: Condition | Tag) -> CountUpBuilder:
         """Add down trigger (optional).
@@ -1362,6 +1506,7 @@ class CountUpBuilder:
             self._reset_condition,
             self._down_condition,
         )
+        instr.source_file, instr.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instr)
         return self._done_bit
 
@@ -1373,13 +1518,23 @@ class CountDownBuilder:
         count_down(done, acc, setpoint=25).reset(reset_tag)
     """
 
-    def __init__(self, done_bit: Tag, accumulator: Tag, setpoint: Tag | int, down_condition: Any):
+    def __init__(
+        self,
+        done_bit: Tag,
+        accumulator: Tag,
+        setpoint: Tag | int,
+        down_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ):
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
         self._down_condition = down_condition  # From rung conditions
         self._reset_condition: Condition | Tag | None = None
         self._rung = _require_rung_context("count_down")
+        self._source_file = source_file
+        self._source_line = source_line
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (required).
@@ -1402,6 +1557,7 @@ class CountDownBuilder:
             self._down_condition,
             self._reset_condition,
         )
+        instr.source_file, instr.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instr)
         return self._done_bit
 
@@ -1431,7 +1587,15 @@ def count_up(
     """
     ctx = _require_rung_context("count_up")
     up_condition = ctx._rung._get_combined_condition()
-    return CountUpBuilder(done_bit, accumulator, setpoint, up_condition)
+    source_file, source_line = _capture_source(depth=2)
+    return CountUpBuilder(
+        done_bit,
+        accumulator,
+        setpoint,
+        up_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
 
 
 def count_down(
@@ -1459,7 +1623,15 @@ def count_down(
     """
     ctx = _require_rung_context("count_down")
     down_condition = ctx._rung._get_combined_condition()
-    return CountDownBuilder(done_bit, accumulator, setpoint, down_condition)
+    source_file, source_line = _capture_source(depth=2)
+    return CountDownBuilder(
+        done_bit,
+        accumulator,
+        setpoint,
+        down_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
 
 
 # ============================================================================
@@ -1481,6 +1653,8 @@ class OnDelayBuilder:
         setpoint: Tag | int,
         enable_condition: Any,
         time_unit: TimeUnit,
+        source_file: str | None = None,
+        source_line: int | None = None,
     ):
         self._done_bit = done_bit
         self._accumulator = accumulator
@@ -1490,6 +1664,8 @@ class OnDelayBuilder:
         self._reset_condition: Condition | Tag | None = None
         self._rung = _require_rung_context("on_delay")
         self._added = False
+        self._source_file = source_file
+        self._source_line = source_line
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (makes timer retentive - RTON).
@@ -1519,6 +1695,7 @@ class OnDelayBuilder:
             self._reset_condition,
             self._time_unit,
         )
+        instr.source_file, instr.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instr)
 
     def __del__(self) -> None:
@@ -1540,6 +1717,8 @@ class OffDelayBuilder:
         setpoint: Tag | int,
         enable_condition: Any,
         time_unit: TimeUnit,
+        source_file: str | None = None,
+        source_line: int | None = None,
     ):
         self._done_bit = done_bit
         self._accumulator = accumulator
@@ -1548,6 +1727,8 @@ class OffDelayBuilder:
         self._time_unit = time_unit
         self._rung = _require_rung_context("off_delay")
         self._added = False
+        self._source_file = source_file
+        self._source_line = source_line
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
@@ -1561,6 +1742,7 @@ class OffDelayBuilder:
             self._enable_condition,
             self._time_unit,
         )
+        instr.source_file, instr.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instr)
 
     def __del__(self) -> None:
@@ -1597,7 +1779,16 @@ def on_delay(
     """
     ctx = _require_rung_context("on_delay")
     enable_condition = ctx._rung._get_combined_condition()
-    return OnDelayBuilder(done_bit, accumulator, setpoint, enable_condition, time_unit)
+    source_file, source_line = _capture_source(depth=2)
+    return OnDelayBuilder(
+        done_bit,
+        accumulator,
+        setpoint,
+        enable_condition,
+        time_unit,
+        source_file=source_file,
+        source_line=source_line,
+    )
 
 
 def off_delay(
@@ -1628,4 +1819,13 @@ def off_delay(
     """
     ctx = _require_rung_context("off_delay")
     enable_condition = ctx._rung._get_combined_condition()
-    return OffDelayBuilder(done_bit, accumulator, setpoint, enable_condition, time_unit)
+    source_file, source_line = _capture_source(depth=2)
+    return OffDelayBuilder(
+        done_bit,
+        accumulator,
+        setpoint,
+        enable_condition,
+        time_unit,
+        source_file=source_file,
+        source_line=source_line,
+    )

@@ -143,6 +143,9 @@ class Instruction(ABC):
     All state modifications are collected and committed at scan end.
     """
 
+    source_file: str | None = None
+    source_line: int | None = None
+
     @abstractmethod
     def execute(self, ctx: ScanContext) -> None:
         """Execute this instruction within the given context (internal)."""

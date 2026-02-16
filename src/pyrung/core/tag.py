@@ -13,6 +13,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
+from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
 
 if TYPE_CHECKING:
@@ -79,37 +80,49 @@ class Tag:
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
-        return CompareEq(self, other)
+        cond = CompareEq(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __ne__(self, other: object) -> Condition:  # type: ignore[override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
-        return CompareNe(self, other)
+        cond = CompareNe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __lt__(self, other: Any) -> Condition:
         """Create less-than comparison condition."""
         from pyrung.core.condition import CompareLt
 
-        return CompareLt(self, other)
+        cond = CompareLt(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __le__(self, other: Any) -> Condition:
         """Create less-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareLe
 
-        return CompareLe(self, other)
+        cond = CompareLe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __gt__(self, other: Any) -> Condition:
         """Create greater-than comparison condition."""
         from pyrung.core.condition import CompareGt
 
-        return CompareGt(self, other)
+        cond = CompareGt(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __ge__(self, other: Any) -> Condition:
         """Create greater-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareGe
 
-        return CompareGe(self, other)
+        cond = CompareGe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
 
     def __or__(self, other: object) -> Any:
         """Create OR condition (for BOOL) or bitwise OR expression (for non-BOOL)."""
@@ -127,7 +140,14 @@ class Tag:
             return TagExpr(self) | cast(Any, other)
 
         if isinstance(other, Tag | CondBase):
-            return AnyCondition(self, other)
+            cond = AnyCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         raise TypeError(
             f"Cannot OR Tag with {type(other).__name__}. "
             f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
@@ -149,7 +169,14 @@ class Tag:
             return other | TagExpr(self)
 
         if isinstance(other, Tag | CondBase):
-            return AnyCondition(other, self)
+            cond = AnyCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         raise TypeError(
             f"Cannot OR {type(other).__name__} with Tag. "
             f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
@@ -330,9 +357,23 @@ class Tag:
 
         if self.type == TagType.BOOL:
             if isinstance(other, CondBase):
-                return AllCondition(self, other)
+                cond = AllCondition(self, other)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
             if isinstance(other, Tag) and other.type == TagType.BOOL:
-                return AllCondition(self, other)
+                cond = AllCondition(self, other)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
 
         return TagExpr(self) & other
 
@@ -344,9 +385,23 @@ class Tag:
 
         if self.type == TagType.BOOL:
             if isinstance(other, CondBase):
-                return AllCondition(other, self)
+                cond = AllCondition(other, self)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
             if isinstance(other, Tag) and other.type == TagType.BOOL:
-                return AllCondition(other, self)
+                cond = AllCondition(other, self)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
 
         return other & TagExpr(self)
 

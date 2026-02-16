@@ -15,7 +15,13 @@ Foundation for all debugging. Enables manual override of tag values during scan 
 
 ### Phase 2 — Source Location Capture + VS Code DAP Integration
 
-During the DSL build phase (`Rung`, `rise()`, `out()`, etc.), capture source file and line numbers via `inspect.currentframe()`. This metadata enables mapping from internal rung/condition/instruction objects back to user source code.
+During the DSL build phase (`Rung`, `rise()`, `out()`, operators, builder-style APIs), capture source metadata at the user callsite. A shared helper walks stack frames so metadata resolves to user DSL lines, not framework internals.
+
+Captured metadata:
+
+- `source_file: str | None`
+- `source_line: int | None`
+- `end_line: int | None` (for block contexts such as `Rung`, `branch`, `forloop`; best-effort via AST `end_lineno`)
 
 Build a VS Code extension using the Debug Adapter Protocol (DAP):
 
@@ -107,14 +113,29 @@ runner.fork_from(scan_id)
 During the DSL build phase, each `Rung`, condition, and instruction captures its source file and line number. This enables mapping from internal engine objects back to user code for editor integration.
 
 ```python
+from pyrung.core._source import _capture_source, _capture_with_end_line
+
 class Rung:
     def __init__(self, *conditions):
-        frame = inspect.currentframe().f_back
-        self.source_file = frame.f_code.co_filename
-        self.source_line = frame.f_lineno
+        self.source_file, self.source_line = _capture_source(depth=2)
+
+    def __exit__(self, *_):
+        self.end_line = _capture_with_end_line(
+            self.source_file,
+            self.source_line,
+            context_name="Rung",
+        )
 ```
 
-Conditions (`rise()`, `fall()`, tag references) and instructions (`out()`, `latch()`, `copy()`, etc.) similarly capture their line numbers at construction time.
+Conditions (`rise()`, `fall()`, `any_of()`, `all_of()`, tag/expression comparisons, `|`/`&` combinations) and instruction emitters (`out()`, `latch()`, `copy()`, `run_function()`, `search()`, `call()`, etc.) capture source at construction time.
+
+Builder flows also preserve original callsite metadata:
+
+- `shift(...).clock(...).reset(...)`
+- `count_up(...).reset(...)` / `count_down(...).reset(...)`
+- `on_delay(...).reset(...)` / `off_delay(...)`
+- `forloop(...)` capture block + emitted `ForLoopInstruction`
+- `branch(...)` capture nested rung metadata
 
 After a scan, trace data maps back to source:
 
@@ -153,6 +174,13 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debuggin
 | `when().pause()` | Breakpoints (gutter) |
 | Scan history | Call stack / timeline |
 | `inspect()` trace | Inline decorations |
+
+Minimum source contract expected by adapter:
+
+- Use `source_file + source_line` as required mapping keys.
+- Treat `end_line` as optional enhancement for range decorations.
+- Handle `None` source metadata defensively (generated/dynamic code paths).
+- Keep path normalization in the adapter (filesystem case/sep differences).
 
 ### Inline decorations
 

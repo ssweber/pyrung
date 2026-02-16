@@ -28,7 +28,13 @@ class Rung:
     Conditions are ANDed together - all must be true for instructions to execute.
     """
 
-    def __init__(self, *conditions: Condition | Tag):
+    def __init__(
+        self,
+        *conditions: Condition | Tag,
+        source_file: str | None = None,
+        source_line: int | None = None,
+        end_line: int | None = None,
+    ):
         """Create a rung with conditions.
 
         Args:
@@ -39,6 +45,9 @@ class Rung:
         self._instructions: list[Instruction] = []
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._coils: set[Tag] = set()  # Tags that should reset when rung false
+        self.source_file = source_file
+        self.source_line = source_line
+        self.end_line = end_line
 
         for cond in conditions:
             self._conditions.append(_as_condition(cond))

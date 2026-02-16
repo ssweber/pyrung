@@ -8,6 +8,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from pyrung.core._source import _capture_source
+
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectRef
@@ -28,6 +30,9 @@ class Condition(ABC):
     Supports both direct evaluation via evaluate(state) and
     context-based evaluation via evaluate(ctx) for batched scans.
     """
+
+    source_file: str | None = None
+    source_line: int | None = None
 
     @abstractmethod
     def evaluate(self, ctx: ScanContext) -> bool:
@@ -55,7 +60,14 @@ class Condition(ABC):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AnyCondition(self, other)
+            cond = AnyCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
     def __ror__(self, other: Tag) -> AnyCondition:
@@ -63,7 +75,14 @@ class Condition(ABC):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Tag):
-            return AnyCondition(other, self)
+            cond = AnyCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
     def __and__(self, other: Condition | Tag) -> AllCondition:
@@ -71,7 +90,14 @@ class Condition(ABC):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AllCondition(self, other)
+            cond = AllCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
     def __rand__(self, other: Condition | Tag) -> AllCondition:
@@ -79,7 +105,14 @@ class Condition(ABC):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AllCondition(other, self)
+            cond = AllCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
 
@@ -398,7 +431,14 @@ class AllCondition(Condition):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AllCondition(*self.conditions, other)
+            cond = AllCondition(*self.conditions, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
     def __rand__(self, other: Condition | Tag) -> AllCondition:
@@ -406,7 +446,14 @@ class AllCondition(Condition):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AllCondition(other, *self.conditions)
+            cond = AllCondition(other, *self.conditions)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
 
@@ -439,7 +486,14 @@ class AnyCondition(Condition):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AnyCondition(*self.conditions, other)
+            cond = AnyCondition(*self.conditions, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
 
     def __ror__(self, other: Condition | Tag) -> AnyCondition:
@@ -447,5 +501,12 @@ class AnyCondition(Condition):
         from pyrung.core.tag import Tag
 
         if isinstance(other, Condition | Tag):
-            return AnyCondition(other, *self.conditions)
+            cond = AnyCondition(other, *self.conditions)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
         return NotImplemented
