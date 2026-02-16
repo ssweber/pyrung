@@ -38,6 +38,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 runner.simulation_time                    # Property: current timestamp
 
 runner.step()                             # Advance one scan
+runner.scan_steps()                       # Generator: yield after each rung in one scan
 runner.run(cycles=N)                      # Run N scans
 runner.run_for(seconds=N)                # Run until sim clock advances N seconds
 runner.run_until(predicate)               # Run until predicate(state) is True
@@ -46,6 +47,8 @@ runner.current_state                      # Property: snapshot at tip of history
 
 - Inversion of control: the runner is driven by the consumer, not the other way around.
 - Each `step()` executes one complete scan cycle and appends the resulting state to history.
+- `scan_steps()` yields `(rung_index, rung, ctx)` at each rung boundary within one scan.
+- `scan_steps()` commits only when fully exhausted.
 - `run()`, `run_for()`, `run_until()` are convenience wrappers around `step()`.
 
 ### Tag Manipulation

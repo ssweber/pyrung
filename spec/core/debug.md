@@ -26,6 +26,7 @@ Captured metadata:
 Build a VS Code extension using the Debug Adapter Protocol (DAP):
 
 - `step()` maps to DAP step
+- `scan_steps()` provides rung-boundary stepping for adapter internals
 - Tag table maps to DAP variables panel
 - Force commands map to debug console
 - Inline decorations show live rung power state (green/grey) and evaluated condition/instruction values as annotations on the original source
@@ -168,6 +169,7 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debuggin
 | PLCRunner concept | VS Code / DAP feature |
 |---|---|
 | `step()` | Step button |
+| `scan_steps()` | Rung-boundary stepping internals |
 | `run()` / `run_until()` | Continue |
 | Tag table | Variables panel |
 | `add_force()` / `remove_force()` | Debug console commands |
@@ -181,6 +183,7 @@ Minimum source contract expected by adapter:
 - Treat `end_line` as optional enhancement for range decorations.
 - Handle `None` source metadata defensively (generated/dynamic code paths).
 - Keep path normalization in the adapter (filesystem case/sep differences).
+- Breakpoints set on instruction lines map to containing top-level rung boundaries in v1.
 
 ### Inline decorations
 

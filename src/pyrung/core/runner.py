@@ -23,7 +23,7 @@ from pyrung.core.system_points import SystemPointRuntime
 from pyrung.core.time_mode import TimeMode
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator, Iterator
 
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
@@ -214,20 +214,20 @@ class PLCRunner:
 
         return self._state.tags.get(name, default)
 
-    def step(self) -> SystemState:
-        """Execute one scan cycle.
+    def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
+        """Execute one scan cycle and yield after each rung evaluation.
 
+        Scan phases:
         1. Create ScanContext from current state
         2. Apply pending patches to context
         3. Apply persistent force overrides (pre-logic)
         4. Calculate dt and inject into context
-        5. Evaluate all logic (writes batched in context)
+        5. Evaluate all logic (writes batched in context), yielding after each rung
         6. Re-apply force overrides (post-logic)
         7. Batch _prev:* updates for edge detection
         8. Commit all changes in single operation
 
-        Returns:
-            The new SystemState after this scan.
+        The commit in phase 8 only happens when the generator is exhausted.
         """
         # Create ScanContext for batched updates + system resolver
         ctx = ScanContext(
@@ -261,9 +261,10 @@ class PLCRunner:
         # Inject dt into context so timer instructions can access it
         ctx.set_memory("_dt", dt)
 
-        # Evaluate all logic (writes batched in context)
-        for rung in self._logic:
+        # Evaluate logic rung-by-rung, yielding at rung boundaries.
+        for i, rung in enumerate(self._logic):
             rung.evaluate(ctx)
+            yield i, rung, ctx
 
         # Re-apply forces after logic so they persist across scans
         if self._forces:
@@ -284,6 +285,11 @@ class PLCRunner:
 
         # Single commit: apply all changes and advance scan
         self._state = ctx.commit(dt=dt)
+
+    def step(self) -> SystemState:
+        """Execute one full scan cycle and return the committed state."""
+        for _ in self.scan_steps():
+            pass
 
         return self._state
 
