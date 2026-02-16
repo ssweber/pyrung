@@ -99,7 +99,6 @@ def test_xd0_reflects_x001_to_x016_bit_image():
     assert provider.read("XD0") == 0xA55A
 
 
-
 def test_xd0u_reflects_x021_to_x036_bit_image():
     provider = ClickDataProvider(PLCRunner(logic=[]), TagMap())
     _write_slot_word(provider, "X", 21, 0x0F0F)

@@ -1787,7 +1787,9 @@ class TestBlockCopyTextModes:
         CH = Block("CH", TagType.CHAR, 1, 10)
         DS = Block("DS", TagType.INT, 1, 10)
         instr = BlockCopyInstruction(as_value(CH.select(1, 3)), DS.select(1, 3))
-        state = SystemState().with_tags({"CH1": "1", "CH2": "A", "CH3": "3", "DS1": 9, "DS2": 9, "DS3": 9})
+        state = SystemState().with_tags(
+            {"CH1": "1", "CH2": "A", "CH3": "3", "DS1": 9, "DS2": 9, "DS3": 9}
+        )
         new_state = execute(instr, state)
 
         assert new_state.tags["fault.out_of_range"] is True
@@ -1814,7 +1816,9 @@ class TestPackTextInstruction:
         CH = Block("CH", TagType.CHAR, 1, 10)
         Dest = Real("Dest")
         instr = PackTextInstruction(CH.select(1, 6), Dest)
-        state = SystemState().with_tags({"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2", "CH5": "", "CH6": ""})
+        state = SystemState().with_tags(
+            {"CH1": "1", "CH2": "e", "CH3": "-", "CH4": "2", "CH5": "", "CH6": ""}
+        )
         new_state = execute(instr, state)
         assert new_state.tags["Dest"] == pytest.approx(0.01)
 

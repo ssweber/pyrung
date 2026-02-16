@@ -376,7 +376,10 @@ def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:
         struct.pack("<f", parsed)
         return parsed
 
-    raise TypeError(f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}")
+    raise TypeError(
+        f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}"
+    )
+
 
 class OneShotMixin:
     """Mixin for instructions that support one-shot mode.
@@ -1503,7 +1506,9 @@ class FillInstruction(OneShotMixin, Instruction):
 
             updates: dict[str, Any] = {}
             for idx, dst in enumerate(dst_tags):
-                updates[dst.name] = _as_single_ascii_char(rendered[idx]) if idx < len(rendered) else ""
+                updates[dst.name] = (
+                    _as_single_ascii_char(rendered[idx]) if idx < len(rendered) else ""
+                )
             ctx.set_tags(updates)
             return
 
@@ -1904,7 +1909,9 @@ class PackTextInstruction(OneShotMixin, Instruction):
                 )
 
         try:
-            text = "".join(_as_single_ascii_char(ctx.get_tag(src.name, src.default)) for src in src_tags)
+            text = "".join(
+                _as_single_ascii_char(ctx.get_tag(src.name, src.default)) for src in src_tags
+            )
             if not self.allow_whitespace and text != text.strip():
                 _set_fault_out_of_range(ctx)
                 return
