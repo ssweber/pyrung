@@ -1,4 +1,10 @@
-"""Tests for @named_array."""
+"""Tests for @named_array.
+
+Note: ``cast(Any, ...)`` is used throughout because ty does not yet infer
+the return type of class decorators.  @named_array replaces the class with a
+``_NamedArrayRuntime`` instance, but ty still sees the original class.
+Tracking issue: https://github.com/astral-sh/ty/issues/143
+"""
 
 from __future__ import annotations
 

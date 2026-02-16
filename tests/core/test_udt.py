@@ -1,4 +1,10 @@
-"""Tests for @udt and shared structured utilities."""
+"""Tests for @udt and shared structured utilities.
+
+Note: ``cast(Any, ...)`` is used throughout because ty does not yet infer
+the return type of class decorators.  @udt replaces the class with a
+``_StructRuntime`` instance, but ty still sees the original class.
+Tracking issue: https://github.com/astral-sh/ty/issues/143
+"""
 
 from __future__ import annotations
 
