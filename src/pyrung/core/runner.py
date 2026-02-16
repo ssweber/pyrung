@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.context import ScanContext
@@ -70,6 +71,7 @@ class PLCRunner:
 
         self._state = initial_state if initial_state is not None else SystemState()
         self._pending_patches: dict[str, bool | int | float | str] = {}
+        self._forces: dict[str, bool | int | float | str] = {}
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
@@ -119,6 +121,31 @@ class PLCRunner:
         finally:
             reset_active_runner(token)
 
+    def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
+        from pyrung.core.tag import Tag as TagClass
+
+        if isinstance(tag, TagClass):
+            return tag.name
+        if isinstance(tag, str):
+            return tag
+        raise TypeError(f"{method}() keys must be str or Tag, got {type(tag).__name__}")
+
+    def _normalize_tag_updates(
+        self,
+        tags: Mapping[str, bool | int | float | str]
+        | Mapping[Tag, bool | int | float | str]
+        | Mapping[str | Tag, bool | int | float | str],
+        *,
+        method: str,
+    ) -> dict[str, bool | int | float | str]:
+        normalized: dict[str, bool | int | float | str] = {}
+        for key, value in tags.items():
+            name = self._normalize_tag_name(key, method=method)
+            if self._system_runtime.is_read_only(name):
+                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+            normalized[name] = value
+        return normalized
+
     def patch(
         self,
         tags: Mapping[str, bool | int | float | str]
@@ -133,26 +160,53 @@ class PLCRunner:
         Args:
             tags: Dict of tag names or Tag objects to values.
         """
-        from pyrung.core.tag import Tag as TagClass
+        self._pending_patches.update(self._normalize_tag_updates(tags, method="patch"))
 
-        normalized: dict[str, bool | int | float | str] = {}
-        for key, value in tags.items():
-            name: str
-            if isinstance(key, TagClass):
-                name = key.name
-            elif isinstance(key, str):
-                name = key
-            else:
-                raise TypeError(f"patch() keys must be str or Tag, got {type(key).__name__}")
-            if self._system_runtime.is_read_only(name):
-                raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
-            normalized[name] = value
-        self._pending_patches.update(normalized)
+    def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
+        """Persistently override a tag until removed."""
+        name = self._normalize_tag_name(tag, method="add_force")
+        if self._system_runtime.is_read_only(name):
+            raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        self._forces[name] = value
+
+    def remove_force(self, tag: str | Tag) -> None:
+        """Remove a single forced tag override."""
+        name = self._normalize_tag_name(tag, method="remove_force")
+        if name not in self._forces:
+            raise KeyError(name)
+        del self._forces[name]
+
+    def clear_forces(self) -> None:
+        """Remove all forced tag overrides."""
+        self._forces = {}
+
+    @contextmanager
+    def force(
+        self,
+        overrides: Mapping[str, bool | int | float | str]
+        | Mapping[Tag, bool | int | float | str]
+        | Mapping[str | Tag, bool | int | float | str],
+    ) -> Iterator[PLCRunner]:
+        """Temporarily apply forces within a context manager."""
+        snapshot = self._forces.copy()
+        try:
+            for tag, value in overrides.items():
+                self.add_force(tag, value)
+            yield self
+        finally:
+            self._forces = snapshot
+
+    @property
+    def forces(self) -> Mapping[str, bool | int | float | str]:
+        """Read-only view of active persistent overrides."""
+        return MappingProxyType(self._forces)
 
     def _peek_live_tag_value(self, name: str, default: Any) -> Any:
         """Read a tag as seen by live Tag.value access."""
         if name in self._pending_patches:
             return self._pending_patches[name]
+        if name in self._forces:
+            return self._forces[name]
 
         resolved, value = self._system_runtime.resolve(name, self._state)
         if resolved:
@@ -165,10 +219,12 @@ class PLCRunner:
 
         1. Create ScanContext from current state
         2. Apply pending patches to context
-        3. Calculate dt and inject into context
-        4. Evaluate all logic (writes batched in context)
-        5. Batch _prev:* updates for edge detection
-        6. Commit all changes in single operation
+        3. Apply persistent force overrides (pre-logic)
+        4. Calculate dt and inject into context
+        5. Evaluate all logic (writes batched in context)
+        6. Re-apply force overrides (post-logic)
+        7. Batch _prev:* updates for edge detection
+        8. Commit all changes in single operation
 
         Returns:
             The new SystemState after this scan.
@@ -188,6 +244,10 @@ class PLCRunner:
             ctx.set_tags(self._pending_patches)
             self._pending_patches = {}
 
+        # Apply persistent force overrides before logic evaluation
+        if self._forces:
+            ctx.set_tags(self._forces)
+
         # Calculate dt based on time mode (needed for timers)
         if self._time_mode == TimeMode.REALTIME:
             now = time.perf_counter()
@@ -204,6 +264,10 @@ class PLCRunner:
         # Evaluate all logic (writes batched in context)
         for rung in self._logic:
             rung.evaluate(ctx)
+
+        # Re-apply forces after logic so they persist across scans
+        if self._forces:
+            ctx.set_tags(self._forces)
 
         # Batch _prev:* updates for edge detection
         # Store current tag values as previous for next scan

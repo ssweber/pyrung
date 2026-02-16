@@ -5,11 +5,49 @@
 
 ---
 
+## Implementation Plan
+
+The debug API is built incrementally, with each phase motivated by a real consumer.
+
+### Phase 1 — Force
+
+Foundation for all debugging. Enables manual override of tag values during scan execution.
+
+### Phase 2 — Source Location Capture + VS Code DAP Integration
+
+During the DSL build phase (`Rung`, `rise()`, `out()`, etc.), capture source file and line numbers via `inspect.currentframe()`. This metadata enables mapping from internal rung/condition/instruction objects back to user source code.
+
+Build a VS Code extension using the Debug Adapter Protocol (DAP):
+
+- `step()` maps to DAP step
+- Tag table maps to DAP variables panel
+- Force commands map to debug console
+- Inline decorations show live rung power state (green/grey) and evaluated condition/instruction values as annotations on the original source
+
+This gives users a live, annotated view of their DSL code during scan execution, with no separate GUI required.
+
+### Phase 3 — Remaining Debug API (driven by editor needs)
+
+Build the rest of the debug API incrementally as each feature has a visible payoff in the editor:
+
+- **History / time travel** → timeline slider, step backward
+- **Breakpoints / snapshot labels** → gutter breakpoints, labeled snapshots
+- **Monitors** → watch panel integration
+- **Rung inspection** → detailed per-rung trace with condition/instruction evaluation results
+- **Diff** → scan-to-scan change view
+- **Fork** → branch-and-explore from historical state
+
+Each engine feature is designed with the editor as its primary consumer, ensuring the API maps cleanly to how the extension needs to present it.
+
+---
+
 ## Scope
 
 Debugging and inspection APIs on top of `PLCRunner`:
 
 - force (Click "override")
+- source location capture for DSL elements
+- VS Code extension via Debug Adapter Protocol
 - breakpoints and snapshot labels
 - monitors
 - history and playhead navigation
@@ -61,6 +99,79 @@ runner.fork_from(scan_id)
 ```
 
 `tag` accepts `str` or `Tag`.
+
+---
+
+## Source Location Capture
+
+During the DSL build phase, each `Rung`, condition, and instruction captures its source file and line number. This enables mapping from internal engine objects back to user code for editor integration.
+
+```python
+class Rung:
+    def __init__(self, *conditions):
+        frame = inspect.currentframe().f_back
+        self.source_file = frame.f_code.co_filename
+        self.source_line = frame.f_lineno
+```
+
+Conditions (`rise()`, `fall()`, tag references) and instructions (`out()`, `latch()`, `copy()`, etc.) similarly capture their line numbers at construction time.
+
+After a scan, trace data maps back to source:
+
+```python
+{
+    "rung_0": {
+        "line": 5, "end_line": 6, "powered": True,
+        "conditions": [
+            {"line": 5, "expr": "rise('start_button')", "value": True}
+        ],
+        "instructions": [
+            {"line": 6, "expr": "out('motor_running')", "value": True}
+        ]
+    }
+}
+```
+
+### Dynamic rung generation
+
+If rungs are built in a loop, multiple rung objects may share source lines. The mapping is best-effort in this case; explicit DSL declarations maintain a clean one-to-one mapping.
+
+---
+
+## VS Code Extension
+
+The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debugging in VS Code.
+
+### DAP mapping
+
+| PLCRunner concept | VS Code / DAP feature |
+|---|---|
+| `step()` | Step button |
+| `run()` / `run_until()` | Continue |
+| Tag table | Variables panel |
+| `add_force()` / `remove_force()` | Debug console commands |
+| `when().pause()` | Breakpoints (gutter) |
+| Scan history | Call stack / timeline |
+| `inspect()` trace | Inline decorations |
+
+### Inline decorations
+
+After each scan, the extension reads trace data and applies decorations to the source file:
+
+- **Green highlight**: powered rungs
+- **Grey highlight**: unpowered rungs
+- **Inline annotations**: evaluated condition and instruction values as faded text
+- **Red inline text**: the condition that caused an unpowered rung
+
+### Architecture
+
+The extension consists of:
+
+- A **Debug Adapter** (Python or TypeScript) that wraps PLCRunner over stdin/stdout or socket
+- A **decoration provider** that maps rung trace data to source line highlights
+- A small **protocol** between the adapter and the runner for trace and state queries
+
+DAP is an open protocol, so the debug adapter also works with Neovim, Emacs, and JetBrains with minimal changes.
 
 ---
 
@@ -175,6 +286,8 @@ runner.inspect(rung_id, scan_id=None) -> RungTrace
 
 Missing scan/rung trace raises `KeyError`.
 
+The `RungTrace` schema will be refined during Phase 3 based on what the VS Code extension needs to render meaningful inline decorations.
+
 ---
 
 ## History and Playhead
@@ -237,4 +350,4 @@ Creates an independent runner with:
 
 - on-disk history/session serialization
 - remote debugger protocol
-- GUI-specific rendering schema beyond `inspect()` trace data
+- GUI-specific rendering schema beyond `inspect()` trace data and VS Code decorations
