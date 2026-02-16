@@ -113,6 +113,33 @@ def test_named_array_allows_underscored_field_names():
     assert alarms[1].val.name == "Alarm1_val"
 
 
+def test_named_array_clone_produces_independent_copy_with_new_name():
+    @named_array(Int, count=2, stride=3)
+    class Task:
+        call = auto()
+        init = 0
+        reset = 0
+
+    Pump = cast(Any, Task).clone("Pump")
+    Valve = cast(Any, Task).clone("Valve")
+
+    assert Pump.name == "Pump"
+    assert Valve.name == "Valve"
+    assert Pump.count == 2
+    assert Pump.stride == 3
+    assert Pump.type == TagType.INT
+    assert Pump.field_names == ("call", "init", "reset")
+
+    assert Pump[1].call.name == "Pump1_call"
+    assert Valve[2].init.name == "Valve2_init"
+    assert Pump[1].call.default == 1
+    assert Pump[2].call.default == 2
+
+    # Original is unaffected
+    task = cast(Any, Task)
+    assert task[1].call.name == "Task1_call"
+
+
 def test_named_array_skips_classvar_fields():
     @named_array(Int, count=1, stride=1)
     class Alarm:

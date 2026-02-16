@@ -17,6 +17,7 @@ UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
 _RESERVED_FIELD_NAMES = frozenset(
     {
+        "clone",
         "count",
         "field_names",
         "fields",
@@ -123,6 +124,7 @@ class _StructRuntime:
 
         self.name = name
         self.count = count
+        self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
@@ -142,6 +144,10 @@ class _StructRuntime:
                 address_formatter=_make_formatter(name, field_spec.name),
                 default_factory=_make_default_factory(field_spec.default),
             )
+
+    def clone(self, name: str) -> _StructRuntime:
+        """Create a copy of this structure with a different base name."""
+        return _StructRuntime(name=name, count=self.count, field_specs=self._original_field_specs)
 
     @property
     def fields(self) -> dict[str, Field]:
@@ -189,6 +195,16 @@ class _NamedArrayRuntime(_StructRuntime):
         self.type = type
         self.stride = stride
         super().__init__(name=name, count=count, field_specs=field_specs)
+
+    def clone(self, name: str) -> _NamedArrayRuntime:
+        """Create a copy of this named array with a different base name."""
+        return _NamedArrayRuntime(
+            name=name,
+            type=self.type,
+            count=self.count,
+            stride=self.stride,
+            field_specs=self._original_field_specs,
+        )
 
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
         """Map this named-array layout to a hardware range."""
@@ -324,9 +340,7 @@ def _is_classvar_annotation(annotation: object) -> bool:
     return False
 
 
-def _should_skip_named_array_attr(
-    name: str, value: object, *, classvar_names: set[str]
-) -> bool:
+def _should_skip_named_array_attr(name: str, value: object, *, classvar_names: set[str]) -> bool:
     if name.startswith("__") and name.endswith("__"):
         return True
     if name in classvar_names:

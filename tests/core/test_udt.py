@@ -113,6 +113,31 @@ def test_udt_allows_underscored_fields():
     assert alarms[1].val.name == "Alarm1_val"
 
 
+def test_udt_clone_produces_independent_copy_with_new_name():
+    @udt(count=3)
+    class Task:
+        call: Bool
+        init: Bool
+        reset: Int = auto()
+
+    Pump = cast(Any, Task).clone("Pump")
+    Valve = cast(Any, Task).clone("Valve")
+
+    assert Pump.name == "Pump"
+    assert Valve.name == "Valve"
+    assert Pump.count == 3
+    assert Pump.field_names == ("call", "init", "reset")
+
+    assert Pump[1].call.name == "Pump1_call"
+    assert Valve[2].init.name == "Valve2_init"
+    assert Pump[1].reset.default == 1
+    assert Pump[2].reset.default == 2
+
+    # Original is unaffected
+    task = cast(Any, Task)
+    assert task[1].call.name == "Task1_call"
+
+
 def test_udt_skips_classvar_fields():
     @udt(count=1)
     class Alarm:
