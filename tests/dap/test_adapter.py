@@ -131,6 +131,24 @@ def _composite_condition_script() -> str:
     )
 
 
+def _indirect_condition_script() -> str:
+    return (
+        "from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, out\n"
+        "\n"
+        "Step = Block('Step', TagType.INT, 0, 9, address_formatter=lambda name, addr: f\"{name}[{addr}]\")\n"
+        "CurStep = Int('CurStep')\n"
+        "DebugStep = Int('DebugStep')\n"
+        "Light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Step[CurStep] == DebugStep):\n"
+        "        out(Light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'CurStep': 1, 'Step[1]': 0, 'DebugStep': 5})\n"
+    )
+
+
 def _nested_debug_script() -> str:
     return (
         "from pyrung.core import Bool, PLCRunner, Program, Rung, branch, call, out, subroutine\n"
@@ -463,6 +481,30 @@ def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
     assert "&" in expression
     assert "any_of" not in expression
     assert "all_of" not in expression
+
+
+def test_next_trace_emits_pointer_condition_details(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "pointer_logic.py", _indirect_condition_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    condition = traces[0]["body"]["regions"][0]["conditions"][0]
+    assert condition["status"] == "false"
+    assert condition["expression"] == "Step[CurStep] == DebugStep"
+
+    details = {item["name"]: item["value"] for item in condition["details"]}
+    assert details["left"] == "Step[1]"
+    assert details["left_value"] == "0"
+    assert details["right_value"] == "5"
+    assert details["left_pointer_expr"] == "Step[CurStep]"
+    assert details["left_pointer"] == "CurStep"
+    assert details["left_pointer_value"] == "1"
 
 
 def test_set_breakpoints_verifies_subroutine_line(tmp_path: Path):

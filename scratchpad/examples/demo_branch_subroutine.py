@@ -2,11 +2,13 @@
 import os
 
 from pyrung.core import (
+    Block,
     Bool,
     Int,
     PLCRunner,
     Program,
     Rung,
+    TagType,
     branch,
     call,
     copy,
@@ -19,6 +21,15 @@ from pyrung.core import (
 )
 
 Step = Int("Step")
+CurStep = Int("CurStep")
+DebugStep = Int("DebugStep")
+StepData = Block(
+    "StepData",
+    TagType.INT,
+    0,
+    16,
+    address_formatter=lambda name, addr: f"{name}[{addr}]",
+)
 AutoMode = Bool("AutoMode")
 MainLight = Bool("MainLight")
 AutoLight = Bool("AutoLight")
@@ -51,6 +62,10 @@ with Program(strict=False) as logic:
                  setpoint=10) \
             .reset(ResetCount)
 
+    # Pointer-condition playground for debug annotation formatting.
+    with Rung(StepData[CurStep] == DebugStep):
+        out(SkippedAfterReturn)
+
     # Subroutine body
     with subroutine("init_sub"):
         with Rung(Step == 0):
@@ -63,6 +78,9 @@ runner = PLCRunner(logic)
 runner.patch(
     {
         "Step": 0,
+        "CurStep": 1,
+        "DebugStep": 5,
+        "StepData[1]": 0,
         "AutoMode": True,
         "MainLight": False,
         "AutoLight": False,

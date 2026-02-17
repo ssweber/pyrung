@@ -171,7 +171,7 @@ class PyrungDecorationController {
         range: new vscode.Range(lineIdx, endCol, lineIdx, endCol),
         renderOptions: {
           after: {
-            contentText: `  ${texts.join(" & ")}`,
+            contentText: `  ${texts.join(" ; ")}`,
           },
         },
       });
@@ -192,7 +192,7 @@ class PyrungDecorationController {
     if (!summary) {
       return `[${statusLabel}] ${expression}`;
     }
-    return `[${statusLabel}] ${expression} (${summary})`;
+    return `[${statusLabel}] ${summary}`;
   }
 
   _conditionDetailMap(details) {
@@ -210,32 +210,128 @@ class PyrungDecorationController {
   }
 
   _conditionDetailSummary(expression, details) {
+    const comparison = this._comparisonParts(expression);
     if (details.has("left") && details.has("left_value")) {
-      const left = String(details.get("left"));
       const leftValue = details.get("left_value");
-      if (details.has("right_value")) {
-        const rightValue = details.get("right_value");
-        return `${left}=${leftValue}, rhs=${rightValue}`;
+      const leftLabel = this._leftLabel(details, comparison);
+      const leftText = this._observedOperand(leftLabel, leftValue);
+      if (comparison) {
+        const rightText = this._rightOperandText(comparison, details);
+        if (rightText) {
+          return `${leftText} ${comparison.operator} ${rightText}`;
+        }
       }
-      return `${left}=${leftValue}`;
+      if (details.has("right_value")) {
+        return `${leftText}, rhs=${details.get("right_value")}`;
+      }
+      return leftText;
     }
     if (details.has("tag") && details.has("value")) {
-      const tag = String(details.get("tag"));
-      const value = details.get("value");
-      if (tag === expression) {
-        return `value=${value}`;
-      }
-      return `${tag}=${value}`;
+      return this._observedOperand(String(details.get("tag")), details.get("value"));
     }
     if (details.has("current") || details.has("previous")) {
+      const tag = details.has("tag") ? String(details.get("tag")) : "value";
       const current = details.has("current") ? details.get("current") : "?";
       const previous = details.has("previous") ? details.get("previous") : "?";
-      return `current=${current}, previous=${previous}`;
+      return `${this._observedOperand(tag, current)} prev(${previous})`;
     }
     if (details.has("terms")) {
       return String(details.get("terms"));
     }
     return "";
+  }
+
+  _leftLabel(details, comparison) {
+    if (
+      details.has("left_pointer_expr") &&
+      details.has("left_pointer") &&
+      details.has("left_pointer_value")
+    ) {
+      return this._pointerResolvedLabel(
+        String(details.get("left_pointer_expr")),
+        String(details.get("left_pointer")),
+        details.get("left_pointer_value")
+      );
+    }
+    if (details.has("left")) {
+      return String(details.get("left"));
+    }
+    if (comparison && comparison.left) {
+      return comparison.left;
+    }
+    return "value";
+  }
+
+  _rightOperandText(comparison, details) {
+    if (details.has("right") && details.has("right_value")) {
+      return this._observedOperand(String(details.get("right")), details.get("right_value"));
+    }
+    if (details.has("right_value")) {
+      if (this._isLiteralOperand(comparison.right)) {
+        return comparison.right;
+      }
+      return this._observedOperand(comparison.right, details.get("right_value"));
+    }
+    if (details.has("right")) {
+      return String(details.get("right"));
+    }
+    return comparison.right;
+  }
+
+  _comparisonParts(expression) {
+    if (typeof expression !== "string") {
+      return null;
+    }
+    const match = expression.trim().match(/^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/);
+    if (!match) {
+      return null;
+    }
+    return {
+      left: this._unwrapIndirectRef(match[1].trim()),
+      operator: match[2],
+      right: this._unwrapIndirectRef(match[3].trim()),
+    };
+  }
+
+  _unwrapIndirectRef(text) {
+    const match = text.match(/^IndirectRef\((.+)\)$/);
+    if (!match) {
+      return text;
+    }
+    return match[1].trim();
+  }
+
+  _pointerResolvedLabel(pointerExpr, pointerName, pointerValue) {
+    const token = `[${pointerName}]`;
+    if (pointerExpr.includes(token)) {
+      return pointerExpr.replace(token, `[${pointerName}(${pointerValue})]`);
+    }
+    const bracketMatch = pointerExpr.match(/^(.+?)\[([^\]]+)\]$/);
+    if (bracketMatch) {
+      return `${bracketMatch[1]}[${bracketMatch[2]}(${pointerValue})]`;
+    }
+    return `${pointerExpr}[${pointerName}(${pointerValue})]`;
+  }
+
+  _isLiteralOperand(text) {
+    if (typeof text !== "string") {
+      return false;
+    }
+    const value = text.trim();
+    if (/^[-+]?\d+(\.\d+)?$/.test(value)) {
+      return true;
+    }
+    if (/^(true|false|null|none)$/i.test(value)) {
+      return true;
+    }
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+      return true;
+    }
+    return false;
+  }
+
+  _observedOperand(label, value) {
+    return `${label}(${value})`;
   }
 
   _normalizeValue(value) {

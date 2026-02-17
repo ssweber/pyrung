@@ -876,16 +876,25 @@ class PLCRunner:
             if hasattr(condition, "tag"):
                 left_label = condition.tag.name
                 left_value = ctx.get_tag(condition.tag.name, condition.tag.default)
+                extra_details: list[dict[str, Any]] = []
             else:
                 target = condition.indirect_ref.resolve_ctx(ctx)
                 left_label = target.name
                 left_value = ctx.get_tag(target.name, target.default)
+                pointer_name = condition.indirect_ref.pointer.name
+                pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
+                extra_details = [
+                    _detail("left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"),
+                    _detail("left_pointer", pointer_name),
+                    _detail("left_pointer_value", pointer_value),
+                ]
             right_value = _resolve_operand(condition.value)
             value = bool(condition.evaluate(ctx))
             return value, [
                 _detail("left", left_label),
                 _detail("left_value", left_value),
                 _detail("right_value", right_value),
+                *extra_details,
             ]
 
         expr_compare_ops: tuple[type[Any], ...] = (
@@ -969,6 +978,9 @@ class PLCRunner:
                 return value.name
             return repr(value)
 
+        def _indirect_ref_text(value: Any) -> str:
+            return f"{value.block.name}[{value.pointer.name}]"
+
         if isinstance(condition, BitCondition):
             return condition.tag.name
         if isinstance(condition, IntTruthyCondition):
@@ -992,17 +1004,17 @@ class PLCRunner:
         if isinstance(condition, CompareGe):
             return f"{condition.tag.name} >= {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareEq):
-            return f"{condition.indirect_ref!r} == {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} == {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareNe):
-            return f"{condition.indirect_ref!r} != {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} != {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareLt):
-            return f"{condition.indirect_ref!r} < {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} < {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareLe):
-            return f"{condition.indirect_ref!r} <= {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} <= {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareGt):
-            return f"{condition.indirect_ref!r} > {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} > {_value_text(condition.value)}"
         if isinstance(condition, IndirectCompareGe):
-            return f"{condition.indirect_ref!r} >= {_value_text(condition.value)}"
+            return f"{_indirect_ref_text(condition.indirect_ref)} >= {_value_text(condition.value)}"
         if isinstance(condition, ExprCompareEq):
             return f"{condition.left!r} == {condition.right!r}"
         if isinstance(condition, ExprCompareNe):
