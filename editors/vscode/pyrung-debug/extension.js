@@ -94,6 +94,7 @@ class PyrungDecorationController {
     const stepRanges = [];
     const enabledRanges = [];
     const disabledRanges = [];
+    const conditionLines = new Map();
     const conditionBuckets = {
       true: new Map(),
       false: new Map(),
@@ -136,13 +137,31 @@ class PyrungDecorationController {
           }
           const status = condition.status === "false" ? "false" : condition.status === "skipped" ? "skipped" : "true";
           const text = this._formatCondition(condition);
-          const bucket = conditionBuckets[status];
-          if (!bucket.has(line)) {
-            bucket.set(line, []);
+          const entry = conditionLines.get(line) || { texts: [], hasTrue: false, hasFalse: false, hasSkipped: false };
+          entry.texts.push(text);
+          if (status === "false") {
+            entry.hasFalse = true;
+          } else if (status === "skipped") {
+            entry.hasSkipped = true;
+          } else {
+            entry.hasTrue = true;
           }
-          bucket.get(line).push(text);
+          conditionLines.set(line, entry);
         }
       }
+    }
+
+    for (const [line, entry] of conditionLines.entries()) {
+      if (!entry.texts.length) {
+        continue;
+      }
+      let bucket = conditionBuckets.true;
+      if (entry.hasFalse) {
+        bucket = conditionBuckets.false;
+      } else if (entry.hasSkipped) {
+        bucket = conditionBuckets.skipped;
+      }
+      bucket.set(line, entry.texts);
     }
 
     editor.setDecorations(this._stepDecoration, stepRanges);
@@ -188,11 +207,190 @@ class PyrungDecorationController {
 
     const statusLabel = status === "false" ? "F" : "T";
     const details = this._conditionDetailMap(condition.details);
+    const compositeSummary = this._compositeConditionSummary(expression, details);
+    if (compositeSummary) {
+      return compositeSummary;
+    }
     const summary = this._conditionDetailSummary(expression, details);
     if (!summary) {
       return `[${statusLabel}] ${expression}`;
     }
     return `[${statusLabel}] ${summary}`;
+  }
+
+  _compositeConditionSummary(expression, details) {
+    if (!(details instanceof Map) || !details.has("terms")) {
+      return "";
+    }
+    const composite = this._splitCompositeExpression(expression);
+    if (!composite) {
+      return "";
+    }
+
+    const evaluatedParts = this._splitTopLevelByOperator(String(details.get("terms")), composite.operator).map(
+      (part) => this._parseEvaluatedCompositeTerm(part)
+    );
+    if (!evaluatedParts.length) {
+      return "";
+    }
+
+    const rendered = [];
+    for (let i = 0; i < composite.terms.length; i += 1) {
+      const evaluated = i < evaluatedParts.length ? evaluatedParts[i] : null;
+      if (!evaluated) {
+        rendered.push(`[SKIP] ${composite.terms[i]}`);
+        continue;
+      }
+      if (evaluated.status === "skipped") {
+        rendered.push(`[SKIP] ${evaluated.text}`);
+        continue;
+      }
+      const label = evaluated.status === "false" ? "F" : "T";
+      rendered.push(`[${label}] ${evaluated.text}(${evaluated.status})`);
+    }
+
+    if (!rendered.length) {
+      return "";
+    }
+    return rendered.join(" ; ");
+  }
+
+  _splitCompositeExpression(expression) {
+    if (typeof expression !== "string") {
+      return null;
+    }
+
+    const text = this._stripOuterParentheses(expression.trim());
+    if (!text) {
+      return null;
+    }
+
+    const terms = [];
+    let term = "";
+    let depth = 0;
+    let operator = null;
+
+    for (let i = 0; i < text.length; i += 1) {
+      const char = text[i];
+      if (char === "(") {
+        depth += 1;
+        term += char;
+        continue;
+      }
+      if (char === ")") {
+        depth = Math.max(0, depth - 1);
+        term += char;
+        continue;
+      }
+      if (depth === 0 && (char === "&" || char === "|")) {
+        const token = term.trim();
+        if (!token) {
+          return null;
+        }
+        terms.push(token);
+        term = "";
+        if (operator === null) {
+          operator = char;
+        } else if (operator !== char) {
+          return null;
+        }
+        continue;
+      }
+      term += char;
+    }
+
+    const tail = term.trim();
+    if (!operator || !tail) {
+      return null;
+    }
+    terms.push(tail);
+    if (terms.length < 2) {
+      return null;
+    }
+    return { operator, terms };
+  }
+
+  _splitTopLevelByOperator(text, operator) {
+    if (typeof text !== "string" || (operator !== "&" && operator !== "|")) {
+      return [];
+    }
+
+    const value = this._stripOuterParentheses(text.trim());
+    if (!value) {
+      return [];
+    }
+
+    const terms = [];
+    let term = "";
+    let depth = 0;
+    for (let i = 0; i < value.length; i += 1) {
+      const char = value[i];
+      if (char === "(") {
+        depth += 1;
+        term += char;
+        continue;
+      }
+      if (char === ")") {
+        depth = Math.max(0, depth - 1);
+        term += char;
+        continue;
+      }
+      if (depth === 0 && char === operator) {
+        const token = term.trim();
+        if (token) {
+          terms.push(token);
+        }
+        term = "";
+        continue;
+      }
+      term += char;
+    }
+    const tail = term.trim();
+    if (tail) {
+      terms.push(tail);
+    }
+    return terms;
+  }
+
+  _stripOuterParentheses(text) {
+    if (typeof text !== "string") {
+      return "";
+    }
+    let value = text.trim();
+    while (value.startsWith("(") && value.endsWith(")")) {
+      let depth = 0;
+      let wrapsWholeText = true;
+      for (let i = 0; i < value.length; i += 1) {
+        const char = value[i];
+        if (char === "(") {
+          depth += 1;
+        } else if (char === ")") {
+          depth -= 1;
+          if (depth === 0 && i < value.length - 1) {
+            wrapsWholeText = false;
+            break;
+          }
+        }
+      }
+      if (!wrapsWholeText || depth !== 0) {
+        break;
+      }
+      value = value.slice(1, -1).trim();
+    }
+    return value;
+  }
+
+  _parseEvaluatedCompositeTerm(text) {
+    if (typeof text !== "string") {
+      return null;
+    }
+    const match = text.trim().match(/^(.*)\((true|false|skipped)\)$/i);
+    if (!match) {
+      return null;
+    }
+    const rawStatus = match[2].toLowerCase();
+    const status = rawStatus === "false" ? "false" : rawStatus === "skipped" ? "skipped" : "true";
+    return { text: match[1].trim(), status };
   }
 
   _conditionDetailMap(details) {

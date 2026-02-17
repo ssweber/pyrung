@@ -10,6 +10,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
@@ -942,27 +943,104 @@ class PLCRunner:
         if isinstance(condition, AllCondition):
             child_results: list[str] = []
             result = True
-            for child in condition.conditions:
-                child_result, _ = self._evaluate_condition_value(child, ctx)
-                child_results.append(f"{self._condition_expression(child)}({str(child_result).lower()})")
+            for idx, child in enumerate(condition.conditions):
+                child_result, child_details = self._evaluate_condition_value(child, ctx)
+                child_text = self._condition_term_text(child, child_details)
+                child_results.append(f"{child_text}({str(child_result).lower()})")
                 if not child_result:
                     result = False
+                    for skipped in condition.conditions[idx + 1 :]:
+                        child_results.append(f"{self._condition_expression(skipped)}(skipped)")
                     break
             return result, [_detail("terms", " & ".join(child_results))]
 
         if isinstance(condition, AnyCondition):
             child_results = []
             result = False
-            for child in condition.conditions:
-                child_result, _ = self._evaluate_condition_value(child, ctx)
-                child_results.append(f"{self._condition_expression(child)}({str(child_result).lower()})")
+            for idx, child in enumerate(condition.conditions):
+                child_result, child_details = self._evaluate_condition_value(child, ctx)
+                child_text = self._condition_term_text(child, child_details)
+                child_results.append(f"{child_text}({str(child_result).lower()})")
                 if child_result:
                     result = True
+                    for skipped in condition.conditions[idx + 1 :]:
+                        child_results.append(f"{self._condition_expression(skipped)}(skipped)")
                     break
             return result, [_detail("terms", " | ".join(child_results))]
 
         value = bool(condition.evaluate(ctx))
         return value, []
+
+    def _condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
+        expression = self._condition_expression(condition)
+        detail_map = self._condition_detail_map(details)
+
+        if "left" in detail_map and "left_value" in detail_map:
+            left_label = str(detail_map["left"])
+            left_text = f"{left_label}({detail_map['left_value']})"
+            comparison = self._comparison_parts(expression)
+            if comparison is not None:
+                _left, operator, right = comparison
+                right_text = self._comparison_right_text(right, detail_map)
+                return f"{left_text} {operator} {right_text}"
+            if "right_value" in detail_map:
+                return f"{left_text}, rhs({detail_map['right_value']})"
+            return left_text
+
+        if "tag" in detail_map and "value" in detail_map:
+            return f"{detail_map['tag']}({detail_map['value']})"
+
+        if "current" in detail_map or "previous" in detail_map:
+            tag = str(detail_map.get("tag", "value"))
+            current = detail_map.get("current", "?")
+            previous = detail_map.get("previous", "?")
+            return f"{tag}({current}) prev({previous})"
+
+        if "terms" in detail_map:
+            return str(detail_map["terms"])
+
+        return expression
+
+    def _condition_detail_map(self, details: list[dict[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for detail in details:
+            if not isinstance(detail, dict):
+                continue
+            name = detail.get("name")
+            if not isinstance(name, str):
+                continue
+            result[name] = detail.get("value")
+        return result
+
+    def _comparison_parts(self, expression: str) -> tuple[str, str, str] | None:
+        match = re.match(r"^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$", expression.strip())
+        if match is None:
+            return None
+        left, operator, right = match.groups()
+        return left.strip(), operator, right.strip()
+
+    def _comparison_right_text(self, right: str, details: dict[str, Any]) -> str:
+        if "right" in details and "right_value" in details:
+            return f"{details['right']}({details['right_value']})"
+        if "right_value" in details:
+            if self._is_literal_operand(right):
+                return right
+            return f"{right}({details['right_value']})"
+        if "right" in details:
+            return str(details["right"])
+        return right
+
+    def _is_literal_operand(self, text: str) -> bool:
+        value = text.strip()
+        if re.match(r"^[-+]?\d+(\.\d+)?$", value):
+            return True
+        if value.lower() in {"true", "false", "null", "none"}:
+            return True
+        if (value.startswith("'") and value.endswith("'")) or (
+            value.startswith('"') and value.endswith('"')
+        ):
+            return True
+        return False
 
     def _condition_expression(self, condition: Any) -> str:
         from pyrung.core.condition import (

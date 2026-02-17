@@ -131,6 +131,57 @@ def _composite_condition_script() -> str:
     )
 
 
+def _all_of_short_circuit_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, all_of, out\n"
+        "\n"
+        "Step = Int('Step')\n"
+        "AutoMode = Bool('AutoMode')\n"
+        "Light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(all_of(Step == 1, AutoMode)):\n"
+        "        out(Light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'Step': 0, 'AutoMode': True})\n"
+    )
+
+
+def _any_of_short_circuit_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, any_of, out\n"
+        "\n"
+        "Step = Int('Step')\n"
+        "AutoMode = Bool('AutoMode')\n"
+        "Light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(any_of(Step == 0, AutoMode)):\n"
+        "        out(Light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'Step': 0, 'AutoMode': False})\n"
+    )
+
+
+def _any_of_rise_short_circuit_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, any_of, out, rise\n"
+        "\n"
+        "Pulse = Bool('Pulse')\n"
+        "AutoMode = Bool('AutoMode')\n"
+        "Light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(any_of(rise(Pulse), AutoMode)):\n"
+        "        out(Light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'Pulse': True, 'AutoMode': False})\n"
+    )
+
+
 def _indirect_condition_script() -> str:
     return (
         "from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, out\n"
@@ -522,6 +573,60 @@ def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
     assert "(true)" in terms or "(false)" in terms
     assert "=True" not in terms
     assert "=False" not in terms
+
+
+def test_next_trace_marks_short_circuited_all_of_child_as_skipped(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "all_of_short_circuit.py", _all_of_short_circuit_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    condition = traces[0]["body"]["regions"][0]["conditions"][0]
+    details = {item["name"]: item["value"] for item in condition["details"]}
+    terms = str(details.get("terms", ""))
+    assert "Step(0) == 1(false)" in terms
+    assert "AutoMode(skipped)" in terms
+
+
+def test_next_trace_marks_short_circuited_any_of_child_as_skipped(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "any_of_short_circuit.py", _any_of_short_circuit_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    condition = traces[0]["body"]["regions"][0]["conditions"][0]
+    details = {item["name"]: item["value"] for item in condition["details"]}
+    terms = str(details.get("terms", ""))
+    assert "Step(0) == 0(true)" in terms
+    assert "AutoMode(skipped)" in terms
+
+
+def test_next_trace_any_of_with_rise_term_keeps_skipped_child(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "any_of_rise_short_circuit.py", _any_of_rise_short_circuit_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    condition = traces[0]["body"]["regions"][0]["conditions"][0]
+    details = {item["name"]: item["value"] for item in condition["details"]}
+    terms = str(details.get("terms", "")).lower()
+    assert "prev(false)" in terms
+    assert "automode(skipped)" in terms
 
 
 def test_next_trace_emits_pointer_condition_details(tmp_path: Path):

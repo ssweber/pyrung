@@ -42,7 +42,7 @@ ResetCount = Bool("ResetCount")
 
 with Program(strict=False) as logic:
     # Main rung
-    with Rung(Step == 0, nc(AutoMode)):
+    with Rung(Step == 0, AutoMode):
 
         # Call subroutine from the main rung
         call("init_sub")
@@ -57,7 +57,7 @@ with Program(strict=False) as logic:
     # Multi-line rung with counter – tests region end-line coverage
     # The .reset() is on a separate line; its source_line won't be in
     # the instruction metadata, only rung.end_line (AST) covers it.
-    with Rung(Step == 1, AutoMode):
+    with Rung(Step == 1, nc(AutoMode)):
         out(MainLight)
         count_up(CountDone, CountAcc,
                  setpoint=10) \
