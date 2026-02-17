@@ -25,6 +25,9 @@ SkippedAfterReturn = Bool("SkippedAfterReturn")
 with Program(strict=False) as logic:
     # Main rung
     with Rung(Step == 0):
+
+        # Call subroutine from the main rung
+        call("init_sub")
         out(MainLight)
 
         # Branch runs only when parent rung AND AutoMode are true
@@ -32,15 +35,13 @@ with Program(strict=False) as logic:
             out(AutoLight)
             copy(1, Step, oneshot=True)
 
-        # Call subroutine from the main rung
-        call("init_sub")
 
     # Subroutine body
     with subroutine("init_sub"):
         with Rung():
             out(SubLight)
-            return_()  # exits subroutine early
-            out(SkippedAfterReturn)
+        with Rung():
+            out(SubLight)
 
 runner = PLCRunner(logic)
 runner.patch(

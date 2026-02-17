@@ -187,6 +187,31 @@ def _branch_unpowered_after_first_scan_script() -> str:
     )
 
 
+def _branch_then_call_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, call, copy, out, subroutine\n"
+        "\n"
+        "Step = Int('Step')\n"
+        "AutoMode = Bool('AutoMode')\n"
+        "BranchDone = Bool('BranchDone')\n"
+        "SubLight = Bool('SubLight')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with subroutine('sub'):\n"
+        "        with Rung(Step == 1):\n"
+        "            out(SubLight)\n"
+        "\n"
+        "    with Rung(Step == 0):\n"
+        "        with branch(AutoMode):\n"
+        "            out(BranchDone)\n"
+        "            copy(1, Step, oneshot=True)\n"
+        "        call('sub')\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'Step': 0, 'AutoMode': True, 'BranchDone': False, 'SubLight': False})\n"
+    )
+
+
 def test_launch_with_runner_emits_entry_stop(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -441,6 +466,36 @@ def test_stepin_after_branch_becomes_unpowered_stays_on_top_rung(tmp_path: Path)
     _drain_messages(out_stream)
     assert adapter._current_step is not None
     assert adapter._current_step.kind == "rung"
+
+
+def test_stepin_skips_powered_branch_when_no_subroutine(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "branch_only.py", _branch_unpowered_after_first_scan_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    # First scan has a powered branch but no subroutine call.
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    assert adapter._current_step is not None
+    assert adapter._current_step.kind == "rung"
+
+
+def test_stepin_skips_branch_and_enters_subroutine(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "branch_then_call.py", _branch_then_call_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    assert adapter._current_step is not None
+    assert adapter._current_step.kind == "subroutine"
+    assert adapter._current_step.subroutine_name == "sub"
 
 
 def test_continue_hits_breakpoint_and_emits_stopped_event(tmp_path: Path):

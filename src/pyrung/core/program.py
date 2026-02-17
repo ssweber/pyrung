@@ -1383,6 +1383,7 @@ class Branch:
             source_file=self._source_file,
             source_line=self._source_line,
         )
+        self._branch_rung._branch_condition_start = len(parent_conditions)
         for condition in self._branch_rung._conditions:
             if condition.source_file is None:
                 condition.source_file = self._source_file

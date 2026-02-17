@@ -44,6 +44,10 @@ class Rung:
         self._conditions: list[Condition] = []
         self._instructions: list[Instruction] = []
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
+        self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
+        # Branch rungs may include inherited parent conditions first.
+        # This index marks where this rung's own local branch conditions begin.
+        self._branch_condition_start = 0
         self._coils: set[Tag] = set()  # Tags that should reset when rung false
         self.source_file = source_file
         self.source_line = source_line
@@ -55,6 +59,7 @@ class Rung:
     def add_instruction(self, instruction: Instruction) -> None:
         """Add an instruction to execute when conditions are true."""
         self._instructions.append(instruction)
+        self._execution_items.append(instruction)
 
     def register_coil(self, tag: Tag) -> None:
         """Register a tag as a coil output (resets when rung false)."""
@@ -63,6 +68,7 @@ class Rung:
     def add_branch(self, branch: Rung) -> None:
         """Add a nested branch (parallel path) to this rung."""
         self._branches.append(branch)
+        self._execution_items.append(branch)
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.
@@ -96,11 +102,7 @@ class Rung:
             ctx: ScanContext for reading/writing with batched updates.
         """
         conditions_true = self._evaluate_conditions(ctx)
-
-        if conditions_true:
-            self._execute_instructions(ctx)
-        else:
-            self._handle_rung_false(ctx)
+        self._execute_with_enable(ctx, conditions_true)
 
     def _evaluate_conditions(self, ctx: ScanContext) -> bool:
         """Evaluate all conditions (AND logic).
@@ -116,13 +118,39 @@ class Rung:
         return True
 
     def _execute_instructions(self, ctx: ScanContext) -> None:
-        """Execute all instructions and branches in order."""
-        for instruction in self._instructions:
-            instruction.execute(ctx)
+        """Execute instructions/branches in source order."""
+        self._execute_with_enable(ctx, True)
 
-        # Evaluate nested branches (parallel paths)
-        for branch in self._branches:
-            branch.evaluate(ctx)
+    def _evaluate_local_conditions(self, ctx: ScanContext) -> bool:
+        """Evaluate only this branch's local conditions (not inherited parent conditions)."""
+        if self._branch_condition_start >= len(self._conditions):
+            return True
+        for cond in self._conditions[self._branch_condition_start :]:
+            if not cond.evaluate(ctx):
+                return False
+        return True
+
+    def _compute_branch_enable_map(self, ctx: ScanContext, parent_enabled: bool) -> dict[int, bool]:
+        """Compute direct branch enable states before executing any items."""
+        branch_enable_map: dict[int, bool] = {}
+        for item in self._execution_items:
+            if isinstance(item, Rung):
+                branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(ctx)
+        return branch_enable_map
+
+    def _execute_with_enable(self, ctx: ScanContext, enabled: bool) -> None:
+        """Execute or false-handle this rung using a precomputed enable state."""
+        if not enabled:
+            self._handle_rung_false(ctx)
+            return
+
+        branch_enable_map = self._compute_branch_enable_map(ctx, parent_enabled=True)
+
+        for item in self._execution_items:
+            if isinstance(item, Rung):
+                item._execute_with_enable(ctx, branch_enable_map.get(id(item), False))
+            else:
+                item.execute(ctx)
 
     def _execute_always_instructions(self, ctx: ScanContext) -> None:
         """Execute instructions that always run (like counters) even when rung is false."""
@@ -152,5 +180,6 @@ class Rung:
                 reset_oneshot()
 
         # Propagate false to nested branches
-        for branch in self._branches:
-            branch._handle_rung_false(ctx)
+        for item in self._execution_items:
+            if isinstance(item, Rung):
+                item._handle_rung_false(ctx)

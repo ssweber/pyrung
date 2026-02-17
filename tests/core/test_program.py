@@ -1142,6 +1142,36 @@ class TestBranch:
         runner.step()
         assert runner.current_state.tags["Light"] is False  # Rung false now
 
+    def test_branch_enable_is_snapshotted_before_item_execution(self):
+        """Branch enable is computed before item execution and applied for this whole rung scan."""
+        from pyrung.core.program import Program, Rung, branch, copy, out
+
+        Step = Int("Step")
+        AutoMode = Bool("AutoMode")
+        Light1 = Bool("Light1")
+        Light2 = Bool("Light2")
+
+        with Program() as logic:
+            with Rung(Step == 0):
+                out(Light1)
+                # This write happens before the branch item in source order.
+                # Branch should still use its precomputed enable from scan start.
+                copy(True, AutoMode)
+                with branch(AutoMode):
+                    out(Light2)
+
+        runner = PLCRunner(logic)
+        runner.patch({"Step": 0, "AutoMode": False, "Light1": False, "Light2": False})
+        runner.step()
+
+        assert runner.current_state.tags["Light1"] is True
+        assert runner.current_state.tags["AutoMode"] is True
+        assert runner.current_state.tags["Light2"] is False
+
+        # Next scan sees AutoMode already true at scan start, so branch executes.
+        runner.step()
+        assert runner.current_state.tags["Light2"] is True
+
     def test_branch_outside_rung_raises_error(self):
         """branch() outside Rung context raises RuntimeError."""
         import pytest
@@ -1234,6 +1264,34 @@ class TestBranch:
         assert (
             evaluate_condition(captured_condition, state(Step=1, Mode=False)) is False
         )  # Both false
+
+    def test_branch_source_order_before_later_instruction(self):
+        """Branch side effects apply before later same-rung instructions in source order."""
+        from pyrung.core.program import Program, Rung, branch, call, copy, out, subroutine
+
+        Step = Int("Step")
+        AutoMode = Bool("AutoMode")
+        BranchDone = Bool("BranchDone")
+        SubLight = Bool("SubLight")
+
+        with Program() as logic:
+            with subroutine("sub"):
+                with Rung(Step == 1):
+                    out(SubLight)
+
+            with Rung(Step == 0):
+                with branch(AutoMode):
+                    out(BranchDone)
+                    copy(1, Step, oneshot=True)
+                call("sub")
+
+        runner = PLCRunner(logic)
+        runner.patch({"Step": 0, "AutoMode": True, "BranchDone": False, "SubLight": False})
+        runner.step()
+
+        assert runner.current_state.tags["Step"] == 1
+        assert runner.current_state.tags["BranchDone"] is True
+        assert runner.current_state.tags["SubLight"] is True
 
 
 class TestSubroutineAndCall:

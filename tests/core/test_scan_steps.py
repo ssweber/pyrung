@@ -4,7 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, PLCRunner, Program, Rung, branch, call, out, return_, subroutine
+from pyrung.core import (
+    Bool,
+    Int,
+    PLCRunner,
+    Program,
+    Rung,
+    branch,
+    call,
+    copy,
+    out,
+    return_,
+    subroutine,
+)
 
 
 def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
@@ -167,5 +179,53 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
     steps = list(runner.scan_steps_debug())
 
     assert [step.kind for step in steps] == ["rung"]
+    assert runner.current_state.tags["BranchOut"] is False
+
+
+def test_scan_steps_debug_respects_source_order_branch_before_call():
+    step = Int("Step")
+    auto = Bool("Auto")
+    branch_done = Bool("BranchDone")
+    sub_light = Bool("SubLight")
+
+    with Program(strict=False) as logic:
+        with subroutine("sub"):
+            with Rung(step == 1):
+                out(sub_light)
+
+        with Rung(step == 0):
+            with branch(auto):
+                out(branch_done)
+                copy(1, step, oneshot=True)
+            call("sub")
+
+    runner = PLCRunner(logic)
+    runner.patch({"Step": 0, "Auto": True, "BranchDone": False, "SubLight": False})
+    steps = list(runner.scan_steps_debug())
+
+    assert [entry.kind for entry in steps] == ["branch", "subroutine", "rung"]
+    assert runner.current_state.tags["Step"] == 1
+    assert runner.current_state.tags["BranchDone"] is True
+    assert runner.current_state.tags["SubLight"] is True
+
+
+def test_scan_steps_debug_uses_precomputed_branch_enable():
+    enable = Bool("Enable")
+    mode = Bool("Mode")
+    branch_out = Bool("BranchOut")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            copy(True, mode)
+            with branch(mode):
+                out(branch_out)
+
+    runner = PLCRunner(logic)
+    runner.patch({"Enable": True, "Mode": False, "BranchOut": False})
+    steps = list(runner.scan_steps_debug())
+
+    # Branch remains unpowered for this scan despite Mode being written before branch item.
+    assert [step.kind for step in steps] == ["rung"]
+    assert runner.current_state.tags["Mode"] is True
     assert runner.current_state.tags["BranchOut"] is False
 
