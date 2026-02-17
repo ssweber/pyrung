@@ -14,8 +14,9 @@ from typing import Any, BinaryIO
 
 from pyrung.core import PLCRunner, Program
 from pyrung.core.context import ScanContext
-from pyrung.core.instruction import Instruction
+from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
+from pyrung.core.runner import ScanStep
 from pyrung.dap.protocol import (
     MessageSequencer,
     make_event,
@@ -57,14 +58,15 @@ class DAPAdapter:
         self._state_lock = threading.Lock()
 
         self._runner: PLCRunner | None = None
-        self._scan_gen: Generator[tuple[int, Rung, ScanContext], None, None] | None = None
+        self._scan_gen: Generator[ScanStep, None, None] | None = None
+        self._current_step: ScanStep | None = None
         self._current_rung_index: int | None = None
         self._current_rung: Rung | None = None
         self._current_ctx: ScanContext | None = None
         self._program_path: str | None = None
 
         self._breakpoints_by_file: dict[str, set[int]] = {}
-        self._breakpoint_rung_map: dict[str, dict[int, set[int]]] = {}
+        self._breakpoint_rung_map: dict[str, set[int]] = {}
 
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
@@ -176,7 +178,15 @@ class DAPAdapter:
         if not program_path.is_file():
             raise DAPAdapterError(f"launch.program file not found: {program_path}")
 
-        namespace = runpy.run_path(str(program_path), run_name="__main__")
+        previous_dap_flag = os.environ.get("PYRUNG_DAP_ACTIVE")
+        os.environ["PYRUNG_DAP_ACTIVE"] = "1"
+        try:
+            namespace = runpy.run_path(str(program_path), run_name="__main__")
+        finally:
+            if previous_dap_flag is None:
+                os.environ.pop("PYRUNG_DAP_ACTIVE", None)
+            else:
+                os.environ["PYRUNG_DAP_ACTIVE"] = previous_dap_flag
         runner = self._discover_runner(namespace)
 
         with self._state_lock:
@@ -184,6 +194,7 @@ class DAPAdapter:
                 raise DAPAdapterError("Cannot launch while continue is running")
             self._runner = runner
             self._scan_gen = None
+            self._current_step = None
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
@@ -216,37 +227,33 @@ class DAPAdapter:
         with self._state_lock:
             runner = self._require_runner_locked()
             rungs = list(runner._logic)
+            current_step = self._current_step
             current_index = self._current_rung_index
             program_path = self._program_path
 
         start_frame = int(args.get("startFrame", 0))
         levels = int(args.get("levels", 0))
 
-        frames: list[dict[str, Any]] = []
-        if rungs:
+        if current_step is not None:
+            frames = self._build_current_stack_frames(current_step=current_step, rungs=rungs)
+        elif rungs:
             order = list(range(len(rungs)))
             if current_index is not None and 0 <= current_index < len(rungs):
                 order = [current_index, *[i for i in order if i != current_index]]
 
-            for idx in order:
-                rung = rungs[idx]
-                frame: dict[str, Any] = {
-                    "id": idx,
-                    "name": f"Rung {idx}",
-                    "line": int(rung.source_line or 1),
-                    "column": 1,
-                }
-                if rung.end_line is not None:
-                    frame["endLine"] = int(rung.end_line)
-                if rung.source_file:
-                    source_path = str(Path(rung.source_file))
-                    frame["source"] = {"name": Path(source_path).name, "path": source_path}
-                frames.append(frame)
+            frames = [
+                self._stack_frame_from_rung(
+                    frame_id=idx,
+                    name=f"Rung {idx}",
+                    rung=rungs[idx],
+                )
+                for idx in order
+            ]
         else:
             frame = {"id": 0, "name": "Scan", "line": 1, "column": 1}
             if program_path is not None:
                 frame["source"] = {"name": Path(program_path).name, "path": program_path}
-            frames.append(frame)
+            frames = [frame]
 
         if levels > 0:
             visible = frames[start_frame : start_frame + levels]
@@ -291,11 +298,17 @@ class DAPAdapter:
     def _on_next(self, _args: dict[str, Any]) -> HandlerResult:
         with self._state_lock:
             self._assert_can_step_locked()
-            self._advance_one_rung_locked()
+            self._advance_one_step_locked()
+            while self._current_step is not None and self._current_step.kind != "rung":
+                if not self._advance_one_step_locked():
+                    break
         return {}, [("stopped", self._stopped_body("step"))]
 
     def _on_stepIn(self, _args: dict[str, Any]) -> HandlerResult:
-        return self._on_next({})
+        with self._state_lock:
+            self._assert_can_step_locked()
+            self._advance_one_step_locked()
+        return {}, [("stopped", self._stopped_body("step"))]
 
     def _on_continue(self, _args: dict[str, Any]) -> HandlerResult:
         with self._state_lock:
@@ -329,8 +342,8 @@ class DAPAdapter:
 
         requested_lines = self._requested_breakpoint_lines(args)
         with self._state_lock:
-            line_map = self._breakpoint_rung_map.get(canonical, {})
-            verified_lines = {line for line in requested_lines if line in line_map}
+            valid_lines = self._breakpoint_rung_map.get(canonical, set())
+            verified_lines = {line for line in requested_lines if line in valid_lines}
             self._breakpoints_by_file[canonical] = verified_lines
 
         response_bps = [
@@ -399,7 +412,7 @@ class DAPAdapter:
                 with self._state_lock:
                     if self._runner is None:
                         return
-                    advanced = self._advance_one_rung_locked()
+                    advanced = self._advance_one_step_locked()
                     hit_breakpoint = self._current_rung_hits_breakpoint_locked()
 
                 if hit_breakpoint:
@@ -419,29 +432,35 @@ class DAPAdapter:
                 self._continue_thread = None
             self._pause_event.clear()
 
-    def _advance_one_rung_locked(self) -> bool:
+    def _advance_one_step_locked(self) -> bool:
         runner = self._require_runner_locked()
         if not runner._logic:
             runner.step()
             self._scan_gen = None
+            self._current_step = None
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
             return False
 
         if self._scan_gen is None:
-            self._scan_gen = runner.scan_steps()
+            self._scan_gen = runner.scan_steps_debug()
 
         try:
-            index, rung, ctx = next(self._scan_gen)
+            step = next(self._scan_gen)
         except StopIteration:
-            self._scan_gen = runner.scan_steps()
-            index, rung, ctx = next(self._scan_gen)
+            self._scan_gen = runner.scan_steps_debug()
+            step = next(self._scan_gen)
 
-        self._current_rung_index = index
-        self._current_rung = rung
-        self._current_ctx = ctx
+        self._current_step = step
+        self._current_rung_index = step.rung_index
+        self._current_rung = step.rung
+        self._current_ctx = step.ctx
         return True
+
+    def _advance_one_rung_locked(self) -> bool:
+        """Backward-compatible alias for tests/helpers."""
+        return self._advance_one_step_locked()
 
     def _assert_can_step_locked(self) -> None:
         self._require_runner_locked()
@@ -452,7 +471,7 @@ class DAPAdapter:
         return self._continue_thread is not None and self._continue_thread.is_alive()
 
     def _current_rung_hits_breakpoint_locked(self) -> bool:
-        if self._current_rung_index is None or self._current_rung is None:
+        if self._current_rung is None:
             return False
         source = self._canonical_path(self._current_rung.source_file)
         if source is None:
@@ -460,58 +479,196 @@ class DAPAdapter:
         active_lines = self._breakpoints_by_file.get(source)
         if not active_lines:
             return False
-        line_map = self._breakpoint_rung_map.get(source, {})
-        return any(self._current_rung_index in line_map.get(line, set()) for line in active_lines)
+        if self._current_rung.source_line is None:
+            return False
+        start_line = int(self._current_rung.source_line)
+        end_line = int(self._current_rung.end_line or self._current_rung.source_line)
+        if end_line < start_line:
+            start_line, end_line = end_line, start_line
+        return any(start_line <= line <= end_line for line in active_lines)
 
     def _rebuild_breakpoint_index_locked(self) -> None:
         self._breakpoint_rung_map = {}
         runner = self._require_runner_locked()
-        for index, rung in enumerate(runner._logic):
-            self._index_rung_lines(top_level_index=index, rung=rung)
+        visited_rungs: set[int] = set()
+        visited_programs: set[int] = set()
+        for rung in runner._logic:
+            self._index_rung_lines(rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs)
 
-    def _index_rung_lines(self, *, top_level_index: int, rung: Rung) -> None:
-        self._index_line(rung.source_file, rung.source_line, top_level_index)
+    def _index_rung_lines(
+        self,
+        *,
+        rung: Rung,
+        visited_rungs: set[int],
+        visited_programs: set[int],
+    ) -> None:
+        rung_id = id(rung)
+        if rung_id in visited_rungs:
+            return
+        visited_rungs.add(rung_id)
+
+        self._index_rung_range(
+            source_file=rung.source_file,
+            source_line=rung.source_line,
+            end_line=rung.end_line,
+        )
         for instruction in rung._instructions:
             self._index_instruction_lines(
-                top_level_index=top_level_index,
                 instruction=instruction,
                 fallback_source_file=rung.source_file,
+                visited_rungs=visited_rungs,
+                visited_programs=visited_programs,
             )
         for branch in rung._branches:
-            self._index_rung_lines(top_level_index=top_level_index, rung=branch)
+            self._index_rung_lines(
+                rung=branch,
+                visited_rungs=visited_rungs,
+                visited_programs=visited_programs,
+            )
 
     def _index_instruction_lines(
         self,
         *,
-        top_level_index: int,
         instruction: Instruction,
         fallback_source_file: str | None,
+        visited_rungs: set[int],
+        visited_programs: set[int],
     ) -> None:
         source_file = getattr(instruction, "source_file", None) or fallback_source_file
         source_line = getattr(instruction, "source_line", None)
-        self._index_line(source_file, source_line, top_level_index)
+        self._index_line(source_file, source_line)
+
+        if isinstance(instruction, CallInstruction):
+            self._index_subroutine_lines_for_call(
+                instruction=instruction,
+                visited_rungs=visited_rungs,
+                visited_programs=visited_programs,
+            )
 
         nested = getattr(instruction, "instructions", None)
         if isinstance(nested, list):
             for child in nested:
                 if isinstance(child, Instruction):
                     self._index_instruction_lines(
-                        top_level_index=top_level_index,
                         instruction=child,
                         fallback_source_file=source_file,
+                        visited_rungs=visited_rungs,
+                        visited_programs=visited_programs,
                     )
 
-    def _index_line(self, source_file: str | None, source_line: int | None, rung_index: int) -> None:
+    def _index_subroutine_lines_for_call(
+        self,
+        *,
+        instruction: CallInstruction,
+        visited_rungs: set[int],
+        visited_programs: set[int],
+    ) -> None:
+        program = getattr(instruction, "_program", None)
+        if program is None:
+            return
+        program_id = id(program)
+        if program_id in visited_programs:
+            return
+        visited_programs.add(program_id)
+        for subroutines in program.subroutines.values():
+            for rung in subroutines:
+                self._index_rung_lines(
+                    rung=rung,
+                    visited_rungs=visited_rungs,
+                    visited_programs=visited_programs,
+                )
+
+    def _index_rung_range(
+        self,
+        *,
+        source_file: str | None,
+        source_line: int | None,
+        end_line: int | None,
+    ) -> None:
+        if source_line is None:
+            return
+        start_line = int(source_line)
+        final_line = int(end_line) if end_line is not None else start_line
+        if final_line < start_line:
+            start_line, final_line = final_line, start_line
+        for line in range(start_line, final_line + 1):
+            self._index_line(source_file, line)
+
+    def _index_line(self, source_file: str | None, source_line: int | None) -> None:
         canonical = self._canonical_path(source_file)
         if canonical is None or source_line is None:
             return
-        line_map = self._breakpoint_rung_map.setdefault(canonical, {})
-        line_map.setdefault(int(source_line), set()).add(rung_index)
+        lines = self._breakpoint_rung_map.setdefault(canonical, set())
+        lines.add(int(source_line))
 
     def _canonical_path(self, path: str | None) -> str | None:
         if path is None or path.startswith("<"):
             return None
         return os.path.normcase(os.path.normpath(os.path.abspath(path)))
+
+    def _build_current_stack_frames(
+        self,
+        *,
+        current_step: ScanStep,
+        rungs: list[Rung],
+    ) -> list[dict[str, Any]]:
+        step_name = f"Rung {current_step.rung_index}"
+        if current_step.kind == "branch":
+            step_name = f"Branch (rung {current_step.rung_index})"
+        elif current_step.kind == "subroutine":
+            sub_name = current_step.subroutine_name or "subroutine"
+            step_name = f"{sub_name} (rung {current_step.rung_index})"
+
+        frames: list[dict[str, Any]] = [
+            self._stack_frame_from_rung(
+                frame_id=0,
+                name=step_name,
+                rung=current_step.rung,
+            )
+        ]
+
+        next_frame_id = 1
+        for subroutine_name in reversed(current_step.call_stack):
+            frames.append(
+                {
+                    "id": next_frame_id,
+                    "name": f"Subroutine {subroutine_name}",
+                    "line": 1,
+                    "column": 1,
+                }
+            )
+            next_frame_id += 1
+
+        if current_step.kind != "rung" and 0 <= current_step.rung_index < len(rungs):
+            frames.append(
+                self._stack_frame_from_rung(
+                    frame_id=next_frame_id,
+                    name=f"Rung {current_step.rung_index}",
+                    rung=rungs[current_step.rung_index],
+                )
+            )
+
+        return frames
+
+    def _stack_frame_from_rung(
+        self,
+        *,
+        frame_id: int,
+        name: str,
+        rung: Rung,
+    ) -> dict[str, Any]:
+        frame: dict[str, Any] = {
+            "id": frame_id,
+            "name": name,
+            "line": int(rung.source_line or 1),
+            "column": 1,
+        }
+        if rung.end_line is not None:
+            frame["endLine"] = int(rung.end_line)
+        if rung.source_file:
+            source_path = str(Path(rung.source_file))
+            frame["source"] = {"name": Path(source_path).name, "path": source_path}
+        return frame
 
     def _require_runner_locked(self) -> PLCRunner:
         if self._runner is None:

@@ -1,4 +1,6 @@
 # scratchpad/examples/demo_branch_subroutine.py
+import os
+
 from pyrung.core import (
     Bool,
     Int,
@@ -52,5 +54,6 @@ runner.patch(
     }
 )
 
-runner.step()
-print(dict(runner.current_state.tags))
+if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
+    runner.step()
+    print(dict(runner.current_state.tags))

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, PLCRunner, Program, Rung, out
+from pyrung.core import Bool, PLCRunner, Program, Rung, branch, call, out, return_, subroutine
 
 
 def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
@@ -89,4 +89,83 @@ def test_step_and_scan_steps_have_equivalent_results():
         pass
 
     assert via_step.current_state == via_scan_steps.current_state
+
+
+def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
+    sub_light = Bool("SubLight")
+    branch_light = Bool("BranchLight")
+    top_light = Bool("TopLight")
+
+    with Program(strict=False) as logic:
+        with subroutine("init_sub"):
+            with Rung():
+                out(sub_light)
+
+        with Rung():
+            call("init_sub")
+            with branch():
+                out(branch_light)
+            out(top_light)
+
+    runner = PLCRunner(logic)
+    steps = list(runner.scan_steps_debug())
+
+    assert [step.kind for step in steps] == ["subroutine", "branch", "rung"]
+    assert [step.depth for step in steps] == [1, 1, 0]
+    assert [step.rung_index for step in steps] == [0, 0, 0]
+    assert steps[0].subroutine_name == "init_sub"
+    assert steps[0].call_stack == ("init_sub",)
+    assert steps[1].call_stack == ()
+    assert steps[2].call_stack == ()
+    assert runner.current_state.tags["SubLight"] is True
+    assert runner.current_state.tags["BranchLight"] is True
+    assert runner.current_state.tags["TopLight"] is True
+
+
+def test_scan_steps_debug_handles_return_signal_and_still_yields_return_rung():
+    first = Bool("First")
+    skipped = Bool("Skipped")
+    done = Bool("Done")
+
+    with Program(strict=False) as logic:
+        with subroutine("work"):
+            with Rung():
+                out(first)
+            with Rung():
+                return_()
+            with Rung():
+                out(skipped)
+
+        with Rung():
+            call("work")
+            out(done)
+
+    runner = PLCRunner(logic)
+    steps = list(runner.scan_steps_debug())
+
+    sub_steps = [step for step in steps if step.kind == "subroutine"]
+    assert len(sub_steps) == 2
+    assert all(step.subroutine_name == "work" for step in sub_steps)
+    assert runner.current_state.tags["First"] is True
+    assert "Skipped" not in runner.current_state.tags
+    assert runner.current_state.tags["Done"] is True
+
+
+def test_scan_steps_debug_does_not_yield_unpowered_branch():
+    enable = Bool("Enable")
+    branch_out = Bool("BranchOut")
+    top_out = Bool("TopOut")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            with branch():
+                out(branch_out)
+            out(top_out)
+
+    runner = PLCRunner(logic)
+    runner.patch({"Enable": False})
+    steps = list(runner.scan_steps_debug())
+
+    assert [step.kind for step in steps] == ["rung"]
+    assert runner.current_state.tags["BranchOut"] is False
 

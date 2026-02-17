@@ -13,8 +13,9 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.context import ScanContext
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
@@ -25,8 +26,22 @@ from pyrung.core.time_mode import TimeMode
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
 
+    from pyrung.core.instruction import Instruction
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
+
+
+@dataclass(frozen=True)
+class ScanStep:
+    """Debug scan step emitted at rung boundaries."""
+
+    rung_index: int
+    rung: Rung
+    ctx: ScanContext
+    kind: Literal["rung", "branch", "subroutine"]
+    subroutine_name: str | None
+    depth: int
+    call_stack: tuple[str, ...]
 
 
 class PLCRunner:
@@ -285,6 +300,241 @@ class PLCRunner:
 
         # Single commit: apply all changes and advance scan
         self._state = ctx.commit(dt=dt)
+
+    def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
+        """Execute one scan cycle and yield at top-level, branch, and subroutine boundaries."""
+        # Create ScanContext for batched updates + system resolver
+        ctx = ScanContext(
+            self._state,
+            resolver=self._system_runtime.resolve,
+            read_only_tags=self._system_runtime.read_only_tags,
+        )
+
+        # System lifecycle hooks run before patching and logic
+        self._system_runtime.on_scan_start(ctx)
+
+        # Apply one-shot patches to context
+        if self._pending_patches:
+            ctx.set_tags(self._pending_patches)
+            self._pending_patches = {}
+
+        # Apply persistent force overrides before logic evaluation
+        if self._forces:
+            ctx.set_tags(self._forces)
+
+        # Calculate dt based on time mode (needed for timers)
+        if self._time_mode == TimeMode.REALTIME:
+            now = time.perf_counter()
+            if self._last_step_time is None:
+                self._last_step_time = now
+            dt = now - self._last_step_time
+            self._last_step_time = now
+        else:
+            dt = self._dt
+
+        # Inject dt into context so timer instructions can access it
+        ctx.set_memory("_dt", dt)
+
+        # Evaluate logic rung-by-rung with nested yield points for debugger stepping.
+        for i, rung in enumerate(self._logic):
+            yield from self._iter_rung_steps(
+                rung_index=i,
+                rung=rung,
+                ctx=ctx,
+                kind="rung",
+                depth=0,
+                subroutine_name=None,
+                call_stack=(),
+                force_false=False,
+            )
+
+        # Re-apply forces after logic so they persist across scans
+        if self._forces:
+            ctx.set_tags(self._forces)
+
+        # Batch _prev:* updates for edge detection
+        # Store current tag values as previous for next scan
+        # Need to include both original tags and any newly created tags
+        for name in self._state.tags:
+            ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+        # Also capture newly created tags from pending writes
+        for name in ctx._tags_pending:
+            if name not in self._state.tags:
+                ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+
+        # Final system updates before commit
+        self._system_runtime.on_scan_end(ctx)
+
+        # Single commit: apply all changes and advance scan
+        self._state = ctx.commit(dt=dt)
+
+    def _iter_rung_steps(
+        self,
+        *,
+        rung_index: int,
+        rung: Rung,
+        ctx: ScanContext,
+        kind: Literal["rung", "branch", "subroutine"],
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+        force_false: bool,
+    ) -> Generator[ScanStep, None, None]:
+        from pyrung.core.instruction import SubroutineReturnSignal
+
+        if force_false:
+            self._handle_rung_false_debug(rung, ctx)
+            for branch in rung._branches:
+                yield from self._iter_rung_steps(
+                    rung_index=rung_index,
+                    rung=branch,
+                    ctx=ctx,
+                    kind="branch",
+                    depth=depth + 1,
+                    subroutine_name=subroutine_name,
+                    call_stack=call_stack,
+                    force_false=True,
+                )
+            if kind != "branch":
+                yield ScanStep(
+                    rung_index=rung_index,
+                    rung=rung,
+                    ctx=ctx,
+                    kind=kind,
+                    subroutine_name=subroutine_name,
+                    depth=depth,
+                    call_stack=call_stack,
+                )
+            return
+
+        conditions_true = rung._evaluate_conditions(ctx)
+        if conditions_true:
+            try:
+                for instruction in rung._instructions:
+                    yield from self._iter_instruction_steps(
+                        rung_index=rung_index,
+                        instruction=instruction,
+                        ctx=ctx,
+                        depth=depth,
+                        call_stack=call_stack,
+                    )
+                for branch in rung._branches:
+                    yield from self._iter_rung_steps(
+                        rung_index=rung_index,
+                        rung=branch,
+                        ctx=ctx,
+                        kind="branch",
+                        depth=depth + 1,
+                        subroutine_name=subroutine_name,
+                        call_stack=call_stack,
+                        force_false=False,
+                    )
+            except SubroutineReturnSignal:
+                if kind != "branch":
+                    yield ScanStep(
+                        rung_index=rung_index,
+                        rung=rung,
+                        ctx=ctx,
+                        kind=kind,
+                        subroutine_name=subroutine_name,
+                        depth=depth,
+                        call_stack=call_stack,
+                    )
+                raise
+        else:
+            self._handle_rung_false_debug(rung, ctx)
+            for branch in rung._branches:
+                yield from self._iter_rung_steps(
+                    rung_index=rung_index,
+                    rung=branch,
+                    ctx=ctx,
+                    kind="branch",
+                    depth=depth + 1,
+                    subroutine_name=subroutine_name,
+                    call_stack=call_stack,
+                    force_false=True,
+                )
+
+        if kind != "branch" or conditions_true:
+            yield ScanStep(
+                rung_index=rung_index,
+                rung=rung,
+                ctx=ctx,
+                kind=kind,
+                subroutine_name=subroutine_name,
+                depth=depth,
+                call_stack=call_stack,
+            )
+
+    def _iter_instruction_steps(
+        self,
+        *,
+        rung_index: int,
+        instruction: Instruction,
+        ctx: ScanContext,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> Generator[ScanStep, None, None]:
+        from pyrung.core.instruction import (
+            CallInstruction,
+            ForLoopInstruction,
+            SubroutineReturnSignal,
+            resolve_tag_or_value_ctx,
+        )
+
+        if isinstance(instruction, CallInstruction):
+            if instruction.subroutine_name not in instruction._program.subroutines:
+                raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+            next_stack = (*call_stack, instruction.subroutine_name)
+            try:
+                for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
+                    yield from self._iter_rung_steps(
+                        rung_index=rung_index,
+                        rung=sub_rung,
+                        ctx=ctx,
+                        kind="subroutine",
+                        depth=depth + 1,
+                        subroutine_name=instruction.subroutine_name,
+                        call_stack=next_stack,
+                        force_false=False,
+                    )
+            except SubroutineReturnSignal:
+                return
+            return
+
+        if isinstance(instruction, ForLoopInstruction):
+            if not instruction.should_execute():
+                return
+
+            count_value = resolve_tag_or_value_ctx(instruction.count, ctx)
+            iterations = max(0, int(count_value))
+
+            for i in range(iterations):
+                # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
+                ctx.set_tag(instruction.idx_tag.name, i)
+                for child in instruction.instructions:
+                    yield from self._iter_instruction_steps(
+                        rung_index=rung_index,
+                        instruction=child,
+                        ctx=ctx,
+                        depth=depth,
+                        call_stack=call_stack,
+                    )
+            return
+
+        instruction.execute(ctx)
+
+    def _handle_rung_false_debug(self, rung: Rung, ctx: ScanContext) -> None:
+        """Mirror Rung._handle_rung_false without recursively walking branches."""
+        rung._execute_always_instructions(ctx)
+
+        for tag in rung._coils:
+            ctx.set_tag(tag.name, tag.default)
+
+        for instruction in rung._instructions:
+            reset_oneshot = getattr(instruction, "reset_oneshot", None)
+            if callable(reset_oneshot):
+                reset_oneshot()
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""
