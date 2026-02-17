@@ -319,7 +319,11 @@ class DAPAdapter:
         with self._state_lock:
             self._assert_can_step_locked()
             self._advance_one_step_locked()
-            while self._current_step is not None and self._current_step.kind == "branch":
+            while self._current_step is not None and self._current_step.kind in {
+                "branch",
+                "rung",
+                "subroutine",
+            }:
                 if not self._advance_one_step_locked():
                     break
         return {}, [("stopped", self._stopped_body("step"))]
