@@ -222,7 +222,7 @@ class PyrungDecorationController {
         }
       }
       if (details.has("right_value")) {
-        return `${leftText}, rhs=${details.get("right_value")}`;
+        return `${leftText}, rhs(${details.get("right_value")})`;
       }
       return leftText;
     }
@@ -242,6 +242,9 @@ class PyrungDecorationController {
   }
 
   _leftLabel(details, comparison) {
+    if (details.has("left")) {
+      return String(details.get("left"));
+    }
     if (
       details.has("left_pointer_expr") &&
       details.has("left_pointer") &&
@@ -253,9 +256,6 @@ class PyrungDecorationController {
         details.get("left_pointer_value")
       );
     }
-    if (details.has("left")) {
-      return String(details.get("left"));
-    }
     if (comparison && comparison.left) {
       return comparison.left;
     }
@@ -263,17 +263,36 @@ class PyrungDecorationController {
   }
 
   _rightOperandText(comparison, details) {
+    const rightLabel = this._rightLabel(details, comparison);
     if (details.has("right") && details.has("right_value")) {
-      return this._observedOperand(String(details.get("right")), details.get("right_value"));
+      return this._observedOperand(rightLabel, details.get("right_value"));
     }
     if (details.has("right_value")) {
       if (this._isLiteralOperand(comparison.right)) {
         return comparison.right;
       }
-      return this._observedOperand(comparison.right, details.get("right_value"));
+      return this._observedOperand(rightLabel, details.get("right_value"));
     }
     if (details.has("right")) {
+      return rightLabel;
+    }
+    return comparison.right;
+  }
+
+  _rightLabel(details, comparison) {
+    if (details.has("right")) {
       return String(details.get("right"));
+    }
+    if (
+      details.has("right_pointer_expr") &&
+      details.has("right_pointer") &&
+      details.has("right_pointer_value")
+    ) {
+      return this._pointerResolvedLabel(
+        String(details.get("right_pointer_expr")),
+        String(details.get("right_pointer")),
+        details.get("right_pointer_value")
+      );
     }
     return comparison.right;
   }

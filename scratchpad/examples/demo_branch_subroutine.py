@@ -18,6 +18,7 @@ from pyrung.core import (
     rise,
     subroutine,
     all_of,
+    nc,
 )
 
 Step = Int("Step")
@@ -41,7 +42,7 @@ ResetCount = Bool("ResetCount")
 
 with Program(strict=False) as logic:
     # Main rung
-    with Rung(Step == 0, AutoMode):
+    with Rung(Step == 0, nc(AutoMode)):
 
         # Call subroutine from the main rung
         call("init_sub")

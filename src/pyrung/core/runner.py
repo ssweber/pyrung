@@ -888,6 +888,28 @@ class PLCRunner:
                     _detail("left_pointer", pointer_name),
                     _detail("left_pointer_value", pointer_value),
                 ]
+            right_details: list[dict[str, Any]] = []
+            right_operand = condition.value
+            if isinstance(right_operand, Tag):
+                right_details.append(_detail("right", right_operand.name))
+            elif isinstance(right_operand, IndirectRef):
+                right_target = right_operand.resolve_ctx(ctx)
+                right_pointer_name = right_operand.pointer.name
+                right_pointer_value = ctx.get_tag(right_pointer_name, right_operand.pointer.default)
+                right_details.extend(
+                    [
+                        _detail("right", right_target.name),
+                        _detail("right_pointer_expr", f"{right_operand.block.name}[{right_pointer_name}]"),
+                        _detail("right_pointer", right_pointer_name),
+                        _detail("right_pointer_value", right_pointer_value),
+                    ]
+                )
+            elif isinstance(right_operand, IndirectExprRef):
+                right_target = right_operand.resolve_ctx(ctx)
+                # Collapse expression refs to concrete resolved tag labels (for concise trace display).
+                right_details.append(_detail("right", right_target.name))
+            elif isinstance(right_operand, Expression):
+                right_details.append(_detail("right", repr(right_operand)))
             right_value = _resolve_operand(condition.value)
             value = bool(condition.evaluate(ctx))
             return value, [
@@ -895,6 +917,7 @@ class PLCRunner:
                 _detail("left_value", left_value),
                 _detail("right_value", right_value),
                 *extra_details,
+                *right_details,
             ]
 
         expr_compare_ops: tuple[type[Any], ...] = (
@@ -921,7 +944,7 @@ class PLCRunner:
             result = True
             for child in condition.conditions:
                 child_result, _ = self._evaluate_condition_value(child, ctx)
-                child_results.append(f"{self._condition_expression(child)}={child_result}")
+                child_results.append(f"{self._condition_expression(child)}({str(child_result).lower()})")
                 if not child_result:
                     result = False
                     break
@@ -932,7 +955,7 @@ class PLCRunner:
             result = False
             for child in condition.conditions:
                 child_result, _ = self._evaluate_condition_value(child, ctx)
-                child_results.append(f"{self._condition_expression(child)}={child_result}")
+                child_results.append(f"{self._condition_expression(child)}({str(child_result).lower()})")
                 if child_result:
                     result = True
                     break
@@ -971,11 +994,16 @@ class PLCRunner:
             ExprCompareLt,
             ExprCompareNe,
         )
+        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
         from pyrung.core.tag import Tag
 
         def _value_text(value: Any) -> str:
             if isinstance(value, Tag):
                 return value.name
+            if isinstance(value, IndirectRef):
+                return f"{value.block.name}[{value.pointer.name}]"
+            if isinstance(value, IndirectExprRef):
+                return f"{value.block.name}[{value.expr!r}]"
             return repr(value)
 
         def _indirect_ref_text(value: Any) -> str:
