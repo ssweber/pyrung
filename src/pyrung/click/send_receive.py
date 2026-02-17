@@ -318,18 +318,13 @@ class _ClickSendInstruction(Instruction):
     def always_execute(self) -> bool:
         return True
 
-    def _is_enabled(self, ctx: ScanContext) -> bool:
-        if self._enable_condition is None:
-            return True
-        return bool(self._enable_condition.evaluate(ctx))
-
     def _clear_status(self, ctx: ScanContext) -> None:
         ctx.set_tags(
             _status_clear_tags(self._sending, self._success, self._error, self._exception_response)
         )
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self._is_enabled(ctx):
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
             _discard_pending_request(self._pending)
             self._pending = None
             self._clear_status(ctx)
@@ -396,6 +391,9 @@ class _ClickSendInstruction(Instruction):
                 }
             )
 
+    def is_inert_when_disabled(self) -> bool:
+        return False
+
 
 class _ClickReceiveInstruction(Instruction):
     def __init__(
@@ -439,11 +437,6 @@ class _ClickReceiveInstruction(Instruction):
     def always_execute(self) -> bool:
         return True
 
-    def _is_enabled(self, ctx: ScanContext) -> bool:
-        if self._enable_condition is None:
-            return True
-        return bool(self._enable_condition.evaluate(ctx))
-
     def _clear_status(self, ctx: ScanContext) -> None:
         ctx.set_tags(
             _status_clear_tags(
@@ -451,8 +444,8 @@ class _ClickReceiveInstruction(Instruction):
             )
         )
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self._is_enabled(ctx):
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
             _discard_pending_request(self._pending)
             self._pending = None
             self._clear_status(ctx)
@@ -532,6 +525,9 @@ class _ClickReceiveInstruction(Instruction):
         updates[self._error.name] = False
         updates[self._exception_response.name] = 0
         ctx.set_tags(updates)
+
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
 
 def send(

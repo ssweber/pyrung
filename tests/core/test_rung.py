@@ -203,7 +203,6 @@ class TestRungOutputHandling:
 
         rung = Rung(Button)
         rung.add_instruction(OutInstruction(Light))
-        rung.register_coil(Light)  # Mark as coil output
 
         # First, rung is true - Light turns on
         state = SystemState().with_tags({"Button": True, "Light": False})

@@ -122,13 +122,14 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
     runner = PLCRunner(logic)
     steps = list(runner.scan_steps_debug())
 
-    assert [step.kind for step in steps] == ["subroutine", "branch", "rung"]
-    assert [step.depth for step in steps] == [1, 1, 0]
-    assert [step.rung_index for step in steps] == [0, 0, 0]
-    assert steps[0].subroutine_name == "init_sub"
-    assert steps[0].call_stack == ("init_sub",)
-    assert steps[1].call_stack == ()
-    assert steps[2].call_stack == ()
+    boundary_steps = [step for step in steps if step.kind != "instruction"]
+    assert [step.kind for step in boundary_steps] == ["subroutine", "branch", "rung"]
+    assert [step.depth for step in boundary_steps] == [1, 1, 0]
+    assert [step.rung_index for step in boundary_steps] == [0, 0, 0]
+    assert boundary_steps[0].subroutine_name == "init_sub"
+    assert boundary_steps[0].call_stack == ("init_sub",)
+    assert boundary_steps[1].call_stack == ()
+    assert boundary_steps[2].call_stack == ()
     assert runner.current_state.tags["SubLight"] is True
     assert runner.current_state.tags["BranchLight"] is True
     assert runner.current_state.tags["TopLight"] is True
@@ -178,7 +179,8 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
     runner.patch({"Enable": False})
     steps = list(runner.scan_steps_debug())
 
-    assert [step.kind for step in steps] == ["rung"]
+    kinds = [step.kind for step in steps]
+    assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
     assert runner.current_state.tags["BranchOut"] is False
 
 
@@ -203,7 +205,8 @@ def test_scan_steps_debug_respects_source_order_branch_before_call():
     runner.patch({"Step": 0, "Auto": True, "BranchDone": False, "SubLight": False})
     steps = list(runner.scan_steps_debug())
 
-    assert [entry.kind for entry in steps] == ["branch", "subroutine", "rung"]
+    kinds = [entry.kind for entry in steps]
+    assert [kind for kind in kinds if kind != "instruction"] == ["branch", "subroutine", "rung"]
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["BranchDone"] is True
     assert runner.current_state.tags["SubLight"] is True
@@ -225,7 +228,8 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
     steps = list(runner.scan_steps_debug())
 
     # Branch remains unpowered for this scan despite Mode being written before branch item.
-    assert [step.kind for step in steps] == ["rung"]
+    kinds = [step.kind for step in steps]
+    assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
     assert runner.current_state.tags["Mode"] is True
     assert runner.current_state.tags["BranchOut"] is False
 

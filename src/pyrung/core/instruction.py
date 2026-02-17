@@ -147,7 +147,7 @@ class Instruction(ABC):
     source_line: int | None = None
 
     @abstractmethod
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this instruction within the given context (internal)."""
         pass
 
@@ -158,6 +158,10 @@ class Instruction(ABC):
         that need to check their conditions independently.
         """
         return False
+
+    def is_inert_when_disabled(self) -> bool:
+        """Whether this instruction is a no-op when `enabled` is False."""
+        return True
 
 
 class SubroutineReturnSignal(Exception):
@@ -399,8 +403,11 @@ class OneShotMixin:
     def oneshot(self) -> bool:
         return self._oneshot
 
-    def should_execute(self) -> bool:
+    def should_execute(self, enabled: bool) -> bool:
         """Check if instruction should execute (respects oneshot)."""
+        if not enabled:
+            self._has_executed = False
+            return False
         if not self._oneshot:
             return True
         if self._has_executed:
@@ -432,8 +439,8 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
         self._ins = ins or {}
         self._outs = outs or {}
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
         result = self._fn(**kwargs)
@@ -470,10 +477,7 @@ class AsyncFunctionCallInstruction(Instruction):
     def always_execute(self) -> bool:
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
-        enabled = True
-        if self._enable_condition is not None:
-            enabled = bool(self._enable_condition.evaluate(ctx))
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
         result = self._fn(enabled, **kwargs)
         if not self._outs:
@@ -491,6 +495,9 @@ class AsyncFunctionCallInstruction(Instruction):
             resolved = resolve_tag_ctx(target, ctx)
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
+    def is_inert_when_disabled(self) -> bool:
+        return False
+
 
 class ForLoopInstruction(OneShotMixin, Instruction):
     """For-loop instruction.
@@ -503,17 +510,21 @@ class ForLoopInstruction(OneShotMixin, Instruction):
         count: Tag | IndirectRef | IndirectExprRef | Any,
         idx_tag: Tag,
         instructions: list[Instruction],
-        coils: set[Tag],
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
         self.count = count
         self.idx_tag = idx_tag
         self.instructions = instructions
-        self.coils = coils
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
+            for instruction in self.instructions:
+                instruction.execute(ctx, False)
+            self.reset_oneshot()
+            return
+
+        if not self.should_execute(enabled):
             return
 
         count_value = resolve_tag_or_value_ctx(self.count, ctx)
@@ -523,7 +534,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
             # Keep loop index in tag space so indirect refs resolve via ctx.get_tag().
             ctx.set_tag(self.idx_tag.name, i)
             for instruction in self.instructions:
-                instruction.execute(ctx)
+                instruction.execute(ctx, True)
 
     def reset_oneshot(self) -> None:
         """Reset own oneshot state and propagate reset to captured children."""
@@ -544,11 +555,21 @@ class OutInstruction(OneShotMixin, Instruction):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        targets = resolve_coil_targets_ctx(self.target, ctx)
+        if not enabled:
+            self.reset_oneshot()
+            for target in targets:
+                ctx.set_tag(target.name, False)
             return
-        for target in resolve_coil_targets_ctx(self.target, ctx):
+
+        if not self.should_execute(enabled):
+            return
+        for target in targets:
             ctx.set_tag(target.name, True)
+
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
 
 class LatchInstruction(Instruction):
@@ -561,7 +582,9 @@ class LatchInstruction(Instruction):
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
         self.target = target
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
+            return
         for target in resolve_coil_targets_ctx(self.target, ctx):
             ctx.set_tag(target.name, True)
 
@@ -575,7 +598,9 @@ class ResetInstruction(Instruction):
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
         self.target = target
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
+            return
         for target in resolve_coil_targets_ctx(self.target, ctx):
             ctx.set_tag(target.name, target.default)
 
@@ -598,8 +623,8 @@ class CopyInstruction(OneShotMixin, Instruction):
         self.source = source
         self.target = target
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         try:
@@ -779,14 +804,18 @@ class CallInstruction(Instruction):
         self.subroutine_name = subroutine_name
         self._program = program  # Reference to Program for subroutine lookup
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not enabled:
+            return
         self._program.call_subroutine_ctx(self.subroutine_name, ctx)
 
 
 class ReturnInstruction(Instruction):
     """Return from the current subroutine immediately."""
 
-    def execute(self, ctx: ScanContext) -> None:  # noqa: ARG002
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
+        if not enabled:
+            return
         raise SubroutineReturnSignal
 
 
@@ -850,7 +879,7 @@ class CountUpInstruction(Instruction):
         """Counter always executes to check all conditions independently."""
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Check reset condition first
         if self.reset_condition is not None:
             reset_active = self.reset_condition.evaluate(ctx)
@@ -864,8 +893,7 @@ class CountUpInstruction(Instruction):
         delta = 0
 
         # Check UP condition (counts every scan when true)
-        up_curr = self.up_condition.evaluate(ctx) if self.up_condition else False
-        if up_curr:
+        if enabled:
             delta += 1
 
         # Check DOWN condition (counts every scan when true, optional)
@@ -883,6 +911,9 @@ class CountUpInstruction(Instruction):
 
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
+
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
 
 class CountDownInstruction(Instruction):
@@ -944,7 +975,7 @@ class CountDownInstruction(Instruction):
         """Counter always executes to check all conditions independently."""
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Check reset condition first
         if self.reset_condition is not None:
             reset_active = self.reset_condition.evaluate(ctx)
@@ -957,8 +988,7 @@ class CountDownInstruction(Instruction):
         acc_value = ctx.get_tag(self.accumulator.name, 0)
 
         # Check DOWN condition (counts every scan when true)
-        down_curr = self.down_condition.evaluate(ctx) if self.down_condition else False
-        if down_curr:
+        if enabled:
             acc_value -= 1
 
         # Clamp to DINT range
@@ -970,6 +1000,9 @@ class CountDownInstruction(Instruction):
 
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
+
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
 
 class OnDelayInstruction(Instruction):
@@ -1035,7 +1068,7 @@ class OnDelayInstruction(Instruction):
         """TON always executes to reset when rung goes false."""
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
 
         # Check reset condition first
@@ -1046,9 +1079,6 @@ class OnDelayInstruction(Instruction):
                 ctx.set_memory(frac_key, 0.0)
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
                 return
-
-        # Check enable condition
-        enabled = self.enable_condition.evaluate(ctx) if self.enable_condition else True
 
         if enabled:
             # Get dt from context (injected by runner)
@@ -1082,6 +1112,9 @@ class OnDelayInstruction(Instruction):
                 # TON: Reset immediately
                 ctx.set_memory(frac_key, 0.0)
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
+
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
 
 class OffDelayInstruction(Instruction):
@@ -1144,10 +1177,7 @@ class OffDelayInstruction(Instruction):
         """Off-delay timers always execute (need to count while disabled)."""
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
-        # Check enable condition
-        enabled = self.enable_condition.evaluate(ctx) if self.enable_condition else True
-
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
 
         if enabled:
@@ -1176,6 +1206,9 @@ class OffDelayInstruction(Instruction):
             ctx.set_memory(frac_key, new_frac)
             ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
 
+    def is_inert_when_disabled(self) -> bool:
+        return False
+
 
 class BlockCopyInstruction(OneShotMixin, Instruction):
     """Block copy instruction.
@@ -1191,8 +1224,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         self.source = source
         self.dest = dest
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
@@ -1407,8 +1440,8 @@ class MathInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.mode = mode
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
@@ -1448,8 +1481,8 @@ class FillInstruction(OneShotMixin, Instruction):
         self.value = value
         self.dest = dest
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
@@ -1570,8 +1603,8 @@ class SearchInstruction(OneShotMixin, Instruction):
         self.continuous = continuous
         self._compare = _SEARCH_OPERATOR_MAP[condition]
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         resolved_range = resolve_block_range_ctx(self.search_range, ctx)
@@ -1770,10 +1803,10 @@ class ShiftInstruction(Instruction):
         """Shift must always run to capture clock edges while rung is false."""
         return True
 
-    def execute(self, ctx: ScanContext) -> None:
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
         tags = self._resolve_tags(ctx)
 
-        data_bit = self.data_condition.evaluate(ctx) if self.data_condition is not None else True
+        data_bit = enabled
         clock_curr = bool(self.clock_condition.evaluate(ctx))
         clock_prev = bool(ctx.get_memory(self._prev_clock_key, False))
         rising_edge = clock_curr and not clock_prev
@@ -1791,6 +1824,9 @@ class ShiftInstruction(Instruction):
 
         ctx.set_memory(self._prev_clock_key, clock_curr)
 
+    def is_inert_when_disabled(self) -> bool:
+        return False
+
 
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
@@ -1800,8 +1836,8 @@ class PackBitsInstruction(OneShotMixin, Instruction):
         self.bit_block = bit_block
         self.dest = dest
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         from pyrung.core.tag import TagType
@@ -1844,8 +1880,8 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         self.word_block = word_block
         self.dest = dest
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         from pyrung.core.tag import TagType
@@ -1892,8 +1928,8 @@ class PackTextInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.allow_whitespace = bool(allow_whitespace)
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         from pyrung.core.tag import TagType
@@ -1936,8 +1972,8 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
         self.source = source
         self.bit_block = bit_block
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         from pyrung.core.tag import TagType
@@ -1983,8 +2019,8 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
         self.source = source
         self.word_block = word_block
 
-    def execute(self, ctx: ScanContext) -> None:
-        if not self.should_execute():
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if not self.should_execute(enabled):
             return
 
         from pyrung.core.tag import TagType

@@ -305,7 +305,7 @@ class TestUnknownResilience:
             def __init__(self):
                 self.mystery = 42
 
-            def execute(self, ctx):
+            def execute(self, ctx, enabled):
                 pass
 
         with Program() as prog:
@@ -485,29 +485,7 @@ class TestOneshotCaptured:
 
 
 # ---------------------------------------------------------------------------
-# 12. Coil tags captured
-# ---------------------------------------------------------------------------
-
-
-class TestCoilsCaptured:
-    """Walker captures rung coil tags."""
-
-    def test_coil_tags_emitted(self):
-        Light = Bool("Light3")
-
-        with Program() as prog:
-            with Rung():
-                out(Light)
-
-        facts = walk_program(prog)
-        coil_facts = [f for f in facts.operands if f.location.arg_path.startswith("coil[")]
-        assert coil_facts
-        assert coil_facts[0].value_kind == "tag"
-        assert coil_facts[0].metadata["tag_name"] == "Light3"
-
-
-# ---------------------------------------------------------------------------
-# 13. Function-call instruction fields captured
+# 12. Function-call instruction fields captured
 # ---------------------------------------------------------------------------
 
 

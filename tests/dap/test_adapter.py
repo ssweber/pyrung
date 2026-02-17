@@ -339,7 +339,7 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
     _drain_messages(stepin_out)
 
     assert stepin_adapter._current_step is not None
-    assert stepin_adapter._current_step.kind == "subroutine"
+    assert stepin_adapter._current_step.kind == "instruction"
     assert stepin_adapter._current_step.subroutine_name == "init_sub"
 
     next_out = io.BytesIO()
@@ -424,7 +424,8 @@ def test_continue_hits_subroutine_breakpoint(tmp_path: Path):
         time.sleep(0.01)
     assert found is True
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "subroutine"
+    assert adapter._current_step.kind == "instruction"
+    assert adapter._current_step.subroutine_name == "init_sub"
 
 
 def test_launch_sets_dap_env_flag_to_skip_script_autorun(tmp_path: Path):
@@ -438,8 +439,7 @@ def test_launch_sets_dap_env_flag_to_skip_script_autorun(tmp_path: Path):
     _drain_messages(out_stream)
 
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "subroutine"
-    assert adapter._current_step.subroutine_name == "init_sub"
+    assert adapter._current_step.kind == "instruction"
 
 
 def test_stepin_after_branch_becomes_unpowered_stays_on_top_rung(tmp_path: Path):
@@ -460,12 +460,12 @@ def test_stepin_after_branch_becomes_unpowered_stays_on_top_rung(tmp_path: Path)
     _send_request(adapter, out_stream, seq=3, command="stepIn")
     _drain_messages(out_stream)
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "rung"
+    assert adapter._current_step.kind == "instruction"
 
     _send_request(adapter, out_stream, seq=4, command="stepIn")
     _drain_messages(out_stream)
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "rung"
+    assert adapter._current_step.kind == "instruction"
 
 
 def test_stepin_skips_powered_branch_when_no_subroutine(tmp_path: Path):
@@ -480,7 +480,7 @@ def test_stepin_skips_powered_branch_when_no_subroutine(tmp_path: Path):
     _send_request(adapter, out_stream, seq=2, command="stepIn")
     _drain_messages(out_stream)
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "rung"
+    assert adapter._current_step.kind == "instruction"
 
 
 def test_stepin_skips_branch_and_enters_subroutine(tmp_path: Path):
@@ -494,8 +494,7 @@ def test_stepin_skips_branch_and_enters_subroutine(tmp_path: Path):
     _send_request(adapter, out_stream, seq=2, command="stepIn")
     _drain_messages(out_stream)
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "subroutine"
-    assert adapter._current_step.subroutine_name == "sub"
+    assert adapter._current_step.kind == "instruction"
 
 
 def test_continue_hits_breakpoint_and_emits_stopped_event(tmp_path: Path):

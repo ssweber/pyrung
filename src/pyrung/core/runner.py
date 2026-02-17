@@ -38,7 +38,7 @@ class ScanStep:
     rung_index: int
     rung: Rung
     ctx: ScanContext
-    kind: Literal["rung", "branch", "subroutine"]
+    kind: Literal["rung", "branch", "subroutine", "instruction"]
     subroutine_name: str | None
     depth: int
     call_stack: tuple[str, ...]
@@ -337,6 +337,7 @@ class PLCRunner:
 
         # Evaluate logic rung-by-rung with nested yield points for debugger stepping.
         for i, rung in enumerate(self._logic):
+            enabled = rung._evaluate_conditions(ctx)
             yield from self._iter_rung_steps(
                 rung_index=i,
                 rung=rung,
@@ -345,7 +346,7 @@ class PLCRunner:
                 depth=0,
                 subroutine_name=None,
                 call_stack=(),
-                force_false=False,
+                enabled=enabled,
             )
 
         # Re-apply forces after logic so they persist across scans
@@ -378,15 +379,16 @@ class PLCRunner:
         depth: int,
         subroutine_name: str | None,
         call_stack: tuple[str, ...],
-        force_false: bool,
+        enabled: bool,
     ) -> Generator[ScanStep, None, None]:
         from pyrung.core.instruction import SubroutineReturnSignal
         from pyrung.core.rung import Rung as RungClass
 
-        if force_false:
-            self._handle_rung_false_debug(rung, ctx)
+        branch_enable_map = rung._compute_branch_enable_map(ctx, parent_enabled=enabled)
+        try:
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
+                    branch_enabled = branch_enable_map.get(id(item), False)
                     yield from self._iter_rung_steps(
                         rung_index=rung_index,
                         rung=item,
@@ -395,8 +397,21 @@ class PLCRunner:
                         depth=depth + 1,
                         subroutine_name=subroutine_name,
                         call_stack=call_stack,
-                        force_false=True,
+                        enabled=branch_enabled,
                     )
+                else:
+                    yield from self._iter_instruction_steps(
+                        rung_index=rung_index,
+                        rung=rung,
+                        kind=kind,
+                        subroutine_name=subroutine_name,
+                        instruction=item,
+                        ctx=ctx,
+                        depth=depth,
+                        call_stack=call_stack,
+                        enabled=enabled,
+                    )
+        except SubroutineReturnSignal:
             if kind != "branch":
                 yield ScanStep(
                     rung_index=rung_index,
@@ -407,61 +422,9 @@ class PLCRunner:
                     depth=depth,
                     call_stack=call_stack,
                 )
-            return
+            raise
 
-        conditions_true = rung._evaluate_conditions(ctx)
-        if conditions_true:
-            branch_enable_map = rung._compute_branch_enable_map(ctx, parent_enabled=True)
-            try:
-                for item in rung._execution_items:
-                    if isinstance(item, RungClass):
-                        enabled = branch_enable_map.get(id(item), False)
-                        yield from self._iter_rung_steps(
-                            rung_index=rung_index,
-                            rung=item,
-                            ctx=ctx,
-                            kind="branch",
-                            depth=depth + 1,
-                            subroutine_name=subroutine_name,
-                            call_stack=call_stack,
-                            force_false=not enabled,
-                        )
-                    else:
-                        yield from self._iter_instruction_steps(
-                            rung_index=rung_index,
-                            instruction=item,
-                            ctx=ctx,
-                            depth=depth,
-                            call_stack=call_stack,
-                        )
-            except SubroutineReturnSignal:
-                if kind != "branch":
-                    yield ScanStep(
-                        rung_index=rung_index,
-                        rung=rung,
-                        ctx=ctx,
-                        kind=kind,
-                        subroutine_name=subroutine_name,
-                        depth=depth,
-                        call_stack=call_stack,
-                    )
-                raise
-        else:
-            self._handle_rung_false_debug(rung, ctx)
-            for item in rung._execution_items:
-                if isinstance(item, RungClass):
-                    yield from self._iter_rung_steps(
-                        rung_index=rung_index,
-                        rung=item,
-                        ctx=ctx,
-                        kind="branch",
-                        depth=depth + 1,
-                        subroutine_name=subroutine_name,
-                        call_stack=call_stack,
-                        force_false=True,
-                    )
-
-        if kind != "branch" or conditions_true:
+        if kind != "branch" or enabled:
             yield ScanStep(
                 rung_index=rung_index,
                 rung=rung,
@@ -476,10 +439,14 @@ class PLCRunner:
         self,
         *,
         rung_index: int,
+        rung: Rung,
+        kind: Literal["rung", "branch", "subroutine"],
+        subroutine_name: str | None,
         instruction: Instruction,
         ctx: ScanContext,
         depth: int,
         call_stack: tuple[str, ...],
+        enabled: bool,
     ) -> Generator[ScanStep, None, None]:
         from pyrung.core.instruction import (
             CallInstruction,
@@ -489,11 +456,15 @@ class PLCRunner:
         )
 
         if isinstance(instruction, CallInstruction):
+            if not enabled:
+                instruction.execute(ctx, enabled)
+                return
             if instruction.subroutine_name not in instruction._program.subroutines:
                 raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
             next_stack = (*call_stack, instruction.subroutine_name)
             try:
                 for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
+                    sub_enabled = sub_rung._evaluate_conditions(ctx)
                     yield from self._iter_rung_steps(
                         rung_index=rung_index,
                         rung=sub_rung,
@@ -502,14 +473,18 @@ class PLCRunner:
                         depth=depth + 1,
                         subroutine_name=instruction.subroutine_name,
                         call_stack=next_stack,
-                        force_false=False,
+                        enabled=sub_enabled,
                     )
             except SubroutineReturnSignal:
                 return
             return
 
         if isinstance(instruction, ForLoopInstruction):
-            if not instruction.should_execute():
+            if not enabled:
+                instruction.execute(ctx, enabled)
+                return
+
+            if not instruction.should_execute(enabled):
                 return
 
             count_value = resolve_tag_or_value_ctx(instruction.count, ctx)
@@ -521,26 +496,31 @@ class PLCRunner:
                 for child in instruction.instructions:
                     yield from self._iter_instruction_steps(
                         rung_index=rung_index,
+                        rung=rung,
+                        kind=kind,
+                        subroutine_name=subroutine_name,
                         instruction=child,
                         ctx=ctx,
                         depth=depth,
                         call_stack=call_stack,
+                        enabled=True,
                     )
             return
 
-        instruction.execute(ctx)
+        if not enabled and instruction.is_inert_when_disabled():
+            instruction.execute(ctx, enabled)
+            return
 
-    def _handle_rung_false_debug(self, rung: Rung, ctx: ScanContext) -> None:
-        """Mirror Rung._handle_rung_false without recursively walking branches."""
-        rung._execute_always_instructions(ctx)
-
-        for tag in rung._coils:
-            ctx.set_tag(tag.name, tag.default)
-
-        for instruction in rung._instructions:
-            reset_oneshot = getattr(instruction, "reset_oneshot", None)
-            if callable(reset_oneshot):
-                reset_oneshot()
+        yield ScanStep(
+            rung_index=rung_index,
+            rung=rung,
+            ctx=ctx,
+            kind="instruction",
+            subroutine_name=subroutine_name,
+            depth=depth,
+            call_stack=call_stack,
+        )
+        instruction.execute(ctx, enabled)
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""

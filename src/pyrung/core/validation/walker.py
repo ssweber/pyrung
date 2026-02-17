@@ -405,19 +405,6 @@ class _Walker:
                 branch_path + (branch_idx,),
             )
 
-        # Coil tags (sorted by name for deterministic order)
-        for coil_idx, coil_tag in enumerate(sorted(rung._coils, key=lambda t: t.name)):
-            self._walk_value(
-                coil_tag,
-                scope,
-                subroutine,
-                rung_index,
-                branch_path,
-                None,
-                None,
-                f"coil[{coil_idx}]",
-            )
-
     # -- instruction traversal ---------------------------------------------
 
     def _walk_instruction(

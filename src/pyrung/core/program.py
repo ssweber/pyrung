@@ -582,8 +582,7 @@ def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
     """
     ctx = _require_rung_context("out")
     source_file, source_line = _capture_source(depth=2)
-    for coil_tag in _iter_coil_tags(target):
-        ctx._rung.register_coil(coil_tag)
+    _iter_coil_tags(target)
     instr = OutInstruction(target, oneshot)
     instr.source_file, instr.source_line = source_file, source_line
     ctx._rung.add_instruction(instr)
@@ -1304,15 +1303,10 @@ class ForLoop:
             count=self.count,
             idx_tag=self.idx,
             instructions=self._capture_rung._instructions,
-            coils=self._capture_rung._coils,
             oneshot=self.oneshot,
         )
         instruction.source_file, instruction.source_line = self._source_file, self._source_line
         self._parent_ctx._rung.add_instruction(instruction)
-
-        # Register child OUT targets on parent rung so rung-false resets still apply.
-        for coil in self._capture_rung._coils:
-            self._parent_ctx._rung.register_coil(coil)
 
 
 def forloop(count: Tag | int, oneshot: bool = False) -> ForLoop:

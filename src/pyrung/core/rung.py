@@ -48,7 +48,6 @@ class Rung:
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
-        self._coils: set[Tag] = set()  # Tags that should reset when rung false
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
@@ -60,10 +59,6 @@ class Rung:
         """Add an instruction to execute when conditions are true."""
         self._instructions.append(instruction)
         self._execution_items.append(instruction)
-
-    def register_coil(self, tag: Tag) -> None:
-        """Register a tag as a coil output (resets when rung false)."""
-        self._coils.add(tag)
 
     def add_branch(self, branch: Rung) -> None:
         """Add a nested branch (parallel path) to this rung."""
@@ -102,7 +97,7 @@ class Rung:
             ctx: ScanContext for reading/writing with batched updates.
         """
         conditions_true = self._evaluate_conditions(ctx)
-        self._execute_with_enable(ctx, conditions_true)
+        self.execute(ctx, conditions_true)
 
     def _evaluate_conditions(self, ctx: ScanContext) -> bool:
         """Evaluate all conditions (AND logic).
@@ -119,7 +114,7 @@ class Rung:
 
     def _execute_instructions(self, ctx: ScanContext) -> None:
         """Execute instructions/branches in source order."""
-        self._execute_with_enable(ctx, True)
+        self.execute(ctx, True)
 
     def _evaluate_local_conditions(self, ctx: ScanContext) -> bool:
         """Evaluate only this branch's local conditions (not inherited parent conditions)."""
@@ -138,48 +133,13 @@ class Rung:
                 branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(ctx)
         return branch_enable_map
 
-    def _execute_with_enable(self, ctx: ScanContext, enabled: bool) -> None:
-        """Execute or false-handle this rung using a precomputed enable state."""
-        if not enabled:
-            self._handle_rung_false(ctx)
-            return
-
-        branch_enable_map = self._compute_branch_enable_map(ctx, parent_enabled=True)
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        """Execute this rung with the provided power state."""
+        branch_enable_map = self._compute_branch_enable_map(ctx, parent_enabled=enabled)
 
         for item in self._execution_items:
             if isinstance(item, Rung):
-                item._execute_with_enable(ctx, branch_enable_map.get(id(item), False))
+                branch_power = branch_enable_map.get(id(item), False)
+                item.execute(ctx, branch_power)
             else:
-                item.execute(ctx)
-
-    def _execute_always_instructions(self, ctx: ScanContext) -> None:
-        """Execute instructions that always run (like counters) even when rung is false."""
-        for instruction in self._instructions:
-            if instruction.always_execute():
-                instruction.execute(ctx)
-
-    def _handle_rung_false(self, ctx: ScanContext) -> None:
-        """Handle outputs when rung goes false.
-
-        - Execute always-execute instructions (like counters)
-        - Reset registered coil outputs to False
-        - Reset oneshot triggers on instructions
-        - Propagate false to nested branches
-        """
-        # Execute instructions that always run (counters check their own conditions)
-        self._execute_always_instructions(ctx)
-
-        # Reset coil outputs
-        for tag in self._coils:
-            ctx.set_tag(tag.name, tag.default)
-
-        # Reset oneshot triggers
-        for instruction in self._instructions:
-            reset_oneshot = getattr(instruction, "reset_oneshot", None)
-            if callable(reset_oneshot):
-                reset_oneshot()
-
-        # Propagate false to nested branches
-        for item in self._execution_items:
-            if isinstance(item, Rung):
-                item._handle_rung_false(ctx)
+                item.execute(ctx, enabled)

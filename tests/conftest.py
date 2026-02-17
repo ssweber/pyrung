@@ -24,7 +24,7 @@ def execute(instr: Instruction, state: SystemState, *, dt: float = 0.0) -> Syste
     """
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
-    instr.execute(ctx)
+    instr.execute(ctx, True)
     return ctx.commit(dt=dt)
 
 
