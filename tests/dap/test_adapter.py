@@ -68,6 +68,10 @@ def _stopped_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "stopped"]
 
 
+def _trace_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "pyrungTrace"]
+
+
 def _runner_script() -> str:
     return (
         "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
@@ -338,6 +342,14 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
     _send_request(stepin_adapter, stepin_out, seq=2, command="stepIn")
     _drain_messages(stepin_out)
 
+    call_line = _line_number(script, "call('init_sub')")
+    assert stepin_adapter._current_step is not None
+    assert stepin_adapter._current_step.kind == "instruction"
+    assert stepin_adapter._current_step.subroutine_name is None
+    assert stepin_adapter._current_step.source_line == call_line
+
+    _send_request(stepin_adapter, stepin_out, seq=3, command="stepIn")
+    _drain_messages(stepin_out)
     assert stepin_adapter._current_step is not None
     assert stepin_adapter._current_step.kind == "instruction"
     assert stepin_adapter._current_step.subroutine_name == "init_sub"
@@ -363,11 +375,55 @@ def test_stacktrace_includes_subroutine_context_when_paused_inside_call(tmp_path
     _drain_messages(out_stream)
     _send_request(adapter, out_stream, seq=2, command="stepIn")
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="stepIn")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=4, command="stackTrace")
+    response = _single_response(messages)
+    frames = response["body"]["stackFrames"]
+    assert any("init_sub" in frame["name"] for frame in frames)
+
+
+def test_stacktrace_uses_call_instruction_line_when_paused_on_call(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
+    call_line = _line_number(script, "call('init_sub')")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
 
     messages = _send_request(adapter, out_stream, seq=3, command="stackTrace")
     response = _single_response(messages)
     frames = response["body"]["stackFrames"]
-    assert any("init_sub" in frame["name"] for frame in frames)
+    assert frames[0]["line"] == call_line
+    assert "CallInstruction" in frames[0]["name"]
+
+
+def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert body["step"]["kind"] == "rung"
+    assert body["step"]["enabledState"] == "disabled_local"
+    regions = body["regions"]
+    assert regions
+    assert regions[0]["enabledState"] == "disabled_local"
+    conditions = regions[0]["conditions"]
+    assert conditions
+    assert conditions[0]["status"] == "false"
+    detail_names = {item["name"] for item in conditions[0]["details"]}
+    assert {"tag", "value"}.issubset(detail_names)
 
 
 def test_set_breakpoints_verifies_subroutine_line(tmp_path: Path):

@@ -38,7 +38,7 @@ with Program(strict=False) as logic:
 
     # Subroutine body
     with subroutine("init_sub"):
-        with Rung():
+        with Rung(Step == 0):
             out(SubLight)
         with Rung():
             out(SubLight)

@@ -85,6 +85,8 @@ class DAPAdapter:
                 continue
             if kind == "internal_event":
                 self._send_event(item["event"], item.get("body"))
+                if item.get("event") == "stopped":
+                    self._emit_trace_event()
                 continue
             if kind == "eof":
                 self._stop_event.set()
@@ -124,6 +126,8 @@ class DAPAdapter:
             self._send_response(request, success=True, body=body)
             for event_name, event_body in events:
                 self._send_event(event_name, event_body)
+                if event_name == "stopped":
+                    self._emit_trace_event()
         except DAPAdapterError as exc:
             self._send_response(request, success=False, message=str(exc))
         except Exception as exc:  # pragma: no cover - defensive fail-safe path
@@ -149,6 +153,13 @@ class DAPAdapter:
     def _send_event(self, event: str, body: dict[str, Any] | None = None) -> None:
         envelope = make_event(seq=self._seq.next(), event=event, body=body)
         write_message(self._out_stream, envelope)
+
+    def _emit_trace_event(self) -> None:
+        with self._state_lock:
+            body = self._current_trace_body_locked()
+        if body is None:
+            return
+        self._send_event("pyrungTrace", body)
 
     def _on_initialize(self, _args: dict[str, Any]) -> HandlerResult:
         capabilities = {
@@ -621,12 +632,15 @@ class DAPAdapter:
         elif current_step.kind == "subroutine":
             sub_name = current_step.subroutine_name or "subroutine"
             step_name = f"{sub_name} (rung {current_step.rung_index})"
+        elif current_step.kind == "instruction":
+            kind_name = current_step.instruction_kind or "Instruction"
+            step_name = f"{kind_name} (rung {current_step.rung_index})"
 
         frames: list[dict[str, Any]] = [
-            self._stack_frame_from_rung(
+            self._stack_frame_from_step(
                 frame_id=0,
                 name=step_name,
-                rung=current_step.rung,
+                step=current_step,
             )
         ]
 
@@ -653,6 +667,29 @@ class DAPAdapter:
 
         return frames
 
+    def _stack_frame_from_step(
+        self,
+        *,
+        frame_id: int,
+        name: str,
+        step: ScanStep,
+    ) -> dict[str, Any]:
+        source_line = int(step.source_line or step.rung.source_line or 1)
+        frame: dict[str, Any] = {
+            "id": frame_id,
+            "name": name,
+            "line": source_line,
+            "column": 1,
+        }
+        end_line = step.end_line or step.source_line
+        if end_line is not None:
+            frame["endLine"] = int(end_line)
+        source_file = step.source_file or step.rung.source_file
+        if source_file:
+            source_path = str(Path(source_file))
+            frame["source"] = {"name": Path(source_path).name, "path": source_path}
+        return frame
+
     def _stack_frame_from_rung(
         self,
         *,
@@ -677,6 +714,79 @@ class DAPAdapter:
         if self._runner is None:
             raise DAPAdapterError("No program launched")
         return self._runner
+
+    def _current_trace_body_locked(self) -> dict[str, Any] | None:
+        step = self._current_step
+        if step is None:
+            return None
+        trace = step.trace or {}
+        regions: list[dict[str, Any]] = []
+        for region in trace.get("regions", []):
+            source_file = region.get("source_file")
+            source_body = None
+            if isinstance(source_file, str) and source_file:
+                source_path = str(Path(source_file))
+                source_body = {"name": Path(source_path).name, "path": source_path}
+
+            conditions: list[dict[str, Any]] = []
+            for cond in region.get("conditions", []):
+                cond_source = None
+                cond_file = cond.get("source_file")
+                if isinstance(cond_file, str) and cond_file:
+                    cond_path = str(Path(cond_file))
+                    cond_source = {"name": Path(cond_path).name, "path": cond_path}
+                details = []
+                for detail in cond.get("details", []):
+                    if not isinstance(detail, dict):
+                        continue
+                    details.append(
+                        {
+                            "name": str(detail.get("name", "")),
+                            "value": self._format_value(detail.get("value")),
+                        }
+                    )
+                conditions.append(
+                    {
+                        "source": cond_source,
+                        "line": cond.get("source_line"),
+                        "expression": cond.get("expression"),
+                        "status": cond.get("status"),
+                        "value": cond.get("value"),
+                        "details": details,
+                    }
+                )
+
+            regions.append(
+                {
+                    "kind": region.get("kind"),
+                    "enabledState": region.get("enabled_state"),
+                    "source": source_body,
+                    "line": region.get("source_line"),
+                    "endLine": region.get("end_line"),
+                    "conditions": conditions,
+                }
+            )
+
+        step_source = None
+        step_source_file = step.source_file or step.rung.source_file
+        if step_source_file:
+            step_source_path = str(Path(step_source_file))
+            step_source = {"name": Path(step_source_path).name, "path": step_source_path}
+
+        return {
+            "step": {
+                "kind": step.kind,
+                "instructionKind": step.instruction_kind,
+                "enabledState": step.enabled_state,
+                "source": step_source,
+                "line": step.source_line or step.rung.source_line,
+                "endLine": step.end_line or step.source_line or step.rung.end_line,
+                "subroutineName": step.subroutine_name,
+                "callStack": list(step.call_stack),
+                "rungIndex": step.rung_index,
+            },
+            "regions": regions,
+        }
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
         return {"reason": reason, "threadId": self.THREAD_ID, "allThreadsStopped": True}
@@ -741,6 +851,8 @@ class DAPAdapter:
                 break
             if item.get("kind") == "internal_event":
                 self._send_event(item["event"], item.get("body"))
+                if item.get("event") == "stopped":
+                    self._emit_trace_event()
                 processed += 1
                 continue
             pending.append(item)

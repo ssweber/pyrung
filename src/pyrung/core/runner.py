@@ -42,6 +42,12 @@ class ScanStep:
     subroutine_name: str | None
     depth: int
     call_stack: tuple[str, ...]
+    source_file: str | None
+    source_line: int | None
+    end_line: int | None
+    enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None
+    trace: dict[str, Any] | None
+    instruction_kind: str | None
 
 
 class PLCRunner:
@@ -337,7 +343,7 @@ class PLCRunner:
 
         # Evaluate logic rung-by-rung with nested yield points for debugger stepping.
         for i, rung in enumerate(self._logic):
-            enabled = rung._evaluate_conditions(ctx)
+            enabled, rung_condition_traces = self._evaluate_conditions_with_trace(rung._conditions, ctx)
             yield from self._iter_rung_steps(
                 rung_index=i,
                 rung=rung,
@@ -347,6 +353,8 @@ class PLCRunner:
                 subroutine_name=None,
                 call_stack=(),
                 enabled=enabled,
+                parent_enabled=True,
+                rung_condition_traces=rung_condition_traces,
             )
 
         # Re-apply forces after logic so they persist across scans
@@ -380,15 +388,42 @@ class PLCRunner:
         subroutine_name: str | None,
         call_stack: tuple[str, ...],
         enabled: bool,
+        parent_enabled: bool,
+        rung_condition_traces: list[dict[str, Any]],
     ) -> Generator[ScanStep, None, None]:
         from pyrung.core.instruction import SubroutineReturnSignal
         from pyrung.core.rung import Rung as RungClass
 
-        branch_enable_map = rung._compute_branch_enable_map(ctx, parent_enabled=enabled)
+        enabled_state = self._enabled_state_for(kind=kind, enabled=enabled, parent_enabled=parent_enabled)
+        branch_enable_map: dict[int, bool] = {}
+        branch_trace_map: dict[int, dict[str, Any]] = {}
+        for item in rung._execution_items:
+            if not isinstance(item, RungClass):
+                continue
+            local_conditions = item._conditions[item._branch_condition_start :]
+            if enabled:
+                local_enabled, local_traces = self._evaluate_conditions_with_trace(local_conditions, ctx)
+                branch_state: Literal["enabled", "disabled_local", "disabled_parent"]
+                branch_state = "enabled" if local_enabled else "disabled_local"
+            else:
+                local_enabled = False
+                local_traces = [self._skipped_condition_trace(cond) for cond in local_conditions]
+                branch_state = "disabled_parent"
+            branch_enable_map[id(item)] = local_enabled
+            branch_trace_map[id(item)] = {"enabled_state": branch_state, "conditions": local_traces}
+
+        step_trace = self._build_step_trace(
+            kind=kind,
+            rung=rung,
+            enabled_state=enabled_state,
+            rung_condition_traces=rung_condition_traces,
+            branch_trace_map=branch_trace_map,
+        )
         try:
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
                     branch_enabled = branch_enable_map.get(id(item), False)
+                    branch_trace = branch_trace_map.get(id(item), {})
                     yield from self._iter_rung_steps(
                         rung_index=rung_index,
                         rung=item,
@@ -398,6 +433,8 @@ class PLCRunner:
                         subroutine_name=subroutine_name,
                         call_stack=call_stack,
                         enabled=branch_enabled,
+                        parent_enabled=enabled,
+                        rung_condition_traces=list(branch_trace.get("conditions", [])),
                     )
                 else:
                     yield from self._iter_instruction_steps(
@@ -410,10 +447,12 @@ class PLCRunner:
                         depth=depth,
                         call_stack=call_stack,
                         enabled=enabled,
+                        enabled_state=enabled_state,
+                        step_trace=step_trace,
                     )
         except SubroutineReturnSignal:
             if kind != "branch":
-                yield ScanStep(
+                yield self._make_scan_step(
                     rung_index=rung_index,
                     rung=rung,
                     ctx=ctx,
@@ -421,11 +460,17 @@ class PLCRunner:
                     subroutine_name=subroutine_name,
                     depth=depth,
                     call_stack=call_stack,
+                    source_file=rung.source_file,
+                    source_line=rung.source_line,
+                    end_line=rung.end_line,
+                    enabled_state=enabled_state,
+                    trace=step_trace,
+                    instruction_kind=None,
                 )
             raise
 
         if kind != "branch" or enabled:
-            yield ScanStep(
+            yield self._make_scan_step(
                 rung_index=rung_index,
                 rung=rung,
                 ctx=ctx,
@@ -433,6 +478,12 @@ class PLCRunner:
                 subroutine_name=subroutine_name,
                 depth=depth,
                 call_stack=call_stack,
+                source_file=rung.source_file,
+                source_line=rung.source_line,
+                end_line=rung.end_line,
+                enabled_state=enabled_state,
+                trace=step_trace,
+                instruction_kind=None,
             )
 
     def _iter_instruction_steps(
@@ -447,6 +498,8 @@ class PLCRunner:
         depth: int,
         call_stack: tuple[str, ...],
         enabled: bool,
+        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"],
+        step_trace: dict[str, Any],
     ) -> Generator[ScanStep, None, None]:
         from pyrung.core.instruction import (
             CallInstruction,
@@ -461,10 +514,27 @@ class PLCRunner:
                 return
             if instruction.subroutine_name not in instruction._program.subroutines:
                 raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+            yield self._make_scan_step(
+                rung_index=rung_index,
+                rung=rung,
+                ctx=ctx,
+                kind="instruction",
+                subroutine_name=subroutine_name,
+                depth=depth,
+                call_stack=call_stack,
+                source_file=getattr(instruction, "source_file", None) or rung.source_file,
+                source_line=getattr(instruction, "source_line", None) or rung.source_line,
+                end_line=getattr(instruction, "source_line", None) or rung.source_line,
+                enabled_state=enabled_state,
+                trace=step_trace,
+                instruction_kind=instruction.__class__.__name__,
+            )
             next_stack = (*call_stack, instruction.subroutine_name)
             try:
                 for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
-                    sub_enabled = sub_rung._evaluate_conditions(ctx)
+                    sub_enabled, sub_condition_traces = self._evaluate_conditions_with_trace(
+                        sub_rung._conditions, ctx
+                    )
                     yield from self._iter_rung_steps(
                         rung_index=rung_index,
                         rung=sub_rung,
@@ -474,6 +544,8 @@ class PLCRunner:
                         subroutine_name=instruction.subroutine_name,
                         call_stack=next_stack,
                         enabled=sub_enabled,
+                        parent_enabled=True,
+                        rung_condition_traces=sub_condition_traces,
                     )
             except SubroutineReturnSignal:
                 return
@@ -504,6 +576,8 @@ class PLCRunner:
                         depth=depth,
                         call_stack=call_stack,
                         enabled=True,
+                        enabled_state="enabled",
+                        step_trace=step_trace,
                     )
             return
 
@@ -511,7 +585,7 @@ class PLCRunner:
             instruction.execute(ctx, enabled)
             return
 
-        yield ScanStep(
+        yield self._make_scan_step(
             rung_index=rung_index,
             rung=rung,
             ctx=ctx,
@@ -519,8 +593,388 @@ class PLCRunner:
             subroutine_name=subroutine_name,
             depth=depth,
             call_stack=call_stack,
+            source_file=getattr(instruction, "source_file", None) or rung.source_file,
+            source_line=getattr(instruction, "source_line", None) or rung.source_line,
+            end_line=getattr(instruction, "source_line", None) or rung.source_line,
+            enabled_state=enabled_state,
+            trace=step_trace,
+            instruction_kind=instruction.__class__.__name__,
         )
         instruction.execute(ctx, enabled)
+
+    def _make_scan_step(
+        self,
+        *,
+        rung_index: int,
+        rung: Rung,
+        ctx: ScanContext,
+        kind: Literal["rung", "branch", "subroutine", "instruction"],
+        subroutine_name: str | None,
+        depth: int,
+        call_stack: tuple[str, ...],
+        source_file: str | None,
+        source_line: int | None,
+        end_line: int | None,
+        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None,
+        trace: dict[str, Any] | None,
+        instruction_kind: str | None,
+    ) -> ScanStep:
+        return ScanStep(
+            rung_index=rung_index,
+            rung=rung,
+            ctx=ctx,
+            kind=kind,
+            subroutine_name=subroutine_name,
+            depth=depth,
+            call_stack=call_stack,
+            source_file=source_file,
+            source_line=source_line,
+            end_line=end_line,
+            enabled_state=enabled_state,
+            trace=trace,
+            instruction_kind=instruction_kind,
+        )
+
+    def _enabled_state_for(
+        self,
+        *,
+        kind: Literal["rung", "branch", "subroutine"],
+        enabled: bool,
+        parent_enabled: bool,
+    ) -> Literal["enabled", "disabled_local", "disabled_parent"]:
+        if enabled:
+            return "enabled"
+        if kind == "branch" and not parent_enabled:
+            return "disabled_parent"
+        return "disabled_local"
+
+    def _build_step_trace(
+        self,
+        *,
+        kind: Literal["rung", "branch", "subroutine"],
+        rung: Rung,
+        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"],
+        rung_condition_traces: list[dict[str, Any]],
+        branch_trace_map: dict[int, dict[str, Any]],
+    ) -> dict[str, Any]:
+        from pyrung.core.rung import Rung as RungClass
+
+        regions: list[dict[str, Any]] = [
+            {
+                "kind": "branch" if kind == "branch" else "rung",
+                "source_file": rung.source_file,
+                "source_line": rung.source_line,
+                "end_line": rung.end_line,
+                "enabled_state": enabled_state,
+                "conditions": rung_condition_traces,
+            }
+        ]
+
+        for item in rung._execution_items:
+            if not isinstance(item, RungClass):
+                continue
+            branch_trace = branch_trace_map.get(id(item), {})
+            regions.append(
+                {
+                    "kind": "branch",
+                    "source_file": item.source_file,
+                    "source_line": item.source_line,
+                    "end_line": item.end_line,
+                    "enabled_state": branch_trace.get("enabled_state", "disabled_local"),
+                    "conditions": list(branch_trace.get("conditions", [])),
+                }
+            )
+
+        return {"regions": regions}
+
+    def _evaluate_conditions_with_trace(
+        self,
+        conditions: list[Any],
+        ctx: ScanContext,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        if not conditions:
+            return True, []
+
+        traces: list[dict[str, Any]] = []
+        enabled = True
+        for condition in conditions:
+            if not enabled:
+                traces.append(self._skipped_condition_trace(condition))
+                continue
+            value, details = self._evaluate_condition_value(condition, ctx)
+            if not value:
+                enabled = False
+            traces.append(
+                {
+                    "source_file": getattr(condition, "source_file", None),
+                    "source_line": getattr(condition, "source_line", None),
+                    "expression": self._condition_expression(condition),
+                    "status": "true" if value else "false",
+                    "value": value,
+                    "details": details,
+                }
+            )
+        return enabled, traces
+
+    def _skipped_condition_trace(self, condition: Any) -> dict[str, Any]:
+        return {
+            "source_file": getattr(condition, "source_file", None),
+            "source_line": getattr(condition, "source_line", None),
+            "expression": self._condition_expression(condition),
+            "status": "skipped",
+            "value": None,
+            "details": [],
+        }
+
+    def _evaluate_condition_value(
+        self,
+        condition: Any,
+        ctx: ScanContext,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        from pyrung.core.condition import (
+            AllCondition,
+            AnyCondition,
+            BitCondition,
+            CompareEq,
+            CompareGe,
+            CompareGt,
+            CompareLe,
+            CompareLt,
+            CompareNe,
+            FallingEdgeCondition,
+            IndirectCompareEq,
+            IndirectCompareGe,
+            IndirectCompareGt,
+            IndirectCompareLe,
+            IndirectCompareLt,
+            IndirectCompareNe,
+            IntTruthyCondition,
+            NormallyClosedCondition,
+            RisingEdgeCondition,
+        )
+        from pyrung.core.expression import (
+            ExprCompareEq,
+            ExprCompareGe,
+            ExprCompareGt,
+            ExprCompareLe,
+            ExprCompareLt,
+            ExprCompareNe,
+            Expression,
+        )
+        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+        from pyrung.core.tag import Tag
+
+        def _detail(name: str, value: Any) -> dict[str, Any]:
+            return {"name": name, "value": value}
+
+        def _resolve_operand(value: Any) -> Any:
+            if isinstance(value, Expression):
+                return value.evaluate(ctx)
+            if isinstance(value, Tag):
+                return ctx.get_tag(value.name, value.default)
+            if isinstance(value, (IndirectRef, IndirectExprRef)):
+                target = value.resolve_ctx(ctx)
+                return ctx.get_tag(target.name, target.default)
+            return value
+
+        if isinstance(condition, BitCondition):
+            value = bool(ctx.get_tag(condition.tag.name, False))
+            return value, [_detail("tag", condition.tag.name), _detail("value", value)]
+
+        if isinstance(condition, IntTruthyCondition):
+            raw = ctx.get_tag(condition.tag.name, condition.tag.default)
+            value = int(raw) != 0
+            return value, [_detail("tag", condition.tag.name), _detail("value", raw)]
+
+        if isinstance(condition, NormallyClosedCondition):
+            raw = bool(ctx.get_tag(condition.tag.name, False))
+            value = not raw
+            return value, [_detail("tag", condition.tag.name), _detail("value", raw)]
+
+        if isinstance(condition, RisingEdgeCondition):
+            current = bool(ctx.get_tag(condition.tag.name, False))
+            previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
+            value = current and not previous
+            return value, [
+                _detail("tag", condition.tag.name),
+                _detail("current", current),
+                _detail("previous", previous),
+            ]
+
+        if isinstance(condition, FallingEdgeCondition):
+            current = bool(ctx.get_tag(condition.tag.name, False))
+            previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
+            value = (not current) and previous
+            return value, [
+                _detail("tag", condition.tag.name),
+                _detail("current", current),
+                _detail("previous", previous),
+            ]
+
+        compare_ops: tuple[type[Any], ...] = (
+            CompareEq,
+            CompareNe,
+            CompareLt,
+            CompareLe,
+            CompareGt,
+            CompareGe,
+            IndirectCompareEq,
+            IndirectCompareNe,
+            IndirectCompareLt,
+            IndirectCompareLe,
+            IndirectCompareGt,
+            IndirectCompareGe,
+        )
+        if isinstance(condition, compare_ops):
+            if hasattr(condition, "tag"):
+                left_label = condition.tag.name
+                left_value = ctx.get_tag(condition.tag.name, condition.tag.default)
+            else:
+                target = condition.indirect_ref.resolve_ctx(ctx)
+                left_label = target.name
+                left_value = ctx.get_tag(target.name, target.default)
+            right_value = _resolve_operand(condition.value)
+            value = bool(condition.evaluate(ctx))
+            return value, [
+                _detail("left", left_label),
+                _detail("left_value", left_value),
+                _detail("right_value", right_value),
+            ]
+
+        expr_compare_ops: tuple[type[Any], ...] = (
+            ExprCompareEq,
+            ExprCompareNe,
+            ExprCompareLt,
+            ExprCompareLe,
+            ExprCompareGt,
+            ExprCompareGe,
+        )
+        if isinstance(condition, expr_compare_ops):
+            left_value = condition.left.evaluate(ctx)
+            right_value = condition.right.evaluate(ctx)
+            value = bool(condition.evaluate(ctx))
+            return value, [
+                _detail("left", repr(condition.left)),
+                _detail("left_value", left_value),
+                _detail("right", repr(condition.right)),
+                _detail("right_value", right_value),
+            ]
+
+        if isinstance(condition, AllCondition):
+            child_results: list[str] = []
+            result = True
+            for child in condition.conditions:
+                child_result, _ = self._evaluate_condition_value(child, ctx)
+                child_results.append(f"{self._condition_expression(child)}={child_result}")
+                if not child_result:
+                    result = False
+                    break
+            return result, [_detail("terms", ", ".join(child_results))]
+
+        if isinstance(condition, AnyCondition):
+            child_results = []
+            result = False
+            for child in condition.conditions:
+                child_result, _ = self._evaluate_condition_value(child, ctx)
+                child_results.append(f"{self._condition_expression(child)}={child_result}")
+                if child_result:
+                    result = True
+                    break
+            return result, [_detail("terms", ", ".join(child_results))]
+
+        value = bool(condition.evaluate(ctx))
+        return value, []
+
+    def _condition_expression(self, condition: Any) -> str:
+        from pyrung.core.condition import (
+            AllCondition,
+            AnyCondition,
+            BitCondition,
+            CompareEq,
+            CompareGe,
+            CompareGt,
+            CompareLe,
+            CompareLt,
+            CompareNe,
+            FallingEdgeCondition,
+            IndirectCompareEq,
+            IndirectCompareGe,
+            IndirectCompareGt,
+            IndirectCompareLe,
+            IndirectCompareLt,
+            IndirectCompareNe,
+            IntTruthyCondition,
+            NormallyClosedCondition,
+            RisingEdgeCondition,
+        )
+        from pyrung.core.expression import (
+            ExprCompareEq,
+            ExprCompareGe,
+            ExprCompareGt,
+            ExprCompareLe,
+            ExprCompareLt,
+            ExprCompareNe,
+        )
+        from pyrung.core.tag import Tag
+
+        def _value_text(value: Any) -> str:
+            if isinstance(value, Tag):
+                return value.name
+            return repr(value)
+
+        if isinstance(condition, BitCondition):
+            return condition.tag.name
+        if isinstance(condition, IntTruthyCondition):
+            return f"{condition.tag.name} != 0"
+        if isinstance(condition, NormallyClosedCondition):
+            return f"!{condition.tag.name}"
+        if isinstance(condition, RisingEdgeCondition):
+            return f"rise({condition.tag.name})"
+        if isinstance(condition, FallingEdgeCondition):
+            return f"fall({condition.tag.name})"
+        if isinstance(condition, CompareEq):
+            return f"{condition.tag.name} == {_value_text(condition.value)}"
+        if isinstance(condition, CompareNe):
+            return f"{condition.tag.name} != {_value_text(condition.value)}"
+        if isinstance(condition, CompareLt):
+            return f"{condition.tag.name} < {_value_text(condition.value)}"
+        if isinstance(condition, CompareLe):
+            return f"{condition.tag.name} <= {_value_text(condition.value)}"
+        if isinstance(condition, CompareGt):
+            return f"{condition.tag.name} > {_value_text(condition.value)}"
+        if isinstance(condition, CompareGe):
+            return f"{condition.tag.name} >= {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareEq):
+            return f"{condition.indirect_ref!r} == {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareNe):
+            return f"{condition.indirect_ref!r} != {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareLt):
+            return f"{condition.indirect_ref!r} < {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareLe):
+            return f"{condition.indirect_ref!r} <= {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareGt):
+            return f"{condition.indirect_ref!r} > {_value_text(condition.value)}"
+        if isinstance(condition, IndirectCompareGe):
+            return f"{condition.indirect_ref!r} >= {_value_text(condition.value)}"
+        if isinstance(condition, ExprCompareEq):
+            return f"{condition.left!r} == {condition.right!r}"
+        if isinstance(condition, ExprCompareNe):
+            return f"{condition.left!r} != {condition.right!r}"
+        if isinstance(condition, ExprCompareLt):
+            return f"{condition.left!r} < {condition.right!r}"
+        if isinstance(condition, ExprCompareLe):
+            return f"{condition.left!r} <= {condition.right!r}"
+        if isinstance(condition, ExprCompareGt):
+            return f"{condition.left!r} > {condition.right!r}"
+        if isinstance(condition, ExprCompareGe):
+            return f"{condition.left!r} >= {condition.right!r}"
+        if isinstance(condition, AllCondition):
+            terms = ", ".join(self._condition_expression(child) for child in condition.conditions)
+            return f"all_of({terms})"
+        if isinstance(condition, AnyCondition):
+            terms = ", ".join(self._condition_expression(child) for child in condition.conditions)
+            return f"any_of({terms})"
+        return condition.__class__.__name__
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""
