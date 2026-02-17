@@ -36,6 +36,7 @@ HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 class DAPAdapter:
     """Minimal single-thread DAP adapter with async continue support."""
 
+    TRACE_VERSION = 1
     THREAD_ID = 1
     TAGS_SCOPE_REF = 1
     FORCES_SCOPE_REF = 2
@@ -728,16 +729,16 @@ class DAPAdapter:
         for region in trace.get("regions", []):
             source_file = region.get("source_file")
             source_body = None
-            if isinstance(source_file, str) and source_file:
-                source_path = str(Path(source_file))
+            source_path = self._canonical_path(source_file) if isinstance(source_file, str) else None
+            if source_path:
                 source_body = {"name": Path(source_path).name, "path": source_path}
 
             conditions: list[dict[str, Any]] = []
             for cond in region.get("conditions", []):
                 cond_source = None
                 cond_file = cond.get("source_file")
-                if isinstance(cond_file, str) and cond_file:
-                    cond_path = str(Path(cond_file))
+                cond_path = self._canonical_path(cond_file) if isinstance(cond_file, str) else None
+                if cond_path:
                     cond_source = {"name": Path(cond_path).name, "path": cond_path}
                 details = []
                 for detail in cond.get("details", []):
@@ -757,6 +758,8 @@ class DAPAdapter:
                         "status": cond.get("status"),
                         "value": cond.get("value"),
                         "details": details,
+                        "summary": cond.get("summary"),
+                        "annotation": cond.get("annotation"),
                     }
                 )
 
@@ -773,15 +776,18 @@ class DAPAdapter:
 
         step_source = None
         step_source_file = step.source_file or step.rung.source_file
-        if step_source_file:
-            step_source_path = str(Path(step_source_file))
+        step_source_path = self._canonical_path(step_source_file)
+        if step_source_path:
             step_source = {"name": Path(step_source_path).name, "path": step_source_path}
 
         return {
+            "traceVersion": self.TRACE_VERSION,
             "step": {
                 "kind": step.kind,
                 "instructionKind": step.instruction_kind,
                 "enabledState": step.enabled_state,
+                "displayStatus": self._step_display_status(step),
+                "displayText": self._step_display_text(step),
                 "source": step_source,
                 "line": step.source_line or step.rung.source_line,
                 "endLine": step.end_line or step.source_line or step.rung.end_line,
@@ -791,6 +797,32 @@ class DAPAdapter:
             },
             "regions": regions,
         }
+
+    def _step_display_status(self, step: ScanStep) -> str:
+        if step.enabled_state == "enabled":
+            return "enabled"
+        if step.enabled_state == "disabled_parent":
+            return "skipped"
+        return "disabled"
+
+    def _step_display_text(self, step: ScanStep) -> str:
+        status = self._step_display_status(step)
+        if status == "enabled":
+            prefix = "[RUN]" if step.kind == "instruction" else "[ON]"
+        elif status == "skipped":
+            prefix = "[SKIP]"
+        else:
+            prefix = "[OFF]"
+
+        if step.kind == "instruction":
+            label = step.instruction_kind or "Instruction"
+        elif step.kind == "branch":
+            label = "Branch"
+        elif step.kind == "subroutine":
+            label = "Subroutine"
+        else:
+            label = "Rung"
+        return f"{prefix} {label}"
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
         return {"reason": reason, "threadId": self.THREAD_ID, "allThreadsStopped": True}

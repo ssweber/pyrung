@@ -321,6 +321,11 @@ class PyrungDecorationController {
   }
 
   _formatCondition(condition) {
+    const annotation = typeof condition.annotation === "string" ? condition.annotation.trim() : "";
+    if (annotation) {
+      return annotation;
+    }
+
     const expression = condition.expression || "condition";
     const status = condition.status || "unknown";
     if (status === "skipped") {

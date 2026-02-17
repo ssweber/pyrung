@@ -752,26 +752,42 @@ class PLCRunner:
             value, details = self._evaluate_condition_value(condition, ctx)
             if not value:
                 enabled = False
+            expression = self._condition_expression(condition)
+            status = "true" if value else "false"
+            summary = self._condition_term_text(condition, details)
             traces.append(
                 {
                     "source_file": getattr(condition, "source_file", None),
                     "source_line": getattr(condition, "source_line", None),
-                    "expression": self._condition_expression(condition),
-                    "status": "true" if value else "false",
+                    "expression": expression,
+                    "status": status,
                     "value": value,
                     "details": details,
+                    "summary": summary,
+                    "annotation": self._condition_annotation(
+                        status=status,
+                        expression=expression,
+                        summary=summary,
+                    ),
                 }
             )
         return enabled, traces
 
     def _skipped_condition_trace(self, condition: Any) -> dict[str, Any]:
+        expression = self._condition_expression(condition)
         return {
             "source_file": getattr(condition, "source_file", None),
             "source_line": getattr(condition, "source_line", None),
-            "expression": self._condition_expression(condition),
+            "expression": expression,
             "status": "skipped",
             "value": None,
             "details": [],
+            "summary": expression,
+            "annotation": self._condition_annotation(
+                status="skipped",
+                expression=expression,
+                summary=expression,
+            ),
         }
 
     def _evaluate_condition_value(
@@ -1000,6 +1016,15 @@ class PLCRunner:
             return str(detail_map["terms"])
 
         return expression
+
+    def _condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
+        if status == "skipped":
+            return f"[SKIP] {expression}"
+        label = "F" if status == "false" else "T"
+        text = summary.strip() if isinstance(summary, str) else ""
+        if not text:
+            text = expression
+        return f"[{label}] {text}"
 
     def _condition_detail_map(self, details: list[dict[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}

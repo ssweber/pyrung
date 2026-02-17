@@ -536,14 +536,23 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     traces = _trace_events(messages)
     assert traces
     body = traces[0]["body"]
+    assert body["traceVersion"] == DAPAdapter.TRACE_VERSION
     assert body["step"]["kind"] == "rung"
     assert body["step"]["enabledState"] == "disabled_local"
+    assert body["step"]["displayStatus"] == "disabled"
+    assert body["step"]["displayText"] == "[OFF] Rung"
+    expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
+    assert body["step"]["source"]["path"] == expected_path
     regions = body["regions"]
     assert regions
     assert regions[0]["enabledState"] == "disabled_local"
+    assert regions[0]["source"]["path"] == expected_path
     conditions = regions[0]["conditions"]
     assert conditions
     assert conditions[0]["status"] == "false"
+    assert conditions[0]["source"]["path"] == expected_path
+    assert isinstance(conditions[0]["summary"], str) and conditions[0]["summary"]
+    assert isinstance(conditions[0]["annotation"], str) and conditions[0]["annotation"].startswith("[F]")
     detail_names = {item["name"] for item in conditions[0]["details"]}
     assert {"tag", "value"}.issubset(detail_names)
 
@@ -573,6 +582,7 @@ def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
     assert "(true)" in terms or "(false)" in terms
     assert "=True" not in terms
     assert "=False" not in terms
+    assert conditions[0]["annotation"].startswith("[")
 
 
 def test_next_trace_marks_short_circuited_all_of_child_as_skipped(tmp_path: Path):
