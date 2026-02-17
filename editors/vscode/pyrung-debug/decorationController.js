@@ -6,35 +6,45 @@ class PyrungDecorationController {
     this._lastTrace = null;
     this._stepDecoration = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
-      backgroundColor: "rgba(255, 196, 0, 0.14)",
-      borderWidth: "1px",
+      backgroundColor: new vscode.ThemeColor("editor.wordHighlightStrongBackground"),
+      borderWidth: "0 0 0 2px",
       borderStyle: "solid",
-      borderColor: "rgba(255, 196, 0, 0.45)",
+      borderColor: new vscode.ThemeColor("editorWarning.foreground"),
+      overviewRulerColor: new vscode.ThemeColor("editorWarning.foreground"),
+      overviewRulerLane: vscode.OverviewRulerLane.Full,
     });
-    this._enabledDecoration = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: "rgba(40, 167, 69, 0.11)",
-    });
+  this._enabledDecoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    borderWidth: "0 0 0 2px",
+    borderStyle: "solid",
+    borderColor: new vscode.ThemeColor("editorInfo.foreground"),
+  });
     this._disabledDecoration = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
-      backgroundColor: "rgba(128, 128, 128, 0.12)",
+      backgroundColor: new vscode.ThemeColor("editor.inactiveSelectionBackground"),
+      opacity: "0.5",
     });
+
     this._conditionTrueDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 1.5em",
-        color: "rgba(40, 167, 69, 0.95)",
+        margin: "0 0 0 2em",
+        color: new vscode.ThemeColor("testing.iconPassed"),
+        fontWeight: "500",
       },
     });
+
     this._conditionFalseDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 1.5em",
-        color: "rgba(220, 53, 69, 0.95)",
+        margin: "0 0 0 2em",
+        color: new vscode.ThemeColor("testing.iconFailed"),
+        fontWeight: "500",
       },
     });
+
     this._conditionSkippedDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 1.5em",
-        color: "rgba(128, 128, 128, 0.95)",
+        margin: "0 0 0 2em",
+        color: new vscode.ThemeColor("testing.iconSkipped"),
         fontStyle: "italic",
       },
     });
