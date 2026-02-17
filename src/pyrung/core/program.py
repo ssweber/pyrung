@@ -19,7 +19,11 @@ from collections.abc import Callable
 from types import FrameType
 from typing import TYPE_CHECKING, Any, ClassVar, overload
 
-from pyrung.core._source import _capture_source, _capture_with_end_line
+from pyrung.core._source import (
+    _capture_source,
+    _capture_with_call_arg_lines,
+    _capture_with_end_line,
+)
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -538,14 +542,22 @@ class Rung:
     def __init__(self, *conditions: Condition | Tag) -> None:
         source_file, source_line = _capture_source(depth=2)
         self._rung = RungLogic(*conditions, source_file=source_file, source_line=source_line)
+        condition_arg_lines = _capture_with_call_arg_lines(
+            source_file,
+            source_line,
+            context_name="Rung",
+        )
 
         # Direct Tag conditions are converted internally and would otherwise
         # have no source metadata.
-        for condition in self._rung._conditions:
+        for idx, condition in enumerate(self._rung._conditions):
             if condition.source_file is None:
                 condition.source_file = source_file
             if condition.source_line is None:
-                condition.source_line = source_line
+                if idx < len(condition_arg_lines):
+                    condition.source_line = condition_arg_lines[idx]
+                else:
+                    condition.source_line = source_line
 
     def __enter__(self) -> Rung:
         _rung_stack.append(self)
@@ -1371,6 +1383,11 @@ class Branch:
         # Create a nested rung for the branch that includes BOTH parent and branch conditions
         # This ensures terminal instructions (counters, timers) see the full condition chain
         parent_conditions = self._parent_ctx._rung._conditions
+        condition_arg_lines = _capture_with_call_arg_lines(
+            self._source_file,
+            self._source_line,
+            context_name="branch",
+        )
         combined_conditions = parent_conditions + self._conditions
         self._branch_rung = RungLogic(
             *combined_conditions,
@@ -1378,6 +1395,15 @@ class Branch:
             source_line=self._source_line,
         )
         self._branch_rung._branch_condition_start = len(parent_conditions)
+
+        local_conditions = self._branch_rung._conditions[self._branch_rung._branch_condition_start :]
+        for idx, condition in enumerate(local_conditions):
+            if condition.source_line is None:
+                if idx < len(condition_arg_lines):
+                    condition.source_line = condition_arg_lines[idx]
+                else:
+                    condition.source_line = self._source_line
+
         for condition in self._branch_rung._conditions:
             if condition.source_file is None:
                 condition.source_file = self._source_file

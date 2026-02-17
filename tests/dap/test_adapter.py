@@ -114,6 +114,23 @@ def _unconditional_script() -> str:
     )
 
 
+def _composite_condition_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, all_of, any_of, out\n"
+        "\n"
+        "start = Bool('Start')\n"
+        "ready = Bool('Ready')\n"
+        "auto = Bool('Auto')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(any_of(start, all_of(ready, auto))):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+    )
+
+
 def _nested_debug_script() -> str:
     return (
         "from pyrung.core import Bool, PLCRunner, Program, Rung, branch, call, out, subroutine\n"
@@ -424,6 +441,28 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     assert conditions[0]["status"] == "false"
     detail_names = {item["name"] for item in conditions[0]["details"]}
     assert {"tag", "value"}.issubset(detail_names)
+
+
+def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "composite_logic.py", _composite_condition_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    conditions = body["regions"][0]["conditions"]
+    assert conditions
+
+    expression = str(conditions[0]["expression"])
+    assert "|" in expression
+    assert "&" in expression
+    assert "any_of" not in expression
+    assert "all_of" not in expression
 
 
 def test_set_breakpoints_verifies_subroutine_line(tmp_path: Path):

@@ -106,10 +106,7 @@ class PyrungDecorationController {
       const step = trace.step || {};
       const stepSource = step.source && step.source.path ? this._normalizePath(step.source.path) : null;
       if (stepSource && stepSource === docPath) {
-        const range = this._lineRange(editor.document, step.line, step.endLine);
-        if (range) {
-          stepRanges.push(range);
-        }
+        stepRanges.push(...this._lineRanges(editor.document, step.line, step.endLine));
       }
 
       const regions = Array.isArray(trace.regions) ? trace.regions : [];
@@ -118,13 +115,11 @@ class PyrungDecorationController {
         if (!source || source !== docPath) {
           continue;
         }
-        const regionRange = this._lineRange(editor.document, region.line, region.endLine);
-        if (regionRange) {
-          if (region.enabledState === "enabled") {
-            enabledRanges.push(regionRange);
-          } else {
-            disabledRanges.push(regionRange);
-          }
+        const regionRanges = this._lineRanges(editor.document, region.line, region.endLine);
+        if (region.enabledState === "enabled") {
+          enabledRanges.push(...regionRanges);
+        } else {
+          disabledRanges.push(...regionRanges);
         }
 
         const conditions = Array.isArray(region.conditions) ? region.conditions : [];
@@ -176,7 +171,7 @@ class PyrungDecorationController {
         range: new vscode.Range(lineIdx, endCol, lineIdx, endCol),
         renderOptions: {
           after: {
-            contentText: `  ${texts.join(" | ")}`,
+            contentText: `  ${texts.join(" & ")}`,
           },
         },
       });
@@ -188,19 +183,73 @@ class PyrungDecorationController {
     const expression = condition.expression || "condition";
     const status = condition.status || "unknown";
     if (status === "skipped") {
-      return `${expression} -> skipped`;
+      return `[SKIP] ${expression}`;
     }
 
-    const value = condition.value === undefined ? "?" : String(condition.value);
-    const details = Array.isArray(condition.details) ? condition.details : [];
-    if (!details.length) {
-      return `${expression} -> ${value}`;
+    const statusLabel = status === "false" ? "F" : "T";
+    const details = this._conditionDetailMap(condition.details);
+    const summary = this._conditionDetailSummary(expression, details);
+    if (!summary) {
+      return `[${statusLabel}] ${expression}`;
     }
+    return `[${statusLabel}] ${expression} (${summary})`;
+  }
 
-    const detailText = details
-      .map((detail) => `${detail.name}=${detail.value}`)
-      .join(", ");
-    return `${expression} -> ${value} (${detailText})`;
+  _conditionDetailMap(details) {
+    const map = new Map();
+    if (!Array.isArray(details)) {
+      return map;
+    }
+    for (const detail of details) {
+      if (!detail || typeof detail.name !== "string") {
+        continue;
+      }
+      map.set(detail.name, this._normalizeValue(detail.value));
+    }
+    return map;
+  }
+
+  _conditionDetailSummary(expression, details) {
+    if (details.has("left") && details.has("left_value")) {
+      const left = String(details.get("left"));
+      const leftValue = details.get("left_value");
+      if (details.has("right_value")) {
+        const rightValue = details.get("right_value");
+        return `${left}=${leftValue}, rhs=${rightValue}`;
+      }
+      return `${left}=${leftValue}`;
+    }
+    if (details.has("tag") && details.has("value")) {
+      const tag = String(details.get("tag"));
+      const value = details.get("value");
+      if (tag === expression) {
+        return `value=${value}`;
+      }
+      return `${tag}=${value}`;
+    }
+    if (details.has("current") || details.has("previous")) {
+      const current = details.has("current") ? details.get("current") : "?";
+      const previous = details.has("previous") ? details.get("previous") : "?";
+      return `current=${current}, previous=${previous}`;
+    }
+    if (details.has("terms")) {
+      return String(details.get("terms"));
+    }
+    return "";
+  }
+
+  _normalizeValue(value) {
+    if (value === undefined || value === null) {
+      return "?";
+    }
+    const text = String(value);
+    if (text === "True") {
+      return "true";
+    }
+    if (text === "False") {
+      return "false";
+    }
+    return text;
   }
 
   _normalizePath(filePath) {
@@ -223,19 +272,23 @@ class PyrungDecorationController {
     return clamped;
   }
 
-  _lineRange(document, line, endLine) {
+  _lineRanges(document, line, endLine) {
     const start = this._safeLine(document, line);
     if (start === null) {
-      return null;
+      return [];
     }
     const end = this._safeLine(document, endLine === undefined || endLine === null ? line : endLine);
     if (end === null) {
-      return null;
+      return [];
     }
     const startIdx = Math.min(start, end) - 1;
     const endIdx = Math.max(start, end) - 1;
-    const endCol = document.lineAt(endIdx).text.length;
-    return new vscode.Range(startIdx, 0, endIdx, endCol);
+    const ranges = [];
+    for (let lineIdx = startIdx; lineIdx <= endIdx; lineIdx += 1) {
+      const endPos = document.lineAt(lineIdx).range.end;
+      ranges.push(new vscode.Range(lineIdx, 0, lineIdx, endPos.character));
+    }
+    return ranges;
   }
 }
 

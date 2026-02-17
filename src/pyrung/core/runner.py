@@ -524,7 +524,11 @@ class PLCRunner:
                 call_stack=call_stack,
                 source_file=getattr(instruction, "source_file", None) or rung.source_file,
                 source_line=getattr(instruction, "source_line", None) or rung.source_line,
-                end_line=getattr(instruction, "source_line", None) or rung.source_line,
+                end_line=(
+                    getattr(instruction, "end_line", None)
+                    or getattr(instruction, "source_line", None)
+                    or rung.source_line
+                ),
                 enabled_state=enabled_state,
                 trace=step_trace,
                 instruction_kind=instruction.__class__.__name__,
@@ -595,7 +599,11 @@ class PLCRunner:
             call_stack=call_stack,
             source_file=getattr(instruction, "source_file", None) or rung.source_file,
             source_line=getattr(instruction, "source_line", None) or rung.source_line,
-            end_line=getattr(instruction, "source_line", None) or rung.source_line,
+            end_line=(
+                getattr(instruction, "end_line", None)
+                or getattr(instruction, "source_line", None)
+                or rung.source_line
+            ),
             enabled_state=enabled_state,
             trace=step_trace,
             instruction_kind=instruction.__class__.__name__,
@@ -664,7 +672,7 @@ class PLCRunner:
                 "kind": "branch" if kind == "branch" else "rung",
                 "source_file": rung.source_file,
                 "source_line": rung.source_line,
-                "end_line": rung.end_line,
+                "end_line": self._effective_region_end_line(rung),
                 "enabled_state": enabled_state,
                 "conditions": rung_condition_traces,
             }
@@ -679,13 +687,52 @@ class PLCRunner:
                     "kind": "branch",
                     "source_file": item.source_file,
                     "source_line": item.source_line,
-                    "end_line": item.end_line,
+                    "end_line": self._effective_region_end_line(item),
                     "enabled_state": branch_trace.get("enabled_state", "disabled_local"),
                     "conditions": list(branch_trace.get("conditions", [])),
                 }
             )
 
         return {"regions": regions}
+
+    def _effective_region_end_line(self, rung: Rung) -> int | None:
+        if rung.end_line is not None:
+            return int(rung.end_line)
+
+        lines: list[int] = []
+        if rung.source_line is not None:
+            lines.append(int(rung.source_line))
+        self._collect_rung_instruction_lines(rung, lines)
+        if not lines:
+            return None
+        return max(lines)
+
+    def _collect_rung_instruction_lines(self, rung: Rung, lines: list[int]) -> None:
+        from pyrung.core.instruction import Instruction
+        from pyrung.core.rung import Rung as RungClass
+
+        for item in rung._execution_items:
+            if isinstance(item, RungClass):
+                self._collect_rung_instruction_lines(item, lines)
+                continue
+            if isinstance(item, Instruction):
+                line = getattr(item, "source_line", None)
+                if line is not None:
+                    lines.append(int(line))
+                end_line = getattr(item, "end_line", None)
+                if end_line is not None:
+                    lines.append(int(end_line))
+                nested = getattr(item, "instructions", None)
+                if isinstance(nested, list):
+                    for child in nested:
+                        if not isinstance(child, Instruction):
+                            continue
+                        child_line = getattr(child, "source_line", None)
+                        if child_line is not None:
+                            lines.append(int(child_line))
+                        child_end_line = getattr(child, "end_line", None)
+                        if child_end_line is not None:
+                            lines.append(int(child_end_line))
 
     def _evaluate_conditions_with_trace(
         self,
@@ -869,7 +916,7 @@ class PLCRunner:
                 if not child_result:
                     result = False
                     break
-            return result, [_detail("terms", ", ".join(child_results))]
+            return result, [_detail("terms", " & ".join(child_results))]
 
         if isinstance(condition, AnyCondition):
             child_results = []
@@ -880,7 +927,7 @@ class PLCRunner:
                 if child_result:
                     result = True
                     break
-            return result, [_detail("terms", ", ".join(child_results))]
+            return result, [_detail("terms", " | ".join(child_results))]
 
         value = bool(condition.evaluate(ctx))
         return value, []
@@ -969,11 +1016,11 @@ class PLCRunner:
         if isinstance(condition, ExprCompareGe):
             return f"{condition.left!r} >= {condition.right!r}"
         if isinstance(condition, AllCondition):
-            terms = ", ".join(self._condition_expression(child) for child in condition.conditions)
-            return f"all_of({terms})"
+            terms = " & ".join(self._condition_expression(child) for child in condition.conditions)
+            return f"({terms})"
         if isinstance(condition, AnyCondition):
-            terms = ", ".join(self._condition_expression(child) for child in condition.conditions)
-            return f"any_of({terms})"
+            terms = " | ".join(self._condition_expression(child) for child in condition.conditions)
+            return f"({terms})"
         return condition.__class__.__name__
 
     def step(self) -> SystemState:

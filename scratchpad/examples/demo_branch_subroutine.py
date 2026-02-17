@@ -10,9 +10,12 @@ from pyrung.core import (
     branch,
     call,
     copy,
+    count_up,
     out,
     return_,
+    rise,
     subroutine,
+    all_of,
 )
 
 Step = Int("Step")
@@ -21,10 +24,13 @@ MainLight = Bool("MainLight")
 AutoLight = Bool("AutoLight")
 SubLight = Bool("SubLight")
 SkippedAfterReturn = Bool("SkippedAfterReturn")
+CountDone = Bool("CountDone")
+CountAcc = Int("CountAcc")
+ResetCount = Bool("ResetCount")
 
 with Program(strict=False) as logic:
     # Main rung
-    with Rung(Step == 0):
+    with Rung(Step == 0, AutoMode):
 
         # Call subroutine from the main rung
         call("init_sub")
@@ -36,9 +42,19 @@ with Program(strict=False) as logic:
             copy(1, Step, oneshot=True)
 
 
+    # Multi-line rung with counter – tests region end-line coverage
+    # The .reset() is on a separate line; its source_line won't be in
+    # the instruction metadata, only rung.end_line (AST) covers it.
+    with Rung(Step == 1, AutoMode):
+        out(MainLight)
+        count_up(CountDone, CountAcc,
+                 setpoint=10) \
+            .reset(ResetCount)
+
     # Subroutine body
     with subroutine("init_sub"):
         with Rung(Step == 0):
+            out(SubLight)
             out(SubLight)
         with Rung():
             out(SubLight)
@@ -52,6 +68,9 @@ runner.patch(
         "AutoLight": False,
         "SubLight": False,
         "SkippedAfterReturn": False,
+        "CountDone": False,
+        "CountAcc": 0,
+        "ResetCount": False,
     }
 )
 

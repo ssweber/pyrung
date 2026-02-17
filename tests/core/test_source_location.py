@@ -9,6 +9,7 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
+    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -157,3 +158,51 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     shift_instr = prog.rungs[5]._instructions[0]
     assert type(shift_instr).__name__ == "ShiftInstruction"
     assert shift_instr.source_line == shift_line
+
+
+def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
+    step = Int("Step")
+    auto_mode = Bool("AutoMode")
+    light = Bool("Light")
+
+    with Program(strict=False) as prog:
+        marker_line = inspect.currentframe().f_lineno
+        with Rung(
+            step == 1,
+            auto_mode,
+        ):
+            out(light)
+
+    step_condition_line = marker_line + 2
+    auto_condition_line = marker_line + 3
+    rung = prog.rungs[0]
+    assert rung._conditions[0].source_line == step_condition_line
+    assert rung._conditions[1].source_line == auto_condition_line
+
+
+def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_line():
+    enable = Bool("Enable")
+    done = Bool("Done")
+    acc = Int("Acc")
+    reset_cond = Bool("Reset")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            count_up_line = inspect.currentframe().f_lineno + 1
+            count_up(
+                done,
+                acc,
+                setpoint=5,
+            ).reset(reset_cond)
+            count_up_end_line = inspect.currentframe().f_lineno - 1
+
+    instruction = prog.rungs[0]._instructions[0]
+    assert instruction.source_line == count_up_line
+    assert instruction.end_line == count_up_end_line
+
+    runner = PLCRunner(prog)
+    runner.patch({"Enable": True, "Reset": False})
+    step = next(runner.scan_steps_debug())
+    assert step.kind == "instruction"
+    assert step.source_line == count_up_line
+    assert step.end_line == count_up_end_line

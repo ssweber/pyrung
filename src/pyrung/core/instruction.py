@@ -145,6 +145,7 @@ class Instruction(ABC):
 
     source_file: str | None = None
     source_line: int | None = None
+    end_line: int | None = None
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

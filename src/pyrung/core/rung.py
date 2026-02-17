@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from pyrung.core._source import _capture_call_end_line
 from pyrung.core.condition import (
     Condition,
     _as_condition,
@@ -57,6 +58,13 @@ class Rung:
 
     def add_instruction(self, instruction: Instruction) -> None:
         """Add an instruction to execute when conditions are true."""
+        if getattr(instruction, "end_line", None) is None:
+            end_line = _capture_call_end_line(
+                getattr(instruction, "source_file", None),
+                getattr(instruction, "source_line", None),
+            )
+            if end_line is not None:
+                instruction.end_line = end_line
         self._instructions.append(instruction)
         self._execution_items.append(instruction)
 
