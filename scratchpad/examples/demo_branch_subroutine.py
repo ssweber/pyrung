@@ -57,7 +57,7 @@ with Program(strict=False) as logic:
     # Multi-line rung with counter – tests region end-line coverage
     # The .reset() is on a separate line; its source_line won't be in
     # the instruction metadata, only rung.end_line (AST) covers it.
-    with Rung(Step == 1, nc(AutoMode)):
+    with Rung(Step == 1, AutoMode):
         out(MainLight)
         count_up(CountDone, CountAcc,
                  setpoint=10) \
