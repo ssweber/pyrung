@@ -6,7 +6,7 @@ const vscode = require("vscode");
 const DECORATION_SETTINGS = {
   step: {
     isWholeLine: true,
-    borderWidth: "0 0 0 10px", 
+    borderWidth: "0 0 0 10px",
     borderStyle: "double",
     borderColor: "debugIcon.stepOverForeground",
     overviewRulerColor: "debugIcon.stepOverForeground",
@@ -20,9 +20,10 @@ const DECORATION_SETTINGS = {
   },
   disabled: {
     isWholeLine: true,
-    borderWidth: "0 0 0 3px", 
+    borderWidth: "0 0 0 3px",
     borderStyle: "solid",
-    borderColor: "editorWarning.foreground", // Yellow
+    borderColor: "editorGhostText.foreground",
+    opacity: "0.75",
   },
   conditionTrue: {
     margin: "0 0 0 2em",
@@ -44,6 +45,7 @@ const DECORATION_SETTINGS = {
 class PyrungDecorationController {
   constructor() {
     this._lastTrace = null;
+    this._pathCache = new Map();
 
     this._stepDecoration = vscode.window.createTextEditorDecorationType({
       ...DECORATION_SETTINGS.step,
@@ -58,7 +60,6 @@ class PyrungDecorationController {
 
     this._disabledDecoration = vscode.window.createTextEditorDecorationType({
       ...DECORATION_SETTINGS.disabled,
-      backgroundColor: new vscode.ThemeColor(DECORATION_SETTINGS.disabled.backgroundColor),
       borderColor: new vscode.ThemeColor(DECORATION_SETTINGS.disabled.borderColor),
     });
 
@@ -94,20 +95,24 @@ class PyrungDecorationController {
   }
 
   handleAdapterMessage(message) {
-    if (!message || message.type !== "event") {
+    if (message?.type !== "event") {
       return;
     }
-    if (message.event === "pyrungTrace") {
-      this._lastTrace = message.body || null;
-      this._renderVisibleEditors();
-      return;
-    }
-    if (message.event === "stopped" && message.body && message.body.reason === "entry") {
-      this.clear();
-      return;
-    }
-    if (message.event === "terminated" || message.event === "exited") {
-      this.clear();
+
+    switch (message.event) {
+      case "pyrungTrace":
+        this._lastTrace = message.body || null;
+        this._renderVisibleEditors();
+        break;
+      case "stopped":
+        if (message.body?.reason === "entry") {
+          this.clear();
+        }
+        break;
+      case "terminated":
+      case "exited":
+        this.clear();
+        break;
     }
   }
 
@@ -117,6 +122,7 @@ class PyrungDecorationController {
 
   clear() {
     this._lastTrace = null;
+    this._pathCache.clear();
     this._renderVisibleEditors();
   }
 
@@ -124,24 +130,27 @@ class PyrungDecorationController {
     const docPath = this._normalizePath(document.fileName);
     const lines = new Set();
     const trace = this._lastTrace;
+
     if (!trace || !docPath) {
       return lines;
     }
 
-    const regions = Array.isArray(trace.regions) ? trace.regions : [];
+    const regions = trace.regions || [];
     for (const region of regions) {
-      const source = region && region.source && region.source.path ? this._normalizePath(region.source.path) : null;
-      if (!source || source !== docPath) {
-        continue;
-      }
-      const conditions = Array.isArray(region.conditions) ? region.conditions : [];
+      const regionSourcePath = region.source?.path;
+      const source = regionSourcePath ? this._normalizePath(regionSourcePath) : null;
+
+      if (source !== docPath) continue;
+
+      const conditions = region.conditions || [];
       for (const condition of conditions) {
-        const condSource = condition && condition.source && condition.source.path
-          ? this._normalizePath(condition.source.path)
+        const condSourcePath = condition.source?.path;
+        const condSource = (condSourcePath && condSourcePath !== regionSourcePath)
+          ? this._normalizePath(condSourcePath)
           : source;
-        if (!condSource || condSource !== docPath) {
-          continue;
-        }
+
+        if (condSource !== docPath) continue;
+
         const line = Number(condition.line);
         if (Number.isFinite(line)) {
           lines.add(Math.trunc(line));
@@ -158,6 +167,18 @@ class PyrungDecorationController {
   }
 
   _applyToEditor(editor) {
+    const trace = this._lastTrace;
+    if (!trace) {
+      editor.setDecorations(this._stepDecoration, []);
+      editor.setDecorations(this._enabledDecoration, []);
+      editor.setDecorations(this._disabledDecoration, []);
+      editor.setDecorations(this._conditionTrueDecoration, []);
+      editor.setDecorations(this._conditionFalseDecoration, []);
+      editor.setDecorations(this._conditionSkippedDecoration, []);
+      return;
+    }
+
+    const docPath = this._normalizePath(editor.document.fileName);
     const stepRanges = [];
     const enabledRanges = [];
     const disabledRanges = [];
@@ -168,58 +189,59 @@ class PyrungDecorationController {
       skipped: new Map(),
     };
 
-    const trace = this._lastTrace;
-    if (trace) {
-      const docPath = this._normalizePath(editor.document.fileName);
-      const step = trace.step || {};
-      const stepSource = step.source && step.source.path ? this._normalizePath(step.source.path) : null;
-      if (stepSource && stepSource === docPath) {
-        stepRanges.push(...this._lineRanges(editor.document, step.line, step.endLine));
+    const stepSourcePath = trace.step?.source?.path;
+    const stepSource = stepSourcePath ? this._normalizePath(stepSourcePath) : null;
+
+    if (stepSource === docPath) {
+      const range = this._lineRange(editor.document, trace.step.line, trace.step.endLine);
+      if (range) stepRanges.push(range);
+    }
+
+    const regions = trace.regions || [];
+    for (const region of regions) {
+      const regionSourcePath = region.source?.path;
+      const source = regionSourcePath ? this._normalizePath(regionSourcePath) : null;
+      if (source !== docPath) continue;
+
+      const range = this._lineRange(editor.document, region.line, region.endLine);
+      if (range) {
+        if (region.enabledState === "enabled") {
+          enabledRanges.push(range);
+        } else {
+          disabledRanges.push(range);
+        }
       }
 
-      const regions = Array.isArray(trace.regions) ? trace.regions : [];
-      for (const region of regions) {
-        const source = region && region.source && region.source.path ? this._normalizePath(region.source.path) : null;
-        if (!source || source !== docPath) {
-          continue;
-        }
-        const regionRanges = this._lineRanges(editor.document, region.line, region.endLine);
-        if (region.enabledState === "enabled") {
-          enabledRanges.push(...regionRanges);
-        } else {
-          disabledRanges.push(...regionRanges);
+      const conditions = region.conditions || [];
+      for (const condition of conditions) {
+        const condSourcePath = condition.source?.path;
+        const condSource = (condSourcePath && condSourcePath !== regionSourcePath)
+          ? this._normalizePath(condSourcePath)
+          : source;
+
+        if (condSource !== docPath) continue;
+
+        const line = this._safeLine(editor.document, condition.line);
+        if (line === null) continue;
+
+        const status = condition.status || "true";
+        const entry = conditionLines.get(line) || { texts: [], hasFalse: false, hasSkipped: false };
+
+        entry.texts.push(this._conditionText(condition));
+
+        if (status === "false") {
+          entry.hasFalse = true;
+        } else if (status === "skipped") {
+          entry.hasSkipped = true;
         }
 
-        const conditions = Array.isArray(region.conditions) ? region.conditions : [];
-        for (const condition of conditions) {
-          const condSource = condition && condition.source && condition.source.path
-            ? this._normalizePath(condition.source.path)
-            : source;
-          if (!condSource || condSource !== docPath) {
-            continue;
-          }
-          const line = this._safeLine(editor.document, condition.line);
-          if (line === null) {
-            continue;
-          }
-          const status = condition.status === "false" ? "false" : condition.status === "skipped" ? "skipped" : "true";
-          const text = this._conditionText(condition);
-          const entry = conditionLines.get(line) || { texts: [], hasFalse: false, hasSkipped: false };
-          entry.texts.push(text);
-          if (status === "false") {
-            entry.hasFalse = true;
-          } else if (status === "skipped") {
-            entry.hasSkipped = true;
-          }
-          conditionLines.set(line, entry);
-        }
+        conditionLines.set(line, entry);
       }
     }
 
     for (const [line, entry] of conditionLines.entries()) {
-      if (!entry.texts.length) {
-        continue;
-      }
+      if (!entry.texts.length) continue;
+
       let bucket = conditionBuckets.true;
       if (entry.hasFalse) {
         bucket = conditionBuckets.false;
@@ -232,15 +254,9 @@ class PyrungDecorationController {
     editor.setDecorations(this._stepDecoration, stepRanges);
     editor.setDecorations(this._enabledDecoration, enabledRanges);
     editor.setDecorations(this._disabledDecoration, disabledRanges);
-    editor.setDecorations(this._conditionTrueDecoration, this._annotationOptions(editor.document, conditionBuckets.true));
-    editor.setDecorations(
-      this._conditionFalseDecoration,
-      this._annotationOptions(editor.document, conditionBuckets.false)
-    );
-    editor.setDecorations(
-      this._conditionSkippedDecoration,
-      this._annotationOptions(editor.document, conditionBuckets.skipped)
-    );
+    editor.setDecorations(this._conditionTrueDecoration, this._annotationOptions(conditionBuckets.true));
+    editor.setDecorations(this._conditionFalseDecoration, this._annotationOptions(conditionBuckets.false));
+    editor.setDecorations(this._conditionSkippedDecoration, this._annotationOptions(conditionBuckets.skipped));
   }
 
   _conditionText(condition) {
@@ -258,16 +274,16 @@ class PyrungDecorationController {
     return `[${label}] ${expression}`;
   }
 
-  _annotationOptions(document, lineMap) {
+  _annotationOptions(lineMap) {
     const options = [];
     for (const [line, texts] of lineMap.entries()) {
-      if (!texts.length) {
-        continue;
-      }
+      if (!texts.length) continue;
+
       const lineIdx = line - 1;
-      const endCol = document.lineAt(lineIdx).text.length;
+
+      // Use Number.MAX_VALUE to snap to the end of the line without querying the document
       options.push({
-        range: new vscode.Range(lineIdx, endCol, lineIdx, endCol),
+        range: new vscode.Range(lineIdx, Number.MAX_VALUE, lineIdx, Number.MAX_VALUE),
         renderOptions: {
           after: {
             contentText: `  ${texts.join(" ; ")}`,
@@ -279,14 +295,17 @@ class PyrungDecorationController {
   }
 
   _normalizePath(filePath) {
-    if (!filePath) {
-      return null;
+    if (!filePath) return null;
+
+    if (this._pathCache.has(filePath)) {
+      return this._pathCache.get(filePath);
     }
+
     const normalized = path.normalize(filePath);
-    if (process.platform === "win32") {
-      return normalized.toLowerCase();
-    }
-    return normalized;
+    const finalPath = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+
+    this._pathCache.set(filePath, finalPath);
+    return finalPath;
   }
 
   _safeLine(document, line) {
@@ -294,27 +313,21 @@ class PyrungDecorationController {
     if (!Number.isFinite(lineNumber)) {
       return null;
     }
-    const clamped = Math.max(1, Math.min(document.lineCount, Math.trunc(lineNumber)));
-    return clamped;
+    return Math.max(1, Math.min(document.lineCount, Math.trunc(lineNumber)));
   }
 
-  _lineRanges(document, line, endLine) {
+  _lineRange(document, line, endLine) {
     const start = this._safeLine(document, line);
-    if (start === null) {
-      return [];
-    }
-    const end = this._safeLine(document, endLine === undefined || endLine === null ? line : endLine);
-    if (end === null) {
-      return [];
-    }
+    if (start === null) return null;
+
+    const end = this._safeLine(document, endLine ?? line);
+    if (end === null) return null;
+
     const startIdx = Math.min(start, end) - 1;
     const endIdx = Math.max(start, end) - 1;
-    const ranges = [];
-    for (let lineIdx = startIdx; lineIdx <= endIdx; lineIdx += 1) {
-      const endPos = document.lineAt(lineIdx).range.end;
-      ranges.push(new vscode.Range(lineIdx, 0, lineIdx, endPos.character));
-    }
-    return ranges;
+
+    // Return a single range. VS Code automatically clamps Number.MAX_VALUE to the end of the line.
+    return new vscode.Range(startIdx, 0, endIdx, Number.MAX_VALUE);
   }
 }
 
