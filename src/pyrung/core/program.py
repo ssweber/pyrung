@@ -33,7 +33,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.instruction import (
-    AsyncFunctionCallInstruction,
+    EnabledFunctionCallInstruction,
     BlockCopyInstruction,
     CallInstruction,
     CopyInstruction,
@@ -687,7 +687,7 @@ def run_enabled_function(
     source_file, source_line = _capture_source(depth=2)
     _validate_function_call(fn, ins, outs, func_name="run_enabled_function", has_enabled=True)
     enable_condition = ctx._rung._get_combined_condition()
-    instr = AsyncFunctionCallInstruction(fn, ins, outs, enable_condition)
+    instr = EnabledFunctionCallInstruction(fn, ins, outs, enable_condition)
     instr.source_file, instr.source_line = source_file, source_line
     ctx._rung.add_instruction(instr)
 

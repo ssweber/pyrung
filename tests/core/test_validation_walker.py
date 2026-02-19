@@ -538,7 +538,7 @@ class TestFunctionCallFieldsCaptured:
         facts = walk_program(prog)
         enable = _first(facts, "instruction._enable_condition")
         assert enable.value_kind == "condition"
-        assert enable.location.instruction_type == "AsyncFunctionCallInstruction"
+        assert enable.location.instruction_type == "EnabledFunctionCallInstruction"
         assert _first(facts, "instruction.ins['value']").value_kind == "tag"
         assert _first(facts, "instruction.outs['result']").value_kind == "tag"
 

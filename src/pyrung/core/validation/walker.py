@@ -158,7 +158,7 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "ForLoopInstruction": ("count", "idx_tag"),
     "FunctionCallInstruction": ("_fn",),
-    "AsyncFunctionCallInstruction": ("_fn", "_enable_condition"),
+    "EnabledFunctionCallInstruction": ("_fn", "_enable_condition"),
     "CallInstruction": ("subroutine_name",),
     "ReturnInstruction": (),
 }
@@ -418,7 +418,7 @@ class _Walker:
     ) -> None:
         class_name = type(instr).__name__
 
-        if class_name in {"FunctionCallInstruction", "AsyncFunctionCallInstruction"}:
+        if class_name in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
             self._walk_function_call_instruction(
                 instr,
                 scope,

@@ -460,7 +460,7 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 
 
-class AsyncFunctionCallInstruction(Instruction):
+class EnabledFunctionCallInstruction(Instruction):
     """Always-execute function call with enabled flag."""
 
     def __init__(

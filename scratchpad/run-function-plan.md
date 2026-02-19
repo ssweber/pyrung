@@ -112,9 +112,9 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
 ```
 
-**Add `AsyncFunctionCallInstruction`**:
+**Add `EnabledFunctionCallInstruction`**:
 ```python
-class AsyncFunctionCallInstruction(Instruction):
+class EnabledFunctionCallInstruction(Instruction):
     """Always-execute function call with enabled flag."""
 
     def __init__(self, fn, ins, outs, enable_condition):
@@ -185,7 +185,7 @@ def run_enabled_function(fn, ins=None, outs=None):
     ctx = _require_rung_context("run_enabled_function")
     _validate_function_call(fn, ins, outs, func_name="run_enabled_function", has_enabled=True)
     enable_condition = ctx._rung._get_combined_condition()
-    ctx._rung.add_instruction(AsyncFunctionCallInstruction(fn, ins, outs, enable_condition))
+    ctx._rung.add_instruction(EnabledFunctionCallInstruction(fn, ins, outs, enable_condition))
 ```
 
 ### 3. `src/pyrung/core/__init__.py` â€” Update exports

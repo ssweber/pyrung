@@ -438,7 +438,7 @@ def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
-    if instruction_type not in {"FunctionCallInstruction", "AsyncFunctionCallInstruction"}:
+    if instruction_type not in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
         return []
 
     location_text = _format_location(base_location)
