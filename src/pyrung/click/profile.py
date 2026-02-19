@@ -1,12 +1,14 @@
-"""Click hardware profile adapter for pyrung validation."""
+"""Hardware profile definition for pyrung validation."""
 
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import Protocol
+
+from .capabilities import CLICK_HARDWARE_PROFILE
 
 
 class HardwareProfile(Protocol):
-    """Validation profile contract consumed by pyrung click validator."""
+    """Validation profile contract consumed by the pyrung click validator."""
 
     def is_writable(self, memory_type: str, address: int | None = None) -> bool: ...
 
@@ -15,26 +17,6 @@ class HardwareProfile(Protocol):
     def copy_compatible(self, operation: str, source_type: str, dest_type: str) -> bool: ...
 
 
-class ClickHardwareProfileAdapter:
-    """Adapter over pyclickplc's default hardware profile object."""
-
-    def __init__(self, profile: object):
-        self._profile = cast(HardwareProfile, profile)
-
-    def is_writable(self, memory_type: str, address: int | None = None) -> bool:
-        return bool(self._profile.is_writable(memory_type, address))
-
-    def valid_for_role(self, memory_type: str, role: str) -> bool:
-        return bool(self._profile.valid_for_role(memory_type, role))
-
-    def copy_compatible(self, operation: str, source_type: str, dest_type: str) -> bool:
-        return bool(self._profile.copy_compatible(operation, source_type, dest_type))
-
-
-def load_default_profile() -> HardwareProfile | None:
-    """Load pyclickplc default profile when available."""
-    try:
-        from pyclickplc import CLICK_HARDWARE_PROFILE
-    except (ImportError, AttributeError):
-        return None
-    return ClickHardwareProfileAdapter(CLICK_HARDWARE_PROFILE)
+def load_default_profile() -> HardwareProfile:
+    """Load the default pyrung hardware profile."""
+    return CLICK_HARDWARE_PROFILE
