@@ -1,51 +1,85 @@
 const path = require("path");
 const vscode = require("vscode");
 
+// --- Configuration ---
+// Centralized settings to easily adjust colors, borders, and opacities
+const DECORATION_SETTINGS = {
+  step: {
+    isWholeLine: true,
+    borderWidth: "0 0 0 10px", 
+    borderStyle: "double",
+    borderColor: "debugIcon.stepOverForeground",
+    overviewRulerColor: "debugIcon.stepOverForeground",
+    overviewRulerLane: vscode.OverviewRulerLane.Full,
+  },
+  enabled: {
+    isWholeLine: true,
+    borderWidth: "0 0 0 3px",
+    borderStyle: "solid",
+    borderColor: "testing.iconPassed", // Green
+  },
+  disabled: {
+    isWholeLine: true,
+    borderWidth: "0 0 0 3px", 
+    borderStyle: "solid",
+    borderColor: "editorWarning.foreground", // Yellow
+  },
+  conditionTrue: {
+    margin: "0 0 0 2em",
+    color: "testing.iconPassed",
+    fontWeight: "500",
+  },
+  conditionFalse: {
+    margin: "0 0 0 2em",
+    color: "testing.iconFailed",
+    fontWeight: "500",
+  },
+  conditionSkipped: {
+    margin: "0 0 0 2em",
+    color: "testing.iconSkipped",
+    fontStyle: "italic",
+  },
+};
+
 class PyrungDecorationController {
   constructor() {
     this._lastTrace = null;
+
     this._stepDecoration = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: new vscode.ThemeColor("editor.wordHighlightStrongBackground"),
-      borderWidth: "0 0 0 2px",
-      borderStyle: "solid",
-      borderColor: new vscode.ThemeColor("editorWarning.foreground"),
-      overviewRulerColor: new vscode.ThemeColor("editorWarning.foreground"),
-      overviewRulerLane: vscode.OverviewRulerLane.Full,
+      ...DECORATION_SETTINGS.step,
+      borderColor: new vscode.ThemeColor(DECORATION_SETTINGS.step.borderColor),
+      overviewRulerColor: new vscode.ThemeColor(DECORATION_SETTINGS.step.overviewRulerColor),
     });
-  this._enabledDecoration = vscode.window.createTextEditorDecorationType({
-    isWholeLine: true,
-    borderWidth: "0 0 0 2px",
-    borderStyle: "solid",
-    borderColor: new vscode.ThemeColor("editorInfo.foreground"),
-  });
+
+    this._enabledDecoration = vscode.window.createTextEditorDecorationType({
+      ...DECORATION_SETTINGS.enabled,
+      borderColor: new vscode.ThemeColor(DECORATION_SETTINGS.enabled.borderColor),
+    });
+
     this._disabledDecoration = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: new vscode.ThemeColor("editor.inactiveSelectionBackground"),
-      opacity: "0.5",
+      ...DECORATION_SETTINGS.disabled,
+      backgroundColor: new vscode.ThemeColor(DECORATION_SETTINGS.disabled.backgroundColor),
+      borderColor: new vscode.ThemeColor(DECORATION_SETTINGS.disabled.borderColor),
     });
 
     this._conditionTrueDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 2em",
-        color: new vscode.ThemeColor("testing.iconPassed"),
-        fontWeight: "500",
+        ...DECORATION_SETTINGS.conditionTrue,
+        color: new vscode.ThemeColor(DECORATION_SETTINGS.conditionTrue.color),
       },
     });
 
     this._conditionFalseDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 2em",
-        color: new vscode.ThemeColor("testing.iconFailed"),
-        fontWeight: "500",
+        ...DECORATION_SETTINGS.conditionFalse,
+        color: new vscode.ThemeColor(DECORATION_SETTINGS.conditionFalse.color),
       },
     });
 
     this._conditionSkippedDecoration = vscode.window.createTextEditorDecorationType({
       after: {
-        margin: "0 0 0 2em",
-        color: new vscode.ThemeColor("testing.iconSkipped"),
-        fontStyle: "italic",
+        ...DECORATION_SETTINGS.conditionSkipped,
+        color: new vscode.ThemeColor(DECORATION_SETTINGS.conditionSkipped.color),
       },
     });
   }
