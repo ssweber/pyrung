@@ -30,4 +30,3 @@ def test_read_write_message_multiple_frames():
     assert read_message(stream) == first
     assert read_message(stream) == second
     assert read_message(stream) is None
-

@@ -33,12 +33,12 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.instruction import (
-    EnabledFunctionCallInstruction,
     BlockCopyInstruction,
     CallInstruction,
     CopyInstruction,
     CountDownInstruction,
     CountUpInstruction,
+    EnabledFunctionCallInstruction,
     FillInstruction,
     ForLoopInstruction,
     FunctionCallInstruction,
@@ -1396,7 +1396,9 @@ class Branch:
         )
         self._branch_rung._branch_condition_start = len(parent_conditions)
 
-        local_conditions = self._branch_rung._conditions[self._branch_rung._branch_condition_start :]
+        local_conditions = self._branch_rung._conditions[
+            self._branch_rung._branch_condition_start :
+        ]
         for idx, condition in enumerate(local_conditions):
             if condition.source_line is None:
                 if idx < len(condition_arg_lines):

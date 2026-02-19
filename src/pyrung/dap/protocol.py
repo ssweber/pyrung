@@ -83,4 +83,3 @@ def make_event(*, seq: int, event: str, body: dict[str, Any] | None = None) -> d
     if body is not None:
         message["body"] = body
     return message
-

@@ -232,4 +232,3 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
     assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
     assert runner.current_state.tags["Mode"] is True
     assert runner.current_state.tags["BranchOut"] is False
-

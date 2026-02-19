@@ -10,4 +10,3 @@ __all__ = ["DAPAdapter", "main"]
 def main() -> None:
     """Run the pyrung DAP adapter over stdin/stdout."""
     DAPAdapter().run()
-

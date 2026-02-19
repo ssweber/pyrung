@@ -138,7 +138,9 @@ class Rung:
         branch_enable_map: dict[int, bool] = {}
         for item in self._execution_items:
             if isinstance(item, Rung):
-                branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(ctx)
+                branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(
+                    ctx
+                )
         return branch_enable_map
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

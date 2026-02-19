@@ -52,7 +52,9 @@ def _write_script(tmp_path: Path, name: str, content: str) -> Path:
 
 
 def _line_number(script_path: Path, needle: str) -> int:
-    for line_number, line in enumerate(script_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(
+        script_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if needle in line:
             return line_number
     raise AssertionError(f"Could not find line containing {needle!r}")
@@ -69,7 +71,9 @@ def _stopped_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _trace_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "pyrungTrace"]
+    return [
+        msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "pyrungTrace"
+    ]
 
 
 def _runner_script() -> str:
@@ -459,7 +463,9 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
     stepin_adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=stepin_out)
     script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
 
-    _send_request(stepin_adapter, stepin_out, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(
+        stepin_adapter, stepin_out, seq=1, command="launch", arguments={"program": str(script)}
+    )
     _drain_messages(stepin_out)
     _send_request(stepin_adapter, stepin_out, seq=2, command="stepIn")
     _drain_messages(stepin_out)
@@ -478,7 +484,9 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
 
     next_out = io.BytesIO()
     next_adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=next_out)
-    _send_request(next_adapter, next_out, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(
+        next_adapter, next_out, seq=1, command="launch", arguments={"program": str(script)}
+    )
     _drain_messages(next_out)
     _send_request(next_adapter, next_out, seq=2, command="next")
     _drain_messages(next_out)
@@ -552,7 +560,9 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     assert conditions[0]["status"] == "false"
     assert conditions[0]["source"]["path"] == expected_path
     assert isinstance(conditions[0]["summary"], str) and conditions[0]["summary"]
-    assert isinstance(conditions[0]["annotation"], str) and conditions[0]["annotation"].startswith("[F]")
+    assert isinstance(conditions[0]["annotation"], str) and conditions[0]["annotation"].startswith(
+        "[F]"
+    )
     detail_names = {item["name"] for item in conditions[0]["details"]}
     assert {"tag", "value"}.issubset(detail_names)
 
@@ -624,7 +634,9 @@ def test_next_trace_marks_short_circuited_any_of_child_as_skipped(tmp_path: Path
 def test_next_trace_any_of_with_rise_term_keeps_skipped_child(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "any_of_rise_short_circuit.py", _any_of_rise_short_circuit_script())
+    script = _write_script(
+        tmp_path, "any_of_rise_short_circuit.py", _any_of_rise_short_circuit_script()
+    )
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
@@ -689,7 +701,9 @@ def test_next_trace_emits_right_pointer_condition_details(tmp_path: Path):
 def test_next_trace_collapses_right_pointer_expression_to_resolved_tag(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "right_pointer_expr_logic.py", _right_indirect_expr_condition_script())
+    script = _write_script(
+        tmp_path, "right_pointer_expr_logic.py", _right_indirect_expr_condition_script()
+    )
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
@@ -781,7 +795,9 @@ def test_launch_sets_dap_env_flag_to_skip_script_autorun(tmp_path: Path):
 def test_stepin_after_branch_becomes_unpowered_stays_on_top_rung(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "branch_unpowered.py", _branch_unpowered_after_first_scan_script())
+    script = _write_script(
+        tmp_path, "branch_unpowered.py", _branch_unpowered_after_first_scan_script()
+    )
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)

@@ -344,7 +344,9 @@ class PLCRunner:
 
         # Evaluate logic rung-by-rung with nested yield points for debugger stepping.
         for i, rung in enumerate(self._logic):
-            enabled, rung_condition_traces = self._evaluate_conditions_with_trace(rung._conditions, ctx)
+            enabled, rung_condition_traces = self._evaluate_conditions_with_trace(
+                rung._conditions, ctx
+            )
             yield from self._iter_rung_steps(
                 rung_index=i,
                 rung=rung,
@@ -395,7 +397,9 @@ class PLCRunner:
         from pyrung.core.instruction import SubroutineReturnSignal
         from pyrung.core.rung import Rung as RungClass
 
-        enabled_state = self._enabled_state_for(kind=kind, enabled=enabled, parent_enabled=parent_enabled)
+        enabled_state = self._enabled_state_for(
+            kind=kind, enabled=enabled, parent_enabled=parent_enabled
+        )
         branch_enable_map: dict[int, bool] = {}
         branch_trace_map: dict[int, dict[str, Any]] = {}
         for item in rung._execution_items:
@@ -403,7 +407,9 @@ class PLCRunner:
                 continue
             local_conditions = item._conditions[item._branch_condition_start :]
             if enabled:
-                local_enabled, local_traces = self._evaluate_conditions_with_trace(local_conditions, ctx)
+                local_enabled, local_traces = self._evaluate_conditions_with_trace(
+                    local_conditions, ctx
+                )
                 branch_state: Literal["enabled", "disabled_local", "disabled_parent"]
                 branch_state = "enabled" if local_enabled else "disabled_local"
             else:
@@ -901,7 +907,9 @@ class PLCRunner:
                 pointer_name = condition.indirect_ref.pointer.name
                 pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
                 extra_details = [
-                    _detail("left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"),
+                    _detail(
+                        "left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"
+                    ),
                     _detail("left_pointer", pointer_name),
                     _detail("left_pointer_value", pointer_value),
                 ]
@@ -916,7 +924,10 @@ class PLCRunner:
                 right_details.extend(
                     [
                         _detail("right", right_target.name),
-                        _detail("right_pointer_expr", f"{right_operand.block.name}[{right_pointer_name}]"),
+                        _detail(
+                            "right_pointer_expr",
+                            f"{right_operand.block.name}[{right_pointer_name}]",
+                        ),
                         _detail("right_pointer", right_pointer_name),
                         _detail("right_pointer_value", right_pointer_value),
                     ]

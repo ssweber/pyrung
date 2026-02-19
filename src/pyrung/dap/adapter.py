@@ -71,7 +71,9 @@ class DAPAdapter:
 
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
-        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True, name="pyrung-dap-reader")
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True, name="pyrung-dap-reader"
+        )
         self._reader_thread.start()
 
         while not self._stop_event.is_set():
@@ -366,8 +368,7 @@ class DAPAdapter:
             self._breakpoints_by_file[canonical] = verified_lines
 
         response_bps = [
-            {"verified": line in verified_lines, "line": line}
-            for line in requested_lines
+            {"verified": line in verified_lines, "line": line} for line in requested_lines
         ]
         return {"breakpoints": response_bps}, []
 
@@ -424,7 +425,11 @@ class DAPAdapter:
             while not self._stop_event.is_set():
                 if self._pause_event.is_set():
                     self._queue.put(
-                        {"kind": "internal_event", "event": "stopped", "body": self._stopped_body("pause")}
+                        {
+                            "kind": "internal_event",
+                            "event": "stopped",
+                            "body": self._stopped_body("pause"),
+                        }
                     )
                     return
 
@@ -512,7 +517,9 @@ class DAPAdapter:
         visited_rungs: set[int] = set()
         visited_programs: set[int] = set()
         for rung in runner._logic:
-            self._index_rung_lines(rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs)
+            self._index_rung_lines(
+                rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs
+            )
 
     def _index_rung_lines(
         self,
@@ -729,7 +736,9 @@ class DAPAdapter:
         for region in trace.get("regions", []):
             source_file = region.get("source_file")
             source_body = None
-            source_path = self._canonical_path(source_file) if isinstance(source_file, str) else None
+            source_path = (
+                self._canonical_path(source_file) if isinstance(source_file, str) else None
+            )
             if source_path:
                 source_body = {"name": Path(source_path).name, "path": source_path}
 
