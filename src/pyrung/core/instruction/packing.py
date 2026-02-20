@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .base import Instruction, OneShotMixin
 from .conversions import (
@@ -18,6 +18,9 @@ from .resolvers import (
     resolve_block_range_tags_ctx,
     resolve_tag_ctx,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
 
 
 class PackBitsInstruction(OneShotMixin, Instruction):

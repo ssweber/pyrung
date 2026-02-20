@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pyrung.core._source import (
     _capture_source,
@@ -20,6 +20,12 @@ from pyrung.core.rung import Rung as RungLogic
 from pyrung.core.tag import Tag, TagType
 
 from .validation import _check_function_body_strict, _check_with_body_from_frame
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
+    from pyrung.core.state import SystemState
+
+    from .validation import DialectValidator
 
 _rung_stack: list[Rung] = []
 

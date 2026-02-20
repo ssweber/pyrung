@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from pyrung.core.tag import Tag
 
 from .base import Instruction, OneShotMixin
 from .resolvers import (
     resolve_coil_targets_ctx,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
 
 class OutInstruction(OneShotMixin, Instruction):

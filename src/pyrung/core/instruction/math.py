@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 
@@ -18,6 +18,9 @@ from .resolvers import (
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
 
 
 class MathInstruction(OneShotMixin, Instruction):

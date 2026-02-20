@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
 from .base import Instruction
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
 
 
 class OnDelayInstruction(Instruction):

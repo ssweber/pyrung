@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 
@@ -10,6 +10,9 @@ from .base import Instruction
 from .conversions import (
     _clamp_dint,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
 
 
 class CountUpInstruction(Instruction):

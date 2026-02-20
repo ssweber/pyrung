@@ -5,6 +5,7 @@ import inspect
 import textwrap
 import warnings
 from collections.abc import Callable
+from types import FrameType
 from typing import Any
 
 

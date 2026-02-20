@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 
@@ -12,6 +12,15 @@ from .conversions import (
     _as_single_ascii_char,
     _ascii_char_from_code,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import (
+        BlockRange,
+        IndirectBlockRange,
+        IndirectExprRef,
+        IndirectRef,
+    )
 
 _TAG_SUFFIX_RE = re.compile(r"^(.*?)(\d+)$")
 

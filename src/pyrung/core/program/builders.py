@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
     _capture_source,
@@ -20,6 +20,9 @@ from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
 from .context import _require_rung_context
+
+if TYPE_CHECKING:
+    from pyrung.core.memory_block import IndirectBlockRange
 
 
 class ShiftBuilder:

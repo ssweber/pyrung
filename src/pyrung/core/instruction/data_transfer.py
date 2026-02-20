@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.tag import Tag
@@ -25,6 +25,10 @@ from .resolvers import (
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
 class CopyInstruction(OneShotMixin, Instruction):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
     _capture_source,
@@ -30,6 +30,9 @@ from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag, TagType
 
 from .context import Program, SubroutineFunc, _require_rung_context
+
+if TYPE_CHECKING:
+    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 
 def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
