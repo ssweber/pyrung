@@ -18,6 +18,7 @@ from .resolvers import (
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
 )
+from .utils import guard_oneshot_execution
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -47,10 +48,8 @@ class MathInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.mode = mode
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         # Evaluate expression (handles Tag, Expression, IndirectRef, literal)
         try:
             value = resolve_tag_or_value_ctx(self.expression, ctx)

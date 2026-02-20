@@ -18,6 +18,10 @@ from .resolvers import (
     resolve_block_range_tags_ctx,
     resolve_tag_ctx,
 )
+from .utils import (
+    assert_tag_type,
+    guard_oneshot_execution,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -31,17 +35,16 @@ class PackBitsInstruction(OneShotMixin, Instruction):
         self.bit_block = bit_block
         self.dest = dest
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         from pyrung.core.tag import TagType
 
         dest_tag = resolve_tag_ctx(self.dest, ctx)
-        if dest_tag.type not in {TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL}:
-            raise TypeError(
-                f"pack_bits destination must be INT, WORD, DINT, or REAL; got {dest_tag.type.name}"
-            )
+        assert_tag_type(
+            dest_tag,
+            (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
+            label="pack_bits destination",
+        )
 
         bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
         width = 16 if dest_tag.type in {TagType.INT, TagType.WORD} else 32
@@ -52,10 +55,12 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 
         packed = 0
         for bit_index, bit_tag in enumerate(bit_tags):
-            if bit_tag.type != TagType.BOOL:
-                raise TypeError(
-                    f"pack_bits source tags must be BOOL; got {bit_tag.type.name} at {bit_tag.name}"
-                )
+            assert_tag_type(
+                bit_tag,
+                (TagType.BOOL,),
+                label="pack_bits source tags",
+                include_tag_name=True,
+            )
             bit_value = ctx.get_tag(bit_tag.name, bit_tag.default)
             if bool(bit_value):
                 packed |= 1 << bit_index
@@ -75,31 +80,28 @@ class PackWordsInstruction(OneShotMixin, Instruction):
         self.word_block = word_block
         self.dest = dest
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         from pyrung.core.tag import TagType
 
         dest_tag = resolve_tag_ctx(self.dest, ctx)
-        if dest_tag.type not in {TagType.DINT, TagType.REAL}:
-            raise TypeError(
-                f"pack_words destination must be DINT or REAL; got {dest_tag.type.name}"
-            )
+        assert_tag_type(dest_tag, (TagType.DINT, TagType.REAL), label="pack_words destination")
 
         word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
         if len(word_tags) != 2:
             raise ValueError(f"pack_words requires exactly 2 source tags; got {len(word_tags)}")
-        if word_tags[0].type not in {TagType.INT, TagType.WORD}:
-            raise TypeError(
-                f"pack_words source tags must be INT or WORD; got {word_tags[0].type.name} "
-                f"at {word_tags[0].name}"
-            )
-        if word_tags[1].type not in {TagType.INT, TagType.WORD}:
-            raise TypeError(
-                f"pack_words source tags must be INT or WORD; got {word_tags[1].type.name} "
-                f"at {word_tags[1].name}"
-            )
+        assert_tag_type(
+            word_tags[0],
+            (TagType.INT, TagType.WORD),
+            label="pack_words source tags",
+            include_tag_name=True,
+        )
+        assert_tag_type(
+            word_tags[1],
+            (TagType.INT, TagType.WORD),
+            label="pack_words source tags",
+            include_tag_name=True,
+        )
 
         lo_value = ctx.get_tag(word_tags[0].name, word_tags[0].default)
         hi_value = ctx.get_tag(word_tags[1].name, word_tags[1].default)
@@ -123,24 +125,25 @@ class PackTextInstruction(OneShotMixin, Instruction):
         self.dest = dest
         self.allow_whitespace = bool(allow_whitespace)
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         from pyrung.core.tag import TagType
 
         dest_tag = resolve_tag_ctx(self.dest, ctx)
-        if dest_tag.type not in {TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL}:
-            raise TypeError(
-                f"pack_text destination must be INT, DINT, WORD, or REAL; got {dest_tag.type.name}"
-            )
+        assert_tag_type(
+            dest_tag,
+            (TagType.INT, TagType.DINT, TagType.WORD, TagType.REAL),
+            label="pack_text destination",
+        )
 
         src_tags = resolve_block_range_tags_ctx(self.source_range, ctx)
         for src in src_tags:
-            if src.type != TagType.CHAR:
-                raise TypeError(
-                    f"pack_text source range must contain only CHAR tags; got {src.type.name} at {src.name}"
-                )
+            assert_tag_type(
+                src,
+                (TagType.CHAR,),
+                label="pack_text source range must contain only CHAR tags",
+                include_tag_name=True,
+            )
 
         try:
             text = "".join(
@@ -167,18 +170,16 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
         self.source = source
         self.bit_block = bit_block
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         from pyrung.core.tag import TagType
 
         source_tag = resolve_tag_ctx(self.source, ctx)
-        if source_tag.type not in {TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL}:
-            raise TypeError(
-                "unpack_to_bits source must be INT, WORD, DINT, or REAL; "
-                f"got {source_tag.type.name}"
-            )
+        assert_tag_type(
+            source_tag,
+            (TagType.INT, TagType.WORD, TagType.DINT, TagType.REAL),
+            label="unpack_to_bits source",
+        )
 
         bit_tags = resolve_block_range_tags_ctx(self.bit_block, ctx)
         width = 16 if source_tag.type in {TagType.INT, TagType.WORD} else 32
@@ -197,11 +198,12 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 
         updates = {}
         for bit_index, bit_tag in enumerate(bit_tags):
-            if bit_tag.type != TagType.BOOL:
-                raise TypeError(
-                    f"unpack_to_bits destination tags must be BOOL; got "
-                    f"{bit_tag.type.name} at {bit_tag.name}"
-                )
+            assert_tag_type(
+                bit_tag,
+                (TagType.BOOL,),
+                label="unpack_to_bits destination tags",
+                include_tag_name=True,
+            )
             updates[bit_tag.name] = bool((bits >> bit_index) & 1)
         ctx.set_tags(updates)
 
@@ -214,33 +216,34 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
         self.source = source
         self.word_block = word_block
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         from pyrung.core.tag import TagType
 
         source_tag = resolve_tag_ctx(self.source, ctx)
-        if source_tag.type not in {TagType.DINT, TagType.REAL}:
-            raise TypeError(
-                f"unpack_to_words source must be DINT or REAL; got {source_tag.type.name}"
-            )
+        assert_tag_type(
+            source_tag,
+            (TagType.DINT, TagType.REAL),
+            label="unpack_to_words source",
+        )
 
         word_tags = resolve_block_range_tags_ctx(self.word_block, ctx)
         if len(word_tags) != 2:
             raise ValueError(
                 f"unpack_to_words requires exactly 2 destination tags; got {len(word_tags)}"
             )
-        if word_tags[0].type not in {TagType.INT, TagType.WORD}:
-            raise TypeError(
-                f"unpack_to_words destination tags must be INT or WORD; got "
-                f"{word_tags[0].type.name} at {word_tags[0].name}"
-            )
-        if word_tags[1].type not in {TagType.INT, TagType.WORD}:
-            raise TypeError(
-                f"unpack_to_words destination tags must be INT or WORD; got "
-                f"{word_tags[1].type.name} at {word_tags[1].name}"
-            )
+        assert_tag_type(
+            word_tags[0],
+            (TagType.INT, TagType.WORD),
+            label="unpack_to_words destination tags",
+            include_tag_name=True,
+        )
+        assert_tag_type(
+            word_tags[1],
+            (TagType.INT, TagType.WORD),
+            label="unpack_to_words destination tags",
+            include_tag_name=True,
+        )
 
         source_value = ctx.get_tag(source_tag.name, source_tag.default)
         bits = (

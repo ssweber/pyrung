@@ -10,6 +10,10 @@ from .base import Instruction
 from .conversions import (
     _clamp_dint,
 )
+from .utils import (
+    resolve_setpoint_ctx,
+    to_condition,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -29,6 +33,9 @@ class CountUpInstruction(Instruction):
     - NOT edge-triggered - counts every scan while condition is true
     """
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         done_bit: Tag,
@@ -43,37 +50,9 @@ class CountUpInstruction(Instruction):
         self.setpoint = setpoint
 
         # Convert Tags to Conditions if needed
-        self.up_condition = self._to_condition(up_condition)
-        self.reset_condition = self._to_condition(reset_condition)
-        self.down_condition = self._to_condition(down_condition)
-
-    def _resolve_setpoint_ctx(self, ctx: ScanContext) -> int:
-        """Resolve setpoint to int value (supports Tag or literal)."""
-        if isinstance(self.setpoint, Tag):
-            return ctx.get_tag(self.setpoint.name, self.setpoint.default)
-        return self.setpoint
-
-    def _to_condition(self, obj: Any) -> Any:
-        """Convert Tag to Condition if needed."""
-        from pyrung.core.condition import BitCondition
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
-        if obj is None:
-            return None
-        if isinstance(obj, TagClass):
-            if obj.type == TagType.BOOL:
-                return BitCondition(obj)
-            else:
-                raise TypeError(
-                    f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-                    "Use comparison operators: tag == value, tag > 0, etc."
-                )
-        return obj
-
-    def always_execute(self) -> bool:
-        """Counter always executes to check all conditions independently."""
-        return True
+        self.up_condition = to_condition(up_condition)
+        self.reset_condition = to_condition(reset_condition)
+        self.down_condition = to_condition(down_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Check reset condition first
@@ -102,14 +81,11 @@ class CountUpInstruction(Instruction):
         acc_value = _clamp_dint(acc_value + delta)
 
         # Compute done bit (resolve setpoint dynamically)
-        sp = self._resolve_setpoint_ctx(ctx)
+        sp = resolve_setpoint_ctx(self.setpoint, ctx)
         done = acc_value >= sp
 
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
-
-    def is_inert_when_disabled(self) -> bool:
-        return False
 
 
 class CountDownInstruction(Instruction):
@@ -127,6 +103,9 @@ class CountDownInstruction(Instruction):
     - Done bit activates when acc <= -setpoint
     """
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         done_bit: Tag,
@@ -140,36 +119,8 @@ class CountDownInstruction(Instruction):
         self.setpoint = setpoint
 
         # Convert Tags to Conditions if needed
-        self.down_condition = self._to_condition(down_condition)
-        self.reset_condition = self._to_condition(reset_condition)
-
-    def _resolve_setpoint_ctx(self, ctx: ScanContext) -> int:
-        """Resolve setpoint to int value (supports Tag or literal)."""
-        if isinstance(self.setpoint, Tag):
-            return ctx.get_tag(self.setpoint.name, self.setpoint.default)
-        return self.setpoint
-
-    def _to_condition(self, obj: Any) -> Any:
-        """Convert Tag to Condition if needed."""
-        from pyrung.core.condition import BitCondition
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
-        if obj is None:
-            return None
-        if isinstance(obj, TagClass):
-            if obj.type == TagType.BOOL:
-                return BitCondition(obj)
-            else:
-                raise TypeError(
-                    f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-                    "Use comparison operators: tag == value, tag > 0, etc."
-                )
-        return obj
-
-    def always_execute(self) -> bool:
-        """Counter always executes to check all conditions independently."""
-        return True
+        self.down_condition = to_condition(down_condition)
+        self.reset_condition = to_condition(reset_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         # Check reset condition first
@@ -191,11 +142,8 @@ class CountDownInstruction(Instruction):
         acc_value = _clamp_dint(acc_value)
 
         # Compute done bit (resolve setpoint dynamically)
-        sp = self._resolve_setpoint_ctx(ctx)
+        sp = resolve_setpoint_ctx(self.setpoint, ctx)
         done = acc_value <= -sp
 
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
-
-    def is_inert_when_disabled(self) -> bool:
-        return False

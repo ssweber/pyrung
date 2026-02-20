@@ -8,6 +8,10 @@ from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeUnit
 
 from .base import Instruction
+from .utils import (
+    resolve_setpoint_ctx,
+    to_condition,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -29,6 +33,9 @@ class OnDelayInstruction(Instruction):
     - Accumulator updates immediately (mid-scan visible)
     """
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         done_bit: Tag,
@@ -45,36 +52,8 @@ class OnDelayInstruction(Instruction):
         self.has_reset = reset_condition is not None
 
         # Convert Tags to Conditions if needed
-        self.enable_condition = self._to_condition(enable_condition)
-        self.reset_condition = self._to_condition(reset_condition)
-
-    def _resolve_setpoint_ctx(self, ctx: ScanContext) -> int:
-        """Resolve setpoint to int value (supports Tag or literal)."""
-        if isinstance(self.setpoint, Tag):
-            return ctx.get_tag(self.setpoint.name, self.setpoint.default)
-        return self.setpoint
-
-    def _to_condition(self, obj: Any) -> Any:
-        """Convert Tag to Condition if needed."""
-        from pyrung.core.condition import BitCondition
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
-        if obj is None:
-            return None
-        if isinstance(obj, TagClass):
-            if obj.type == TagType.BOOL:
-                return BitCondition(obj)
-            else:
-                raise TypeError(
-                    f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-                    "Use comparison operators: tag == value, tag > 0, etc."
-                )
-        return obj
-
-    def always_execute(self) -> bool:
-        """TON always executes to reset when rung goes false."""
-        return True
+        self.enable_condition = to_condition(enable_condition)
+        self.reset_condition = to_condition(reset_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
@@ -105,7 +84,7 @@ class OnDelayInstruction(Instruction):
             acc_value = min(acc_value + int_units, 32767)
 
             # Compute done bit (resolve setpoint dynamically)
-            sp = self._resolve_setpoint_ctx(ctx)
+            sp = resolve_setpoint_ctx(self.setpoint, ctx)
             done = acc_value >= sp
 
             # Update state
@@ -120,9 +99,6 @@ class OnDelayInstruction(Instruction):
                 # TON: Reset immediately
                 ctx.set_memory(frac_key, 0.0)
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
-
-    def is_inert_when_disabled(self) -> bool:
-        return False
 
 
 class OffDelayInstruction(Instruction):
@@ -141,6 +117,9 @@ class OffDelayInstruction(Instruction):
     - If setpoint increases past accumulator after timeout, done re-enables
     """
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         done_bit: Tag,
@@ -155,35 +134,7 @@ class OffDelayInstruction(Instruction):
         self.time_unit = time_unit
 
         # Convert Tags to Conditions if needed
-        self.enable_condition = self._to_condition(enable_condition)
-
-    def _resolve_setpoint_ctx(self, ctx: ScanContext) -> int:
-        """Resolve setpoint to int value (supports Tag or literal)."""
-        if isinstance(self.setpoint, Tag):
-            return ctx.get_tag(self.setpoint.name, self.setpoint.default)
-        return self.setpoint
-
-    def _to_condition(self, obj: Any) -> Any:
-        """Convert Tag to Condition if needed."""
-        from pyrung.core.condition import BitCondition
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
-        if obj is None:
-            return None
-        if isinstance(obj, TagClass):
-            if obj.type == TagType.BOOL:
-                return BitCondition(obj)
-            else:
-                raise TypeError(
-                    f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-                    "Use comparison operators: tag == value, tag > 0, etc."
-                )
-        return obj
-
-    def always_execute(self) -> bool:
-        """Off-delay timers always execute (need to count while disabled)."""
-        return True
+        self.enable_condition = to_condition(enable_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
@@ -195,7 +146,7 @@ class OffDelayInstruction(Instruction):
         else:
             # Disabled: count up towards (and past) setpoint
             acc_value = ctx.get_tag(self.accumulator.name, 0)
-            sp = self._resolve_setpoint_ctx(ctx)
+            sp = resolve_setpoint_ctx(self.setpoint, ctx)
 
             # Always count while disabled (accumulator continues to max int)
             dt = ctx.get_memory("_dt", 0.0)
@@ -213,6 +164,3 @@ class OffDelayInstruction(Instruction):
 
             ctx.set_memory(frac_key, new_frac)
             ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
-
-    def is_inert_when_disabled(self) -> bool:
-        return False

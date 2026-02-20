@@ -25,6 +25,7 @@ from .resolvers import (
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
+from .utils import guard_oneshot_execution
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -49,10 +50,8 @@ class CopyInstruction(OneShotMixin, Instruction):
         self.source = source
         self.target = target
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         try:
             resolved_target = resolve_tag_ctx(self.target, ctx)
         except IndexError:
@@ -233,10 +232,8 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
         self.source = source
         self.dest = dest
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
 
         if isinstance(self.source, CopyModifier):
@@ -329,10 +326,8 @@ class FillInstruction(OneShotMixin, Instruction):
         self.value = value
         self.dest = dest
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         dst_tags = resolve_block_range_tags_ctx(self.dest, ctx)
         if isinstance(self.value, CopyModifier):
             self._execute_modifier_fill(ctx, self.value, dst_tags)

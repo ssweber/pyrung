@@ -13,6 +13,10 @@ from .resolvers import (
     resolve_block_range_tags_ctx,
     resolve_tag_or_value_ctx,
 )
+from .utils import (
+    guard_oneshot_execution,
+    to_condition,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -73,10 +77,8 @@ class SearchInstruction(OneShotMixin, Instruction):
         self.continuous = continuous
         self._compare = _SEARCH_OPERATOR_MAP[condition]
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
-
         resolved_range = resolve_block_range_ctx(self.search_range, ctx)
         addresses = list(resolved_range.addresses)
         tags = resolved_range.tags()
@@ -212,6 +214,9 @@ class ShiftInstruction(Instruction):
     - reset condition (level) to clear all bits in the range
     """
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         bit_range: BlockRange | IndirectBlockRange,
@@ -228,32 +233,15 @@ class ShiftInstruction(Instruction):
             )
 
         self.bit_range = bit_range
-        self.data_condition = self._to_condition(data_condition)
-        self.clock_condition = self._to_condition(clock_condition)
-        self.reset_condition = self._to_condition(reset_condition)
+        self.data_condition = to_condition(data_condition)
+        self.clock_condition = to_condition(clock_condition)
+        self.reset_condition = to_condition(reset_condition)
         self._prev_clock_key = f"_shift_prev_clock:{id(self)}"
 
         if self.clock_condition is None:
             raise ValueError("shift requires a clock condition")
         if self.reset_condition is None:
             raise ValueError("shift requires a reset condition")
-
-    def _to_condition(self, obj: Any) -> Any:
-        """Convert a BOOL tag to BitCondition for condition inputs."""
-        from pyrung.core.condition import BitCondition
-        from pyrung.core.tag import Tag as TagClass
-        from pyrung.core.tag import TagType
-
-        if obj is None:
-            return None
-        if isinstance(obj, TagClass):
-            if obj.type == TagType.BOOL:
-                return BitCondition(obj)
-            raise TypeError(
-                f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-                "Use comparison operators: tag == value, tag > 0, etc."
-            )
-        return obj
 
     def _resolve_tags(self, ctx: ScanContext) -> list[Tag]:
         from pyrung.core.tag import TagType
@@ -268,10 +256,6 @@ class ShiftInstruction(Instruction):
                     f"got {tag.type.name} at {tag.name}"
                 )
         return tags
-
-    def always_execute(self) -> bool:
-        """Shift must always run to capture clock edges while rung is false."""
-        return True
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         tags = self._resolve_tags(ctx)
@@ -293,6 +277,3 @@ class ShiftInstruction(Instruction):
             ctx.set_tags({tag.name: False for tag in tags})
 
         ctx.set_memory(self._prev_clock_key, clock_curr)
-
-    def is_inert_when_disabled(self) -> bool:
-        return False

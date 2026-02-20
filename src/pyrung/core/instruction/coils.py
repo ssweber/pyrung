@@ -22,6 +22,8 @@ class OutInstruction(OneShotMixin, Instruction):
     Sets the target bit to True when executed.
     """
 
+    INERT_WHEN_DISABLED = False
+
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
@@ -38,9 +40,6 @@ class OutInstruction(OneShotMixin, Instruction):
             return
         for target in targets:
             ctx.set_tag(target.name, True)
-
-    def is_inert_when_disabled(self) -> bool:
-        return False
 
 
 class LatchInstruction(Instruction):

@@ -16,6 +16,7 @@ from .resolvers import (
     resolve_tag_ctx,
     resolve_tag_or_value_ctx,
 )
+from .utils import guard_oneshot_execution
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -38,9 +39,8 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
         self._ins = ins or {}
         self._outs = outs or {}
 
+    @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not self.should_execute(enabled):
-            return
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
         result = self._fn(**kwargs)
         if not self._outs:
@@ -61,6 +61,9 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
 class EnabledFunctionCallInstruction(Instruction):
     """Always-execute function call with enabled flag."""
 
+    ALWAYS_EXECUTES = True
+    INERT_WHEN_DISABLED = False
+
     def __init__(
         self,
         fn: Callable[..., dict[str, Any]],
@@ -72,9 +75,6 @@ class EnabledFunctionCallInstruction(Instruction):
         self._ins = ins or {}
         self._outs = outs or {}
         self._enable_condition = enable_condition
-
-    def always_execute(self) -> bool:
-        return True
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         kwargs = {name: resolve_tag_or_value_ctx(src, ctx) for name, src in self._ins.items()}
@@ -93,9 +93,6 @@ class EnabledFunctionCallInstruction(Instruction):
                 )
             resolved = resolve_tag_ctx(target, ctx)
             ctx.set_tag(resolved.name, _store_copy_value_to_tag_type(result[key], resolved))
-
-    def is_inert_when_disabled(self) -> bool:
-        return False
 
 
 class ForLoopInstruction(OneShotMixin, Instruction):

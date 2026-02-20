@@ -19,6 +19,8 @@ class Instruction(ABC):
     source_file: str | None = None
     source_line: int | None = None
     end_line: int | None = None
+    ALWAYS_EXECUTES: bool = False
+    INERT_WHEN_DISABLED: bool = True
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -31,11 +33,11 @@ class Instruction(ABC):
         Override to return True for terminal instructions like counters
         that need to check their conditions independently.
         """
-        return False
+        return self.ALWAYS_EXECUTES
 
     def is_inert_when_disabled(self) -> bool:
         """Whether this instruction is a no-op when `enabled` is False."""
-        return True
+        return self.INERT_WHEN_DISABLED
 
 
 class SubroutineReturnSignal(Exception):
