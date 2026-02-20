@@ -27,6 +27,7 @@ from pyrung.core import (
     rise,
     shift,
 )
+from pyrung.core.instruction import ForLoopInstruction
 
 
 def test_rung_captures_source_file_start_line_and_end_line():
@@ -139,7 +140,7 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     assert branch_rung.end_line == branch_end_line
 
     forloop_instr = prog.rungs[1]._instructions[0]
-    assert type(forloop_instr).__name__ == "ForLoopInstruction"
+    assert isinstance(forloop_instr, ForLoopInstruction)
     assert forloop_instr.source_line == forloop_line
     assert forloop_instr.instructions[0].source_line == forloop_copy_line
 

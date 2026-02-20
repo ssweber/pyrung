@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 from .capabilities import CLICK_HARDWARE_PROFILE
 
@@ -19,4 +19,4 @@ class HardwareProfile(Protocol):
 
 def load_default_profile() -> HardwareProfile:
     """Load the default pyrung hardware profile."""
-    return CLICK_HARDWARE_PROFILE
+    return cast(HardwareProfile, CLICK_HARDWARE_PROFILE)

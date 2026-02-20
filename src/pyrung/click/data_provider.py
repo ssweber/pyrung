@@ -22,11 +22,12 @@ class _MappedRuntimeSlot:
     source: str
 
 
-_XY_SLOT_RANGES = BANKS["X"].valid_ranges
-if _XY_SLOT_RANGES is None:
+_xy_slot_ranges = BANKS["X"].valid_ranges
+if _xy_slot_ranges is None:
     raise RuntimeError("X bank must define sparse valid ranges for XD/YD mirroring.")
-if BANKS["Y"].valid_ranges != _XY_SLOT_RANGES:
+if BANKS["Y"].valid_ranges != _xy_slot_ranges:
     raise RuntimeError("X and Y sparse ranges must match for XD/YD mirroring.")
+_XY_SLOT_RANGES: tuple[tuple[int, int], ...] = _xy_slot_ranges
 for _lo, _hi in _XY_SLOT_RANGES:
     if _hi - _lo + 1 != 16:
         raise RuntimeError("Each X/Y sparse slot must be 16 bits wide.")

@@ -110,8 +110,8 @@ def test_instance_view_validates_index_and_missing_attributes():
 def test_udt_allows_underscored_fields():
     @udt(count=1)
     class Alarm:
-        _x: Int = 0
-        val: Int = 1
+        _x: Int = 0  # type: ignore[invalid-assignment]
+        val: Int = 1  # type: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("_x", "val")
@@ -148,7 +148,7 @@ def test_udt_skips_classvar_fields():
     @udt(count=1)
     class Alarm:
         _meta: ClassVar[int] = 123
-        val: Int = 1
+        val: Int = 1  # type: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("val",)
