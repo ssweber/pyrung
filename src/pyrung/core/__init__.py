@@ -77,7 +77,7 @@ from pyrung.core.program import (
 )
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
-from pyrung.core.struct import AutoDefault, Field, InstanceView, auto, named_array, udt
+from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
 from pyrung.core.system_points import system
 from pyrung.core.tag import (
     Bool,
