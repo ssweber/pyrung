@@ -68,6 +68,7 @@ class DAPAdapter:
 
         self._breakpoints_by_file: dict[str, set[int]] = {}
         self._breakpoint_rung_map: dict[str, set[int]] = {}
+        self._subroutine_source_map: dict[str, tuple[str, int, int | None]] = {}
 
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
@@ -215,6 +216,7 @@ class DAPAdapter:
             self._program_path = str(program_path)
             self._breakpoints_by_file = {}
             self._breakpoint_rung_map = {}
+            self._subroutine_source_map = {}
             self._rebuild_breakpoint_index_locked()
 
         return {}, [("stopped", self._stopped_body("entry"))]
@@ -513,6 +515,7 @@ class DAPAdapter:
 
     def _rebuild_breakpoint_index_locked(self) -> None:
         self._breakpoint_rung_map = {}
+        self._subroutine_source_map = {}
         runner = self._require_runner_locked()
         visited_rungs: set[int] = set()
         visited_programs: set[int] = set()
@@ -596,13 +599,29 @@ class DAPAdapter:
         if program_id in visited_programs:
             return
         visited_programs.add(program_id)
-        for subroutines in program.subroutines.values():
-            for rung in subroutines:
+        for subroutine_name, subroutine_rungs in program.subroutines.items():
+            self._index_subroutine_source(subroutine_name=subroutine_name, rungs=subroutine_rungs)
+            for rung in subroutine_rungs:
                 self._index_rung_lines(
                     rung=rung,
                     visited_rungs=visited_rungs,
                     visited_programs=visited_programs,
                 )
+
+    def _index_subroutine_source(self, *, subroutine_name: str, rungs: list[Rung]) -> None:
+        if subroutine_name in self._subroutine_source_map:
+            return
+        for rung in rungs:
+            source_path = self._canonical_path(rung.source_file)
+            if source_path is None or rung.source_line is None:
+                continue
+            end_line = int(rung.end_line) if rung.end_line is not None else None
+            self._subroutine_source_map[subroutine_name] = (
+                source_path,
+                int(rung.source_line),
+                end_line,
+            )
+            return
 
     def _index_rung_range(
         self,
@@ -646,7 +665,12 @@ class DAPAdapter:
             step_name = f"{sub_name} (rung {current_step.rung_index})"
         elif current_step.kind == "instruction":
             kind_name = current_step.instruction_kind or "Instruction"
-            step_name = f"{kind_name} (rung {current_step.rung_index})"
+            if current_step.subroutine_name:
+                step_name = (
+                    f"{kind_name} ({current_step.subroutine_name}, rung {current_step.rung_index})"
+                )
+            else:
+                step_name = f"{kind_name} (rung {current_step.rung_index})"
 
         frames: list[dict[str, Any]] = [
             self._stack_frame_from_step(
@@ -657,14 +681,15 @@ class DAPAdapter:
         ]
 
         next_frame_id = 1
-        for subroutine_name in reversed(current_step.call_stack):
+        for depth, subroutine_name in enumerate(reversed(current_step.call_stack)):
+            innermost = depth == 0 and current_step.subroutine_name == subroutine_name
             frames.append(
-                {
-                    "id": next_frame_id,
-                    "name": f"Subroutine {subroutine_name}",
-                    "line": 1,
-                    "column": 1,
-                }
+                self._stack_frame_from_subroutine(
+                    frame_id=next_frame_id,
+                    subroutine_name=subroutine_name,
+                    current_step=current_step,
+                    innermost=innermost,
+                )
             )
             next_frame_id += 1
 
@@ -721,6 +746,46 @@ class DAPAdapter:
             source_path = str(Path(rung.source_file))
             frame["source"] = {"name": Path(source_path).name, "path": source_path}
         return frame
+
+    def _stack_frame_from_subroutine(
+        self,
+        *,
+        frame_id: int,
+        subroutine_name: str,
+        current_step: ScanStep,
+        innermost: bool,
+    ) -> dict[str, Any]:
+        source_location: tuple[str, int, int | None] | None = None
+        if innermost:
+            source_location = self._subroutine_source_from_step_rung(current_step)
+        if source_location is None:
+            source_location = self._subroutine_source_map.get(subroutine_name)
+
+        frame: dict[str, Any] = {
+            "id": frame_id,
+            "name": f"Subroutine {subroutine_name}",
+            "line": 1,
+            "column": 1,
+        }
+        if source_location is None:
+            return frame
+
+        source_path, source_line, end_line = source_location
+        frame["line"] = int(source_line)
+        if end_line is not None:
+            frame["endLine"] = int(end_line)
+        frame["source"] = {"name": Path(source_path).name, "path": source_path}
+        return frame
+
+    def _subroutine_source_from_step_rung(
+        self,
+        step: ScanStep,
+    ) -> tuple[str, int, int | None] | None:
+        source_path = self._canonical_path(step.rung.source_file)
+        if source_path is None or step.rung.source_line is None:
+            return None
+        end_line = int(step.rung.end_line) if step.rung.end_line is not None else None
+        return source_path, int(step.rung.source_line), end_line
 
     def _require_runner_locked(self) -> PLCRunner:
         if self._runner is None:

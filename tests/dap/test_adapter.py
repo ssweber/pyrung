@@ -500,6 +500,8 @@ def test_stacktrace_includes_subroutine_context_when_paused_inside_call(tmp_path
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
+    sub_rung_line = _line_number(script, "with Rung():")
+    expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
@@ -511,7 +513,28 @@ def test_stacktrace_includes_subroutine_context_when_paused_inside_call(tmp_path
     messages = _send_request(adapter, out_stream, seq=4, command="stackTrace")
     response = _single_response(messages)
     frames = response["body"]["stackFrames"]
-    assert any("init_sub" in frame["name"] for frame in frames)
+    sub_frame = next(frame for frame in frames if frame["name"] == "Subroutine init_sub")
+    assert sub_frame["source"]["path"] == expected_path
+    assert sub_frame["line"] == sub_rung_line
+
+
+def test_stacktrace_includes_subroutine_name_in_instruction_frame(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="stepIn")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=4, command="stackTrace")
+    response = _single_response(messages)
+    frames = response["body"]["stackFrames"]
+    assert "OutInstruction" in frames[0]["name"]
+    assert "init_sub" in frames[0]["name"]
 
 
 def test_stacktrace_uses_call_instruction_line_when_paused_on_call(tmp_path: Path):
