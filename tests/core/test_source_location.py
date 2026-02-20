@@ -33,7 +33,9 @@ from pyrung.core.instruction import ForLoopInstruction
 
 
 def _line_no() -> int:
-    return cast(FrameType, inspect.currentframe()).f_lineno
+    frame = cast(FrameType, inspect.currentframe())
+    caller = cast(FrameType, frame.f_back)
+    return caller.f_lineno
 
 
 def test_rung_captures_source_file_start_line_and_end_line():
