@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import FrameType
+from typing import cast
 
 from pyrung.core import (
     Block,
@@ -30,17 +32,21 @@ from pyrung.core import (
 from pyrung.core.instruction import ForLoopInstruction
 
 
+def _line_no() -> int:
+    return cast(FrameType, inspect.currentframe()).f_lineno
+
+
 def test_rung_captures_source_file_start_line_and_end_line():
     enable = Bool("Enable")
     light = Bool("Light")
     latched = Bool("Latched")
 
     with Program(strict=False) as prog:
-        rung_line = inspect.currentframe().f_lineno + 1
+        rung_line = _line_no() + 1
         with Rung(enable):
-            out_line = inspect.currentframe().f_lineno + 1
+            out_line = _line_no() + 1
             out(light)
-            end_line = inspect.currentframe().f_lineno + 1
+            end_line = _line_no() + 1
             latch(latched)
 
     rung = prog.rungs[0]
@@ -57,23 +63,23 @@ def test_condition_helpers_and_operators_capture_source_lines():
     c = Bool("C")
     step = Int("Step")
 
-    line_nc = inspect.currentframe().f_lineno + 1
+    line_nc = _line_no() + 1
     cond_nc = nc(a)
-    line_rise = inspect.currentframe().f_lineno + 1
+    line_rise = _line_no() + 1
     cond_rise = rise(b)
-    line_any = inspect.currentframe().f_lineno + 1
+    line_any = _line_no() + 1
     cond_any = any_of(a, b)
-    line_all = inspect.currentframe().f_lineno + 1
+    line_all = _line_no() + 1
     cond_all = all_of(a, c)
-    line_or = inspect.currentframe().f_lineno + 1
+    line_or = _line_no() + 1
     cond_or = a | b
-    line_and = inspect.currentframe().f_lineno + 1
+    line_and = _line_no() + 1
     cond_and = a & b
-    line_cmp = inspect.currentframe().f_lineno + 1
+    line_cmp = _line_no() + 1
     cond_cmp = step == 10
-    line_expr_cmp = inspect.currentframe().f_lineno + 1
+    line_expr_cmp = _line_no() + 1
     cond_expr_cmp = (step + 1) > 0
-    line_chain = inspect.currentframe().f_lineno + 1
+    line_chain = _line_no() + 1
     cond_chain = (a | b) | (step > 1)
 
     assert cond_nc.source_line == line_nc
@@ -108,31 +114,31 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
 
     with Program(strict=False) as prog:
         with Rung(enable):
-            branch_line = inspect.currentframe().f_lineno + 1
+            branch_line = _line_no() + 1
             with branch(branch_enable):
-                branch_end_line = inspect.currentframe().f_lineno + 1
+                branch_end_line = _line_no() + 1
                 out(branch_out)
 
         with Rung(enable):
-            forloop_line = inspect.currentframe().f_lineno + 1
+            forloop_line = _line_no() + 1
             with forloop(2):
-                forloop_copy_line = inspect.currentframe().f_lineno + 1
+                forloop_copy_line = _line_no() + 1
                 copy(forloop_counter + 1, forloop_counter)
 
         with Rung(enable):
-            count_up_line = inspect.currentframe().f_lineno + 1
+            count_up_line = _line_no() + 1
             count_up(cu_done, cu_acc, setpoint=5).reset(reset_cond)
 
         with Rung(enable):
-            count_down_line = inspect.currentframe().f_lineno + 1
+            count_down_line = _line_no() + 1
             count_down(cd_done, cd_acc, setpoint=5).reset(reset_cond)
 
         with Rung(enable):
-            on_delay_line = inspect.currentframe().f_lineno + 1
+            on_delay_line = _line_no() + 1
             on_delay(timer_done, timer_acc, setpoint=50).reset(reset_cond)
 
         with Rung(enable):
-            shift_line = inspect.currentframe().f_lineno + 1
+            shift_line = _line_no() + 1
             shift(bits.select(1, 4)).clock(clock).reset(reset_cond)
 
     branch_rung = prog.rungs[0]._branches[0]
@@ -167,7 +173,7 @@ def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
     light = Bool("Light")
 
     with Program(strict=False) as prog:
-        marker_line = inspect.currentframe().f_lineno
+        marker_line = _line_no()
         with Rung(
             step == 1,
             auto_mode,
@@ -189,13 +195,13 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
 
     with Program(strict=False) as prog:
         with Rung(enable):
-            count_up_line = inspect.currentframe().f_lineno + 1
+            count_up_line = _line_no() + 1
             count_up(
                 done,
                 acc,
                 setpoint=5,
             ).reset(reset_cond)
-            count_up_end_line = inspect.currentframe().f_lineno - 1
+            count_up_end_line = _line_no() - 1
 
     instruction = prog.rungs[0]._instructions[0]
     assert instruction.source_line == count_up_line
