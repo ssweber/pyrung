@@ -44,7 +44,9 @@ def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
     raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
 
 
-def _attach_instruction(ctx: Any, instruction: Any, source_file: str | None, source_line: int | None) -> None:
+def _attach_instruction(
+    ctx: Any, instruction: Any, source_file: str | None, source_line: int | None
+) -> None:
     """Attach source metadata and append an instruction to the current rung."""
     instruction.source_file, instruction.source_line = source_file, source_line
     ctx._rung.add_instruction(instruction)

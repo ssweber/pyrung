@@ -74,7 +74,4 @@ def assert_tag_type(
     if tag.type in allowed:
         return
     suffix = f" at {tag.name}" if include_tag_name else ""
-    raise TypeError(
-        f"{label} must be {_allowed_type_text(allowed)}; got {tag.type.name}{suffix}"
-    )
-
+    raise TypeError(f"{label} must be {_allowed_type_text(allowed)}; got {tag.type.name}{suffix}")
