@@ -18,10 +18,10 @@ from pyclickplc.banks import BANKS
 
 from pyrung.core.instruction import (
     Instruction,
-    _store_copy_value_to_tag_type,
     resolve_block_range_tags_ctx,
     resolve_tag_ctx,
 )
+from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program import _require_rung_context
 from pyrung.core.tag import Tag, TagType

@@ -1,0 +1,69 @@
+"""Automatically generated module split."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+class Instruction(ABC):
+    """Base class for all instructions.
+
+    Instructions execute within a ScanContext, writing to batched evolvers.
+    All state modifications are collected and committed at scan end.
+    """
+
+    source_file: str | None = None
+    source_line: int | None = None
+    end_line: int | None = None
+
+    @abstractmethod
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        """Execute this instruction within the given context (internal)."""
+        pass
+
+    def always_execute(self) -> bool:
+        """Whether this instruction should execute even when rung is false.
+
+        Override to return True for terminal instructions like counters
+        that need to check their conditions independently.
+        """
+        return False
+
+    def is_inert_when_disabled(self) -> bool:
+        """Whether this instruction is a no-op when `enabled` is False."""
+        return True
+
+
+class SubroutineReturnSignal(Exception):
+    """Internal control-flow signal used by return_() inside subroutines."""
+
+
+class OneShotMixin:
+    """Mixin for instructions that support one-shot mode.
+
+    One-shot instructions execute only once per rung activation.
+    They must be reset when the rung goes false.
+    """
+
+    def __init__(self, oneshot: bool = False):
+        self._oneshot = oneshot
+        self._has_executed = False
+
+    @property
+    def oneshot(self) -> bool:
+        return self._oneshot
+
+    def should_execute(self, enabled: bool) -> bool:
+        """Check if instruction should execute (respects oneshot)."""
+        if not enabled:
+            self._has_executed = False
+            return False
+        if not self._oneshot:
+            return True
+        if self._has_executed:
+            return False
+        self._has_executed = True
+        return True
+
+    def reset_oneshot(self) -> None:
+        """Reset oneshot state (call when rung goes false)."""
+        self._has_executed = False
