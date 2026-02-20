@@ -46,6 +46,38 @@ def _require_rung_context(func_name: str) -> Rung:
     return rung
 
 
+def _push_rung_context(ctx: Rung) -> None:
+    """Push a rung context onto the active stack."""
+    _rung_stack.append(ctx)
+
+
+def _pop_rung_context() -> None:
+    """Pop the current rung context from the active stack."""
+    _rung_stack.pop()
+
+
+def _new_capture_context(rung: RungLogic) -> Rung:
+    """Create a lightweight Rung wrapper for temporary capture scopes."""
+    ctx = Rung.__new__(Rung)
+    ctx._rung = rung
+    return ctx
+
+
+def _set_scope_end_line(
+    rung: RungLogic,
+    *,
+    source_file: str | None,
+    source_line: int | None,
+    context_name: str,
+) -> None:
+    """Populate end-line metadata for a scope-backed rung."""
+    rung.end_line = _capture_with_end_line(
+        source_file,
+        source_line,
+        context_name=context_name,
+    )
+
+
 class Program:
     """Container for PLC logic (rungs and subroutines).
 
@@ -193,14 +225,15 @@ class Rung:
                     condition.source_line = source_line
 
     def __enter__(self) -> Rung:
-        _rung_stack.append(self)
+        _push_rung_context(self)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _rung_stack.pop()
-        self._rung.end_line = _capture_with_end_line(
-            self._rung.source_file,
-            self._rung.source_line,
+        _pop_rung_context()
+        _set_scope_end_line(
+            self._rung,
+            source_file=self._rung.source_file,
+            source_line=self._rung.source_line,
             context_name="Rung",
         )
         # Add rung to current program
@@ -338,24 +371,24 @@ class ForLoop:
             source_file=self._source_file,
             source_line=self._source_line,
         )
-        self._capture_ctx = Rung.__new__(Rung)
-        self._capture_ctx._rung = self._capture_rung
-        _rung_stack.append(self._capture_ctx)
+        self._capture_ctx = _new_capture_context(self._capture_rung)
+        _push_rung_context(self._capture_ctx)
 
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         global _forloop_active
 
-        _rung_stack.pop()
+        _pop_rung_context()
         _forloop_active = False
 
         if self._parent_ctx is None or self._capture_rung is None:
             return
 
-        self._capture_rung.end_line = _capture_with_end_line(
-            self._source_file,
-            self._source_line,
+        _set_scope_end_line(
+            self._capture_rung,
+            source_file=self._source_file,
+            source_line=self._source_line,
             context_name="forloop",
         )
 
@@ -456,21 +489,21 @@ class Branch:
                 condition.source_line = self._source_line
 
         # Push a new "fake" rung context so instructions go to the branch
-        self._branch_ctx = Rung.__new__(Rung)
-        self._branch_ctx._rung = self._branch_rung
-        _rung_stack.append(self._branch_ctx)
+        self._branch_ctx = _new_capture_context(self._branch_rung)
+        _push_rung_context(self._branch_ctx)
 
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Pop our branch context
-        _rung_stack.pop()
+        _pop_rung_context()
 
         # Add the branch as a nested rung to the parent
         if self._parent_ctx is not None and self._branch_rung is not None:
-            self._branch_rung.end_line = _capture_with_end_line(
-                self._source_file,
-                self._source_line,
+            _set_scope_end_line(
+                self._branch_rung,
+                source_file=self._source_file,
+                source_line=self._source_line,
                 context_name="branch",
             )
             self._parent_ctx._rung.add_branch(self._branch_rung)

@@ -57,6 +57,30 @@ _GENERIC_STMT_HINT = "Only `with ...:`, bare function calls, and `pass` are allo
 DialectValidator = Callable[..., Any]
 
 
+_EXPR_STMT_HINT = "Only bare call expressions are allowed as statements"
+
+
+_FORBIDDEN_NODE_RULES: tuple[tuple[tuple[type[ast.AST], ...], str | None, str], ...] = (
+    ((ast.If, ast.IfExp), "if/elif/else", _IF_HINT),
+    ((ast.BoolOp,), "and/or", _BOOL_HINT),
+    ((ast.For, ast.AsyncFor, ast.While), "for/while", _LOOP_HINT),
+    ((ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr), "assignment", _ASSIGN_HINT),
+    ((ast.Try,), "try/except", _TRY_HINT),
+    (
+        (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.comprehension),
+        "comprehension/generator",
+        _COMPREHENSION_HINT,
+    ),
+    ((ast.Global, ast.Nonlocal), "global/nonlocal", _SCOPE_HINT),
+    ((ast.Yield, ast.YieldFrom, ast.Await, ast.Return), "yield/await/return", _RETURN_HINT),
+    ((ast.Import, ast.ImportFrom), "import", _IMPORT_HINT),
+    ((ast.Assert, ast.Raise, ast.Delete), "assert/raise/del", _ASSERT_HINT),
+    ((ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef), None, _DEF_HINT),
+    ((ast.Expr,), "expression statement", _EXPR_STMT_HINT),
+    ((ast.stmt,), None, _GENERIC_STMT_HINT),
+)
+
+
 def _warn_check_skipped(target: str, reason: Exception) -> None:
     """Warn and skip strict checking when source inspection/parsing is unavailable."""
     warnings.warn(
@@ -73,37 +97,11 @@ def _absolute_line(node: ast.AST, line_offset: int) -> int:
 
 def _describe_forbidden_node(node: ast.AST) -> tuple[str, str]:
     """Return user-facing construct label and DSL hint for a forbidden node."""
-    if isinstance(node, (ast.If, ast.IfExp)):
-        return "if/elif/else", _IF_HINT
-    if isinstance(node, ast.BoolOp):
-        return "and/or", _BOOL_HINT
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return "not", _NOT_HINT
-    if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
-        return "for/while", _LOOP_HINT
-    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-        return "assignment", _ASSIGN_HINT
-    if isinstance(node, ast.Try):
-        return "try/except", _TRY_HINT
-    if isinstance(
-        node,
-        (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.comprehension),
-    ):
-        return "comprehension/generator", _COMPREHENSION_HINT
-    if isinstance(node, (ast.Global, ast.Nonlocal)):
-        return "global/nonlocal", _SCOPE_HINT
-    if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Await, ast.Return)):
-        return "yield/await/return", _RETURN_HINT
-    if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return "import", _IMPORT_HINT
-    if isinstance(node, (ast.Assert, ast.Raise, ast.Delete)):
-        return "assert/raise/del", _ASSERT_HINT
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return type(node).__name__, _DEF_HINT
-    if isinstance(node, ast.Expr):
-        return "expression statement", "Only bare call expressions are allowed as statements"
-    if isinstance(node, ast.stmt):
-        return type(node).__name__, _GENERIC_STMT_HINT
+    for node_types, label, hint in _FORBIDDEN_NODE_RULES:
+        if isinstance(node, node_types):
+            return (type(node).__name__ if label is None else label), hint
     return type(node).__name__, "This construct is not allowed in strict DSL scope"
 
 

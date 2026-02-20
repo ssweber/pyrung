@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
 from pyrung.core._source import (
     _capture_source,
 )
@@ -13,6 +15,29 @@ from pyrung.core.condition import (
 )
 from pyrung.core.tag import Tag
 
+ConditionType = TypeVar("ConditionType", bound=Condition)
+
+
+def _make_condition(
+    condition_cls: type[ConditionType],
+    *args: object,
+    source_depth: int = 3,
+    propagate_children: bool = False,
+) -> ConditionType:
+    """Construct a condition and attach call-site source metadata."""
+    condition = condition_cls(*args)
+    source_file, source_line = _capture_source(depth=source_depth)
+    condition.source_file, condition.source_line = source_file, source_line
+
+    if propagate_children and hasattr(condition, "conditions"):
+        for child in condition.conditions:  # type: ignore[attr-defined]
+            if child.source_file is None:
+                child.source_file = source_file
+            if child.source_line is None:
+                child.source_line = source_line
+
+    return condition
+
 
 def nc(tag: Tag) -> NormallyClosedCondition:
     """Normally closed contact (XIO).
@@ -23,9 +48,7 @@ def nc(tag: Tag) -> NormallyClosedCondition:
         with Rung(StartButton, nc(StopButton)):
             latch(MotorRunning)
     """
-    cond = NormallyClosedCondition(tag)
-    cond.source_file, cond.source_line = _capture_source(depth=2)
-    return cond
+    return _make_condition(NormallyClosedCondition, tag)
 
 
 def rise(tag: Tag) -> RisingEdgeCondition:
@@ -37,9 +60,7 @@ def rise(tag: Tag) -> RisingEdgeCondition:
         with Rung(rise(Button)):
             latch(MotorRunning)  # Latches on button press, not while held
     """
-    cond = RisingEdgeCondition(tag)
-    cond.source_file, cond.source_line = _capture_source(depth=2)
-    return cond
+    return _make_condition(RisingEdgeCondition, tag)
 
 
 def fall(tag: Tag) -> FallingEdgeCondition:
@@ -51,9 +72,7 @@ def fall(tag: Tag) -> FallingEdgeCondition:
         with Rung(fall(Button)):
             reset(MotorRunning)  # Resets when button is released
     """
-    cond = FallingEdgeCondition(tag)
-    cond.source_file, cond.source_line = _capture_source(depth=2)
-    return cond
+    return _make_condition(FallingEdgeCondition, tag)
 
 
 def any_of(
@@ -82,14 +101,11 @@ def any_of(
     Returns:
         AnyCondition that evaluates True if any sub-condition is True.
     """
-    cond = AnyCondition(*conditions)
-    cond.source_file, cond.source_line = _capture_source(depth=2)
-    for child in cond.conditions:
-        if child.source_file is None:
-            child.source_file = cond.source_file
-        if child.source_line is None:
-            child.source_line = cond.source_line
-    return cond
+    return _make_condition(
+        AnyCondition,
+        *conditions,
+        propagate_children=True,
+    )
 
 
 def all_of(
@@ -108,11 +124,8 @@ def all_of(
         with Rung((Ready & AutoMode) | RemoteStart):
             out(StartPermissive)
     """
-    cond = AllCondition(*conditions)
-    cond.source_file, cond.source_line = _capture_source(depth=2)
-    for child in cond.conditions:
-        if child.source_file is None:
-            child.source_file = cond.source_file
-        if child.source_line is None:
-            child.source_line = cond.source_line
-    return cond
+    return _make_condition(
+        AllCondition,
+        *conditions,
+        propagate_children=True,
+    )

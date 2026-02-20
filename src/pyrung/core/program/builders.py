@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
@@ -25,7 +26,52 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange
 
 
-class ShiftBuilder:
+def _capture_rung_condition_and_source(
+    func_name: str,
+    *,
+    source_depth: int = 3,
+) -> tuple[Any, str | None, int | None]:
+    """Capture current rung combined condition and source location."""
+    ctx = _require_rung_context(func_name)
+    source_file, source_line = _capture_source(depth=source_depth)
+    return ctx._rung._get_combined_condition(), source_file, source_line
+
+
+class _BuilderBase:
+    """Shared rung/source bookkeeping for terminal instruction builders."""
+
+    def __init__(
+        self,
+        *,
+        func_name: str,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
+        self._rung = _require_rung_context(func_name)
+        self._source_file = source_file
+        self._source_line = source_line
+
+    def _append_instruction(self, instruction: Any) -> None:
+        """Attach source metadata and append the built instruction."""
+        instruction.source_file, instruction.source_line = self._source_file, self._source_line
+        self._rung._rung.add_instruction(instruction)
+
+
+class _AutoFinalizeBuilderBase(_BuilderBase):
+    """Base for builders that can finalize once via explicit call or __del__."""
+
+    def __init__(self, *, func_name: str, source_file: str | None, source_line: int | None) -> None:
+        super().__init__(func_name=func_name, source_file=source_file, source_line=source_line)
+        self._added = False
+
+    def _append_once(self, instruction_factory: Callable[[], Any]) -> None:
+        if self._added:
+            return
+        self._added = True
+        self._append_instruction(instruction_factory())
+
+
+class ShiftBuilder(_BuilderBase):
     """Builder for shift instruction with required .clock().reset() chaining."""
 
     def __init__(
@@ -35,12 +81,10 @@ class ShiftBuilder:
         source_file: str | None = None,
         source_line: int | None = None,
     ):
+        super().__init__(func_name="shift", source_file=source_file, source_line=source_line)
         self._bit_range = bit_range
         self._data_condition = data_condition
         self._clock_condition: Condition | Tag | None = None
-        self._rung = _require_rung_context("shift")
-        self._source_file = source_file
-        self._source_line = source_line
 
     def clock(self, condition: Condition | Tag) -> ShiftBuilder:
         """Set the shift clock trigger condition."""
@@ -58,8 +102,7 @@ class ShiftBuilder:
             clock_condition=self._clock_condition,
             reset_condition=condition,
         )
-        instr.source_file, instr.source_line = self._source_file, self._source_line
-        self._rung._rung.add_instruction(instr)
+        self._append_instruction(instr)
         return self._bit_range
 
 
@@ -81,13 +124,11 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
             f"got {type(bit_range).__name__}"
         )
 
-    ctx = _require_rung_context("shift")
-    data_condition = ctx._rung._get_combined_condition()
-    source_file, source_line = _capture_source(depth=2)
+    data_condition, source_file, source_line = _capture_rung_condition_and_source("shift")
     return ShiftBuilder(bit_range, data_condition, source_file, source_line)
 
 
-class CountUpBuilder:
+class CountUpBuilder(_BuilderBase):
     """Builder for count_up instruction with chaining API (Click-style).
 
     Supports optional .down() and required .reset() chaining:
@@ -104,15 +145,13 @@ class CountUpBuilder:
         source_file: str | None = None,
         source_line: int | None = None,
     ):
+        super().__init__(func_name="count_up", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
         self._up_condition = up_condition  # From rung conditions
         self._down_condition: Condition | Tag | None = None
         self._reset_condition: Condition | Tag | None = None
-        self._rung = _require_rung_context("count_up")
-        self._source_file = source_file
-        self._source_line = source_line
 
     def down(self, condition: Condition | Tag) -> CountUpBuilder:
         """Add down trigger (optional).
@@ -150,12 +189,11 @@ class CountUpBuilder:
             self._reset_condition,
             self._down_condition,
         )
-        instr.source_file, instr.source_line = self._source_file, self._source_line
-        self._rung._rung.add_instruction(instr)
+        self._append_instruction(instr)
         return self._done_bit
 
 
-class CountDownBuilder:
+class CountDownBuilder(_BuilderBase):
     """Builder for count_down instruction with chaining API (Click-style).
 
     Supports required .reset() chaining:
@@ -171,14 +209,12 @@ class CountDownBuilder:
         source_file: str | None = None,
         source_line: int | None = None,
     ):
+        super().__init__(func_name="count_down", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
         self._down_condition = down_condition  # From rung conditions
         self._reset_condition: Condition | Tag | None = None
-        self._rung = _require_rung_context("count_down")
-        self._source_file = source_file
-        self._source_line = source_line
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (required).
@@ -201,8 +237,7 @@ class CountDownBuilder:
             self._down_condition,
             self._reset_condition,
         )
-        instr.source_file, instr.source_line = self._source_file, self._source_line
-        self._rung._rung.add_instruction(instr)
+        self._append_instruction(instr)
         return self._done_bit
 
 
@@ -229,9 +264,7 @@ def count_up(
     Returns:
         Builder for chaining .down() and .reset().
     """
-    ctx = _require_rung_context("count_up")
-    up_condition = ctx._rung._get_combined_condition()
-    source_file, source_line = _capture_source(depth=2)
+    up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
         done_bit,
         accumulator,
@@ -265,9 +298,7 @@ def count_down(
     Returns:
         Builder for chaining .reset().
     """
-    ctx = _require_rung_context("count_down")
-    down_condition = ctx._rung._get_combined_condition()
-    source_file, source_line = _capture_source(depth=2)
+    down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
         done_bit,
         accumulator,
@@ -278,7 +309,7 @@ def count_down(
     )
 
 
-class OnDelayBuilder:
+class OnDelayBuilder(_AutoFinalizeBuilderBase):
     """Builder for on_delay instruction with optional .reset() chaining (Click-style).
 
     Without .reset(): TON behavior (auto-reset on rung false)
@@ -295,16 +326,13 @@ class OnDelayBuilder:
         source_file: str | None = None,
         source_line: int | None = None,
     ):
+        super().__init__(func_name="on_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
         self._enable_condition = enable_condition
         self._time_unit = time_unit
         self._reset_condition: Condition | Tag | None = None
-        self._rung = _require_rung_context("on_delay")
-        self._added = False
-        self._source_file = source_file
-        self._source_line = source_line
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (makes timer retentive - RTON).
@@ -323,19 +351,16 @@ class OnDelayBuilder:
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
-        if self._added:
-            return
-        self._added = True
-        instr = OnDelayInstruction(
-            self._done_bit,
-            self._accumulator,
-            self._setpoint,
-            self._enable_condition,
-            self._reset_condition,
-            self._time_unit,
+        self._append_once(
+            lambda: OnDelayInstruction(
+                self._done_bit,
+                self._accumulator,
+                self._setpoint,
+                self._enable_condition,
+                self._reset_condition,
+                self._time_unit,
+            )
         )
-        instr.source_file, instr.source_line = self._source_file, self._source_line
-        self._rung._rung.add_instruction(instr)
 
     def __del__(self) -> None:
         """Finalize on garbage collection if not explicitly called."""
@@ -343,7 +368,7 @@ class OnDelayBuilder:
         self._finalize()
 
 
-class OffDelayBuilder:
+class OffDelayBuilder(_AutoFinalizeBuilderBase):
     """Builder for off_delay instruction (TOF behavior, Click-style).
 
     Auto-resets when re-enabled.
@@ -359,30 +384,24 @@ class OffDelayBuilder:
         source_file: str | None = None,
         source_line: int | None = None,
     ):
+        super().__init__(func_name="off_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._setpoint = setpoint
         self._enable_condition = enable_condition
         self._time_unit = time_unit
-        self._rung = _require_rung_context("off_delay")
-        self._added = False
-        self._source_file = source_file
-        self._source_line = source_line
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
-        if self._added:
-            return
-        self._added = True
-        instr = OffDelayInstruction(
-            self._done_bit,
-            self._accumulator,
-            self._setpoint,
-            self._enable_condition,
-            self._time_unit,
+        self._append_once(
+            lambda: OffDelayInstruction(
+                self._done_bit,
+                self._accumulator,
+                self._setpoint,
+                self._enable_condition,
+                self._time_unit,
+            )
         )
-        instr.source_file, instr.source_line = self._source_file, self._source_line
-        self._rung._rung.add_instruction(instr)
 
     def __del__(self) -> None:
         """Finalize on garbage collection if not explicitly called."""
@@ -416,9 +435,7 @@ def on_delay(
     Returns:
         Builder for optional .reset() chaining.
     """
-    ctx = _require_rung_context("on_delay")
-    enable_condition = ctx._rung._get_combined_condition()
-    source_file, source_line = _capture_source(depth=2)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
         done_bit,
         accumulator,
@@ -456,9 +473,7 @@ def off_delay(
     Returns:
         Builder for the off_delay instruction.
     """
-    ctx = _require_rung_context("off_delay")
-    enable_condition = ctx._rung._get_combined_condition()
-    source_file, source_line = _capture_source(depth=2)
+    enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
         done_bit,
         accumulator,

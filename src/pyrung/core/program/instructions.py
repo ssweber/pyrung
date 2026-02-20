@@ -44,6 +44,40 @@ def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
     raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
 
 
+def _attach_instruction(ctx: Any, instruction: Any, source_file: str | None, source_line: int | None) -> None:
+    """Attach source metadata and append an instruction to the current rung."""
+    instruction.source_file, instruction.source_line = source_file, source_line
+    ctx._rung.add_instruction(instruction)
+
+
+def _capture_instruction_context(
+    func_name: str,
+    *,
+    source_depth: int,
+) -> tuple[Any, str | None, int | None]:
+    """Capture required rung context and source location for a DSL instruction call."""
+    ctx = _require_rung_context(func_name)
+    source_file, source_line = _capture_source(depth=source_depth)
+    return ctx, source_file, source_line
+
+
+def _add_instruction(
+    func_name: str,
+    instruction_cls: type,
+    *args: Any,
+    source_depth: int = 4,
+    **kwargs: Any,
+) -> Any:
+    """Build an instruction, capture source metadata, and append it to the rung."""
+    ctx, source_file, source_line = _capture_instruction_context(
+        func_name,
+        source_depth=source_depth,
+    )
+    instruction = instruction_cls(*args, **kwargs)
+    _attach_instruction(ctx, instruction, source_file, source_line)
+    return instruction
+
+
 def _validate_function_call(
     fn: Any,
     ins: dict[str, Any] | None,
@@ -96,12 +130,9 @@ def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
             out(Light)
             out(Y.select(1, 4))
     """
-    ctx = _require_rung_context("out")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context("out", source_depth=3)
     _iter_coil_tags(target)
-    instr = OutInstruction(target, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(ctx, OutInstruction(target, oneshot), source_file, source_line)
     return target
 
 
@@ -116,12 +147,9 @@ def latch(target: Tag | BlockRange) -> Tag | BlockRange:
             latch(MotorRunning)
             latch(C.select(1, 8))
     """
-    ctx = _require_rung_context("latch")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context("latch", source_depth=3)
     _iter_coil_tags(target)
-    instr = LatchInstruction(target)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(ctx, LatchInstruction(target), source_file, source_line)
     return target
 
 
@@ -135,12 +163,9 @@ def reset(target: Tag | BlockRange) -> Tag | BlockRange:
             reset(MotorRunning)
             reset(C.select(1, 8))
     """
-    ctx = _require_rung_context("reset")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context("reset", source_depth=3)
     _iter_coil_tags(target)
-    instr = ResetInstruction(target)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(ctx, ResetInstruction(target), source_file, source_line)
     return target
 
 
@@ -157,11 +182,7 @@ def copy(
         with Rung(Button):
             copy(5, StepNumber)
     """
-    ctx = _require_rung_context("copy")
-    source_file, source_line = _capture_source(depth=2)
-    instr = CopyInstruction(source, target, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("copy", CopyInstruction, source, target, oneshot)
     return target
 
 
@@ -173,12 +194,17 @@ def run_function(
     oneshot: bool = False,
 ) -> None:
     """Execute a synchronous function when rung power is true."""
-    ctx = _require_rung_context("run_function")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context(
+        "run_function",
+        source_depth=3,
+    )
     _validate_function_call(fn, ins, outs, func_name="run_function")
-    instr = FunctionCallInstruction(fn, ins, outs, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(
+        ctx,
+        FunctionCallInstruction(fn, ins, outs, oneshot),
+        source_file,
+        source_line,
+    )
 
 
 def run_enabled_function(
@@ -187,13 +213,18 @@ def run_enabled_function(
     outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
 ) -> None:
     """Execute a synchronous function every scan with rung enabled state."""
-    ctx = _require_rung_context("run_enabled_function")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context(
+        "run_enabled_function",
+        source_depth=3,
+    )
     _validate_function_call(fn, ins, outs, func_name="run_enabled_function", has_enabled=True)
     enable_condition = ctx._rung._get_combined_condition()
-    instr = EnabledFunctionCallInstruction(fn, ins, outs, enable_condition)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(
+        ctx,
+        EnabledFunctionCallInstruction(fn, ins, outs, enable_condition),
+        source_file,
+        source_line,
+    )
 
 
 def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
@@ -211,11 +242,7 @@ def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
         dest: Dest BlockRange or IndirectBlockRange from .select().
         oneshot: If True, execute only once per rung activation.
     """
-    ctx = _require_rung_context("blockcopy")
-    source_file, source_line = _capture_source(depth=2)
-    instr = BlockCopyInstruction(source, dest, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("blockcopy", BlockCopyInstruction, source, dest, oneshot)
 
 
 def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
@@ -232,29 +259,17 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
         dest: Dest BlockRange or IndirectBlockRange from .select().
         oneshot: If True, execute only once per rung activation.
     """
-    ctx = _require_rung_context("fill")
-    source_file, source_line = _capture_source(depth=2)
-    instr = FillInstruction(value, dest, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("fill", FillInstruction, value, dest, oneshot)
 
 
 def pack_bits(bit_block: Any, dest: Any, oneshot: bool = False) -> None:
     """Pack BOOL tags from a BlockRange into a register destination."""
-    ctx = _require_rung_context("pack_bits")
-    source_file, source_line = _capture_source(depth=2)
-    instr = PackBitsInstruction(bit_block, dest, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("pack_bits", PackBitsInstruction, bit_block, dest, oneshot)
 
 
 def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
     """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
-    ctx = _require_rung_context("pack_words")
-    source_file, source_line = _capture_source(depth=2)
-    instr = PackWordsInstruction(word_block, dest, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("pack_words", PackWordsInstruction, word_block, dest, oneshot)
 
 
 def pack_text(
@@ -265,34 +280,36 @@ def pack_text(
     oneshot: bool = False,
 ) -> None:
     """Pack Copy text mode: parse a TXT/CHAR range into a numeric destination."""
-    ctx = _require_rung_context("pack_text")
-    source_file, source_line = _capture_source(depth=2)
-    instr = PackTextInstruction(
+    _add_instruction(
+        "pack_text",
+        PackTextInstruction,
         source_range,
         dest,
         allow_whitespace=allow_whitespace,
         oneshot=oneshot,
     )
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
 
 
 def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:
     """Unpack a register source into BOOL tags in a BlockRange."""
-    ctx = _require_rung_context("unpack_to_bits")
-    source_file, source_line = _capture_source(depth=2)
-    instr = UnpackToBitsInstruction(source, bit_block, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction(
+        "unpack_to_bits",
+        UnpackToBitsInstruction,
+        source,
+        bit_block,
+        oneshot,
+    )
 
 
 def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None:
     """Unpack a 32-bit register source into two 16-bit tags in a BlockRange."""
-    ctx = _require_rung_context("unpack_to_words")
-    source_file, source_line = _capture_source(depth=2)
-    instr = UnpackToWordsInstruction(source, word_block, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction(
+        "unpack_to_words",
+        UnpackToWordsInstruction,
+        source,
+        word_block,
+        oneshot,
+    )
 
 
 def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
@@ -320,11 +337,7 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
     Returns:
         The dest tag.
     """
-    ctx = _require_rung_context("math")
-    source_file, source_line = _capture_source(depth=2)
-    instr = MathInstruction(expression, dest, oneshot, mode)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction("math", MathInstruction, expression, dest, oneshot, mode)
     return dest
 
 
@@ -358,11 +371,17 @@ def search(
     if result.type not in {TagType.INT, TagType.DINT}:
         raise TypeError(f"search() result must be INT or DINT, got {result.type.name}")
 
-    ctx = _require_rung_context("search")
-    source_file, source_line = _capture_source(depth=2)
-    instr = SearchInstruction(condition, value, search_range, result, found, continuous, oneshot)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _add_instruction(
+        "search",
+        SearchInstruction,
+        condition,
+        value,
+        search_range,
+        result,
+        found,
+        continuous,
+        oneshot,
+    )
     return result
 
 
@@ -390,8 +409,7 @@ def call(target: str | SubroutineFunc) -> None:
             with Rung(Button):
                 call(init_sequence)
     """
-    ctx = _require_rung_context("call")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context("call", source_depth=3)
     prog = Program.current()
     if prog is None:
         raise RuntimeError("call() must be used inside a Program context")
@@ -403,9 +421,7 @@ def call(target: str | SubroutineFunc) -> None:
     else:
         name = target
 
-    instr = CallInstruction(name, prog)
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(ctx, CallInstruction(name, prog), source_file, source_line)
 
 
 def return_() -> None:
@@ -416,11 +432,8 @@ def return_() -> None:
             with Rung(Abort):
                 return_()
     """
-    ctx = _require_rung_context("return_")
-    source_file, source_line = _capture_source(depth=2)
+    ctx, source_file, source_line = _capture_instruction_context("return_", source_depth=3)
     prog = Program.current()
     if prog is None or prog._current_subroutine is None:
         raise RuntimeError("return_() must be used inside a subroutine")
-    instr = ReturnInstruction()
-    instr.source_file, instr.source_line = source_file, source_line
-    ctx._rung.add_instruction(instr)
+    _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)
