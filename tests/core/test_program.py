@@ -630,6 +630,7 @@ class TestStrictDslControlFlowGuard:
         import importlib
 
         program_module = importlib.import_module("pyrung.core.program")
+        validation_module = importlib.import_module("pyrung.core.program.validation")
 
         Enable = Bool("Enable")
         Light = Bool("Light")
@@ -637,7 +638,7 @@ class TestStrictDslControlFlowGuard:
         def _raise_source_error(_obj: object) -> tuple[list[str], int]:
             raise OSError("source unavailable")
 
-        monkeypatch.setattr(program_module.inspect, "getsourcelines", _raise_source_error)
+        monkeypatch.setattr(validation_module.inspect, "getsourcelines", _raise_source_error)
 
         with pytest.warns(RuntimeWarning, match="Unable to perform strict DSL control-flow check"):
             with program_module.Program() as logic:
@@ -1236,7 +1237,7 @@ class TestBranch:
         # Capture the combined condition from inside a branch
         def capture_condition():
             nonlocal captured_condition
-            from pyrung.core.program import _require_rung_context
+            from pyrung.core.program.context import _require_rung_context
 
             ctx = _require_rung_context("test")
             captured_condition = ctx._rung._get_combined_condition()
