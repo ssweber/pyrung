@@ -263,6 +263,46 @@ def _nested_debug_script() -> str:
     )
 
 
+def _chained_builder_debug_script() -> str:
+    return (
+        "from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Program, Rung, TagType, count_down, count_up, on_delay, shift\n"
+        "\n"
+        "Enable = Bool('Enable')\n"
+        "Down = Bool('Down')\n"
+        "Reset = Bool('Reset')\n"
+        "Clock = Bool('Clock')\n"
+        "DoneUp = Bool('DoneUp')\n"
+        "AccUp = Dint('AccUp')\n"
+        "DoneDown = Bool('DoneDown')\n"
+        "AccDown = Dint('AccDown')\n"
+        "TimerDone = Bool('TimerDone')\n"
+        "TimerAcc = Int('TimerAcc')\n"
+        "C = Block('C', TagType.BOOL, 1, 8)\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(Enable):\n"
+        "        cu_builder = count_up(DoneUp, AccUp, setpoint=5)\n"
+        "        cu_builder = cu_builder.down(Down)\n"
+        "        cu_builder.reset(Reset)\n"
+        "\n"
+        "    with Rung(Enable):\n"
+        "        cd_builder = count_down(DoneDown, AccDown, setpoint=5)\n"
+        "        cd_builder.reset(Reset)\n"
+        "\n"
+        "    with Rung(Enable):\n"
+        "        timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)\n"
+        "        timer_builder.reset(Reset)\n"
+        "\n"
+        "    with Rung(Enable):\n"
+        "        shift_builder = shift(C.select(1, 3))\n"
+        "        shift_builder = shift_builder.clock(Clock)\n"
+        "        shift_builder.reset(Reset)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+        "runner.patch({'Enable': True, 'Down': True, 'Reset': False, 'Clock': True})\n"
+    )
+
+
 def _nested_debug_autorun_script() -> str:
     return (
         "import os\n"
@@ -494,6 +534,72 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
     assert next_adapter._current_step is not None
     assert next_adapter._current_step.kind == "rung"
     assert next_adapter._current_rung_index == 0
+
+
+def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_lines(
+    tmp_path: Path,
+):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "chained_debug.py", _chained_builder_debug_script())
+    expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
+
+    expected = [
+        ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, setpoint=5)")),
+        ("Count Down", _line_number(script, "cu_builder = cu_builder.down(Down)")),
+        ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
+        ("Count Down", _line_number(script, "cd_builder = count_down(DoneDown, AccDown, setpoint=5)")),
+        ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
+        ("Enable", _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)")),
+        ("Reset", _line_number(script, "timer_builder.reset(Reset)")),
+        ("Data", _line_number(script, "shift_builder = shift(C.select(1, 3))")),
+        ("Clock", _line_number(script, "shift_builder = shift_builder.clock(Clock)")),
+        ("Reset", _line_number(script, "shift_builder.reset(Reset)")),
+    ]
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    first_messages = _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _single_response(first_messages)
+    assert adapter._current_step is not None
+    assert adapter._current_step.kind == "instruction"
+    assert adapter._current_step.instruction_kind == expected[0][0]
+    assert adapter._current_step.source_line == expected[0][1]
+
+    stack_messages = _send_request(adapter, out_stream, seq=3, command="stackTrace")
+    stack_response = _single_response(stack_messages)
+    assert expected[0][0] in stack_response["body"]["stackFrames"][0]["name"]
+
+    first_trace = _trace_events(first_messages)
+    assert first_trace
+    first_body = first_trace[0]["body"]
+    assert first_body["step"]["instructionKind"] == expected[0][0]
+    assert first_body["step"]["line"] == expected[0][1]
+    assert first_body["step"]["source"]["path"] == expected_path
+    assert len(first_body["regions"]) == 1
+    assert len(first_body["regions"][0]["conditions"]) == 1
+    assert first_body["regions"][0]["conditions"][0]["line"] == expected[0][1]
+
+    seq = 4
+    for instruction_kind, source_line in expected[1:]:
+        messages = _send_request(adapter, out_stream, seq=seq, command="stepIn")
+        seq += 1
+        _single_response(messages)
+        assert adapter._current_step is not None
+        assert adapter._current_step.kind == "instruction"
+        assert adapter._current_step.instruction_kind == instruction_kind
+        assert adapter._current_step.source_line == source_line
+
+        traces = _trace_events(messages)
+        assert traces
+        body = traces[0]["body"]
+        assert body["step"]["instructionKind"] == instruction_kind
+        assert body["step"]["line"] == source_line
+        assert len(body["regions"]) == 1
+        conditions = body["regions"][0]["conditions"]
+        assert len(conditions) == 1
+        assert conditions[0]["line"] == source_line
 
 
 def test_stacktrace_includes_subroutine_context_when_paused_inside_call(tmp_path: Path):

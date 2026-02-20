@@ -566,6 +566,13 @@ class DAPAdapter:
         source_file = getattr(instruction, "source_file", None) or fallback_source_file
         source_line = getattr(instruction, "source_line", None)
         self._index_line(source_file, source_line)
+        debug_substeps = getattr(instruction, "debug_substeps", None)
+        if debug_substeps:
+            for substep in debug_substeps:
+                self._index_line(
+                    getattr(substep, "source_file", None) or source_file,
+                    getattr(substep, "source_line", None),
+                )
 
         if isinstance(instruction, CallInstruction):
             self._index_subroutine_lines_for_call(

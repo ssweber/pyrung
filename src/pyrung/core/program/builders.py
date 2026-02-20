@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +14,7 @@ from pyrung.core.condition import (
 from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
+    DebugInstructionSubStep,
     OffDelayInstruction,
     OnDelayInstruction,
     ShiftInstruction,
@@ -35,6 +38,30 @@ def _capture_rung_condition_and_source(
     ctx = _require_rung_context(func_name)
     source_file, source_line = _capture_source(depth=source_depth)
     return ctx._rung._get_combined_condition(), source_file, source_line
+
+
+def _capture_chained_method_source() -> tuple[str | None, int | None]:
+    """Capture source location for a chained builder method call site.
+
+    Walks stack frames until it finds the first frame outside this module,
+    so debugger steps always anchor to user code, never builder internals.
+    """
+    frame = inspect.currentframe()
+    if frame is None:
+        return None, None
+
+    module_file = os.path.normcase(os.path.abspath(__file__))
+    try:
+        current = frame.f_back
+        while current is not None:
+            filename = current.f_code.co_filename
+            normalized = os.path.normcase(os.path.abspath(filename))
+            if normalized != module_file:
+                return filename, current.f_lineno
+            current = current.f_back
+    finally:
+        del frame
+    return None, None
 
 
 class _BuilderBase:
@@ -85,14 +112,20 @@ class ShiftBuilder(_BuilderBase):
         self._bit_range = bit_range
         self._data_condition = data_condition
         self._clock_condition: Condition | Tag | None = None
+        self._clock_source_file: str | None = None
+        self._clock_source_line: int | None = None
+        self._reset_source_file: str | None = None
+        self._reset_source_line: int | None = None
 
     def clock(self, condition: Condition | Tag) -> ShiftBuilder:
         """Set the shift clock trigger condition."""
+        self._clock_source_file, self._clock_source_line = _capture_chained_method_source()
         self._clock_condition = condition
         return self
 
     def reset(self, condition: Condition | Tag) -> BlockRange | IndirectBlockRange:
         """Finalize the shift instruction with required reset condition."""
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         if self._clock_condition is None:
             raise RuntimeError("shift().clock(...) must be called before shift().reset(...)")
 
@@ -101,6 +134,29 @@ class ShiftBuilder(_BuilderBase):
             data_condition=self._data_condition,
             clock_condition=self._clock_condition,
             reset_condition=condition,
+        )
+        instr.debug_substeps = (
+            DebugInstructionSubStep(
+                instruction_kind="Data",
+                source_file=self._source_file,
+                source_line=self._source_line,
+                eval_mode="enabled",
+                expression="Data",
+            ),
+            DebugInstructionSubStep(
+                instruction_kind="Clock",
+                source_file=self._clock_source_file or self._source_file,
+                source_line=self._clock_source_line or self._source_line,
+                eval_mode="condition",
+                condition=instr.clock_condition,
+            ),
+            DebugInstructionSubStep(
+                instruction_kind="Reset",
+                source_file=self._reset_source_file or self._source_file,
+                source_line=self._reset_source_line or self._source_line,
+                eval_mode="condition",
+                condition=instr.reset_condition,
+            ),
         )
         self._append_instruction(instr)
         return self._bit_range
@@ -152,6 +208,10 @@ class CountUpBuilder(_BuilderBase):
         self._up_condition = up_condition  # From rung conditions
         self._down_condition: Condition | Tag | None = None
         self._reset_condition: Condition | Tag | None = None
+        self._down_source_file: str | None = None
+        self._down_source_line: int | None = None
+        self._reset_source_file: str | None = None
+        self._reset_source_line: int | None = None
 
     def down(self, condition: Condition | Tag) -> CountUpBuilder:
         """Add down trigger (optional).
@@ -165,6 +225,7 @@ class CountUpBuilder(_BuilderBase):
         Returns:
             Self for chaining.
         """
+        self._down_source_file, self._down_source_line = _capture_chained_method_source()
         self._down_condition = condition
         return self
 
@@ -179,6 +240,7 @@ class CountUpBuilder(_BuilderBase):
         Returns:
             The done bit tag.
         """
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         self._reset_condition = condition
         # Now build and add the instruction
         instr = CountUpInstruction(
@@ -189,6 +251,35 @@ class CountUpBuilder(_BuilderBase):
             self._reset_condition,
             self._down_condition,
         )
+        substeps: list[DebugInstructionSubStep] = [
+            DebugInstructionSubStep(
+                instruction_kind="Count Up",
+                source_file=self._source_file,
+                source_line=self._source_line,
+                eval_mode="enabled",
+                expression="Count Up",
+            )
+        ]
+        if instr.down_condition is not None:
+            substeps.append(
+                DebugInstructionSubStep(
+                    instruction_kind="Count Down",
+                    source_file=self._down_source_file or self._source_file,
+                    source_line=self._down_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=instr.down_condition,
+                )
+            )
+        substeps.append(
+            DebugInstructionSubStep(
+                instruction_kind="Reset",
+                source_file=self._reset_source_file or self._source_file,
+                source_line=self._reset_source_line or self._source_line,
+                eval_mode="condition",
+                condition=instr.reset_condition,
+            )
+        )
+        instr.debug_substeps = tuple(substeps)
         self._append_instruction(instr)
         return self._done_bit
 
@@ -215,6 +306,8 @@ class CountDownBuilder(_BuilderBase):
         self._setpoint = setpoint
         self._down_condition = down_condition  # From rung conditions
         self._reset_condition: Condition | Tag | None = None
+        self._reset_source_file: str | None = None
+        self._reset_source_line: int | None = None
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (required).
@@ -228,6 +321,7 @@ class CountDownBuilder(_BuilderBase):
         Returns:
             The done bit tag.
         """
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         self._reset_condition = condition
         # Now build and add the instruction
         instr = CountDownInstruction(
@@ -236,6 +330,22 @@ class CountDownBuilder(_BuilderBase):
             self._setpoint,
             self._down_condition,
             self._reset_condition,
+        )
+        instr.debug_substeps = (
+            DebugInstructionSubStep(
+                instruction_kind="Count Down",
+                source_file=self._source_file,
+                source_line=self._source_line,
+                eval_mode="enabled",
+                expression="Count Down",
+            ),
+            DebugInstructionSubStep(
+                instruction_kind="Reset",
+                source_file=self._reset_source_file or self._source_file,
+                source_line=self._reset_source_line or self._source_line,
+                eval_mode="condition",
+                condition=instr.reset_condition,
+            ),
         )
         self._append_instruction(instr)
         return self._done_bit
@@ -333,6 +443,8 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         self._enable_condition = enable_condition
         self._time_unit = time_unit
         self._reset_condition: Condition | Tag | None = None
+        self._reset_source_file: str | None = None
+        self._reset_source_line: int | None = None
 
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (makes timer retentive - RTON).
@@ -345,14 +457,15 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         Returns:
             The done bit tag.
         """
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         self._reset_condition = condition
         self._finalize()
         return self._done_bit
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
-        self._append_once(
-            lambda: OnDelayInstruction(
+        def _build_instruction() -> OnDelayInstruction:
+            instr = OnDelayInstruction(
                 self._done_bit,
                 self._accumulator,
                 self._setpoint,
@@ -360,7 +473,26 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
                 self._reset_condition,
                 self._time_unit,
             )
-        )
+            if instr.reset_condition is not None:
+                instr.debug_substeps = (
+                    DebugInstructionSubStep(
+                        instruction_kind="Enable",
+                        source_file=self._source_file,
+                        source_line=self._source_line,
+                        eval_mode="enabled",
+                        expression="Enable",
+                    ),
+                    DebugInstructionSubStep(
+                        instruction_kind="Reset",
+                        source_file=self._reset_source_file or self._source_file,
+                        source_line=self._reset_source_line or self._source_line,
+                        eval_mode="condition",
+                        condition=instr.reset_condition,
+                    ),
+                )
+            return instr
+
+        self._append_once(_build_instruction)
 
     def __del__(self) -> None:
         """Finalize on garbage collection if not explicitly called."""

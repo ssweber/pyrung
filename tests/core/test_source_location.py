@@ -214,4 +214,111 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
     step = next(runner.scan_steps_debug())
     assert step.kind == "instruction"
     assert step.source_line == count_up_line
-    assert step.end_line == count_up_end_line
+    assert step.end_line == count_up_line
+
+
+def test_chained_builder_methods_capture_distinct_debug_substep_lines():
+    enable = Bool("Enable")
+    down = Bool("Down")
+    reset_cond = Bool("Reset")
+    clock = Bool("Clock")
+    up_done = Bool("UpDone")
+    up_acc = Int("UpAcc")
+    down_done = Bool("DownDone")
+    down_acc = Int("DownAcc")
+    timer_done = Bool("TimerDone")
+    timer_acc = Int("TimerAcc")
+    bits = Block("C", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            cu_line = _line_no() + 1
+            cu_builder = count_up(up_done, up_acc, setpoint=5)
+            cu_down_line = _line_no() + 1
+            cu_builder = cu_builder.down(down)
+            cu_reset_line = _line_no() + 1
+            cu_builder.reset(reset_cond)
+
+        with Rung(enable):
+            cd_line = _line_no() + 1
+            cd_builder = count_down(down_done, down_acc, setpoint=5)
+            cd_reset_line = _line_no() + 1
+            cd_builder.reset(reset_cond)
+
+        with Rung(enable):
+            timer_line = _line_no() + 1
+            timer_builder = on_delay(timer_done, timer_acc, setpoint=50)
+            timer_reset_line = _line_no() + 1
+            timer_builder.reset(reset_cond)
+
+        with Rung(enable):
+            shift_line = _line_no() + 1
+            shift_builder = shift(bits.select(1, 4))
+            shift_clock_line = _line_no() + 1
+            shift_builder = shift_builder.clock(clock)
+            shift_reset_line = _line_no() + 1
+            shift_builder.reset(reset_cond)
+
+    cu_instr = prog.rungs[0]._instructions[0]
+    assert cu_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in cu_instr.debug_substeps] == [
+        "Count Up",
+        "Count Down",
+        "Reset",
+    ]
+    assert [step.source_line for step in cu_instr.debug_substeps] == [
+        cu_line,
+        cu_down_line,
+        cu_reset_line,
+    ]
+
+    cd_instr = prog.rungs[1]._instructions[0]
+    assert cd_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in cd_instr.debug_substeps] == [
+        "Count Down",
+        "Reset",
+    ]
+    assert [step.source_line for step in cd_instr.debug_substeps] == [
+        cd_line,
+        cd_reset_line,
+    ]
+
+    timer_instr = prog.rungs[2]._instructions[0]
+    assert timer_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in timer_instr.debug_substeps] == [
+        "Enable",
+        "Reset",
+    ]
+    assert [step.source_line for step in timer_instr.debug_substeps] == [
+        timer_line,
+        timer_reset_line,
+    ]
+
+    shift_instr = prog.rungs[3]._instructions[0]
+    assert shift_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in shift_instr.debug_substeps] == [
+        "Data",
+        "Clock",
+        "Reset",
+    ]
+    assert [step.source_line for step in shift_instr.debug_substeps] == [
+        shift_line,
+        shift_clock_line,
+        shift_reset_line,
+    ]
+
+    runner = PLCRunner(prog)
+    runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
+    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+    assert [step.source_line for step in instruction_steps] == [
+        cu_line,
+        cu_down_line,
+        cu_reset_line,
+        cd_line,
+        cd_reset_line,
+        timer_line,
+        timer_reset_line,
+        shift_line,
+        shift_clock_line,
+        shift_reset_line,
+    ]

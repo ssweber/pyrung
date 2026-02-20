@@ -549,6 +549,50 @@ class PLCRunner:
             instruction.execute(ctx, enabled)
             return
 
+        instruction_source_file = getattr(instruction, "source_file", None) or rung.source_file
+        instruction_source_line = getattr(instruction, "source_line", None) or rung.source_line
+        instruction_end_line = (
+            getattr(instruction, "end_line", None)
+            or getattr(instruction, "source_line", None)
+            or rung.source_line
+        )
+        debug_substeps = getattr(instruction, "debug_substeps", None)
+        if debug_substeps:
+            for substep in debug_substeps:
+                substep_source_file = substep.source_file or instruction_source_file
+                substep_source_line = substep.source_line or instruction_source_line
+                substep_condition_trace = self._instruction_substep_condition_trace(
+                    substep=substep,
+                    ctx=ctx,
+                    enabled=enabled,
+                    enabled_state=enabled_state,
+                    source_file=substep_source_file,
+                    source_line=substep_source_line,
+                )
+                substep_trace = self._instruction_substep_trace(
+                    source_file=substep_source_file,
+                    source_line=substep_source_line,
+                    enabled_state=enabled_state,
+                    condition_trace=substep_condition_trace,
+                )
+                yield ScanStep(
+                    rung_index=rung_index,
+                    rung=rung,
+                    ctx=ctx,
+                    kind="instruction",
+                    subroutine_name=subroutine_name,
+                    depth=depth,
+                    call_stack=call_stack,
+                    source_file=substep_source_file,
+                    source_line=substep_source_line,
+                    end_line=substep_source_line if substep_source_line is not None else instruction_end_line,
+                    enabled_state=enabled_state,
+                    trace=substep_trace,
+                    instruction_kind=substep.instruction_kind,
+                )
+            instruction.execute(ctx, enabled)
+            return
+
         yield ScanStep(
             rung_index=rung_index,
             rung=rung,
@@ -557,18 +601,136 @@ class PLCRunner:
             subroutine_name=subroutine_name,
             depth=depth,
             call_stack=call_stack,
-            source_file=getattr(instruction, "source_file", None) or rung.source_file,
-            source_line=getattr(instruction, "source_line", None) or rung.source_line,
-            end_line=(
-                getattr(instruction, "end_line", None)
-                or getattr(instruction, "source_line", None)
-                or rung.source_line
-            ),
+            source_file=instruction_source_file,
+            source_line=instruction_source_line,
+            end_line=instruction_end_line,
             enabled_state=enabled_state,
             trace=step_trace,
             instruction_kind=instruction.__class__.__name__,
         )
         instruction.execute(ctx, enabled)
+
+    def _instruction_substep_trace(
+        self,
+        *,
+        source_file: str | None,
+        source_line: int | None,
+        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"],
+        condition_trace: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "regions": [
+                {
+                    "kind": "instruction",
+                    "source_file": source_file,
+                    "source_line": source_line,
+                    "end_line": source_line,
+                    "enabled_state": enabled_state,
+                    "conditions": [condition_trace],
+                }
+            ]
+        }
+
+    def _instruction_substep_condition_trace(
+        self,
+        *,
+        substep: Any,
+        ctx: ScanContext,
+        enabled: bool,
+        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"],
+        source_file: str | None,
+        source_line: int | None,
+    ) -> dict[str, Any]:
+        condition = getattr(substep, "condition", None)
+        expression = getattr(substep, "expression", None)
+        eval_mode = getattr(substep, "eval_mode", "condition")
+
+        if eval_mode == "enabled":
+            text = str(expression or substep.instruction_kind or "Enable")
+            if enabled_state == "disabled_parent":
+                return {
+                    "source_file": source_file,
+                    "source_line": source_line,
+                    "expression": text,
+                    "status": "skipped",
+                    "value": None,
+                    "details": [],
+                    "summary": text,
+                    "annotation": self._condition_annotation(
+                        status="skipped",
+                        expression=text,
+                        summary=text,
+                    ),
+                }
+            value = bool(enabled)
+            status = "true" if value else "false"
+            summary = f"{text}({value})"
+            return {
+                "source_file": source_file,
+                "source_line": source_line,
+                "expression": text,
+                "status": status,
+                "value": value,
+                "details": [{"name": "enabled", "value": enabled}],
+                "summary": summary,
+                "annotation": self._condition_annotation(
+                    status=status,
+                    expression=text,
+                    summary=summary,
+                ),
+            }
+
+        if condition is None:
+            text = str(expression or substep.instruction_kind or "Condition")
+            return {
+                "source_file": source_file,
+                "source_line": source_line,
+                "expression": text,
+                "status": "skipped",
+                "value": None,
+                "details": [],
+                "summary": text,
+                "annotation": self._condition_annotation(
+                    status="skipped",
+                    expression=text,
+                    summary=text,
+                ),
+            }
+
+        text = str(expression or self._condition_expression(condition))
+        if enabled_state == "disabled_parent":
+            return {
+                "source_file": source_file,
+                "source_line": source_line,
+                "expression": text,
+                "status": "skipped",
+                "value": None,
+                "details": [],
+                "summary": text,
+                "annotation": self._condition_annotation(
+                    status="skipped",
+                    expression=text,
+                    summary=text,
+                ),
+            }
+
+        value, details = self._evaluate_condition_value(condition, ctx)
+        status = "true" if value else "false"
+        summary = self._condition_term_text(condition, details)
+        return {
+            "source_file": source_file,
+            "source_line": source_line,
+            "expression": text,
+            "status": status,
+            "value": value,
+            "details": details,
+            "summary": summary,
+            "annotation": self._condition_annotation(
+                status=status,
+                expression=text,
+                summary=summary,
+            ),
+        }
 
     def _enabled_state_for(
         self,

@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+
+
+@dataclass(frozen=True)
+class DebugInstructionSubStep:
+    """Per-instruction debug step metadata for chained builder methods."""
+
+    instruction_kind: str
+    source_file: str | None
+    source_line: int | None
+    eval_mode: Literal["enabled", "condition"]
+    condition: Any | None = None
+    expression: str | None = None
 
 
 class Instruction(ABC):
@@ -19,6 +32,7 @@ class Instruction(ABC):
     source_file: str | None = None
     source_line: int | None = None
     end_line: int | None = None
+    debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
 

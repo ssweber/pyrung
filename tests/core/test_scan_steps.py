@@ -5,16 +5,22 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import (
+    Block,
     Bool,
     Int,
     PLCRunner,
     Program,
     Rung,
+    TagType,
     branch,
     call,
+    count_down,
+    count_up,
     copy,
+    on_delay,
     out,
     return_,
+    shift,
     subroutine,
 )
 
@@ -264,3 +270,61 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
     assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
     assert runner.current_state.tags["Mode"] is True
     assert runner.current_state.tags["BranchOut"] is False
+
+
+def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace():
+    enable = Bool("Enable")
+    down = Bool("Down")
+    reset = Bool("Reset")
+    clock = Bool("Clock")
+    up_done = Bool("UpDone")
+    up_acc = Int("UpAcc")
+    down_done = Bool("DownDone")
+    down_acc = Int("DownAcc")
+    timer_done = Bool("TimerDone")
+    timer_acc = Int("TimerAcc")
+    bits = Block("C", TagType.BOOL, 1, 8)
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            count_up(up_done, up_acc, setpoint=5).down(down).reset(reset)
+
+        with Rung(enable):
+            count_down(down_done, down_acc, setpoint=5).reset(reset)
+
+        with Rung(enable):
+            on_delay(timer_done, timer_acc, setpoint=50).reset(reset)
+
+        with Rung(enable):
+            shift(bits.select(1, 4)).clock(clock).reset(reset)
+
+    runner = PLCRunner(logic)
+    runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
+    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+
+    assert [step.instruction_kind for step in instruction_steps] == [
+        "Count Up",
+        "Count Down",
+        "Reset",
+        "Count Down",
+        "Reset",
+        "Enable",
+        "Reset",
+        "Data",
+        "Clock",
+        "Reset",
+    ]
+
+    for step in instruction_steps:
+        assert step.trace is not None
+        regions = step.trace["regions"]
+        assert len(regions) == 1
+        region = regions[0]
+        assert region["kind"] == "instruction"
+        assert region["source_line"] == step.source_line
+        assert region["end_line"] == step.source_line
+        conditions = region["conditions"]
+        assert len(conditions) == 1
+        condition = conditions[0]
+        assert condition["source_line"] == step.source_line
+        assert isinstance(condition["expression"], str) and condition["expression"]

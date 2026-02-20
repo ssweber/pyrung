@@ -5,7 +5,7 @@ All state modifications are collected and committed at scan end.
 """
 
 from .advanced import SearchInstruction, ShiftInstruction
-from .base import Instruction, OneShotMixin, SubroutineReturnSignal
+from .base import DebugInstructionSubStep, Instruction, OneShotMixin, SubroutineReturnSignal
 from .coils import LatchInstruction, OutInstruction, ResetInstruction
 from .control import (
     CallInstruction,
@@ -36,6 +36,7 @@ from .timers import OffDelayInstruction, OnDelayInstruction
 
 __all__ = [
     # Base
+    "DebugInstructionSubStep",
     "Instruction",
     "OneShotMixin",
     "SubroutineReturnSignal",
