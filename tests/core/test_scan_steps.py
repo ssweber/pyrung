@@ -82,6 +82,38 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
     assert runner.current_state.tags["Output"] is True
 
 
+def test_scan_steps_debug_partial_consumption_does_not_commit_state():
+    enable = Bool("Enable")
+    output = Bool("Output")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            out(output)
+
+    runner = PLCRunner(logic)
+    runner.patch({"Enable": True})
+
+    scan_gen = runner.scan_steps_debug()
+    first_step = next(scan_gen)
+
+    assert first_step.kind == "instruction"
+    assert runner.current_state.scan_id == 0
+    assert "Output" not in runner.current_state.tags
+
+    second_step = next(scan_gen)
+    assert second_step.kind == "rung"
+    assert second_step.ctx.get_tag("Output") is True
+    assert runner.current_state.scan_id == 0
+    assert "Output" not in runner.current_state.tags
+
+    # Commit only happens once the generator is exhausted.
+    for _ in scan_gen:
+        pass
+
+    assert runner.current_state.scan_id == 1
+    assert runner.current_state.tags["Output"] is True
+
+
 def test_step_and_scan_steps_have_equivalent_results():
     enable = Bool("Enable")
     light = Bool("Light")

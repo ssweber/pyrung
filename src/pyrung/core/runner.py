@@ -236,6 +236,55 @@ class PLCRunner:
 
         return self._state.tags.get(name, default)
 
+    def _calculate_dt(self) -> float:
+        """Calculate scan delta time based on current time mode."""
+        if self._time_mode == TimeMode.REALTIME:
+            now = time.perf_counter()
+            if self._last_step_time is None:
+                self._last_step_time = now
+            dt = now - self._last_step_time
+            self._last_step_time = now
+            return dt
+        return self._dt
+
+    def _prepare_scan(self) -> tuple[ScanContext, float]:
+        """Create and initialize scan context before logic evaluation."""
+        ctx = ScanContext(
+            self._state,
+            resolver=self._system_runtime.resolve,
+            read_only_tags=self._system_runtime.read_only_tags,
+        )
+
+        self._system_runtime.on_scan_start(ctx)
+
+        if self._pending_patches:
+            ctx.set_tags(self._pending_patches)
+            self._pending_patches = {}
+
+        if self._forces:
+            ctx.set_tags(self._forces)
+
+        dt = self._calculate_dt()
+        ctx.set_memory("_dt", dt)
+        return ctx, dt
+
+    def _capture_previous_states(self, ctx: ScanContext) -> None:
+        """Batch _prev:* updates used by edge detection conditions."""
+        for name in self._state.tags:
+            ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+        for name in ctx._tags_pending:
+            if name not in self._state.tags:
+                ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+
+    def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        """Finalize one scan and commit all batched writes."""
+        if self._forces:
+            ctx.set_tags(self._forces)
+
+        self._capture_previous_states(ctx)
+        self._system_runtime.on_scan_end(ctx)
+        self._state = ctx.commit(dt=dt)
+
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
 
@@ -251,96 +300,18 @@ class PLCRunner:
 
         The commit in phase 8 only happens when the generator is exhausted.
         """
-        # Create ScanContext for batched updates + system resolver
-        ctx = ScanContext(
-            self._state,
-            resolver=self._system_runtime.resolve,
-            read_only_tags=self._system_runtime.read_only_tags,
-        )
-
-        # System lifecycle hooks run before patching and logic
-        self._system_runtime.on_scan_start(ctx)
-
-        # Apply one-shot patches to context
-        if self._pending_patches:
-            ctx.set_tags(self._pending_patches)
-            self._pending_patches = {}
-
-        # Apply persistent force overrides before logic evaluation
-        if self._forces:
-            ctx.set_tags(self._forces)
-
-        # Calculate dt based on time mode (needed for timers)
-        if self._time_mode == TimeMode.REALTIME:
-            now = time.perf_counter()
-            if self._last_step_time is None:
-                self._last_step_time = now
-            dt = now - self._last_step_time
-            self._last_step_time = now
-        else:
-            dt = self._dt
-
-        # Inject dt into context so timer instructions can access it
-        ctx.set_memory("_dt", dt)
+        ctx, dt = self._prepare_scan()
 
         # Evaluate logic rung-by-rung, yielding at rung boundaries.
         for i, rung in enumerate(self._logic):
             rung.evaluate(ctx)
             yield i, rung, ctx
 
-        # Re-apply forces after logic so they persist across scans
-        if self._forces:
-            ctx.set_tags(self._forces)
-
-        # Batch _prev:* updates for edge detection
-        # Store current tag values as previous for next scan
-        # Need to include both original tags and any newly created tags
-        for name in self._state.tags:
-            ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
-        # Also capture newly created tags from pending writes
-        for name in ctx._tags_pending:
-            if name not in self._state.tags:
-                ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
-
-        # Final system updates before commit
-        self._system_runtime.on_scan_end(ctx)
-
-        # Single commit: apply all changes and advance scan
-        self._state = ctx.commit(dt=dt)
+        self._commit_scan(ctx, dt)
 
     def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle and yield at top-level, branch, and subroutine boundaries."""
-        # Create ScanContext for batched updates + system resolver
-        ctx = ScanContext(
-            self._state,
-            resolver=self._system_runtime.resolve,
-            read_only_tags=self._system_runtime.read_only_tags,
-        )
-
-        # System lifecycle hooks run before patching and logic
-        self._system_runtime.on_scan_start(ctx)
-
-        # Apply one-shot patches to context
-        if self._pending_patches:
-            ctx.set_tags(self._pending_patches)
-            self._pending_patches = {}
-
-        # Apply persistent force overrides before logic evaluation
-        if self._forces:
-            ctx.set_tags(self._forces)
-
-        # Calculate dt based on time mode (needed for timers)
-        if self._time_mode == TimeMode.REALTIME:
-            now = time.perf_counter()
-            if self._last_step_time is None:
-                self._last_step_time = now
-            dt = now - self._last_step_time
-            self._last_step_time = now
-        else:
-            dt = self._dt
-
-        # Inject dt into context so timer instructions can access it
-        ctx.set_memory("_dt", dt)
+        ctx, dt = self._prepare_scan()
 
         # Evaluate logic rung-by-rung with nested yield points for debugger stepping.
         for i, rung in enumerate(self._logic):
@@ -360,25 +331,7 @@ class PLCRunner:
                 rung_condition_traces=rung_condition_traces,
             )
 
-        # Re-apply forces after logic so they persist across scans
-        if self._forces:
-            ctx.set_tags(self._forces)
-
-        # Batch _prev:* updates for edge detection
-        # Store current tag values as previous for next scan
-        # Need to include both original tags and any newly created tags
-        for name in self._state.tags:
-            ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
-        # Also capture newly created tags from pending writes
-        for name in ctx._tags_pending:
-            if name not in self._state.tags:
-                ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
-
-        # Final system updates before commit
-        self._system_runtime.on_scan_end(ctx)
-
-        # Single commit: apply all changes and advance scan
-        self._state = ctx.commit(dt=dt)
+        self._commit_scan(ctx, dt)
 
     def _iter_rung_steps(
         self,
@@ -459,7 +412,7 @@ class PLCRunner:
                     )
         except SubroutineReturnSignal:
             if kind != "branch":
-                yield self._make_scan_step(
+                yield ScanStep(
                     rung_index=rung_index,
                     rung=rung,
                     ctx=ctx,
@@ -477,7 +430,7 @@ class PLCRunner:
             raise
 
         if kind != "branch" or enabled:
-            yield self._make_scan_step(
+            yield ScanStep(
                 rung_index=rung_index,
                 rung=rung,
                 ctx=ctx,
@@ -521,7 +474,7 @@ class PLCRunner:
                 return
             if instruction.subroutine_name not in instruction._program.subroutines:
                 raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
-            yield self._make_scan_step(
+            yield ScanStep(
                 rung_index=rung_index,
                 rung=rung,
                 ctx=ctx,
@@ -596,7 +549,7 @@ class PLCRunner:
             instruction.execute(ctx, enabled)
             return
 
-        yield self._make_scan_step(
+        yield ScanStep(
             rung_index=rung_index,
             rung=rung,
             ctx=ctx,
@@ -616,39 +569,6 @@ class PLCRunner:
             instruction_kind=instruction.__class__.__name__,
         )
         instruction.execute(ctx, enabled)
-
-    def _make_scan_step(
-        self,
-        *,
-        rung_index: int,
-        rung: Rung,
-        ctx: ScanContext,
-        kind: Literal["rung", "branch", "subroutine", "instruction"],
-        subroutine_name: str | None,
-        depth: int,
-        call_stack: tuple[str, ...],
-        source_file: str | None,
-        source_line: int | None,
-        end_line: int | None,
-        enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None,
-        trace: dict[str, Any] | None,
-        instruction_kind: str | None,
-    ) -> ScanStep:
-        return ScanStep(
-            rung_index=rung_index,
-            rung=rung,
-            ctx=ctx,
-            kind=kind,
-            subroutine_name=subroutine_name,
-            depth=depth,
-            call_stack=call_stack,
-            source_file=source_file,
-            source_line=source_line,
-            end_line=end_line,
-            enabled_state=enabled_state,
-            trace=trace,
-            instruction_kind=instruction_kind,
-        )
 
     def _enabled_state_for(
         self,
