@@ -288,3 +288,47 @@ def test_fork_from_raises_for_missing_scan() -> None:
 
     with pytest.raises(KeyError):
         runner.fork_from(999)
+
+
+def test_history_find_and_find_all_return_missing_results_for_unknown_label() -> None:
+    history = History(SystemState())
+
+    assert history.find("missing") is None
+    assert history.find_all("missing") == []
+
+
+def test_history_label_scan_supports_find_find_all_and_dedup_per_scan() -> None:
+    initial = SystemState()
+    history = History(initial)
+    scan_1 = initial.next_scan(dt=0.1)
+    history._append(scan_1)
+    scan_2 = scan_1.next_scan(dt=0.1)
+    history._append(scan_2)
+
+    history._label_scan("fault", 1)
+    history._label_scan("fault", 1)
+    history._label_scan("fault", 2)
+
+    assert history.find("fault") is scan_2
+    assert [state.scan_id for state in history.find_all("fault")] == [1, 2]
+
+
+def test_history_label_scan_raises_for_missing_scan() -> None:
+    history = History(SystemState())
+
+    with pytest.raises(KeyError):
+        history._label_scan("fault", 99)
+
+
+def test_history_label_entries_are_pruned_when_scan_is_evicted() -> None:
+    initial = SystemState()
+    history = History(initial, limit=2)
+    history._label_scan("boot", 0)
+
+    scan_1 = initial.next_scan(dt=0.1)
+    history._append(scan_1)
+    scan_2 = scan_1.next_scan(dt=0.1)
+    history._append(scan_2)  # evicts scan 0
+
+    assert history.find("boot") is None
+    assert history.find_all("boot") == []

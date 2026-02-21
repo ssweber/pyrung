@@ -54,6 +54,81 @@ class ScanStep:
     instruction_kind: str | None
 
 
+@dataclass
+class _MonitorRegistration:
+    id: int
+    tag_name: str
+    callback: Callable[[Any, Any], None]
+    enabled: bool = True
+    removed: bool = False
+
+
+@dataclass
+class _BreakpointRegistration:
+    id: int
+    predicate: Callable[[SystemState], bool]
+    action: Literal["pause", "snapshot"]
+    label: str | None = None
+    enabled: bool = True
+    removed: bool = False
+
+
+class _RunnerHandle:
+    """Mutable registration handle used by monitor/breakpoint APIs."""
+
+    __slots__ = ("_id", "_remove", "_enable", "_disable")
+
+    def __init__(
+        self,
+        *,
+        handle_id: int,
+        remove: Callable[[int], None],
+        enable: Callable[[int], None],
+        disable: Callable[[int], None],
+    ) -> None:
+        self._id = handle_id
+        self._remove = remove
+        self._enable = enable
+        self._disable = disable
+
+    @property
+    def id(self) -> int:
+        return self._id
+
+    def remove(self) -> None:
+        self._remove(self._id)
+
+    def enable(self) -> None:
+        self._enable(self._id)
+
+    def disable(self) -> None:
+        self._disable(self._id)
+
+
+class _BreakpointBuilder:
+    """Fluent builder returned by ``runner.when(predicate)``."""
+
+    __slots__ = ("_runner", "_predicate")
+
+    def __init__(self, runner: PLCRunner, predicate: Callable[[SystemState], bool]) -> None:
+        self._runner = runner
+        self._predicate = predicate
+
+    def pause(self) -> _RunnerHandle:
+        return self._runner._register_breakpoint(
+            predicate=self._predicate,
+            action="pause",
+            label=None,
+        )
+
+    def snapshot(self, label: str) -> _RunnerHandle:
+        return self._runner._register_breakpoint(
+            predicate=self._predicate,
+            action="snapshot",
+            label=label,
+        )
+
+
 class PLCRunner:
     """Generator-driven PLC execution engine.
 
@@ -124,6 +199,10 @@ class PLCRunner:
         self._forces = self._input_overrides.forces_mutable
         self._condition_trace = ConditionTraceEngine(formatter=TraceFormatter())
         self._debugger = PLCDebugger(step_factory=ScanStep)
+        self._next_debug_handle_id = 1
+        self._monitors_by_id: dict[int, _MonitorRegistration] = {}
+        self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
+        self._pause_requested_this_scan = False
 
     @property
     def current_state(self) -> SystemState:
@@ -369,6 +448,104 @@ class PLCRunner:
         """Read-only view of active persistent overrides."""
         return self._input_overrides.forces
 
+    def monitor(self, tag: str | Tag, callback: Callable[[Any, Any], None]) -> _RunnerHandle:
+        """Call ``callback(current, previous)`` after commit when tag value changes."""
+        tag_name = self._normalize_tag_name(tag, method="monitor")
+        monitor_id = self._next_handle_id()
+        self._monitors_by_id[monitor_id] = _MonitorRegistration(
+            id=monitor_id,
+            tag_name=tag_name,
+            callback=callback,
+        )
+        return _RunnerHandle(
+            handle_id=monitor_id,
+            remove=self._remove_monitor,
+            enable=self._enable_monitor,
+            disable=self._disable_monitor,
+        )
+
+    def when(self, predicate: Callable[[SystemState], bool]) -> _BreakpointBuilder:
+        """Create a predicate breakpoint builder evaluated after each committed scan."""
+        return _BreakpointBuilder(self, predicate)
+
+    def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
+        from pyrung.core.tag import Tag as TagClass
+
+        if isinstance(tag, TagClass):
+            return tag.name
+        if isinstance(tag, str):
+            return tag
+        raise TypeError(f"{method}() tag must be str or Tag, got {type(tag).__name__}")
+
+    def _next_handle_id(self) -> int:
+        handle_id = self._next_debug_handle_id
+        self._next_debug_handle_id += 1
+        return handle_id
+
+    def _remove_monitor(self, monitor_id: int) -> None:
+        registration = self._monitors_by_id.get(monitor_id)
+        if registration is None or registration.removed:
+            return
+        registration.removed = True
+        registration.enabled = False
+
+    def _enable_monitor(self, monitor_id: int) -> None:
+        registration = self._monitors_by_id.get(monitor_id)
+        if registration is None or registration.removed:
+            return
+        registration.enabled = True
+
+    def _disable_monitor(self, monitor_id: int) -> None:
+        registration = self._monitors_by_id.get(monitor_id)
+        if registration is None or registration.removed:
+            return
+        registration.enabled = False
+
+    def _register_breakpoint(
+        self,
+        *,
+        predicate: Callable[[SystemState], bool],
+        action: Literal["pause", "snapshot"],
+        label: str | None,
+    ) -> _RunnerHandle:
+        breakpoint_id = self._next_handle_id()
+        self._breakpoints_by_id[breakpoint_id] = _BreakpointRegistration(
+            id=breakpoint_id,
+            predicate=predicate,
+            action=action,
+            label=label,
+        )
+        return _RunnerHandle(
+            handle_id=breakpoint_id,
+            remove=self._remove_breakpoint,
+            enable=self._enable_breakpoint,
+            disable=self._disable_breakpoint,
+        )
+
+    def _remove_breakpoint(self, breakpoint_id: int) -> None:
+        registration = self._breakpoints_by_id.get(breakpoint_id)
+        if registration is None or registration.removed:
+            return
+        registration.removed = True
+        registration.enabled = False
+
+    def _enable_breakpoint(self, breakpoint_id: int) -> None:
+        registration = self._breakpoints_by_id.get(breakpoint_id)
+        if registration is None or registration.removed:
+            return
+        registration.enabled = True
+
+    def _disable_breakpoint(self, breakpoint_id: int) -> None:
+        registration = self._breakpoints_by_id.get(breakpoint_id)
+        if registration is None or registration.removed:
+            return
+        registration.enabled = False
+
+    def _consume_pause_request(self) -> bool:
+        pause_requested = self._pause_requested_this_scan
+        self._pause_requested_this_scan = False
+        return pause_requested
+
     def _peek_live_tag_value(self, name: str, default: Any) -> Any:
         """Read a tag as seen by live Tag.value access."""
         has_override, value = self._input_overrides.get_live_override(name)
@@ -417,7 +594,8 @@ class PLCRunner:
 
     def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
         """Finalize one scan and commit all batched writes."""
-        previous_tip_scan_id = self._state.scan_id
+        previous_state = self._state
+        previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
         self._capture_previous_states(ctx)
@@ -438,6 +616,37 @@ class PLCRunner:
 
         if not self._history.contains(self._playhead):
             self._playhead = self._history.oldest_scan_id
+
+        self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
+        self._evaluate_breakpoints(state=self._state)
+
+    def _evaluate_monitors(self, *, previous_state: SystemState, current_state: SystemState) -> None:
+        for monitor_id in sorted(self._monitors_by_id):
+            registration = self._monitors_by_id[monitor_id]
+            if registration.removed or not registration.enabled:
+                continue
+
+            previous_value = previous_state.tags.get(registration.tag_name)
+            current_value = current_state.tags.get(registration.tag_name)
+            if current_value != previous_value:
+                registration.callback(current_value, previous_value)
+
+    def _evaluate_breakpoints(self, *, state: SystemState) -> None:
+        self._pause_requested_this_scan = False
+        for breakpoint_id in sorted(self._breakpoints_by_id):
+            registration = self._breakpoints_by_id[breakpoint_id]
+            if registration.removed or not registration.enabled:
+                continue
+
+            if not registration.predicate(state):
+                continue
+
+            if registration.action == "snapshot":
+                assert registration.label is not None
+                self._history._label_scan(registration.label, state.scan_id)
+                continue
+
+            self._pause_requested_this_scan = True
 
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
@@ -593,13 +802,18 @@ class PLCRunner:
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""
+        return self._run_single_scan(consume_pause_request=True)
+
+    def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         for _ in self.scan_steps():
             pass
 
+        if consume_pause_request:
+            self._consume_pause_request()
         return self._state
 
     def run(self, cycles: int) -> SystemState:
-        """Execute multiple scan cycles.
+        """Execute up to ``cycles`` scans, stopping early on pause breakpoints.
 
         Args:
             cycles: Number of scans to execute.
@@ -608,11 +822,14 @@ class PLCRunner:
             The final SystemState after all cycles.
         """
         for _ in range(cycles):
-            self.step()
+            self._consume_pause_request()
+            self._run_single_scan(consume_pause_request=False)
+            if self._consume_pause_request():
+                break
         return self._state
 
     def run_for(self, seconds: float) -> SystemState:
-        """Run until simulation time advances by at least N seconds.
+        """Run until simulation time advances by N seconds or a pause breakpoint fires.
 
         Args:
             seconds: Minimum simulation time to advance.
@@ -622,7 +839,10 @@ class PLCRunner:
         """
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
-            self.step()
+            self._consume_pause_request()
+            self._run_single_scan(consume_pause_request=False)
+            if self._consume_pause_request():
+                break
         return self._state
 
     def run_until(
@@ -630,7 +850,7 @@ class PLCRunner:
         predicate: Callable[[SystemState], bool],
         max_cycles: int = 10000,
     ) -> SystemState:
-        """Run until predicate returns True or max_cycles reached.
+        """Run until predicate returns True, pause breakpoint fires, or max_cycles reached.
 
         Args:
             predicate: Function that takes SystemState and returns bool.
@@ -640,7 +860,9 @@ class PLCRunner:
             The state that matched the predicate, or final state if max reached.
         """
         for _ in range(max_cycles):
-            self.step()
-            if predicate(self._state):
+            self._consume_pause_request()
+            self._run_single_scan(consume_pause_request=False)
+            pause_requested = self._consume_pause_request()
+            if predicate(self._state) or pause_requested:
                 break
         return self._state

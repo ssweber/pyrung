@@ -17,6 +17,8 @@ class History:
         self._limit = limit
         self._order: deque[int] = deque([initial_state.scan_id])
         self._by_scan_id: dict[int, SystemState] = {initial_state.scan_id: initial_state}
+        self._label_to_scan_ids: dict[str, deque[int]] = {}
+        self._scan_id_to_labels: dict[int, set[str]] = {}
 
     def at(self, scan_id: int) -> SystemState:
         """Return snapshot for a retained scan id."""
@@ -43,6 +45,20 @@ class History:
         retained = list(self._order)
         tail_ids = retained[-n:]
         return [self._by_scan_id[scan_id] for scan_id in tail_ids]
+
+    def find(self, label: str) -> SystemState | None:
+        """Return the most recent retained snapshot labeled ``label``."""
+        scan_ids = self._label_to_scan_ids.get(label)
+        if not scan_ids:
+            return None
+        return self._by_scan_id[scan_ids[-1]]
+
+    def find_all(self, label: str) -> list[SystemState]:
+        """Return all retained snapshots labeled ``label`` (oldest -> newest)."""
+        scan_ids = self._label_to_scan_ids.get(label)
+        if not scan_ids:
+            return []
+        return [self._by_scan_id[scan_id] for scan_id in scan_ids]
 
     @property
     def oldest_scan_id(self) -> int:
@@ -78,6 +94,18 @@ class History:
         self._by_scan_id[scan_id] = state
         return self._evict_if_needed()
 
+    def _label_scan(self, label: str, scan_id: int) -> None:
+        """Attach ``label`` to one retained scan; deduplicated per scan."""
+        if scan_id not in self._by_scan_id:
+            raise KeyError(scan_id)
+
+        labels = self._scan_id_to_labels.setdefault(scan_id, set())
+        if label in labels:
+            return
+
+        labels.add(label)
+        self._label_to_scan_ids.setdefault(label, deque()).append(scan_id)
+
     def _evict_if_needed(self) -> list[int]:
         evicted_scan_ids: list[int] = []
         if self._limit is None:
@@ -86,6 +114,23 @@ class History:
         while len(self._order) > self._limit:
             oldest_scan_id = self._order.popleft()
             del self._by_scan_id[oldest_scan_id]
+            self._drop_labels_for_scan(oldest_scan_id)
             evicted_scan_ids.append(oldest_scan_id)
 
         return evicted_scan_ids
+
+    def _drop_labels_for_scan(self, scan_id: int) -> None:
+        labels = self._scan_id_to_labels.pop(scan_id, None)
+        if labels is None:
+            return
+
+        for label in labels:
+            scan_ids = self._label_to_scan_ids.get(label)
+            if scan_ids is None:
+                continue
+            try:
+                scan_ids.remove(scan_id)
+            except ValueError:
+                continue
+            if not scan_ids:
+                del self._label_to_scan_ids[label]

@@ -124,10 +124,10 @@ The debug adapter is a thin Python process that:
 DAP is an open protocol — the adapter also works with Neovim (via `nvim-dap`), Emacs (`dap-mode`), and JetBrains IDEs with minimal changes.
 
 !!! note "Planned features (Phase 3)"
-    The following are designed but not yet in the adapter:
+    The following are not yet wired into the adapter UX:
 
     - **Timeline slider** — step backward through scan history
-    - **Watch panel** — `runner.monitor(tag, callback)`
+    - **Watch panel** — core `runner.monitor(tag, callback)` is available; adapter watch UI is pending
     - **Scan-to-scan diff** view
     - **Fork** — branch from historical state to explore "what if"
 

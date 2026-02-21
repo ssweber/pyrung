@@ -116,7 +116,7 @@ The fork:
 
 - starts from that historical `SystemState`
 - keeps the same time mode configuration
-- has clean runtime debug state (no active forces/patches)
+- has clean runtime debug state (no active forces, patches, breakpoints, monitors, or labels)
 - retains only the fork snapshot initially in its own history
 
 ## Time-travel playhead
@@ -155,22 +155,41 @@ Current incremental limitation:
 - `inspect()` trace retention is currently populated through `scan_steps_debug()` (including DAP stepping flows).
 - Scans produced only with `step()`/`run()` may not yet have retained inspect trace.
 
-## Planned features (Phase 3)
+## Predicate breakpoints and snapshot labels
 
-The following debug APIs are still planned:
+Predicate breakpoints evaluate on each committed `SystemState` snapshot.
 
-!!! note "Planned - not yet available"
-    **Breakpoints / snapshot labels**
+```python
+pause_handle = runner.when(lambda s: s.tags.get("Fault")).pause()
+snapshot_handle = runner.when(lambda s: s.tags.get("Fault")).snapshot("fault_triggered")
+```
 
-    ```python
-    handle = runner.when(lambda s: s.tags.get("Fault")).pause()
-    handle = runner.when(predicate).snapshot("fault_triggered")
-    ```
+`pause()` behavior:
 
-    **Monitors**
+- Halts `run()`, `run_for()`, or `run_until()` after committing the triggering scan.
+- `step()` still executes exactly one scan.
 
-    ```python
-    runner.monitor(Button, lambda curr, prev: print(f"{prev} -> {curr}"))
-    ```
+`snapshot(label)` behavior:
 
-See `spec/core/debug.md` for the full Phase 3 design.
+- Tags the triggering scan in history and does not halt execution.
+- Query labels via `runner.history.find(label)` and `runner.history.find_all(label)`.
+
+Both methods return a handle with:
+
+- `id`
+- `remove()`
+- `enable()`
+- `disable()`
+
+## Monitors
+
+Monitors fire on committed value changes:
+
+```python
+handle = runner.monitor("Button", lambda curr, prev: print(f"{prev} -> {curr}"))
+```
+
+- Callback signature is `callback(current_value, previous_value)`.
+- Callbacks run after each commit only when the value changed.
+- Callback exceptions propagate to the caller.
+- Monitor handles also support `id/remove/enable/disable`.

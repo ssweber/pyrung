@@ -33,7 +33,7 @@ Build a VS Code extension using the Debug Adapter Protocol (DAP):
 
 This gives users a live, annotated view of their DSL code during scan execution, with no separate GUI required.
 
-### Phase 3 — Remaining Debug API (driven by editor needs)
+### Phase 3 — Debug APIs (driven by editor needs)
 
 Build the rest of the debug API incrementally as each feature has a visible payoff in the editor:
 
