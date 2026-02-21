@@ -31,6 +31,31 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
 
+_DIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
+    "CompareEq": "==",
+    "CompareNe": "!=",
+    "CompareLt": "<",
+    "CompareLe": "<=",
+    "CompareGt": ">",
+    "CompareGe": ">=",
+}
+_INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
+    "IndirectCompareEq": "==",
+    "IndirectCompareNe": "!=",
+    "IndirectCompareLt": "<",
+    "IndirectCompareLe": "<=",
+    "IndirectCompareGt": ">",
+    "IndirectCompareGe": ">=",
+}
+_EXPR_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
+    "ExprCompareEq": "==",
+    "ExprCompareNe": "!=",
+    "ExprCompareLt": "<",
+    "ExprCompareLe": "<=",
+    "ExprCompareGt": ">",
+    "ExprCompareGe": ">=",
+}
+
 
 @dataclass(frozen=True)
 class ScanStep:
@@ -503,30 +528,10 @@ class PLCRunner:
             AllCondition,
             AnyCondition,
             BitCondition,
-            CompareEq,
-            CompareGe,
-            CompareGt,
-            CompareLe,
-            CompareLt,
-            CompareNe,
             FallingEdgeCondition,
-            IndirectCompareEq,
-            IndirectCompareGe,
-            IndirectCompareGt,
-            IndirectCompareLe,
-            IndirectCompareLt,
-            IndirectCompareNe,
             IntTruthyCondition,
             NormallyClosedCondition,
             RisingEdgeCondition,
-        )
-        from pyrung.core.expression import (
-            ExprCompareEq,
-            ExprCompareGe,
-            ExprCompareGt,
-            ExprCompareLe,
-            ExprCompareLt,
-            ExprCompareNe,
         )
         from pyrung.core.memory_block import IndirectExprRef, IndirectRef
         from pyrung.core.tag import Tag
@@ -553,42 +558,19 @@ class PLCRunner:
             return f"rise({condition.tag.name})"
         if isinstance(condition, FallingEdgeCondition):
             return f"fall({condition.tag.name})"
-        if isinstance(condition, CompareEq):
-            return f"{condition.tag.name} == {_value_text(condition.value)}"
-        if isinstance(condition, CompareNe):
-            return f"{condition.tag.name} != {_value_text(condition.value)}"
-        if isinstance(condition, CompareLt):
-            return f"{condition.tag.name} < {_value_text(condition.value)}"
-        if isinstance(condition, CompareLe):
-            return f"{condition.tag.name} <= {_value_text(condition.value)}"
-        if isinstance(condition, CompareGt):
-            return f"{condition.tag.name} > {_value_text(condition.value)}"
-        if isinstance(condition, CompareGe):
-            return f"{condition.tag.name} >= {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareEq):
-            return f"{_indirect_ref_text(condition.indirect_ref)} == {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareNe):
-            return f"{_indirect_ref_text(condition.indirect_ref)} != {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareLt):
-            return f"{_indirect_ref_text(condition.indirect_ref)} < {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareLe):
-            return f"{_indirect_ref_text(condition.indirect_ref)} <= {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareGt):
-            return f"{_indirect_ref_text(condition.indirect_ref)} > {_value_text(condition.value)}"
-        if isinstance(condition, IndirectCompareGe):
-            return f"{_indirect_ref_text(condition.indirect_ref)} >= {_value_text(condition.value)}"
-        if isinstance(condition, ExprCompareEq):
-            return f"{condition.left!r} == {condition.right!r}"
-        if isinstance(condition, ExprCompareNe):
-            return f"{condition.left!r} != {condition.right!r}"
-        if isinstance(condition, ExprCompareLt):
-            return f"{condition.left!r} < {condition.right!r}"
-        if isinstance(condition, ExprCompareLe):
-            return f"{condition.left!r} <= {condition.right!r}"
-        if isinstance(condition, ExprCompareGt):
-            return f"{condition.left!r} > {condition.right!r}"
-        if isinstance(condition, ExprCompareGe):
-            return f"{condition.left!r} >= {condition.right!r}"
+        condition_type_name = type(condition).__name__
+        direct_op = _DIRECT_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
+        if direct_op is not None:
+            return f"{condition.tag.name} {direct_op} {_value_text(condition.value)}"
+        indirect_op = _INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
+        if indirect_op is not None:
+            return (
+                f"{_indirect_ref_text(condition.indirect_ref)} "
+                f"{indirect_op} {_value_text(condition.value)}"
+            )
+        expr_op = _EXPR_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
+        if expr_op is not None:
+            return f"{condition.left!r} {expr_op} {condition.right!r}"
         if isinstance(condition, AllCondition):
             terms = " & ".join(self._condition_expression(child) for child in condition.conditions)
             return f"({terms})"
