@@ -14,9 +14,9 @@ from pyrung.core import (
     TagType,
     branch,
     call,
+    copy,
     count_down,
     count_up,
-    copy,
     on_delay,
     out,
     return_,
@@ -317,14 +317,14 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
 
     for step in instruction_steps:
         assert step.trace is not None
-        regions = step.trace["regions"]
+        regions = step.trace.regions
         assert len(regions) == 1
         region = regions[0]
-        assert region["kind"] == "instruction"
-        assert region["source_line"] == step.source_line
-        assert region["end_line"] == step.source_line
-        conditions = region["conditions"]
+        assert region.kind == "instruction"
+        assert region.source.source_line == step.source_line
+        assert region.source.end_line == step.source_line
+        conditions = region.conditions
         assert len(conditions) == 1
         condition = conditions[0]
-        assert condition["source_line"] == step.source_line
-        assert isinstance(condition["expression"], str) and condition["expression"]
+        assert condition.source_line == step.source_line
+        assert isinstance(condition.expression, str) and condition.expression

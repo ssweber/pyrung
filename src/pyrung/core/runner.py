@@ -11,13 +11,14 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
+from pyrung.core.debug_trace import TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
@@ -48,7 +49,7 @@ class ScanStep:
     source_line: int | None
     end_line: int | None
     enabled_state: Literal["enabled", "disabled_local", "disabled_parent"] | None
-    trace: dict[str, Any] | None
+    trace: TraceEvent | None
     instruction_kind: str | None
 
 
@@ -273,6 +274,42 @@ class PLCRunner:
     def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle and yield at top-level, branch, and subroutine boundaries."""
         yield from self._debugger.scan_steps_debug(self)
+
+    def prepare_scan(self) -> tuple[ScanContext, float]:
+        """Debugger-facing scan preparation API."""
+        return self._prepare_scan()
+
+    def commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        """Debugger-facing scan commit API."""
+        self._commit_scan(ctx, dt)
+
+    def iter_top_level_rungs(self) -> Iterable[Rung]:
+        """Debugger-facing top-level rung iterator."""
+        return self._logic
+
+    def evaluate_condition_value(
+        self,
+        condition: Any,
+        ctx: ScanContext,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Debugger-facing condition evaluation API."""
+        return self._evaluate_condition_value(condition, ctx)
+
+    def condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
+        """Debugger-facing condition summary API."""
+        return self._condition_term_text(condition, details)
+
+    def condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
+        """Debugger-facing annotation API."""
+        return self._condition_annotation(
+            status=status,
+            expression=expression,
+            summary=summary,
+        )
+
+    def condition_expression(self, condition: Any) -> str:
+        """Debugger-facing expression rendering API."""
+        return self._condition_expression(condition)
 
     def _evaluate_condition_value(
         self,

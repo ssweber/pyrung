@@ -14,6 +14,7 @@ from typing import Any, BinaryIO
 
 from pyrung.core import PLCRunner, Program
 from pyrung.core.context import ScanContext
+from pyrung.core.debug_trace import TraceEvent
 from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
@@ -803,57 +804,114 @@ class DAPAdapter:
         step = self._current_step
         if step is None:
             return None
-        trace = step.trace or {}
-        regions: list[dict[str, Any]] = []
-        for region in trace.get("regions", []):
-            source_file = region.get("source_file")
-            source_body = None
-            source_path = (
-                self._canonical_path(source_file) if isinstance(source_file, str) else None
-            )
-            if source_path:
-                source_body = {"name": Path(source_path).name, "path": source_path}
 
-            conditions: list[dict[str, Any]] = []
-            for cond in region.get("conditions", []):
-                cond_source = None
-                cond_file = cond.get("source_file")
-                cond_path = self._canonical_path(cond_file) if isinstance(cond_file, str) else None
-                if cond_path:
-                    cond_source = {"name": Path(cond_path).name, "path": cond_path}
-                details = []
-                for detail in cond.get("details", []):
-                    if not isinstance(detail, dict):
-                        continue
-                    details.append(
+        regions: list[dict[str, Any]] = []
+        trace = step.trace
+        if isinstance(trace, TraceEvent):
+            for region in trace.regions:
+                source_body = None
+                source_path = (
+                    self._canonical_path(region.source.source_file)
+                    if isinstance(region.source.source_file, str)
+                    else None
+                )
+                if source_path:
+                    source_body = {"name": Path(source_path).name, "path": source_path}
+
+                conditions: list[dict[str, Any]] = []
+                for cond in region.conditions:
+                    cond_source = None
+                    cond_path = (
+                        self._canonical_path(cond.source_file)
+                        if isinstance(cond.source_file, str)
+                        else None
+                    )
+                    if cond_path:
+                        cond_source = {"name": Path(cond_path).name, "path": cond_path}
+                    details = [
                         {
                             "name": str(detail.get("name", "")),
                             "value": self._format_value(detail.get("value")),
                         }
+                        for detail in cond.details
+                        if isinstance(detail, dict)
+                    ]
+                    conditions.append(
+                        {
+                            "source": cond_source,
+                            "line": cond.source_line,
+                            "expression": cond.expression,
+                            "status": cond.status,
+                            "value": cond.value,
+                            "details": details,
+                            "summary": cond.summary,
+                            "annotation": cond.annotation,
+                        }
                     )
-                conditions.append(
+
+                regions.append(
                     {
-                        "source": cond_source,
-                        "line": cond.get("source_line"),
-                        "expression": cond.get("expression"),
-                        "status": cond.get("status"),
-                        "value": cond.get("value"),
-                        "details": details,
-                        "summary": cond.get("summary"),
-                        "annotation": cond.get("annotation"),
+                        "kind": region.kind,
+                        "enabledState": region.enabled_state,
+                        "source": source_body,
+                        "line": region.source.source_line,
+                        "endLine": region.source.end_line,
+                        "conditions": conditions,
                     }
                 )
+        else:
+            trace_dict = trace if isinstance(trace, dict) else {}
+            for region in trace_dict.get("regions", []):
+                source_file = region.get("source_file")
+                source_body = None
+                source_path = (
+                    self._canonical_path(source_file) if isinstance(source_file, str) else None
+                )
+                if source_path:
+                    source_body = {"name": Path(source_path).name, "path": source_path}
 
-            regions.append(
-                {
-                    "kind": region.get("kind"),
-                    "enabledState": region.get("enabled_state"),
-                    "source": source_body,
-                    "line": region.get("source_line"),
-                    "endLine": region.get("end_line"),
-                    "conditions": conditions,
-                }
-            )
+                conditions: list[dict[str, Any]] = []
+                for cond in region.get("conditions", []):
+                    cond_source = None
+                    cond_file = cond.get("source_file")
+                    cond_path = (
+                        self._canonical_path(cond_file) if isinstance(cond_file, str) else None
+                    )
+                    if cond_path:
+                        cond_source = {"name": Path(cond_path).name, "path": cond_path}
+                    details = []
+                    for detail in cond.get("details", []):
+                        if not isinstance(detail, dict):
+                            continue
+                        details.append(
+                            {
+                                "name": str(detail.get("name", "")),
+                                "value": self._format_value(detail.get("value")),
+                            }
+                        )
+                    conditions.append(
+                        {
+                            "source": cond_source,
+                            "line": cond.get("source_line"),
+                            "expression": cond.get("expression"),
+                            "status": cond.get("status"),
+                            "value": cond.get("value"),
+                            "details": details,
+                            "summary": cond.get("summary"),
+                            "annotation": cond.get("annotation"),
+                        }
+                    )
+
+                regions.append(
+                    {
+                        "kind": region.get("kind"),
+                        "enabledState": region.get("enabled_state"),
+                        "source": source_body,
+                        "line": region.get("source_line"),
+                        "endLine": region.get("end_line"),
+                        "conditions": conditions,
+                    }
+                )
 
         step_source = None
         step_source_file = step.source_file or step.rung.source_file
