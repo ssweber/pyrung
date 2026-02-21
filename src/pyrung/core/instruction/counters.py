@@ -20,17 +20,27 @@ if TYPE_CHECKING:
 
 
 class CountUpInstruction(Instruction):
-    """Count Up (CTU) instruction.
+    """Count-Up (CTU) — and optionally bidirectional — counter.
 
-    Terminal instruction that always executes and checks conditions independently:
-    - UP condition: Increments accumulator EVERY SCAN when true
-    - DOWN condition (optional): Decrements accumulator EVERY SCAN when true
-    - RESET condition: Clears done bit and accumulator
+    Increments the accumulator every scan the rung is True.  Optionally
+    decrements when a separate down condition is True (bidirectional counter).
 
-    Click-specific:
-    - Accumulator stored in CTD bank (DINT / 32-bit signed)
-    - Done bit in CT bank
-    - NOT edge-triggered - counts every scan while condition is true
+    .. warning::
+        Not edge-triggered. The accumulator advances by one per scan while
+        the enable condition is True.  Wrap `rise()` around the rung condition
+        to count leading edges instead.
+
+    - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
+    - Done bit: True when acc ≥ setpoint.
+    - Reset condition: clears acc to 0 and done to False (level-sensitive).
+
+    Args:
+        done_bit: BOOL tag set when acc ≥ setpoint.
+        accumulator: DINT tag storing the current count.
+        setpoint: Target count (constant or DINT tag).
+        up_condition: Rung power condition (injected automatically by DSL).
+        reset_condition: Tag or condition that resets acc and done.
+        down_condition: Optional tag or condition for bidirectional counting.
     """
 
     ALWAYS_EXECUTES = True
@@ -89,18 +99,25 @@ class CountUpInstruction(Instruction):
 
 
 class CountDownInstruction(Instruction):
-    """Count Down (CTD) instruction.
+    """Count-Down (CTD) counter.
 
-    Terminal instruction that always executes and checks conditions independently:
-    - DOWN condition: Decrements accumulator EVERY SCAN when true (starts at 0, goes negative)
-    - RESET condition: Clears accumulator to 0 and clears done bit
+    Decrements the accumulator every scan the rung is True.  The accumulator
+    starts at 0 and counts negative; done = True when acc ≤ −setpoint.
 
-    Click-specific:
-    - Accumulator stored in CTD bank (DINT / 32-bit signed)
-    - Done bit in CT bank
-    - NOT edge-triggered - counts every scan while condition is true
-    - Starts at 0 and counts down to negative values
-    - Done bit activates when acc <= -setpoint
+    .. warning::
+        Not edge-triggered. The accumulator decrements by one per scan while
+        the enable condition is True.  Wrap `rise()` around the rung condition
+        to count leading edges instead.
+
+    - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
+    - Reset condition: resets acc to 0 and done to False (level-sensitive).
+
+    Args:
+        done_bit: BOOL tag set when acc ≤ −setpoint.
+        accumulator: DINT tag storing the current (negative) count.
+        setpoint: Target magnitude (positive constant or DINT tag).
+        down_condition: Rung power condition (injected automatically by DSL).
+        reset_condition: Tag or condition that resets acc and done.
     """
 
     ALWAYS_EXECUTES = True

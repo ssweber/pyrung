@@ -247,7 +247,62 @@ def _format_default(value: object, tag_type: TagType) -> str:
 
 
 class TagMap:
-    """Maps logical Tags/Blocks to Click hardware addresses."""
+    """Maps logical Tags and Blocks to Click hardware addresses.
+
+    `TagMap` is the pivot of the Click dialect.  It links semantic tags (which
+    have no hardware knowledge) to concrete Click addresses, and drives
+    nickname file round-trips and validation.
+
+    **Constructing from a dict** — map individual tags and entire blocks:
+
+    .. code-block:: python
+
+        from pyrung.click import TagMap, x, y, c, ds
+
+        mapping = TagMap({
+            StartButton:  x[1],              # Tag → Tag (BOOL → X001)
+            Motor:        y[1],              # Tag → Tag (BOOL → Y001)
+            Alarms:       c.select(1, 100),  # Block → BlockRange
+            Speed:        ds[1],             # Tag → Tag (INT → DS1)
+        })
+
+    **From a Click nickname CSV file:**
+
+    .. code-block:: python
+
+        mapping = TagMap.from_nickname_file("project.csv")
+
+    **Exporting back to CSV:**
+
+    .. code-block:: python
+
+        mapping.to_nickname_file("project.csv")
+
+    **Validating a program:**
+
+    .. code-block:: python
+
+        report = mapping.validate(logic, mode="warn")
+        print(report.summary())
+
+    **Resolving a logical tag to its hardware address:**
+
+    .. code-block:: python
+
+        mapping.resolve(Speed)              # "DS1"
+        mapping.resolve(Alarms, index=5)   # "C5"
+
+    Type compatibility is validated at construction time — mapping a BOOL tag
+    to a DS address (INT) raises ``ValueError``.  Hardware address conflicts
+    (two logical tags mapped to the same Click address) also raise
+    ``ValueError``.
+
+    Args:
+        mappings: ``dict[Tag | Block, Tag | BlockRange]``,
+            ``Iterable[MappingEntry]``, or ``None`` for an empty map.
+        include_system: Whether to include built-in system tag mappings
+            (SC/SD points). Default ``True``.
+    """
 
     def __init__(
         self,
@@ -377,7 +432,29 @@ class TagMap:
 
     @classmethod
     def from_nickname_file(cls, path: str | Path) -> TagMap:
-        """Build a TagMap from a Click nickname CSV file."""
+        """Build a `TagMap` from a Click nickname CSV file.
+
+        Reads the CSV produced by Click Programming Software and reconstructs
+        logical-to-hardware mappings:
+
+        - **Block tag pairs** (rows with ``<Name>`` / ``</Name>`` comments) →
+          ``Block`` objects mapped to hardware ranges.
+        - **Standalone nicknames** → individual ``Tag`` objects.
+        - ``_D`` suffix pairs (timer/counter accumulators) are linked
+          automatically.
+        - Initial values and retentive flags are preserved.
+
+        Args:
+            path: Path to the Click nickname CSV file.
+
+        Returns:
+            A `TagMap` ready for use with `validate()` and `to_nickname_file()`.
+
+        Raises:
+            FileNotFoundError: If the path does not exist.
+            ValueError: If the CSV contains conflicting block boundaries or
+                mismatched memory types.
+        """
         records = pyclickplc.read_csv(path)
         rows = sorted(
             records.values(),
@@ -470,7 +547,19 @@ class TagMap:
         return tag_map
 
     def to_nickname_file(self, path: str | Path) -> int:
-        """Write only mapped addresses to a Click nickname CSV file."""
+        """Write mapped addresses to a Click nickname CSV file.
+
+        Emits one row per mapped hardware address.  Block entries produce
+        rows with ``<Name>`` / ``</Name>`` comment markers that Click
+        Programming Software can parse as block tag groups.  Unmapped
+        addresses are omitted.
+
+        Args:
+            path: Destination CSV path. Parent directories must exist.
+
+        Returns:
+            Number of rows written.
+        """
         records: dict[int, AddressRecord] = {}
 
         for entry in self._tag_entries_tuple:

@@ -464,6 +464,7 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
+
         def _build_instruction() -> OnDelayInstruction:
             instr = OnDelayInstruction(
                 self._done_bit,

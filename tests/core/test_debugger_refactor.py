@@ -128,7 +128,9 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
         def iter_top_level_rungs(self) -> Any:
             return self._inner.iter_top_level_rungs()
 
-        def evaluate_condition_value(self, condition: Any, ctx: Any) -> tuple[bool, list[dict[str, Any]]]:
+        def evaluate_condition_value(
+            self, condition: Any, ctx: Any
+        ) -> tuple[bool, list[dict[str, Any]]]:
             return self._inner.evaluate_condition_value(condition, ctx)
 
         def condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:

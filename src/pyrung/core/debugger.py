@@ -148,7 +148,9 @@ class PLCDebugger:
                 if isinstance(item, RungClass):
                     branch_enabled = branch_enable_map.get(id(item), False)
                     branch_trace = branch_trace_map.get(id(item))
-                    child_conditions = list(branch_trace.conditions) if branch_trace is not None else []
+                    child_conditions = (
+                        list(branch_trace.conditions) if branch_trace is not None else []
+                    )
                     child_execution = execution.with_overrides(
                         kind="branch",
                         depth=execution.depth + 1,
@@ -557,7 +559,8 @@ class PLCDebugger:
             else:
                 local_enabled = False
                 local_traces = [
-                    self._skipped_condition_trace(execution.runner, cond) for cond in local_conditions
+                    self._skipped_condition_trace(execution.runner, cond)
+                    for cond in local_conditions
                 ]
                 branch_state = "disabled_parent"
             branch_enable_map[id(item)] = local_enabled

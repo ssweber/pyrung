@@ -37,7 +37,39 @@ _MIRRORED_WORD_BANKS: dict[str, str] = {"XD": "X", "YD": "Y"}
 
 
 class ClickDataProvider:
-    """DataProvider bridge that serves mapped addresses from PLCRunner state."""
+    """Bridges ``PLCRunner`` state to the ``pyclickplc`` ``DataProvider`` protocol.
+
+    Implements the ``DataProvider`` interface so pyrung can act as a soft PLC
+    accessible over Modbus TCP via ``pyclickplc.server.ClickServer``.
+
+    - **Reads** return the current committed ``SystemState.tags`` value for the
+      mapped logical tag.
+    - **Writes** queue a ``runner.patch()`` so the new value takes effect at
+      the start of the next scan.
+    - Unmapped addresses fall through to an optional `fallback` provider.
+
+    **XD / YD word-image mirroring:**
+
+    - ``XD*`` reads are computed from the current X bit image (16 bits per slot).
+    - ``YD*`` reads are computed from the current Y bit image.
+    - ``YD*`` writes fan out to the corresponding Y bit tags via ``runner.patch()``.
+    - ``XD*`` writes are rejected (read-only).
+
+    Args:
+        runner: The active ``PLCRunner`` whose state is served.
+        tag_map: Mapping from logical tag names to Click hardware addresses.
+        fallback: Optional provider for unmapped addresses.
+            Defaults to an in-memory provider.
+
+    Example:
+        .. code-block:: python
+
+            from pyrung.click import ClickDataProvider
+            from pyclickplc.server import ClickServer
+
+            provider = ClickDataProvider(runner, tag_map=mapping)
+            server = ClickServer(provider, port=502)
+    """
 
     def __init__(
         self,

@@ -191,7 +191,23 @@ class Tag:
 
     @property
     def value(self) -> Any:
-        """Read/write value through the currently active runner context."""
+        """Read or write this tag's value through the active runner scope.
+
+        Returns the current value as seen by the runner, including any pending
+        patches or forces. Writes are staged as one-shot patches consumed at
+        the next `step()`.
+
+        Raises:
+            RuntimeError: If called outside `with runner.active(): ...`.
+
+        Example:
+            ```python
+            runner = PLCRunner(logic)
+            with runner.active():
+                print(StartButton.value)    # read current value
+                StartButton.value = True    # queue for next scan
+            ```
+        """
         runner = _require_active_runner(self.name)
         return runner._peek_live_tag_value(self.name, self.default)
 
@@ -458,7 +474,17 @@ def _require_active_runner(tag_name: str):
 
 
 class LiveTag(Tag):
-    """Tag with runner-bound staged value access via .value."""
+    """Tag with runner-bound staged value access via `.value`.
+
+    `LiveTag` is the concrete type returned by all IEC constructor functions
+    (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) and by block indexing.
+    It extends `Tag` with the `.value` property, which provides read/write
+    access to the current runner state.
+
+    Note:
+        `.value` requires an active runner scope. Access outside
+        `with runner.active(): ...` raises `RuntimeError`.
+    """
 
 
 @dataclass(frozen=True)
@@ -474,27 +500,61 @@ class ImmediateRef:
 
 @dataclass(frozen=True)
 class InputTag(Tag):
-    """Tag representing a physical input.
+    """Tag representing a physical input channel.
 
-    InputTags have an .immediate property to access the physical
-    input value directly, bypassing the input image table.
+    `InputTag` instances are produced exclusively by indexing an `InputBlock`.
+    They add the `.immediate` property for bypassing the scan-cycle image table.
+
+    `.immediate` semantics by context:
+
+    - **Simulation (pure):** validation-time annotation only; no runtime effect.
+    - **Click dialect:** transcription hint for Click software export.
+    - **CircuitPython dialect:** generates direct hardware-read code.
+    - **Hardware-in-the-loop:** triggers a real hardware read mid-scan.
+
+    You cannot create an `InputTag` directly; use `InputBlock[n]` instead.
+
+    Example:
+        ```python
+        X = InputBlock("X", TagType.BOOL, 1, 16)
+        sensor = X[3]          # LiveInputTag
+        sensor.immediate       # ImmediateRef — bypass image table
+        ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
+        """Return an ImmediateRef that bypasses the input image table."""
         return ImmediateRef(self)
 
 
 @dataclass(frozen=True)
 class OutputTag(Tag):
-    """Tag representing a physical output.
+    """Tag representing a physical output channel.
 
-    OutputTags have an .immediate property to access the physical
-    output value directly, bypassing the output image table.
+    `OutputTag` instances are produced exclusively by indexing an `OutputBlock`.
+    They add the `.immediate` property for bypassing the scan-cycle image table.
+
+    `.immediate` semantics by context:
+
+    - **Simulation (pure):** validation-time annotation only; no runtime effect.
+    - **Click dialect:** transcription hint for Click software export.
+    - **CircuitPython dialect:** generates direct hardware-write code.
+    - **Hardware-in-the-loop:** triggers a real hardware write mid-scan.
+
+    You cannot create an `OutputTag` directly; use `OutputBlock[n]` instead.
+
+    Example:
+        ```python
+        Y = OutputBlock("Y", TagType.BOOL, 1, 16)
+        valve = Y[1]           # LiveOutputTag
+        valve.immediate        # ImmediateRef — bypass image table
+        ```
     """
 
     @property
     def immediate(self) -> ImmediateRef:
+        """Return an ImmediateRef that bypasses the output image table."""
         return ImmediateRef(self)
 
 
@@ -533,7 +593,45 @@ class _AutoTagDecl:
 
 
 class TagNamespace:
-    """Base class for opt-in class-based auto tag naming declarations."""
+    """Base class for class-body auto-naming of tags.
+
+    Subclass `TagNamespace` and declare tags using the type constructors
+    without a name argument. The attribute name is used as the tag name
+    automatically. This is equivalent to ``Bool("Start")`` but removes
+    the string duplication.
+
+    Note:
+        ``TagNamespace`` is not exported from ``pyrung``'s top-level
+        ``__all__``. Import it explicitly::
+
+            from pyrung.core import TagNamespace
+
+    Example:
+        ```python
+        from pyrung.core import TagNamespace
+        from pyrung import Bool, Int, Real
+
+        class Tags(TagNamespace):
+            Start    = Bool()
+            Stop     = Bool()
+            Step     = Int(retentive=True)
+            Setpoint = Real()
+
+        # Access tags via the class:
+        with Rung(Tags.Start):
+            latch(Tags.Stop)
+
+        # Or unpack for convenience:
+        Start, Stop, Step = Tags.Start, Tags.Stop, Tags.Step
+        ```
+
+    Tag constructors called *outside* a `TagNamespace` class body without a
+    name raise `TypeError`. Explicit naming (``Bool("Start")``) is always
+    valid and is the canonical cross-context form.
+
+    Duplicate tag names across the class hierarchy are detected at class
+    definition time and raise `ValueError`.
+    """
 
     _PYRUNG_IS_TAG_NAMESPACE = True
     __pyrung_tags__: dict[str, LiveTag] = cast(dict[str, LiveTag], MappingProxyType({}))
@@ -653,30 +751,100 @@ class _TagTypeBase(LiveTag):
 
 
 class Bool(_TagTypeBase):
+    """Create a BOOL (1-bit boolean) tag.
+
+    Not retentive by default — resets to `False` on power cycle.
+
+    Example:
+        ```python
+        Button = Bool("Button")
+        Light  = Bool("Light", retentive=True)
+
+        # In a TagNamespace class body (auto-named):
+        class Tags(TagNamespace):
+            Start = Bool()
+        ```
+    """
+
     _tag_type = TagType.BOOL
     _default_retentive = False
 
 
 class Int(_TagTypeBase):
+    """Create an INT (16-bit signed integer, −32768 to 32767) tag.
+
+    Retentive by default — survives power cycles.
+
+    Example:
+        ```python
+        Step     = Int("Step")
+        Setpoint = Int("Setpoint", retentive=False)
+        ```
+    """
+
     _tag_type = TagType.INT
     _default_retentive = True
 
 
 class Dint(_TagTypeBase):
+    """Create a DINT (32-bit signed integer, ±2 147 483 647) tag.
+
+    Retentive by default. Use for counters or values that exceed INT range.
+
+    Example:
+        ```python
+        TotalCount = Dint("TotalCount")
+        ```
+    """
+
     _tag_type = TagType.DINT
     _default_retentive = True
 
 
 class Real(_TagTypeBase):
+    """Create a REAL (32-bit IEEE 754 float) tag.
+
+    Retentive by default. Use for analog setpoints and process values.
+
+    Example:
+        ```python
+        Temperature = Real("Temperature")
+        FlowRate    = Real("FlowRate", retentive=False)
+        ```
+    """
+
     _tag_type = TagType.REAL
     _default_retentive = True
 
 
 class Word(_TagTypeBase):
+    """Create a WORD (16-bit unsigned integer, 0x0000–0xFFFF) tag.
+
+    Not retentive by default. Use for bit-packed status registers or hex values.
+    In the Click dialect, `Hex` is an alias for `Word`.
+
+    Example:
+        ```python
+        StatusWord = Word("StatusWord")
+        ```
+    """
+
     _tag_type = TagType.WORD
     _default_retentive = False
 
 
 class Char(_TagTypeBase):
+    """Create a CHAR (8-bit ASCII character) tag.
+
+    Retentive by default. Use for single-character text values.
+    For multi-character strings, use a `Block` of `CHAR` tags.
+    In the Click dialect, `Txt` is an alias for `Char`.
+
+    Example:
+        ```python
+        ModeChar = Char("ModeChar")
+        ```
+    """
+
     _tag_type = TagType.CHAR
     _default_retentive = True

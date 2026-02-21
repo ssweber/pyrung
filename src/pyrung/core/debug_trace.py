@@ -80,4 +80,3 @@ class TraceEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return {"regions": [region.to_dict() for region in self.regions]}
-

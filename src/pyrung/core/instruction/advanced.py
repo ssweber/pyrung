@@ -33,12 +33,32 @@ _SEARCH_OPERATOR_MAP = {
 
 
 class SearchInstruction(OneShotMixin, Instruction):
-    """Search instruction.
+    """Scan a block range for the first element matching a condition (SRCH).
 
-    Scans a selected range for the first value (or text window) matching
-    the given condition and writes:
-    - result: matched address, or -1 on miss
-    - found: True on hit, False on miss
+    Walks the tags in `search_range` in address order and writes the address
+    of the first match to `result`, or −1 on miss.  `found` is True on hit,
+    False on miss.
+
+    **Numeric search** — uses the selected comparison operator against a
+    constant or tag value.
+
+    **Text search** — `search_range` must be a CHAR block range.  The search
+    value is treated as a substring; only ``"=="`` and ``"!="`` are valid
+    operators.  A window of ``len(value)`` consecutive CHAR tags is compared.
+
+    **Continuous mode** — when `continuous=True`, the search resumes from the
+    address after the previous result rather than restarting each scan.
+    Set ``result = 0`` to restart, or set ``result = -1`` to signal exhaustion.
+
+    Args:
+        condition: Comparison operator string: ``"=="``, ``"!="`, ``"<"``,
+            ``"<="`, ``">"``, or ``">="`.
+        value: Value to compare against (constant, Tag, or Expression).
+        search_range: `BlockRange` or `IndirectBlockRange` from `.select()`.
+        result: INT or DINT tag to receive the matched address (or −1).
+        found: BOOL tag set True on hit, False on miss.
+        continuous: Resume from previous result position. Default False.
+        oneshot: Execute only on rung rising edge. Default False.
     """
 
     def __init__(
@@ -206,12 +226,28 @@ class SearchInstruction(OneShotMixin, Instruction):
 
 
 class ShiftInstruction(Instruction):
-    """Shift register instruction.
+    """Shift register — shift a BOOL range on a clock edge (SHR/SHL).
 
-    Terminal instruction that always executes and checks:
-    - data condition (rung combined condition) for inserted bit value
-    - clock condition for OFF->ON edge shift trigger
-    - reset condition (level) to clear all bits in the range
+    On each rising edge of the clock condition, shifts all bits one position
+    and inserts the rung's combined condition (the data bit) at position [0].
+
+    - **Data bit** — the combined rung condition at execution time.
+    - **Clock** — shift fires on OFF→ON edge (rising edge, not level).
+    - **Reset** — level-sensitive: clears all bits in the range to False
+      while True.
+
+    Direction is determined by the range order:
+
+    - ``C.select(1, 8)`` → shifts low-to-high (data at C1, exits at C8).
+    - ``C.select(8, 1).reverse()`` → shifts high-to-low.
+
+    The `bit_range` must contain only BOOL tags.
+
+    Args:
+        bit_range: `BlockRange` or `IndirectBlockRange` from `.select()`.
+        data_condition: Combined rung condition (injected by DSL).
+        clock_condition: Tag or condition whose rising edge triggers the shift.
+        reset_condition: Tag or condition that clears all bits (level-sensitive).
     """
 
     ALWAYS_EXECUTES = True

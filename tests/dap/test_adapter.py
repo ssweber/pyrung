@@ -120,11 +120,7 @@ def _unconditional_script() -> str:
 
 
 def _empty_logic_runner_script() -> str:
-    return (
-        "from pyrung.core import PLCRunner\n"
-        "\n"
-        "runner = PLCRunner()\n"
-    )
+    return "from pyrung.core import PLCRunner\n\nrunner = PLCRunner()\n"
 
 
 def _composite_condition_script() -> str:
@@ -404,7 +400,9 @@ def test_initialize_advertises_capabilities():
     assert body["supportsStepBack"] is False
     assert body["supportsStepOut"] is True
     assert body["supportsTerminateRequest"] is True
-    initialized = [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "initialized"]
+    initialized = [
+        msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "initialized"
+    ]
     assert initialized
 
 
@@ -415,7 +413,9 @@ def test_terminate_stops_adapter_and_emits_terminated_event():
     messages = _send_request(adapter, out_stream, seq=1, command="terminate")
     response = _single_response(messages)
     assert response["success"] is True
-    terminated = [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "terminated"]
+    terminated = [
+        msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "terminated"
+    ]
     assert terminated
     assert adapter._stop_event.is_set() is True
     assert adapter._pause_event.is_set() is True
@@ -683,9 +683,15 @@ def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_li
         ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, setpoint=5)")),
         ("Count Down", _line_number(script, "cu_builder = cu_builder.down(Down)")),
         ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
-        ("Count Down", _line_number(script, "cd_builder = count_down(DoneDown, AccDown, setpoint=5)")),
+        (
+            "Count Down",
+            _line_number(script, "cd_builder = count_down(DoneDown, AccDown, setpoint=5)"),
+        ),
         ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
-        ("Enable", _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)")),
+        (
+            "Enable",
+            _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)"),
+        ),
         ("Reset", _line_number(script, "timer_builder.reset(Reset)")),
         ("Data", _line_number(script, "shift_builder = shift(C.select(1, 3))")),
         ("Clock", _line_number(script, "shift_builder = shift_builder.clock(Clock)")),

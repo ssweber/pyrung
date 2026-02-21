@@ -132,7 +132,9 @@ class ConditionTraceEngine:
         return value, [self._detail("tag", condition.tag.name), self._detail("value", value)]
 
     @_evaluate.register
-    def _(self, condition: IntTruthyCondition, ctx: ScanContext) -> tuple[bool, list[dict[str, Any]]]:
+    def _(
+        self, condition: IntTruthyCondition, ctx: ScanContext
+    ) -> tuple[bool, list[dict[str, Any]]]:
         raw = ctx.get_tag(condition.tag.name, condition.tag.default)
         value = int(raw) != 0
         return value, [self._detail("tag", condition.tag.name), self._detail("value", raw)]
@@ -207,7 +209,9 @@ class ConditionTraceEngine:
         pointer_name = condition.indirect_ref.pointer.name
         pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
         extra_details = [
-            self._detail("left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"),
+            self._detail(
+                "left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"
+            ),
             self._detail("left_pointer", pointer_name),
             self._detail("left_pointer_value", pointer_value),
         ]

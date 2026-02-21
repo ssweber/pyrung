@@ -1,4 +1,81 @@
-"""Click-style constructor aliases and prebuilt memory blocks."""
+"""Click PLC dialect for pyrung.
+
+This module adds Click-hardware-specific building blocks on top of the
+hardware-agnostic ``pyrung`` core:
+
+**Pre-built blocks** (constructed from ``pyclickplc`` bank metadata):
+
++--------+---------------------+---------+-----------+
+| Name   | Click bank          | Type    | Kind      |
++========+=====================+=========+===========+
+| ``x``  | X (digital inputs)  | BOOL    | InputBlock|
++--------+---------------------+---------+-----------+
+| ``y``  | Y (digital outputs) | BOOL    | OutputBlock|
++--------+---------------------+---------+-----------+
+| ``c``  | C (bit memory)      | BOOL    | Block     |
++--------+---------------------+---------+-----------+
+| ``ds`` | DS (INT memory)     | INT     | Block     |
++--------+---------------------+---------+-----------+
+| ``dd`` | DD (DINT memory)    | DINT    | Block     |
++--------+---------------------+---------+-----------+
+| ``dh`` | DH (WORD memory)    | WORD    | Block     |
++--------+---------------------+---------+-----------+
+| ``df`` | DF (REAL memory)    | REAL    | Block     |
++--------+---------------------+---------+-----------+
+| ``t``  | T (timer done bits) | BOOL    | Block     |
++--------+---------------------+---------+-----------+
+| ``td`` | TD (timer acc)      | INT     | Block     |
++--------+---------------------+---------+-----------+
+| ``ct`` | CT (counter done)   | BOOL    | Block     |
++--------+---------------------+---------+-----------+
+| ``ctd``| CTD (counter acc)   | DINT    | Block     |
++--------+---------------------+---------+-----------+
+| ``sc`` | SC (system control) | BOOL    | Block     |
++--------+---------------------+---------+-----------+
+| ``sd`` | SD (system data)    | INT     | Block     |
++--------+---------------------+---------+-----------+
+| ``txt``| TXT (text memory)   | CHAR    | Block     |
++--------+---------------------+---------+-----------+
+| ``xd`` | XD (input words)    | WORD    | InputBlock|
++--------+---------------------+---------+-----------+
+| ``yd`` | YD (output words)   | WORD    | OutputBlock|
++--------+---------------------+---------+-----------+
+
+**Type aliases** (Click-familiar names for IEC constructors):
+
+- ``Bit = Bool``
+- ``Int2 = Dint``
+- ``Float = Real``
+- ``Hex = Word``
+- ``Txt = Char``
+
+**Mapping and validation:**
+
+- :class:`TagMap` — maps logical Tags/Blocks to Click hardware addresses.
+- :func:`validate_click_program` — checks a Program against Click hardware restrictions.
+
+**Soft PLC adapter:**
+
+- :class:`ClickDataProvider` — bridges ``SystemState`` to pyclickplc's Modbus server.
+
+**Communication instructions:**
+
+- :func:`send` / :func:`receive` — Modbus TCP communication between Click PLCs.
+
+Typical usage::
+
+    from pyrung import *
+    from pyrung.click import x, y, ds, TagMap
+
+    Button = Bool("Button")
+    Light  = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Button):
+            out(Light)
+
+    mapping = TagMap({Button: x[1], Light: y[1]})
+"""
 
 from typing import Any, cast
 

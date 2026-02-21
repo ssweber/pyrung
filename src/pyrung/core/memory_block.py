@@ -37,17 +37,48 @@ if TYPE_CHECKING:
 class Block:
     """Factory for creating Tags from a typed memory region.
 
-    Block defines a named region of memory with:
-    - Consistent type for all addresses
-    - Inclusive address bounds [start, end]
-    - Default retentive behavior
+    `Block` defines a named, 1-indexed memory region where every address shares
+    the same `TagType`. Indexing a `Block` returns a cached `LiveTag`. The block
+    holds no runtime values — all values live in `SystemState.tags`.
 
-    Attributes:
-        name: Block prefix (e.g., "DS", "DD", "C").
-        type: TagType for all tags in this block.
-        start: Inclusive lower bound address.
-        end: Inclusive upper bound address.
-        retentive: Default retentive setting for tags. Default False.
+    Address bounds are **inclusive** on both ends: `Block("DS", INT, 1, 100)`
+    defines addresses 1–100 (100 tags). Indexing outside this range raises
+    `IndexError`. Slice syntax (`block[1:10]`) is rejected — use
+    `.select(start, end)` instead.
+
+    For sparse blocks (e.g. Click X/Y banks with non-contiguous valid addresses),
+    pass `valid_ranges` to restrict which addresses within `[start, end]` are
+    legal.
+
+    Args:
+        name: Block prefix used to generate tag names (e.g. ``"DS"`` →
+            ``"DS1"``, ``"DS2"`` …).
+        type: `TagType` shared by all tags in this block.
+        start: Inclusive lower bound address (must be ≥ 0).
+        end: Inclusive upper bound address (must be ≥ start).
+        retentive: Whether tags in this block survive power cycles.
+            Default ``False``.
+        valid_ranges: Optional tuple of ``(lo, hi)`` inclusive segments
+            that constrain which addresses within ``[start, end]`` are
+            accessible. Addresses outside all segments raise `IndexError`.
+        address_formatter: Optional callable ``(block_name, addr) → str``
+            that overrides default tag name generation. Used by dialects
+            for canonical display names like ``"X001"``.
+
+    Example:
+        ```python
+        DS = Block("DS", TagType.INT, 1, 100)
+        DS[1]          # → LiveTag("DS1", TagType.INT)
+        DS[101]        # → IndexError
+
+        # Range for block operations:
+        DS.select(1, 10)   # → BlockRange, tags DS1..DS10
+
+        # Indirect (pointer) addressing:
+        idx = Int("Idx")
+        DS[idx]        # → IndirectRef, resolved at scan time
+        DS[idx + 1]    # → IndirectExprRef
+        ```
     """
 
     name: str
@@ -192,14 +223,46 @@ class Block:
     def select(
         self, start: int | Tag | Any, end: int | Tag | Any
     ) -> BlockRange | IndirectBlockRange:
-        """Select a range of addresses (inclusive bounds).
+        """Select an inclusive range of addresses for block operations.
+
+        Both `start` and `end` are **inclusive**: ``DS.select(1, 10)`` yields
+        10 tags (1, 2, … 10).  This mirrors the block constructor convention and
+        avoids the off-by-one confusion of Python's half-open slices.
+
+        For sparse blocks (`valid_ranges` set), returns only the valid addresses
+        within the window — gaps are silently skipped.
 
         Args:
-            start: Start address (int, Tag, or Expression).
-            end: End address (int, Tag, or Expression).
+            start: Start address. ``int`` for a static range; `Tag` or
+                `Expression` for a dynamically-resolved range.
+            end: End address. ``int`` for a static range; `Tag` or
+                `Expression` for a dynamically-resolved range.
 
         Returns:
-            BlockRange if both are ints, IndirectBlockRange otherwise.
+            `BlockRange` when both arguments are ``int`` (resolved at
+            definition time). `IndirectBlockRange` when either argument is a
+            `Tag` or `Expression` (resolved each scan at execution time).
+
+        Raises:
+            ValueError: If ``start > end``.
+            IndexError: If either bound is outside the block's ``[start, end]``.
+
+        Example:
+            ```python
+            # Static range
+            DS.select(1, 100)              # BlockRange, DS1..DS100
+
+            # Sparse window (Click X bank)
+            x.select(1, 21)               # valid tags only: X001..X016, X021
+
+            # Dynamic range (resolved each scan)
+            DS.select(start_tag, end_tag)  # IndirectBlockRange
+
+            # Use with bulk instructions:
+            fill(0, DS.select(1, 10))
+            blockcopy(DS.select(1, 10), DD.select(1, 10))
+            search(">=", 100, DS.select(1, 100), result=Found, found=FoundFlag)
+            ```
         """
 
         if isinstance(start, int) and isinstance(end, int):
@@ -225,9 +288,24 @@ class Block:
 
 @dataclass(eq=False)
 class InputBlock(Block):
-    """Block that creates InputTag instances for physical inputs.
+    """Factory for creating `InputTag` instances from a physical input memory region.
 
-    InputBlock always has retentive=False (inputs are not retentive).
+    `InputBlock` is identical to `Block` except:
+
+    - Indexing returns `LiveInputTag` (not `LiveTag`), so elements have `.immediate`.
+    - Always non-retentive — physical inputs do not survive power cycles.
+
+    Use `InputBlock` when the tags represent real hardware inputs (sensors,
+    switches, etc.). In simulation, values are supplied via `runner.patch()` or
+    `runner.add_force()` during the *Read Inputs* scan phase.
+
+    Example:
+        ```python
+        X = InputBlock("X", TagType.BOOL, 1, 16)
+        X[1]           # → LiveInputTag("X1", BOOL)
+        X[1].immediate # → ImmediateRef — bypass image table
+        X.select(1, 8) # → BlockRange for bulk operations
+        ```
     """
 
     def __init__(
@@ -288,9 +366,24 @@ class InputBlock(Block):
 
 @dataclass(eq=False)
 class OutputBlock(Block):
-    """Block that creates OutputTag instances for physical outputs.
+    """Factory for creating `OutputTag` instances from a physical output memory region.
 
-    OutputBlock always has retentive=False (outputs are not retentive).
+    `OutputBlock` is identical to `Block` except:
+
+    - Indexing returns `LiveOutputTag` (not `LiveTag`), so elements have `.immediate`.
+    - Always non-retentive — physical outputs do not survive power cycles.
+
+    Writes to `OutputTag` elements are immediately visible to subsequent rungs
+    within the same scan (standard PLC behavior). The actual hardware write
+    happens at the *Write Outputs* scan phase (phase 6).
+
+    Example:
+        ```python
+        Y = OutputBlock("Y", TagType.BOOL, 1, 16)
+        Y[1]           # → LiveOutputTag("Y1", BOOL)
+        Y[1].immediate # → ImmediateRef — bypass image table
+        Y.select(1, 8) # → BlockRange for bulk operations
+        ```
     """
 
     def __init__(

@@ -18,19 +18,28 @@ if TYPE_CHECKING:
 
 
 class OnDelayInstruction(Instruction):
-    """On-Delay Timer (TON/RTON) instruction.
+    """On-Delay Timer — TON (auto-reset) or RTON (manual reset).
 
-    Terminal instruction that accumulates time while enabled:
-    - ENABLE condition (rung): Timer counts while true
-    - RESET condition (optional): Clears done bit and accumulator
+    Accumulates elapsed time while the rung is True. When the accumulator
+    reaches `setpoint`, the done bit is set True.
 
-    Without reset (TON): Resets immediately when rung goes false.
-    With reset (RTON): Holds value when rung goes false, manual reset required.
+    **TON (no reset arg):**
+    Resets the accumulator and done bit immediately when the rung goes False.
 
-    Click-specific:
-    - Accumulator stored in TD bank (INT type)
-    - Done bit in T bank
-    - Accumulator updates immediately (mid-scan visible)
+    **RTON (`.reset(tag)` provided):**
+    Holds the accumulator and done bit when the rung goes False.
+    The reset condition clears both regardless of rung state.
+
+    The accumulator is an INT tag (max 32 767). It clamps at the maximum and
+    never overflows. `setpoint` may be an INT tag (dynamic) or a constant.
+
+    Args:
+        done_bit: BOOL tag set when acc ≥ setpoint.
+        accumulator: INT tag storing elapsed time in the selected `time_unit`.
+        setpoint: Target value (constant or INT tag).
+        enable_condition: Rung power condition (injected automatically by DSL).
+        reset_condition: Optional condition to reset acc+done (creates RTON).
+        time_unit: Time unit for accumulator. Default `Tms` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -102,19 +111,23 @@ class OnDelayInstruction(Instruction):
 
 
 class OffDelayInstruction(Instruction):
-    """Off-Delay Timer (TOF) instruction.
+    """Off-Delay Timer (TOF).
 
-    Terminal instruction for off-delay timing:
-    - While ENABLED: done = True, acc = 0
-    - While DISABLED: acc counts up, done stays True until acc >= setpoint
-    - When setpoint reached: done = False
-    - Auto-resets when re-enabled
+    Keeps the done bit True for a specified time after the rung goes False.
 
-    Click-specific:
-    - Accumulator stored in TD bank (INT type)
-    - Done bit in T bank
-    - Accumulator updates immediately (mid-scan visible)
-    - If setpoint increases past accumulator after timeout, done re-enables
+    - **Rung True:** done = True, accumulator = 0 (resets immediately)
+    - **Rung False:** accumulator counts up; done = False once acc ≥ setpoint
+    - **Re-enabling:** re-enables immediately (acc and done reset)
+
+    If `setpoint` is a dynamic tag that increases past the current accumulator
+    after the timer has already fired, done re-enables until acc catches up.
+
+    Args:
+        done_bit: BOOL tag that stays True until delay expires.
+        accumulator: INT tag storing elapsed off-time in `time_unit` ticks.
+        setpoint: Delay duration (constant or INT tag).
+        enable_condition: Rung power condition (injected automatically by DSL).
+        time_unit: Time unit for accumulator. Default `Tms` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True

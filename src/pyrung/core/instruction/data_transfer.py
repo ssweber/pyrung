@@ -33,11 +33,24 @@ if TYPE_CHECKING:
 
 
 class CopyInstruction(OneShotMixin, Instruction):
-    """Copy instruction (CPY/MOV).
+    """Copy a single value from source to destination (CPY/MOV).
 
-    Copies a value from source to target.
-    Source can be a literal value, Tag, or IndirectRef.
-    Target can be a Tag or IndirectRef.
+    Source may be a literal value, `Tag`, `IndirectRef`, `IndirectExprRef`, or
+    a copy modifier (`.as_text()`, `.as_value()`, etc.).  Destination may be a
+    `Tag` or `IndirectRef`.
+
+    **Clamping semantics:** Out-of-range values are clamped to the
+    destination type's min/max (e.g. copying 40 000 into an INT tag produces
+    32 767). This differs from `MathInstruction`, which wraps.
+
+    **Pointer errors:** If the pointer resolves to an out-of-range address,
+    the address-error fault flag is set and the copy is skipped.
+
+    Args:
+        source: Value to copy from.
+        target: Tag or indirect reference to copy into.
+        oneshot: When True, execute only on the rung's rising edge (once per
+            False→True transition). Default False.
     """
 
     def __init__(

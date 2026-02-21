@@ -1,12 +1,31 @@
 site_name: pyrung
-site_description: Documentation for pyrung
+site_description: Pythonic PLC simulation engine — write ladder logic in Python, simulate with full debug support.
 repo_url: https://github.com/ssweber/pyrung
 
 theme:
   name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
 
 nav:
   - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Core Concepts: getting-started/concepts.md
+  - Guides:
+      - Writing Ladder Logic: guides/ladder-logic.md
+      - Running and Stepping: guides/runner.md
+      - Testing with FIXED_STEP: guides/testing.md
+      - Forces and Debug Overrides: guides/forces-debug.md
+      - DAP Debugger in VS Code: guides/dap-vscode.md
+  - Dialects:
+      - Click PLC: dialects/click.md
+      - CircuitPython: dialects/circuitpy.md
   - API Reference:
       - Overview: reference/index.md
 
@@ -34,6 +53,7 @@ plugins:
 
 exclude_docs: |
   click_reference/**
+  internal/**
 
 not_in_nav: |
   reference/api/**
@@ -41,3 +61,10 @@ not_in_nav: |
 markdown_extensions:
   - admonition
   - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true

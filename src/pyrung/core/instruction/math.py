@@ -25,15 +25,30 @@ if TYPE_CHECKING:
 
 
 class MathInstruction(OneShotMixin, Instruction):
-    """Math instruction.
+    """Evaluate an arithmetic expression and store the result (MATH).
 
-    Evaluates an expression and stores the result in a destination tag,
-    with truncation to the destination's type width.
+    Evaluates `expression` (which may reference any `Tag` or arithmetic
+    combination thereof) and stores the result into `dest`, truncating
+    to the destination type's bit width via modular wrapping.
 
-    Key differences from CopyInstruction:
-    - Truncates result to destination tag's bit width (modular wrapping)
-    - Division by zero produces 0 (not infinity)
-    - Supports "decimal" (signed) and "hex" (unsigned 16-bit) modes
+    **Wrapping semantics:** Overflow wraps — e.g. storing 32 768 into an INT
+    tag produces −32 768. This differs from `CopyInstruction`, which clamps.
+
+    **Division by zero:** Result is forced to 0 and the division-error fault
+    flag is set. The instruction completes normally.
+
+    **Modes:**
+
+    - ``"decimal"`` (default) — signed arithmetic, result stored as signed int.
+    - ``"hex"`` — unsigned 16-bit arithmetic; operands treated as unsigned and
+      result wraps at 0xFFFF.
+
+    Args:
+        expression: Python expression built from `Tag` objects and literals
+            (e.g. ``DS1 + DS2 * 10``).
+        dest: Destination `Tag` to write the result into.
+        oneshot: When True, execute only on the rung's rising edge. Default False.
+        mode: ``"decimal"`` or ``"hex"``. Default ``"decimal"``.
     """
 
     def __init__(

@@ -192,4 +192,3 @@ class ForLoopInstructionDebugHandler:
                         step_trace=instruction_state.step_trace,
                     )
                 )
-
