@@ -101,6 +101,7 @@ runner.playhead
 
 # inspection / diff / fork
 runner.inspect(rung_id, scan_id=None)
+runner.inspect_event()
 runner.diff(scan_a, scan_b)
 runner.fork_from(scan_id)
 ```
@@ -175,7 +176,7 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debuggin
 | `add_force()` / `remove_force()` | Debug console commands |
 | `when().pause()` | Breakpoints (gutter) |
 | Scan history | Call stack / timeline |
-| `inspect()` + `ScanStep.trace` | Inline decorations (hybrid source) |
+| `inspect()` + `inspect_event()` | Inline decorations (unified core source) |
 
 Minimum source contract expected by adapter:
 
@@ -210,10 +211,10 @@ Incremental note (Phase 3, 2026-02-21):
   - `traceSource` (`"live"` or `"inspect"`)
   - `scanId`
   - `rungId`
-- Trace emission now uses a hybrid source model:
-  - live `ScanStep.trace` while stepping mid-scan
-  - `runner.inspect(scan_id, rung_id)` fallback for committed trace contexts
-- This is additive. Full adapter simplification still depends on all-scan inspect coverage.
+- Trace emission uses a unified core model through `runner.inspect_event()`:
+  - `"live"` when the returned event is from in-flight debug scan context
+  - `"inspect"` when the returned event is from committed retained debug scan context
+- Coverage remains intentionally debug-path-only (`scan_steps_debug()` and DAP stepping paths).
 
 ---
 
@@ -313,6 +314,7 @@ runner.monitor(tag, callback)
 
 ```python
 runner.inspect(rung_id, scan_id=None) -> RungTrace
+runner.inspect_event() -> tuple[int, int, RungTraceEvent] | None
 ```
 
 - If `scan_id` is omitted, inspect uses `runner.playhead`.
@@ -335,6 +337,13 @@ Current `RungTrace` v1 shape:
 
 Missing scan/rung trace raises `KeyError`.
 
+`inspect_event()` behavior:
+
+- Returns `(scan_id, rung_id, event)` for the latest debug event.
+- Prefers in-flight debug-path scan events when available.
+- Falls back to latest retained committed debug-path event.
+- Returns `None` when no debug trace context exists.
+
 Planned future expansion:
 
 - attempted writes and force re-apply events (pre-logic and post-logic)
@@ -345,6 +354,7 @@ Incremental note (Phase 3, 2026-02-21):
 
 - `inspect()` is currently trace-only and records data for scans executed through
   `scan_steps_debug()` (including DAP stepping paths).
+- `inspect_event()` follows the same debug-path-only scope.
 - Scans executed only via `step()`/`run()`/`run_for()`/`run_until()` may have no retained
   rung trace yet; in those cases `inspect()` raises `KeyError(rung_id)` after scan
   existence is validated.

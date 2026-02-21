@@ -106,6 +106,10 @@ class PLCRunner:
         self._history_limit = history_limit
         self._history = History(self._state, limit=history_limit)
         self._rung_traces_by_scan: dict[int, dict[int, RungTrace]] = {}
+        self._inflight_scan_id: int | None = None
+        self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
+        self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
+        self._latest_committed_trace_event: tuple[int, int, RungTraceEvent] | None = None
         self._playhead = self._state.scan_id
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
@@ -189,6 +193,41 @@ class PLCRunner:
             return scan_traces[rung_id]
         except KeyError as exc:
             raise KeyError(rung_id) from exc
+
+    def inspect_event(self) -> tuple[int, int, RungTraceEvent] | None:
+        """Return the latest debug-trace event for active/committed debug-path scans.
+
+        Returns:
+            A tuple of ``(scan_id, rung_id, event)``. In-flight debug-scan events
+            are preferred when available. Otherwise, the latest retained committed
+            debug-scan event is returned.
+
+        Notes:
+            - This API is populated by ``scan_steps_debug()`` only.
+            - Scans produced through ``step()/run()/run_for()/run_until()`` do not
+              contribute trace events here.
+        """
+        inflight = self._latest_inflight_trace_event
+        if self._inflight_scan_id is not None and inflight is not None:
+            return inflight
+
+        committed = self._latest_committed_trace_event
+        if committed is None:
+            return None
+
+        scan_id, rung_id, _event = committed
+        trace = self._rung_traces_by_scan.get(scan_id, {}).get(rung_id)
+        if trace is None:
+            self._latest_committed_trace_event = None
+            return None
+
+        if not trace.events:
+            self._latest_committed_trace_event = None
+            return None
+
+        latest_event = trace.events[-1]
+        self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
+        return self._latest_committed_trace_event
 
     def fork_from(self, scan_id: int) -> PLCRunner:
         """Create an independent runner from a retained historical snapshot."""
@@ -387,6 +426,11 @@ class PLCRunner:
         evicted_scan_ids = self._history._append(self._state)
         for evicted_scan_id in evicted_scan_ids:
             self._rung_traces_by_scan.pop(evicted_scan_id, None)
+            if (
+                self._latest_committed_trace_event is not None
+                and self._latest_committed_trace_event[0] == evicted_scan_id
+            ):
+                self._latest_committed_trace_event = None
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -440,29 +484,56 @@ class PLCRunner:
             Like `scan_steps()`, the scan is committed only when the generator
             is **fully exhausted**.
         """
+        pending_scan_id = self._state.scan_id + 1
         events_by_rung: dict[int, list[RungTraceEvent]] = {}
-        for step in self._debugger.scan_steps_debug(self):
-            events_by_rung.setdefault(step.rung_index, []).append(
-                RungTraceEvent(
-                    kind=step.kind,
-                    source_file=step.source_file,
-                    source_line=step.source_line,
-                    end_line=step.end_line,
-                    subroutine_name=step.subroutine_name,
-                    depth=step.depth,
-                    call_stack=step.call_stack,
-                    enabled_state=step.enabled_state,
-                    instruction_kind=step.instruction_kind,
-                    trace=step.trace,
-                )
-            )
-            yield step
+        self._start_inflight_debug_scan(scan_id=pending_scan_id, events_by_rung=events_by_rung)
 
-        scan_id = self._state.scan_id
-        self._rung_traces_by_scan[scan_id] = {
-            rung_id: RungTrace(scan_id=scan_id, rung_id=rung_id, events=tuple(events))
-            for rung_id, events in sorted(events_by_rung.items())
-        }
+        try:
+            for step in self._debugger.scan_steps_debug(self):
+                event = self._rung_trace_event_from_step(step)
+                events_by_rung.setdefault(step.rung_index, []).append(event)
+                self._latest_inflight_trace_event = (pending_scan_id, step.rung_index, event)
+                yield step
+
+            scan_id = self._state.scan_id
+            self._rung_traces_by_scan[scan_id] = {
+                rung_id: RungTrace(scan_id=scan_id, rung_id=rung_id, events=tuple(events))
+                for rung_id, events in sorted(events_by_rung.items())
+            }
+            if self._latest_inflight_trace_event is not None:
+                _inflight_scan_id, latest_rung_id, latest_event = self._latest_inflight_trace_event
+                self._latest_committed_trace_event = (scan_id, latest_rung_id, latest_event)
+        finally:
+            self._clear_inflight_debug_scan()
+
+    def _start_inflight_debug_scan(
+        self,
+        *,
+        scan_id: int,
+        events_by_rung: dict[int, list[RungTraceEvent]],
+    ) -> None:
+        self._inflight_scan_id = scan_id
+        self._inflight_rung_events = events_by_rung
+        self._latest_inflight_trace_event = None
+
+    def _clear_inflight_debug_scan(self) -> None:
+        self._inflight_scan_id = None
+        self._inflight_rung_events = {}
+        self._latest_inflight_trace_event = None
+
+    def _rung_trace_event_from_step(self, step: ScanStep) -> RungTraceEvent:
+        return RungTraceEvent(
+            kind=step.kind,
+            source_file=step.source_file,
+            source_line=step.source_line,
+            end_line=step.end_line,
+            subroutine_name=step.subroutine_name,
+            depth=step.depth,
+            call_stack=step.call_stack,
+            enabled_state=step.enabled_state,
+            instruction_kind=step.instruction_kind,
+            trace=step.trace,
+        )
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
         """Debugger-facing scan preparation API."""

@@ -162,6 +162,26 @@ Current limitation (Phase 3 incremental):
 - Trace retention for `inspect()` is currently populated by `scan_steps_debug()` (including DAP stepping paths).
 - Scans produced only by `step()`/`run()`/`run_for()`/`run_until()` may not have retained rung trace yet.
 
+`PLCRunner.inspect_event()` returns the latest debug-trace event using a unified core path:
+
+```python
+event = runner.inspect_event()
+if event is not None:
+    scan_id, rung_id, rung_event = event
+```
+
+Behavior:
+
+- Returns latest in-flight event while a `scan_steps_debug()` scan is active and has yielded at least one step.
+- Otherwise returns latest committed retained debug-path event.
+- Returns `None` if no debug trace context exists.
+- Returned event is immutable `RungTraceEvent` model data.
+
+Debug-path-only scope:
+
+- `inspect_event()` and `inspect()` are populated through `scan_steps_debug()` (including DAP stepping flows).
+- Scans produced only by `step()`/`run()`/`run_for()`/`run_until()` are intentionally out of scope for trace retention in this phase.
+
 ## Injecting inputs
 
 ### `patch()` — one-shot inputs

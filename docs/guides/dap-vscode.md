@@ -63,7 +63,7 @@ Add to `.vscode/launch.json`:
 | Variables panel | `SystemState.tags` |
 | Debug console force | `runner.add_force()` / `runner.remove_force()` |
 | Breakpoints (gutter) | DAP `setBreakpoints` mapped to captured source lines |
-| Inline decorations | Hybrid trace source: live `ScanStep.trace` + `runner.inspect()` fallback |
+| Inline decorations | Unified core trace source via `runner.inspect_event()` |
 | Call stack | Subroutine call stack from `ScanStep.call_stack` |
 
 ## Trace payload (`pyrungTrace`)
@@ -81,10 +81,13 @@ Payload includes:
 
 `traceSource` semantics:
 
-- `"live"`: trace came from the current in-flight `ScanStep.trace`.
-- `"inspect"`: trace came from committed scan data via `runner.inspect(scan_id, rung_id)`.
+- `"live"`: trace came from in-flight debug-path context via `runner.inspect_event()`.
+- `"inspect"`: trace came from committed debug-path context via `runner.inspect_event()`.
 
-This hybrid model keeps mid-scan stepping behavior unchanged while allowing retained trace reuse when live step context is unavailable.
+This keeps adapter trace retrieval on one core API while preserving the existing payload shape.
+
+Debug-path-only scope remains intentional: trace retention and in-flight trace events are populated by
+`scan_steps_debug()` (including DAP stepping paths), not by `step()`/`run()`/`run_for()`/`run_until()`.
 
 ## Source location capture
 
@@ -115,7 +118,7 @@ The debug adapter is a thin Python process that:
 
 1. Spawns (or connects to) a `PLCRunner` with your program.
 2. Translates DAP protocol messages to `runner.step()`, `scan_steps_debug()`, etc.
-3. After each stop, emits `pyrungTrace` using live `ScanStep.trace` first, then `runner.inspect()` fallback for committed scans.
+3. After each stop, emits `pyrungTrace` from `runner.inspect_event()` (in-flight and committed debug-path scans).
 4. Provides `SystemState.tags` as the DAP variables response.
 
 DAP is an open protocol — the adapter also works with Neovim (via `nvim-dap`), Emacs (`dap-mode`), and JetBrains IDEs with minimal changes.

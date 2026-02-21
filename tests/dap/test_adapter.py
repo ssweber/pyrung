@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pyrung.core.runner import ScanStep
+from pyrung.core.debug_trace import RungTraceEvent
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -840,7 +840,7 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     assert {"tag", "value"}.issubset(detail_names)
 
 
-def test_trace_body_falls_back_to_runner_inspect_for_committed_scan(tmp_path: Path):
+def test_trace_body_uses_committed_core_event_when_no_inflight_scan_context(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -852,13 +852,15 @@ def test_trace_body_falls_back_to_runner_inspect_for_committed_scan(tmp_path: Pa
     _send_request(adapter, out_stream, seq=2, command="next")
     _drain_messages(out_stream)
 
-    # Second next crosses StopIteration, committing scan 1 and caching inspect data.
+    # Second next crosses StopIteration and starts scan 2.
     _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
-    assert adapter._last_committed_scan_id == 1
-    assert adapter._last_committed_rung_index == 0
 
-    # Simulate no live step context; adapter should still surface committed trace.
+    # Drop in-flight scan context so runner.inspect_event() falls back to committed data.
+    if adapter._scan_gen is not None:
+        adapter._scan_gen.close()
+    adapter._scan_gen = None
+    adapter._current_scan_id = None
     adapter._current_step = None
     adapter._current_ctx = None
     adapter._current_rung = None
@@ -883,26 +885,30 @@ def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: 
     _send_request(adapter, out_stream, seq=2, command="next")
     _drain_messages(out_stream)
 
-    assert adapter._current_step is not None
-    current = adapter._current_step
-    adapter._current_step = ScanStep(
-        rung_index=current.rung_index,
-        rung=current.rung,
-        ctx=current.ctx,
-        kind=current.kind,
-        subroutine_name=current.subroutine_name,
-        depth=current.depth,
-        call_stack=current.call_stack,
-        source_file=current.source_file,
-        source_line=current.source_line,
-        end_line=current.end_line,
-        enabled_state=current.enabled_state,
-        trace="unexpected-trace-type",  # type: ignore[arg-type]
-        instruction_kind=current.instruction_kind,
+    assert adapter._runner is not None
+    inspect_event = adapter._runner.inspect_event()
+    assert inspect_event is not None
+    scan_id, rung_id, event = inspect_event
+    adapter._runner._latest_inflight_trace_event = (
+        scan_id,
+        rung_id,
+        RungTraceEvent(
+            kind=event.kind,
+            source_file=event.source_file,
+            source_line=event.source_line,
+            end_line=event.end_line,
+            subroutine_name=event.subroutine_name,
+            depth=event.depth,
+            call_stack=event.call_stack,
+            enabled_state=event.enabled_state,
+            instruction_kind=event.instruction_kind,
+            trace="unexpected-trace-type",  # type: ignore[arg-type]
+        ),
     )
 
     body = adapter._current_trace_body_locked()
     assert body is not None
+    assert body["traceSource"] == "live"
     assert body["regions"] == []
 
 

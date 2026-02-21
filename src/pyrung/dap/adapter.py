@@ -14,7 +14,7 @@ from typing import Any, BinaryIO
 
 from pyrung.core import PLCRunner, Program
 from pyrung.core.context import ScanContext
-from pyrung.core.debug_trace import RungTraceEvent, TraceEvent
+from pyrung.core.debug_trace import TraceEvent
 from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
@@ -66,8 +66,6 @@ class DAPAdapter:
         self._current_rung_index: int | None = None
         self._current_rung: Rung | None = None
         self._current_ctx: ScanContext | None = None
-        self._last_committed_scan_id: int | None = None
-        self._last_committed_rung_index: int | None = None
         self._program_path: str | None = None
 
         self._breakpoints_by_file: dict[str, set[int]] = {}
@@ -221,8 +219,6 @@ class DAPAdapter:
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
-            self._last_committed_scan_id = None
-            self._last_committed_rung_index = None
             self._program_path = str(program_path)
             self._breakpoints_by_file = {}
             self._breakpoint_rung_map = {}
@@ -502,8 +498,6 @@ class DAPAdapter:
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
-            self._last_committed_scan_id = runner.current_state.scan_id
-            self._last_committed_rung_index = None
             return False
 
         if self._scan_gen is None:
@@ -513,13 +507,6 @@ class DAPAdapter:
         try:
             step = next(self._scan_gen)
         except StopIteration:
-            # Exhausting the scan generator commits the in-flight scan.
-            previous_step = self._current_step
-            committed_scan_id = runner.current_state.scan_id
-            if previous_step is not None:
-                self._last_committed_scan_id = committed_scan_id
-                self._last_committed_rung_index = previous_step.rung_index
-
             self._scan_gen = runner.scan_steps_debug()
             self._current_scan_id = runner.current_state.scan_id + 1
             step = next(self._scan_gen)
@@ -856,63 +843,24 @@ class DAPAdapter:
 
     def _current_trace_body_locked(self) -> dict[str, Any] | None:
         runner = self._runner
-        step = self._current_step
-
-        trace_source = "live"
-        trace: TraceEvent | None = None
-        if step is not None and isinstance(step.trace, TraceEvent):
-            trace = step.trace
-
-        step_kind: str | None = step.kind if step is not None else None
-        instruction_kind: str | None = step.instruction_kind if step is not None else None
-        enabled_state: str | None = step.enabled_state if step is not None else None
-        subroutine_name: str | None = step.subroutine_name if step is not None else None
-        call_stack: list[str] = list(step.call_stack) if step is not None else []
-        rung_index: int | None = step.rung_index if step is not None else None
-        source_line: int | None = (
-            step.source_line or step.rung.source_line if step is not None else None
-        )
-        end_line: int | None = (
-            step.end_line or step.source_line or step.rung.end_line if step is not None else None
-        )
-        step_source_file = (step.source_file or step.rung.source_file) if step is not None else None
-        scan_id = self._current_scan_id
-
-        if trace is None:
-            preferred_scan_id: int | None = None
-            preferred_rung_id: int | None = None
-            if (
-                runner is not None
-                and step is not None
-                and self._current_scan_id is not None
-                and self._current_scan_id <= runner.current_state.scan_id
-            ):
-                preferred_scan_id = self._current_scan_id
-                preferred_rung_id = step.rung_index
-
-            inspect_event = self._inspect_trace_event_locked(
-                preferred_scan_id=preferred_scan_id,
-                preferred_rung_id=preferred_rung_id,
-            )
-            if inspect_event is not None:
-                inspect_scan_id, inspect_rung_id, event = inspect_event
-                if isinstance(event.trace, TraceEvent):
-                    trace_source = "inspect"
-                    trace = event.trace
-                    scan_id = inspect_scan_id
-                    rung_index = inspect_rung_id
-                    if step is None:
-                        step_kind = event.kind
-                        instruction_kind = event.instruction_kind
-                        enabled_state = event.enabled_state
-                        subroutine_name = event.subroutine_name
-                        call_stack = list(event.call_stack)
-                        source_line = event.source_line
-                        end_line = event.end_line
-                        step_source_file = event.source_file
-
-        if step is None and step_kind is None:
+        if runner is None:
             return None
+
+        event_result = runner.inspect_event()
+        if event_result is None:
+            return None
+
+        scan_id, rung_index, event = event_result
+        trace_source = "live" if scan_id > runner.current_state.scan_id else "inspect"
+        trace = event.trace if isinstance(event.trace, TraceEvent) else None
+        step_kind: str | None = event.kind
+        instruction_kind: str | None = event.instruction_kind
+        enabled_state: str | None = event.enabled_state
+        subroutine_name: str | None = event.subroutine_name
+        call_stack: list[str] = list(event.call_stack)
+        source_line: int | None = event.source_line
+        end_line: int | None = event.end_line if event.end_line is not None else event.source_line
+        step_source_file = event.source_file
 
         regions = self._regions_from_trace_event(trace)
         step_source = None
@@ -1006,36 +954,6 @@ class DAPAdapter:
             )
 
         return regions
-
-    def _inspect_trace_event_locked(
-        self,
-        *,
-        preferred_scan_id: int | None,
-        preferred_rung_id: int | None,
-    ) -> tuple[int, int, RungTraceEvent] | None:
-        runner = self._runner
-        if runner is None:
-            return None
-
-        candidates: list[tuple[int, int]] = []
-        if preferred_scan_id is not None and preferred_rung_id is not None:
-            candidates.append((preferred_scan_id, preferred_rung_id))
-        if self._last_committed_scan_id is not None and self._last_committed_rung_index is not None:
-            fallback = (self._last_committed_scan_id, self._last_committed_rung_index)
-            if fallback not in candidates:
-                candidates.append(fallback)
-
-        for scan_id, rung_id in candidates:
-            try:
-                trace = runner.inspect(rung_id=rung_id, scan_id=scan_id)
-            except KeyError:
-                continue
-
-            for event in reversed(trace.events):
-                if isinstance(event.trace, TraceEvent):
-                    return trace.scan_id, trace.rung_id, event
-
-        return None
 
     def _step_display_status(self, step: ScanStep) -> str:
         return self._step_display_status_from_fields(enabled_state=step.enabled_state)
