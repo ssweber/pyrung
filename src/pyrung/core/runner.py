@@ -20,6 +20,7 @@ from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
 from pyrung.core.debug_trace import TraceEvent
 from pyrung.core.debugger import PLCDebugger
+from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.state import SystemState
@@ -59,11 +60,12 @@ class PLCRunner:
     Executes PLC logic as pure functions: Logic(state) -> new_state.
     The consumer controls execution via step(), enabling:
     - Input injection via patch()
-    - Inspection of any historical state
+    - Inspection of retained historical state via runner.history
     - Pause/resume at any scan boundary
 
     Attributes:
         current_state: The current SystemState snapshot.
+        history: Query interface for retained SystemState snapshots.
         simulation_time: Current simulation clock (seconds).
         time_mode: Current time mode (FIXED_STEP or REALTIME).
     """
@@ -72,13 +74,20 @@ class PLCRunner:
         self,
         logic: list[Any] | Any = None,
         initial_state: SystemState | None = None,
+        *,
+        history_limit: int | None = None,
     ) -> None:
         """Create a new PLCRunner.
 
         Args:
             logic: Program, list of rungs, or None for empty logic.
             initial_state: Starting state. Defaults to SystemState().
+            history_limit: Max retained snapshots including initial state.
+                Use None for unbounded history.
         """
+        if history_limit is not None and history_limit < 1:
+            raise ValueError("history_limit must be >= 1 or None")
+
         self._logic: list[Rung]
         # Handle different logic types
         # Import Program here to avoid circular import at module level
@@ -94,6 +103,7 @@ class PLCRunner:
             self._logic = [logic]
 
         self._state = initial_state if initial_state is not None else SystemState()
+        self._history = History(self._state, limit=history_limit)
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
@@ -112,6 +122,11 @@ class PLCRunner:
     def current_state(self) -> SystemState:
         """Current state snapshot."""
         return self._state
+
+    @property
+    def history(self) -> History:
+        """Read-only history query surface."""
+        return self._history
 
     @property
     def simulation_time(self) -> float:
@@ -166,15 +181,45 @@ class PLCRunner:
         self._input_overrides.patch(tags)
 
     def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
-        """Persistently override a tag until removed."""
+        """Persistently override a tag value until explicitly removed.
+
+        The forced value is applied at the pre-logic force pass (phase 3) and
+        re-applied at the post-logic force pass (phase 5) every scan.  Logic
+        may temporarily diverge the value mid-scan, but the post-logic pass
+        restores it before outputs are written.
+
+        Forces persist across scans until `remove_force()` or `clear_forces()`
+        is called.  Multiple forces may be active simultaneously.
+
+        If a tag is both patched and forced in the same scan, the force
+        overwrites the patch during the pre-logic pass.
+
+        Args:
+            tag: Tag name or `Tag` object to override.
+            value: Value to hold. Must be compatible with the tag's type.
+
+        Raises:
+            ValueError: If the tag is a read-only system point.
+        """
         self._input_overrides.add_force(tag, value)
 
     def remove_force(self, tag: str | Tag) -> None:
-        """Remove a single forced tag override."""
+        """Remove a single persistent force override.
+
+        After removal the tag resumes its logic-computed value starting
+        from the next scan.
+
+        Args:
+            tag: Tag name or `Tag` object whose force to remove.
+        """
         self._input_overrides.remove_force(tag)
 
     def clear_forces(self) -> None:
-        """Remove all forced tag overrides."""
+        """Remove all active persistent force overrides.
+
+        All forced tags resume their logic-computed values starting
+        from the next scan.
+        """
         self._input_overrides.clear_forces()
 
     @contextmanager
@@ -184,7 +229,26 @@ class PLCRunner:
         | Mapping[Tag, bool | int | float | str]
         | Mapping[str | Tag, bool | int | float | str],
     ) -> Iterator[PLCRunner]:
-        """Temporarily apply forces within a context manager."""
+        """Temporarily apply forces for the duration of the context.
+
+        On entry, saves the current force map and adds the given overrides.
+        On exit (normally or on exception), the exact previous force map is
+        restored — forces that existed before the context are reinstated, and
+        forces added inside the context are removed.
+
+        Safe for nesting: inner ``force()`` contexts layer on top of outer ones
+        without disrupting them.
+
+        Args:
+            overrides: Mapping of tag name / ``Tag`` object to forced value.
+
+        Example:
+            ```python
+            with runner.force({"AutoMode": True, "Fault": False}):
+                runner.run(5)
+            # AutoMode and Fault forces released here
+            ```
+        """
         with self._input_overrides.force(overrides):
             yield self
 
@@ -246,6 +310,7 @@ class PLCRunner:
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
+        self._history._append(self._state)
 
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
@@ -272,7 +337,26 @@ class PLCRunner:
         self._commit_scan(ctx, dt)
 
     def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
-        """Execute one scan cycle and yield at top-level, branch, and subroutine boundaries."""
+        """Execute one scan cycle and yield ``ScanStep`` objects at all boundaries.
+
+        Yields a `ScanStep` at each:
+
+        - Top-level rung boundary (``kind="rung"``)
+        - Branch entry / exit (``kind="branch"``)
+        - Subroutine call and body steps (``kind="subroutine"``)
+        - Individual instruction boundaries (``kind="instruction"``)
+
+        Each `ScanStep` carries source location metadata (``source_file``,
+        ``source_line``, ``end_line``), rung enable state, and a trace of
+        evaluated conditions and instructions.
+
+        This is the API used by the DAP adapter.  Prefer `scan_steps()` for
+        non-debug consumers — it has less overhead and a simpler yield type.
+
+        Note:
+            Like `scan_steps()`, the scan is committed only when the generator
+            is **fully exhausted**.
+        """
         yield from self._debugger.scan_steps_debug(self)
 
     def prepare_scan(self) -> tuple[ScanContext, float]:

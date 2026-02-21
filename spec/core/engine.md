@@ -33,7 +33,7 @@ class SystemState(PRecord):
 ### PLCRunner
 
 ```python
-runner = PLCRunner(logic, initial_state=None)
+runner = PLCRunner(logic, initial_state=None, history_limit=None)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 runner.simulation_time                    # Property: current timestamp
 

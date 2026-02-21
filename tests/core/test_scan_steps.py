@@ -47,12 +47,14 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     assert ctx0.get_tag("Light1") is True
     assert runner.current_state.scan_id == 0
     assert "Light1" not in runner.current_state.tags
+    assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     idx1, rung1, ctx1 = next(scan_gen)
     assert idx1 == 1
     assert rung1 is logic.rungs[1]
     assert ctx1.get_tag("Light2") is True
     assert runner.current_state.scan_id == 0
+    assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     with pytest.raises(StopIteration):
         next(scan_gen)
@@ -60,6 +62,7 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     assert runner.current_state.scan_id == 1
     assert runner.current_state.tags["Light1"] is True
     assert runner.current_state.tags["Light2"] is True
+    assert [state.scan_id for state in runner.history.latest(10)] == [0, 1]
 
 
 def test_scan_steps_partial_consumption_does_not_commit_state():
@@ -79,6 +82,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
     assert runner.current_state.scan_id == 0
     assert "Output" not in runner.current_state.tags
     assert ctx.get_tag("Output") is True
+    assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     # Commit only happens once the generator is exhausted.
     for _ in scan_gen:
@@ -86,6 +90,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
 
     assert runner.current_state.scan_id == 1
     assert runner.current_state.tags["Output"] is True
+    assert [state.scan_id for state in runner.history.latest(10)] == [0, 1]
 
 
 def test_scan_steps_debug_partial_consumption_does_not_commit_state():
@@ -105,12 +110,14 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
     assert first_step.kind == "instruction"
     assert runner.current_state.scan_id == 0
     assert "Output" not in runner.current_state.tags
+    assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     second_step = next(scan_gen)
     assert second_step.kind == "rung"
     assert second_step.ctx.get_tag("Output") is True
     assert runner.current_state.scan_id == 0
     assert "Output" not in runner.current_state.tags
+    assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     # Commit only happens once the generator is exhausted.
     for _ in scan_gen:
@@ -118,6 +125,7 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
 
     assert runner.current_state.scan_id == 1
     assert runner.current_state.tags["Output"] is True
+    assert [state.scan_id for state in runner.history.latest(10)] == [0, 1]
 
 
 def test_step_and_scan_steps_have_equivalent_results():
