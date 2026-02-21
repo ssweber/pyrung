@@ -9,6 +9,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 
 from pyrung.core.context import ScanContext
 from pyrung.core.copy_modifiers import as_ascii, as_binary, as_text, as_value
+from pyrung.core.debug_trace import RungTrace, RungTraceEvent
 from pyrung.core.expression import (
     PI,
     Expression,
@@ -99,6 +100,8 @@ __all__ = [
     "PLCRunner",
     "ScanContext",
     "SystemState",
+    "RungTrace",
+    "RungTraceEvent",
     "system",
     "TimeMode",
     "TimeUnit",

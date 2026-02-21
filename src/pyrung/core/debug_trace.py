@@ -80,3 +80,28 @@ class TraceEvent:
 
     def to_dict(self) -> dict[str, Any]:
         return {"regions": [region.to_dict() for region in self.regions]}
+
+
+@dataclass(frozen=True)
+class RungTraceEvent:
+    """One debug event captured for a rung during scan execution."""
+
+    kind: Literal["rung", "branch", "subroutine", "instruction"]
+    source_file: str | None
+    source_line: int | None
+    end_line: int | None
+    subroutine_name: str | None
+    depth: int
+    call_stack: tuple[str, ...]
+    enabled_state: EnabledState | None
+    instruction_kind: str | None
+    trace: TraceEvent | None
+
+
+@dataclass(frozen=True)
+class RungTrace:
+    """Retained per-rung debug trace for one committed scan."""
+
+    scan_id: int
+    rung_id: int
+    events: tuple[RungTraceEvent, ...]

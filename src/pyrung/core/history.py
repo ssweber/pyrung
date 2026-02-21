@@ -66,7 +66,7 @@ class History:
                 return state
         return None
 
-    def _append(self, state: SystemState) -> None:
+    def _append(self, state: SystemState) -> list[int]:
         """Append a newly committed state; for runner-internal use only."""
         scan_id = state.scan_id
         if self._order and scan_id <= self._order[-1]:
@@ -76,12 +76,16 @@ class History:
 
         self._order.append(scan_id)
         self._by_scan_id[scan_id] = state
-        self._evict_if_needed()
+        return self._evict_if_needed()
 
-    def _evict_if_needed(self) -> None:
+    def _evict_if_needed(self) -> list[int]:
+        evicted_scan_ids: list[int] = []
         if self._limit is None:
-            return
+            return evicted_scan_ids
 
         while len(self._order) > self._limit:
             oldest_scan_id = self._order.popleft()
             del self._by_scan_id[oldest_scan_id]
+            evicted_scan_ids.append(oldest_scan_id)
+
+        return evicted_scan_ids

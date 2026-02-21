@@ -319,6 +319,14 @@ Missing scan/rung trace raises `KeyError`.
 
 The `RungTrace` schema will be refined during Phase 3 based on what the VS Code extension needs to render meaningful inline decorations.
 
+Incremental note (Phase 3, 2026-02-21):
+
+- `inspect()` is currently trace-only and records data for scans executed through
+  `scan_steps_debug()` (including DAP stepping paths).
+- Scans executed only via `step()`/`run()`/`run_for()`/`run_until()` may have no retained
+  rung trace yet; in those cases `inspect()` raises `KeyError(rung_id)` after scan
+  existence is validated.
+
 ---
 
 ## History and Playhead

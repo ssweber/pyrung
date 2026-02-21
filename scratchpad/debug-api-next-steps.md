@@ -6,7 +6,7 @@ The debugger platform is now in a strong state:
 
 - Phase 1 (Force): complete.
 - Phase 2 (Source Location + DAP): complete for current scope, including `stepOut` and terminate capability.
-- Phase 3: quick wins complete (`B1`, `B4`, `B5`, `B2`).
+- Phase 3: quick wins complete (`B1`, `B4`, `B5`, `B2`) and `B3` delivered as trace-only v1.
 
 Recently completed:
 
@@ -15,6 +15,7 @@ Recently completed:
 - `B4`: `runner.diff(scan_a, scan_b)` with changed-only tag diff, missing-as-`None`, deterministic ordering.
 - `B5`: `runner.fork_from(scan_id)` with clean mutable debug/runtime state and preserved time config.
 - `B2`: `runner.playhead`, `runner.seek(scan_id)`, `runner.rewind(seconds)` with eviction-safe playhead behavior.
+- `B3`: `runner.inspect(rung_id, scan_id=None)` with retained rung traces for debug-path scans.
 
 The next objective is to complete the remaining Phase 3 APIs built on top of history.
 
@@ -62,14 +63,17 @@ The next objective is to complete the remaining Phase 3 APIs built on top of his
 - Add `runner.rewind(seconds)`.
 - Execution stays independent of playhead (`step()` appends at history tip).
 
+### B3. `runner.inspect(rung_id, scan_id=None)`
+
+- Stores retained rung-level trace data keyed by scan/rung.
+- Defaults to `runner.playhead` when `scan_id` is omitted.
+- Trace retention is pruned with history eviction.
+- Current incremental limitation: trace capture is debug-path only (`scan_steps_debug()`/DAP flow);
+  scans created through `step()`/`run()` may not have inspect trace yet.
+
 ---
 
 ## Next Work (Phase 3)
-
-### B3. `runner.inspect(rung_id, scan_id=None)`
-
-- Store and query rung-level traces by scan/rung.
-- Use playhead when `scan_id` omitted.
 
 ### C3. Monitors
 
@@ -86,7 +90,6 @@ The next objective is to complete the remaining Phase 3 APIs built on top of his
 ## Recommended Implementation Order
 
 ```text
-B3  inspect               <- richer debugger rendering
 C3  monitors              <- independent and useful
 C1  predicate breakpoints <- depends on snapshot evaluation flow
 C2  snapshot labels       <- extends C1 + history

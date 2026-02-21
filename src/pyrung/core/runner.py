@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
-from pyrung.core.debug_trace import TraceEvent
+from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
@@ -105,6 +105,7 @@ class PLCRunner:
         self._state = initial_state if initial_state is not None else SystemState()
         self._history_limit = history_limit
         self._history = History(self._state, limit=history_limit)
+        self._rung_traces_by_scan: dict[int, dict[int, RungTrace]] = {}
         self._playhead = self._state.scan_id
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
@@ -169,6 +170,25 @@ class PLCRunner:
             if old_value != new_value:
                 changed[key] = (old_value, new_value)
         return changed
+
+    def inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
+        """Return retained rung-level debug trace for one scan.
+
+        If ``scan_id`` is omitted, the current playhead scan is inspected.
+        Raises:
+            KeyError: Missing scan id, or missing rung trace for retained scan.
+        """
+        target_scan_id = self._playhead if scan_id is None else scan_id
+        self.history.at(target_scan_id)
+
+        scan_traces = self._rung_traces_by_scan.get(target_scan_id)
+        if scan_traces is None:
+            raise KeyError(rung_id)
+
+        try:
+            return scan_traces[rung_id]
+        except KeyError as exc:
+            raise KeyError(rung_id) from exc
 
     def fork_from(self, scan_id: int) -> PLCRunner:
         """Create an independent runner from a retained historical snapshot."""
@@ -364,7 +384,9 @@ class PLCRunner:
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
-        self._history._append(self._state)
+        evicted_scan_ids = self._history._append(self._state)
+        for evicted_scan_id in evicted_scan_ids:
+            self._rung_traces_by_scan.pop(evicted_scan_id, None)
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -418,7 +440,29 @@ class PLCRunner:
             Like `scan_steps()`, the scan is committed only when the generator
             is **fully exhausted**.
         """
-        yield from self._debugger.scan_steps_debug(self)
+        events_by_rung: dict[int, list[RungTraceEvent]] = {}
+        for step in self._debugger.scan_steps_debug(self):
+            events_by_rung.setdefault(step.rung_index, []).append(
+                RungTraceEvent(
+                    kind=step.kind,
+                    source_file=step.source_file,
+                    source_line=step.source_line,
+                    end_line=step.end_line,
+                    subroutine_name=step.subroutine_name,
+                    depth=step.depth,
+                    call_stack=step.call_stack,
+                    enabled_state=step.enabled_state,
+                    instruction_kind=step.instruction_kind,
+                    trace=step.trace,
+                )
+            )
+            yield step
+
+        scan_id = self._state.scan_id
+        self._rung_traces_by_scan[scan_id] = {
+            rung_id: RungTrace(scan_id=scan_id, rung_id=rung_id, events=tuple(events))
+            for rung_id, events in sorted(events_by_rung.items())
+        }
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
         """Debugger-facing scan preparation API."""
