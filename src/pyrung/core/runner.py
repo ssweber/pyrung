@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ScanContext
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.input_overrides import InputOverrideManager
@@ -30,31 +31,6 @@ if TYPE_CHECKING:
 
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
-
-_DIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
-    "CompareEq": "==",
-    "CompareNe": "!=",
-    "CompareLt": "<",
-    "CompareLe": "<=",
-    "CompareGt": ">",
-    "CompareGe": ">=",
-}
-_INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
-    "IndirectCompareEq": "==",
-    "IndirectCompareNe": "!=",
-    "IndirectCompareLt": "<",
-    "IndirectCompareLe": "<=",
-    "IndirectCompareGt": ">",
-    "IndirectCompareGe": ">=",
-}
-_EXPR_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
-    "ExprCompareEq": "==",
-    "ExprCompareNe": "!=",
-    "ExprCompareLt": "<",
-    "ExprCompareLe": "<=",
-    "ExprCompareGt": ">",
-    "ExprCompareGe": ">=",
-}
 
 
 @dataclass(frozen=True)
@@ -128,7 +104,7 @@ class PLCRunner:
         # Preserve direct access used in tests/live-tag helpers.
         self._pending_patches = self._input_overrides.pending_patches
         self._forces = self._input_overrides.forces_mutable
-        self._trace_formatter = TraceFormatter()
+        self._condition_trace = ConditionTraceEngine(formatter=TraceFormatter())
         self._debugger = PLCDebugger(step_factory=ScanStep)
 
     @property
@@ -303,281 +279,20 @@ class PLCRunner:
         condition: Any,
         ctx: ScanContext,
     ) -> tuple[bool, list[dict[str, Any]]]:
-        from pyrung.core.condition import (
-            AllCondition,
-            AnyCondition,
-            BitCondition,
-            CompareEq,
-            CompareGe,
-            CompareGt,
-            CompareLe,
-            CompareLt,
-            CompareNe,
-            FallingEdgeCondition,
-            IndirectCompareEq,
-            IndirectCompareGe,
-            IndirectCompareGt,
-            IndirectCompareLe,
-            IndirectCompareLt,
-            IndirectCompareNe,
-            IntTruthyCondition,
-            NormallyClosedCondition,
-            RisingEdgeCondition,
-        )
-        from pyrung.core.expression import (
-            ExprCompareEq,
-            ExprCompareGe,
-            ExprCompareGt,
-            ExprCompareLe,
-            ExprCompareLt,
-            ExprCompareNe,
-            Expression,
-        )
-        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-        from pyrung.core.tag import Tag
-
-        def _detail(name: str, value: Any) -> dict[str, Any]:
-            return {"name": name, "value": value}
-
-        def _resolve_operand(value: Any) -> Any:
-            if isinstance(value, Expression):
-                return value.evaluate(ctx)
-            if isinstance(value, Tag):
-                return ctx.get_tag(value.name, value.default)
-            if isinstance(value, (IndirectRef, IndirectExprRef)):
-                target = value.resolve_ctx(ctx)
-                return ctx.get_tag(target.name, target.default)
-            return value
-
-        if isinstance(condition, BitCondition):
-            value = bool(ctx.get_tag(condition.tag.name, False))
-            return value, [_detail("tag", condition.tag.name), _detail("value", value)]
-
-        if isinstance(condition, IntTruthyCondition):
-            raw = ctx.get_tag(condition.tag.name, condition.tag.default)
-            value = int(raw) != 0
-            return value, [_detail("tag", condition.tag.name), _detail("value", raw)]
-
-        if isinstance(condition, NormallyClosedCondition):
-            raw = bool(ctx.get_tag(condition.tag.name, False))
-            value = not raw
-            return value, [_detail("tag", condition.tag.name), _detail("value", raw)]
-
-        if isinstance(condition, RisingEdgeCondition):
-            current = bool(ctx.get_tag(condition.tag.name, False))
-            previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
-            value = current and not previous
-            return value, [
-                _detail("tag", condition.tag.name),
-                _detail("current", current),
-                _detail("previous", previous),
-            ]
-
-        if isinstance(condition, FallingEdgeCondition):
-            current = bool(ctx.get_tag(condition.tag.name, False))
-            previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
-            value = (not current) and previous
-            return value, [
-                _detail("tag", condition.tag.name),
-                _detail("current", current),
-                _detail("previous", previous),
-            ]
-
-        compare_ops: tuple[type[Any], ...] = (
-            CompareEq,
-            CompareNe,
-            CompareLt,
-            CompareLe,
-            CompareGt,
-            CompareGe,
-            IndirectCompareEq,
-            IndirectCompareNe,
-            IndirectCompareLt,
-            IndirectCompareLe,
-            IndirectCompareGt,
-            IndirectCompareGe,
-        )
-        if isinstance(condition, compare_ops):
-            if hasattr(condition, "tag"):
-                left_label = condition.tag.name
-                left_value = ctx.get_tag(condition.tag.name, condition.tag.default)
-                extra_details: list[dict[str, Any]] = []
-            else:
-                target = condition.indirect_ref.resolve_ctx(ctx)
-                left_label = target.name
-                left_value = ctx.get_tag(target.name, target.default)
-                pointer_name = condition.indirect_ref.pointer.name
-                pointer_value = ctx.get_tag(pointer_name, condition.indirect_ref.pointer.default)
-                extra_details = [
-                    _detail(
-                        "left_pointer_expr", f"{condition.indirect_ref.block.name}[{pointer_name}]"
-                    ),
-                    _detail("left_pointer", pointer_name),
-                    _detail("left_pointer_value", pointer_value),
-                ]
-            right_details: list[dict[str, Any]] = []
-            right_operand = condition.value
-            if isinstance(right_operand, Tag):
-                right_details.append(_detail("right", right_operand.name))
-            elif isinstance(right_operand, IndirectRef):
-                right_target = right_operand.resolve_ctx(ctx)
-                right_pointer_name = right_operand.pointer.name
-                right_pointer_value = ctx.get_tag(right_pointer_name, right_operand.pointer.default)
-                right_details.extend(
-                    [
-                        _detail("right", right_target.name),
-                        _detail(
-                            "right_pointer_expr",
-                            f"{right_operand.block.name}[{right_pointer_name}]",
-                        ),
-                        _detail("right_pointer", right_pointer_name),
-                        _detail("right_pointer_value", right_pointer_value),
-                    ]
-                )
-            elif isinstance(right_operand, IndirectExprRef):
-                right_target = right_operand.resolve_ctx(ctx)
-                # Collapse expression refs to concrete resolved tag labels (for concise trace display).
-                right_details.append(_detail("right", right_target.name))
-            elif isinstance(right_operand, Expression):
-                right_details.append(_detail("right", repr(right_operand)))
-            right_value = _resolve_operand(condition.value)
-            value = bool(condition.evaluate(ctx))
-            return value, [
-                _detail("left", left_label),
-                _detail("left_value", left_value),
-                _detail("right_value", right_value),
-                *extra_details,
-                *right_details,
-            ]
-
-        expr_compare_ops: tuple[type[Any], ...] = (
-            ExprCompareEq,
-            ExprCompareNe,
-            ExprCompareLt,
-            ExprCompareLe,
-            ExprCompareGt,
-            ExprCompareGe,
-        )
-        if isinstance(condition, expr_compare_ops):
-            left_value = condition.left.evaluate(ctx)
-            right_value = condition.right.evaluate(ctx)
-            value = bool(condition.evaluate(ctx))
-            return value, [
-                _detail("left", repr(condition.left)),
-                _detail("left_value", left_value),
-                _detail("right", repr(condition.right)),
-                _detail("right_value", right_value),
-            ]
-
-        if isinstance(condition, AllCondition):
-            child_results: list[str] = []
-            result = True
-            for idx, child in enumerate(condition.conditions):
-                child_result, child_details = self._evaluate_condition_value(child, ctx)
-                child_text = self._condition_term_text(child, child_details)
-                child_results.append(f"{child_text}({str(child_result).lower()})")
-                if not child_result:
-                    result = False
-                    for skipped in condition.conditions[idx + 1 :]:
-                        child_results.append(f"{self._condition_expression(skipped)}(skipped)")
-                    break
-            return result, [_detail("terms", " & ".join(child_results))]
-
-        if isinstance(condition, AnyCondition):
-            child_results = []
-            result = False
-            for idx, child in enumerate(condition.conditions):
-                child_result, child_details = self._evaluate_condition_value(child, ctx)
-                child_text = self._condition_term_text(child, child_details)
-                child_results.append(f"{child_text}({str(child_result).lower()})")
-                if child_result:
-                    result = True
-                    for skipped in condition.conditions[idx + 1 :]:
-                        child_results.append(f"{self._condition_expression(skipped)}(skipped)")
-                    break
-            return result, [_detail("terms", " | ".join(child_results))]
-
-        value = bool(condition.evaluate(ctx))
-        return value, []
+        return self._condition_trace.evaluate(condition, ctx)
 
     def _condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
-        expression = self._condition_expression(condition)
-        return self._trace_formatter.condition_term_text(expression=expression, details=details)
+        return self._condition_trace.summary(condition, details)
 
     def _condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
-        return self._trace_formatter.condition_annotation(
+        return self._condition_trace.annotation(
             status=status,
             expression=expression,
             summary=summary,
         )
 
-    def _condition_detail_map(self, details: list[dict[str, Any]]) -> dict[str, Any]:
-        return self._trace_formatter.condition_detail_map(details)
-
-    def _comparison_parts(self, expression: str) -> tuple[str, str, str] | None:
-        return self._trace_formatter.comparison_parts(expression)
-
-    def _comparison_right_text(self, right: str, details: dict[str, Any]) -> str:
-        return self._trace_formatter.comparison_right_text(right, details)
-
-    def _is_literal_operand(self, text: str) -> bool:
-        return self._trace_formatter.is_literal_operand(text)
-
     def _condition_expression(self, condition: Any) -> str:
-        from pyrung.core.condition import (
-            AllCondition,
-            AnyCondition,
-            BitCondition,
-            FallingEdgeCondition,
-            IntTruthyCondition,
-            NormallyClosedCondition,
-            RisingEdgeCondition,
-        )
-        from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-        from pyrung.core.tag import Tag
-
-        def _value_text(value: Any) -> str:
-            if isinstance(value, Tag):
-                return value.name
-            if isinstance(value, IndirectRef):
-                return f"{value.block.name}[{value.pointer.name}]"
-            if isinstance(value, IndirectExprRef):
-                return f"{value.block.name}[{value.expr!r}]"
-            return repr(value)
-
-        def _indirect_ref_text(value: Any) -> str:
-            return f"{value.block.name}[{value.pointer.name}]"
-
-        if isinstance(condition, BitCondition):
-            return condition.tag.name
-        if isinstance(condition, IntTruthyCondition):
-            return f"{condition.tag.name} != 0"
-        if isinstance(condition, NormallyClosedCondition):
-            return f"!{condition.tag.name}"
-        if isinstance(condition, RisingEdgeCondition):
-            return f"rise({condition.tag.name})"
-        if isinstance(condition, FallingEdgeCondition):
-            return f"fall({condition.tag.name})"
-        condition_type_name = type(condition).__name__
-        direct_op = _DIRECT_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
-        if direct_op is not None:
-            return f"{condition.tag.name} {direct_op} {_value_text(condition.value)}"
-        indirect_op = _INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
-        if indirect_op is not None:
-            return (
-                f"{_indirect_ref_text(condition.indirect_ref)} "
-                f"{indirect_op} {_value_text(condition.value)}"
-            )
-        expr_op = _EXPR_COMPARE_OPERATOR_BY_CLASS_NAME.get(condition_type_name)
-        if expr_op is not None:
-            return f"{condition.left!r} {expr_op} {condition.right!r}"
-        if isinstance(condition, AllCondition):
-            terms = " & ".join(self._condition_expression(child) for child in condition.conditions)
-            return f"({terms})"
-        if isinstance(condition, AnyCondition):
-            terms = " | ".join(self._condition_expression(child) for child in condition.conditions)
-            return f"({terms})"
-        return condition.__class__.__name__
+        return self._condition_trace.expression(condition)
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""
