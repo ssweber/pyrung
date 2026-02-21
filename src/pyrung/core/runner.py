@@ -103,6 +103,7 @@ class PLCRunner:
             self._logic = [logic]
 
         self._state = initial_state if initial_state is not None else SystemState()
+        self._history_limit = history_limit
         self._history = History(self._state, limit=history_limit)
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
@@ -127,6 +128,31 @@ class PLCRunner:
     def history(self) -> History:
         """Read-only history query surface."""
         return self._history
+
+    def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
+        """Return changed tag values between two retained historical scans."""
+        state_a = self.history.at(scan_a)
+        state_b = self.history.at(scan_b)
+
+        changed: dict[str, tuple[Any, Any]] = {}
+        all_keys = sorted(set(state_a.tags.keys()) | set(state_b.tags.keys()))
+        for key in all_keys:
+            old_value = state_a.tags.get(key)
+            new_value = state_b.tags.get(key)
+            if old_value != new_value:
+                changed[key] = (old_value, new_value)
+        return changed
+
+    def fork_from(self, scan_id: int) -> PLCRunner:
+        """Create an independent runner from a retained historical snapshot."""
+        historical_state = self.history.at(scan_id)
+        fork = PLCRunner(
+            logic=list(self._logic),
+            initial_state=historical_state,
+            history_limit=self._history_limit,
+        )
+        fork.set_time_mode(self._time_mode, dt=self._dt)
+        return fork
 
     @property
     def simulation_time(self) -> float:

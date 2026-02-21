@@ -15,6 +15,7 @@ runner = PLCRunner(logic)
 - a list of rungs (`[rung1, rung2]`)
 - `None` for an empty program (useful in tests)
 - an `initial_state` keyword argument for custom starting state
+- a `history_limit` keyword argument (`int | None`) for retained snapshots
 
 ## Time modes
 
@@ -79,7 +80,33 @@ runner.time_mode               # Current TimeMode
 state.scan_id    # int — monotonic scan counter (starts at 0)
 state.timestamp  # float — simulation clock in seconds
 state.tags       # PMap[str, value] — all tag values
-state.memory     # PMap[str, value] — internal engine state
+state.memory     # PMap[str, value] - internal engine state
+```
+
+## History, diff, and fork
+
+`PLCRunner` retains immutable `SystemState` snapshots, including the initial state.
+
+```python
+runner = PLCRunner(logic, history_limit=1000)  # keep latest 1000 snapshots
+
+runner.history.at(5)         # one retained snapshot
+runner.history.range(3, 7)   # [scan_id 3, 4, 5, 6] if retained
+runner.history.latest(10)    # up to 10 snapshots (oldest -> newest)
+```
+
+You can compare two retained scans by tag value:
+
+```python
+changes = runner.diff(scan_a=5, scan_b=10)
+# {"TagName": (old_value, new_value), ...}
+```
+
+And branch execution from a historical scan:
+
+```python
+fork = runner.fork_from(scan_id=10)
+fork.step()   # advances independently of parent runner
 ```
 
 ## Injecting inputs
