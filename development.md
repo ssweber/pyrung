@@ -78,6 +78,31 @@ extensions:
   for type checking. Note that this extension works with non-Microsoft VSCode forks like
   Cursor.
 
+## Internal Debug Architecture
+
+Debugger internals are intentionally split into a typed trace model plus adapter serialization:
+
+- Core stepping (`PLCDebugger`) emits `TraceEvent` objects (`SourceSpan`, `TraceRegion`,
+  `ConditionTrace`) and `ScanStep.trace` carries this typed model.
+- DAP owns the wire conversion boundary and translates typed traces into the `pyrungTrace`
+  event payload consumed by clients.
+- The debugger/runner contract is expressed through `DebugRunner` in
+  `src/pyrung/core/debugger_protocol.py`.
+
+This debug contract is **internal-only**:
+
+- Do not export `DebugRunner`, handler classes, or debug trace models in top-level public
+  API surfaces.
+- Keep compatibility commitments focused on user-facing APIs and DAP wire payload fields,
+  not internal debugger helper protocols.
+
+Instruction stepping uses a registry + handler pattern:
+
+- `CallInstructionDebugHandler` and `ForLoopInstructionDebugHandler` handle control-flow-heavy
+  instructions.
+- `GenericInstructionDebugHandler` is the fallback for all other instructions.
+- `PLCDebugger` remains an orchestrator; handlers encapsulate instruction-specific flow.
+
 ## Documentation
 
 - [uv docs](https://docs.astral.sh/uv/)

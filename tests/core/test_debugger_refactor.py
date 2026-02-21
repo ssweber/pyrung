@@ -5,7 +5,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, out
+from pyrung.core import Bool, Int, PLCRunner, Program, Rung, call, forloop, out, subroutine
+from pyrung.core.debug_handlers import (
+    CallInstructionDebugHandler,
+    ForLoopInstructionDebugHandler,
+    GenericInstructionDebugHandler,
+)
 from pyrung.core.debug_trace import ConditionTrace, SourceSpan, TraceEvent, TraceRegion
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.instruction import CallInstruction, ForLoopInstruction, OutInstruction
@@ -52,9 +57,51 @@ def test_debugger_control_flow_handlers_are_registered_with_generic_fallback() -
     )
     fallback_handler = debugger._resolve_instruction_handler(OutInstruction(Bool("Out")))
 
-    assert call_handler.__name__ == "_iter_call_instruction_steps"
-    assert forloop_handler.__name__ == "_iter_forloop_instruction_steps"
-    assert fallback_handler.__name__ == "_iter_generic_instruction_steps"
+    assert isinstance(call_handler, CallInstructionDebugHandler)
+    assert isinstance(forloop_handler, ForLoopInstructionDebugHandler)
+    assert isinstance(fallback_handler, GenericInstructionDebugHandler)
+
+
+def test_call_handler_preserves_subroutine_context_and_call_stack() -> None:
+    done = Bool("Done")
+    sub = Bool("Sub")
+
+    with Program(strict=False) as logic:
+        with subroutine("work"):
+            with Rung():
+                out(sub)
+
+        with Rung():
+            call("work")
+            out(done)
+
+    runner = PLCRunner(logic)
+    steps = list(runner.scan_steps_debug())
+
+    sub_instruction_steps = [
+        step for step in steps if step.kind == "instruction" and step.subroutine_name == "work"
+    ]
+    assert sub_instruction_steps
+    assert sub_instruction_steps[0].call_stack == ("work",)
+    assert runner.current_state.tags["Sub"] is True
+    assert runner.current_state.tags["Done"] is True
+
+
+def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
+    pulse = Bool("Pulse")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            with forloop(2):
+                out(pulse)
+
+    runner = PLCRunner(logic)
+    steps = list(runner.scan_steps_debug())
+
+    instruction_steps = [step for step in steps if step.kind == "instruction"]
+    assert len(instruction_steps) == 2
+    assert all(step.instruction_kind == "OutInstruction" for step in instruction_steps)
+    assert runner.current_state.tags["Pulse"] is True
 
 
 def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
@@ -102,4 +149,3 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
 
     assert [step.kind for step in steps] == ["instruction", "rung"]
     assert runner.current_state.tags["Light"] is True
-

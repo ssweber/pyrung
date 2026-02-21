@@ -1,4 +1,4 @@
-"""Protocol boundary used by PLCDebugger to interact with a runner."""
+"""Internal protocol boundary used by PLCDebugger to interact with a runner."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pyrung.core.rung import Rung
 
 
 class DebugRunner(Protocol):
-    """Public runner API consumed by the debugger."""
+    """Internal runner API consumed by the debugger."""
 
     def prepare_scan(self) -> tuple[ScanContext, float]:
         """Create/initialize one scan context and return (context, dt)."""
@@ -36,4 +36,3 @@ class DebugRunner(Protocol):
 
     def condition_expression(self, condition: Any) -> str:
         """Return human-readable condition expression."""
-

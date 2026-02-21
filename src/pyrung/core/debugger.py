@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -17,6 +17,7 @@ from pyrung.core.debug_trace import (
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.debug_handlers import InstructionDebugHandler
     from pyrung.core.debugger_protocol import DebugRunner
     from pyrung.core.instruction import Instruction
     from pyrung.core.rung import Rung
@@ -71,22 +72,26 @@ class DebugInstructionState:
     step_trace: TraceEvent
 
 
-InstructionHandler = Callable[[DebugInstructionState], Generator[Any, None, None]]
-
-
 class PLCDebugger:
     """Produces debug scan steps and trace payloads for a runner."""
 
     def __init__(self, *, step_factory: type[Any]) -> None:
         self._step_factory = step_factory
-        self._instruction_handlers: dict[type[Any], InstructionHandler] = {}
+        self._instruction_handlers: dict[type[Any], InstructionDebugHandler] = {}
+        self._default_instruction_handler: InstructionDebugHandler
         self._register_instruction_handlers()
 
     def _register_instruction_handlers(self) -> None:
+        from pyrung.core.debug_handlers import (
+            CallInstructionDebugHandler,
+            ForLoopInstructionDebugHandler,
+            GenericInstructionDebugHandler,
+        )
         from pyrung.core.instruction import CallInstruction, ForLoopInstruction
 
-        self._instruction_handlers[CallInstruction] = self._iter_call_instruction_steps
-        self._instruction_handlers[ForLoopInstruction] = self._iter_forloop_instruction_steps
+        self._default_instruction_handler = GenericInstructionDebugHandler()
+        self._instruction_handlers[CallInstruction] = CallInstructionDebugHandler()
+        self._instruction_handlers[ForLoopInstruction] = ForLoopInstructionDebugHandler()
 
     def scan_steps_debug(self, runner: DebugRunner) -> Generator[Any, None, None]:
         """Execute one scan cycle and yield debug steps."""
@@ -113,7 +118,7 @@ class PLCDebugger:
                 ),
             )
             yield from self._iter_rung_steps(
-                DebugRungState(
+                self._make_rung_state(
                     execution=execution,
                     rung=rung,
                     rung_condition_traces=rung_condition_traces,
@@ -156,7 +161,7 @@ class PLCDebugger:
                         ),
                     )
                     yield from self._iter_rung_steps(
-                        DebugRungState(
+                        self._make_rung_state(
                             execution=child_execution,
                             rung=item,
                             rung_condition_traces=child_conditions,
@@ -164,7 +169,7 @@ class PLCDebugger:
                     )
                 else:
                     yield from self._iter_instruction_steps(
-                        DebugInstructionState(
+                        self._make_instruction_state(
                             execution=execution,
                             rung=rung,
                             instruction=item,
@@ -198,170 +203,14 @@ class PLCDebugger:
         instruction_state: DebugInstructionState,
     ) -> Generator[Any, None, None]:
         handler = self._resolve_instruction_handler(instruction_state.instruction)
-        yield from handler(instruction_state)
+        yield from handler.iter_steps(instruction_state, self)
 
-    def _resolve_instruction_handler(self, instruction: Instruction) -> InstructionHandler:
+    def _resolve_instruction_handler(self, instruction: Instruction) -> InstructionDebugHandler:
         for instruction_cls in type(instruction).__mro__:
             handler = self._instruction_handlers.get(instruction_cls)
             if handler is not None:
                 return handler
-        return self._iter_generic_instruction_steps
-
-    def _iter_call_instruction_steps(
-        self,
-        instruction_state: DebugInstructionState,
-    ) -> Generator[Any, None, None]:
-        from pyrung.core.instruction import CallInstruction, SubroutineReturnSignal
-
-        execution = instruction_state.execution
-        instruction = instruction_state.instruction
-        if not isinstance(instruction, CallInstruction):
-            return
-
-        if not execution.enabled:
-            instruction.execute(execution.ctx, execution.enabled)
-            return
-
-        if instruction.subroutine_name not in instruction._program.subroutines:
-            raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
-
-        instruction_span = self._resolve_location(
-            instruction,
-            fallback=self._instruction_fallback_span(instruction_state.rung),
-            fallback_end_to_line=True,
-        )
-        yield self._emit_step(
-            execution=execution,
-            rung=instruction_state.rung,
-            kind="instruction",
-            source=instruction_span,
-            trace=instruction_state.step_trace,
-            instruction_kind=instruction.__class__.__name__,
-        )
-
-        next_stack = (*execution.call_stack, instruction.subroutine_name)
-        try:
-            for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
-                sub_enabled, sub_condition_traces = self._evaluate_conditions_with_trace(
-                    execution.runner,
-                    sub_rung._conditions,
-                    execution.ctx,
-                )
-                sub_execution = execution.with_overrides(
-                    kind="subroutine",
-                    depth=execution.depth + 1,
-                    subroutine_name=instruction.subroutine_name,
-                    call_stack=next_stack,
-                    enabled=sub_enabled,
-                    parent_enabled=True,
-                    enabled_state=self._enabled_state_for(
-                        kind="subroutine",
-                        enabled=sub_enabled,
-                        parent_enabled=True,
-                    ),
-                )
-                yield from self._iter_rung_steps(
-                    DebugRungState(
-                        execution=sub_execution,
-                        rung=sub_rung,
-                        rung_condition_traces=sub_condition_traces,
-                    )
-                )
-        except SubroutineReturnSignal:
-            return
-
-    def _iter_forloop_instruction_steps(
-        self,
-        instruction_state: DebugInstructionState,
-    ) -> Generator[Any, None, None]:
-        from pyrung.core.instruction import ForLoopInstruction, resolve_tag_or_value_ctx
-
-        execution = instruction_state.execution
-        instruction = instruction_state.instruction
-        if not isinstance(instruction, ForLoopInstruction):
-            return
-
-        if not execution.enabled:
-            instruction.execute(execution.ctx, execution.enabled)
-            return
-
-        if not instruction.should_execute(execution.enabled):
-            return
-
-        count_value = resolve_tag_or_value_ctx(instruction.count, execution.ctx)
-        iterations = max(0, int(count_value))
-
-        child_execution = execution.with_overrides(enabled=True, enabled_state="enabled")
-        for i in range(iterations):
-            execution.ctx.set_tag(instruction.idx_tag.name, i)
-            for child in instruction.instructions:
-                yield from self._iter_instruction_steps(
-                    DebugInstructionState(
-                        execution=child_execution,
-                        rung=instruction_state.rung,
-                        instruction=child,
-                        step_trace=instruction_state.step_trace,
-                    )
-                )
-
-    def _iter_generic_instruction_steps(
-        self,
-        instruction_state: DebugInstructionState,
-    ) -> Generator[Any, None, None]:
-        execution = instruction_state.execution
-        instruction = instruction_state.instruction
-
-        if not execution.enabled and instruction.is_inert_when_disabled():
-            instruction.execute(execution.ctx, execution.enabled)
-            return
-
-        instruction_span = self._resolve_location(
-            instruction,
-            fallback=self._instruction_fallback_span(instruction_state.rung),
-            fallback_end_to_line=True,
-        )
-        debug_substeps = getattr(instruction, "debug_substeps", None)
-        if debug_substeps:
-            for substep in debug_substeps:
-                substep_span = self._resolve_location(
-                    substep,
-                    fallback=instruction_span,
-                    fallback_end_to_line=True,
-                )
-                substep_condition_trace = self._instruction_substep_condition_trace(
-                    runner=execution.runner,
-                    substep=substep,
-                    ctx=execution.ctx,
-                    enabled=execution.enabled,
-                    enabled_state=execution.enabled_state,
-                    source_file=substep_span.source_file,
-                    source_line=substep_span.source_line,
-                )
-                substep_trace = self._instruction_substep_trace(
-                    source=substep_span,
-                    enabled_state=execution.enabled_state,
-                    condition_trace=substep_condition_trace,
-                )
-                yield self._emit_step(
-                    execution=execution,
-                    rung=instruction_state.rung,
-                    kind="instruction",
-                    source=substep_span,
-                    trace=substep_trace,
-                    instruction_kind=substep.instruction_kind,
-                )
-            instruction.execute(execution.ctx, execution.enabled)
-            return
-
-        yield self._emit_step(
-            execution=execution,
-            rung=instruction_state.rung,
-            kind="instruction",
-            source=instruction_span,
-            trace=instruction_state.step_trace,
-            instruction_kind=instruction.__class__.__name__,
-        )
-        instruction.execute(execution.ctx, execution.enabled)
+        return self._default_instruction_handler
 
     def _instruction_substep_trace(
         self,
@@ -656,6 +505,34 @@ class PLCDebugger:
 
     def _make_step_trace(self, regions: list[TraceRegion]) -> TraceEvent:
         return TraceEvent(regions=list(regions))
+
+    def _make_rung_state(
+        self,
+        *,
+        execution: DebugExecutionState,
+        rung: Rung,
+        rung_condition_traces: list[ConditionTrace],
+    ) -> DebugRungState:
+        return DebugRungState(
+            execution=execution,
+            rung=rung,
+            rung_condition_traces=rung_condition_traces,
+        )
+
+    def _make_instruction_state(
+        self,
+        *,
+        execution: DebugExecutionState,
+        rung: Rung,
+        instruction: Instruction,
+        step_trace: TraceEvent,
+    ) -> DebugInstructionState:
+        return DebugInstructionState(
+            execution=execution,
+            rung=rung,
+            instruction=instruction,
+            step_trace=step_trace,
+        )
 
     def _build_branch_maps(
         self,

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pyrung.core.runner import ScanStep
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
 
@@ -115,6 +116,14 @@ def _unconditional_script() -> str:
         "        out(light)\n"
         "\n"
         "runner = PLCRunner(prog)\n"
+    )
+
+
+def _empty_logic_runner_script() -> str:
+    return (
+        "from pyrung.core import PLCRunner\n"
+        "\n"
+        "runner = PLCRunner()\n"
     )
 
 
@@ -498,6 +507,26 @@ def test_next_advances_one_rung_and_emits_step_stop(tmp_path: Path):
     assert adapter._current_rung_index == 0
 
 
+def test_next_with_empty_logic_runner_keeps_scan_stack_frame(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "empty_runner.py", _empty_logic_runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="next")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_step is None
+
+    stack_messages = _send_request(adapter, out_stream, seq=3, command="stackTrace")
+    stack_response = _single_response(stack_messages)
+    assert stack_response["body"]["stackFrames"][0]["name"] == "Scan"
+
+
 def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Path):
     stepin_out = io.BytesIO()
     stepin_adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=stepin_out)
@@ -694,6 +723,39 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     )
     detail_names = {item["name"] for item in conditions[0]["details"]}
     assert {"tag", "value"}.issubset(detail_names)
+
+
+def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+
+    assert adapter._current_step is not None
+    current = adapter._current_step
+    adapter._current_step = ScanStep(
+        rung_index=current.rung_index,
+        rung=current.rung,
+        ctx=current.ctx,
+        kind=current.kind,
+        subroutine_name=current.subroutine_name,
+        depth=current.depth,
+        call_stack=current.call_stack,
+        source_file=current.source_file,
+        source_line=current.source_line,
+        end_line=current.end_line,
+        enabled_state=current.enabled_state,
+        trace="unexpected-trace-type",  # type: ignore[arg-type]
+        instruction_kind=current.instruction_kind,
+    )
+
+    body = adapter._current_trace_body_locked()
+    assert body is not None
+    assert body["regions"] == []
 
 
 def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):

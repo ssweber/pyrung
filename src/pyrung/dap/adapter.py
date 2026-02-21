@@ -243,7 +243,7 @@ class DAPAdapter:
     def _on_stackTrace(self, args: dict[str, Any]) -> HandlerResult:
         with self._state_lock:
             runner = self._require_runner_locked()
-            rungs = list(runner._logic)
+            rungs = self._top_level_rungs(runner)
             current_step = self._current_step
             current_index = self._current_rung_index
             program_path = self._program_path
@@ -461,7 +461,7 @@ class DAPAdapter:
 
     def _advance_one_step_locked(self) -> bool:
         runner = self._require_runner_locked()
-        if not runner._logic:
+        if not self._top_level_rungs(runner):
             runner.step()
             self._scan_gen = None
             self._current_step = None
@@ -520,7 +520,7 @@ class DAPAdapter:
         runner = self._require_runner_locked()
         visited_rungs: set[int] = set()
         visited_programs: set[int] = set()
-        for rung in runner._logic:
+        for rung in self._top_level_rungs(runner):
             self._index_rung_lines(
                 rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs
             )
@@ -800,6 +800,10 @@ class DAPAdapter:
             raise DAPAdapterError("No program launched")
         return self._runner
 
+    def _top_level_rungs(self, runner: PLCRunner) -> list[Rung]:
+        """Return top-level rungs through the runner's public debug API."""
+        return list(runner.iter_top_level_rungs())
+
     def _current_trace_body_locked(self) -> dict[str, Any] | None:
         step = self._current_step
         if step is None:
@@ -856,59 +860,6 @@ class DAPAdapter:
                         "source": source_body,
                         "line": region.source.source_line,
                         "endLine": region.source.end_line,
-                        "conditions": conditions,
-                    }
-                )
-        else:
-            trace_dict = trace if isinstance(trace, dict) else {}
-            for region in trace_dict.get("regions", []):
-                source_file = region.get("source_file")
-                source_body = None
-                source_path = (
-                    self._canonical_path(source_file) if isinstance(source_file, str) else None
-                )
-                if source_path:
-                    source_body = {"name": Path(source_path).name, "path": source_path}
-
-                conditions: list[dict[str, Any]] = []
-                for cond in region.get("conditions", []):
-                    cond_source = None
-                    cond_file = cond.get("source_file")
-                    cond_path = (
-                        self._canonical_path(cond_file) if isinstance(cond_file, str) else None
-                    )
-                    if cond_path:
-                        cond_source = {"name": Path(cond_path).name, "path": cond_path}
-                    details = []
-                    for detail in cond.get("details", []):
-                        if not isinstance(detail, dict):
-                            continue
-                        details.append(
-                            {
-                                "name": str(detail.get("name", "")),
-                                "value": self._format_value(detail.get("value")),
-                            }
-                        )
-                    conditions.append(
-                        {
-                            "source": cond_source,
-                            "line": cond.get("source_line"),
-                            "expression": cond.get("expression"),
-                            "status": cond.get("status"),
-                            "value": cond.get("value"),
-                            "details": details,
-                            "summary": cond.get("summary"),
-                            "annotation": cond.get("annotation"),
-                        }
-                    )
-
-                regions.append(
-                    {
-                        "kind": region.get("kind"),
-                        "enabledState": region.get("enabled_state"),
-                        "source": source_body,
-                        "line": region.get("source_line"),
-                        "endLine": region.get("end_line"),
                         "conditions": conditions,
                     }
                 )
