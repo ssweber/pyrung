@@ -132,6 +132,29 @@ snapshot = runner.history.at(runner.playhead)
 
 `seek()`/`rewind()` are inspection-only navigation APIs. Calling `step()` still appends a new scan at the history tip.
 
+## Rung inspection
+
+You can inspect retained rung-level debug trace data by scan and rung index:
+
+```python
+trace = runner.inspect(rung_id=0)            # uses runner.playhead
+trace = runner.inspect(rung_id=0, scan_id=5) # explicit retained scan
+```
+
+`trace` is a `RungTrace` with:
+
+- `scan_id`
+- `rung_id`
+- `events` (`tuple[RungTraceEvent, ...]`)
+
+If the scan is missing/evicted, `inspect()` raises `KeyError(scan_id)`.
+If the scan exists but no trace is retained for that rung, it raises `KeyError(rung_id)`.
+
+Current incremental limitation:
+
+- `inspect()` trace retention is currently populated through `scan_steps_debug()` (including DAP stepping flows).
+- Scans produced only with `step()`/`run()` may not yet have retained inspect trace.
+
 ## Planned features (Phase 3)
 
 The following debug APIs are still planned:

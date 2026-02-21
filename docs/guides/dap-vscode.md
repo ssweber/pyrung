@@ -63,8 +63,28 @@ Add to `.vscode/launch.json`:
 | Variables panel | `SystemState.tags` |
 | Debug console force | `runner.add_force()` / `runner.remove_force()` |
 | Breakpoints (gutter) | DAP `setBreakpoints` mapped to captured source lines |
-| Inline decorations | `ScanStep.trace` data |
+| Inline decorations | Hybrid trace source: live `ScanStep.trace` + `runner.inspect()` fallback |
 | Call stack | Subroutine call stack from `ScanStep.call_stack` |
+
+## Trace payload (`pyrungTrace`)
+
+The adapter emits a custom event named `pyrungTrace` after each stop.
+
+Payload includes:
+
+- `traceVersion`: adapter trace schema version
+- `traceSource`: `"live"` or `"inspect"`
+- `scanId`: scan identity for the trace
+- `rungId`: top-level rung identity for the trace
+- `step`: current step metadata (`kind`, source location, call stack, etc.)
+- `regions`: condition/instruction trace regions used for inline decorations
+
+`traceSource` semantics:
+
+- `"live"`: trace came from the current in-flight `ScanStep.trace`.
+- `"inspect"`: trace came from committed scan data via `runner.inspect(scan_id, rung_id)`.
+
+This hybrid model keeps mid-scan stepping behavior unchanged while allowing retained trace reuse when live step context is unavailable.
 
 ## Source location capture
 
@@ -95,7 +115,7 @@ The debug adapter is a thin Python process that:
 
 1. Spawns (or connects to) a `PLCRunner` with your program.
 2. Translates DAP protocol messages to `runner.step()`, `scan_steps_debug()`, etc.
-3. After each step, reads `ScanStep.trace` and sends inline decoration data to the extension.
+3. After each stop, emits `pyrungTrace` using live `ScanStep.trace` first, then `runner.inspect()` fallback for committed scans.
 4. Provides `SystemState.tags` as the DAP variables response.
 
 DAP is an open protocol — the adapter also works with Neovim (via `nvim-dap`), Emacs (`dap-mode`), and JetBrains IDEs with minimal changes.

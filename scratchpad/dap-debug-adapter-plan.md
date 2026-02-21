@@ -1,5 +1,13 @@
 ## Tightened Plan: DAP Adapter v1 (Keep `step()`, Add `scan_steps()`, Rung-Level Execution with Instruction-Line Breakpoint Mapping)
 
+### Incremental Follow-up (2026-02-21): Hybrid Trace Source
+
+- `pyrungTrace` emission now uses a hybrid source model:
+  - live `ScanStep.trace` for mid-scan stops (step/continue/pause behavior unchanged)
+  - `runner.inspect(scan_id, rung_id)` fallback when live step context is unavailable
+- Trace payload now includes `traceSource`, `scanId`, and `rungId` for client correlation.
+- Full adapter simplification still depends on future all-scan inspect coverage in core.
+
 ### Summary
 Build a minimal, robust DAP adapter aligned with `spec/core/debug.md` Phase 2:
 1. Keep `PLCRunner.step()` as-is (no rename now).

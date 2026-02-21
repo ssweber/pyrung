@@ -14,7 +14,7 @@ from typing import Any, BinaryIO
 
 from pyrung.core import PLCRunner, Program
 from pyrung.core.context import ScanContext
-from pyrung.core.debug_trace import TraceEvent
+from pyrung.core.debug_trace import RungTraceEvent, TraceEvent
 from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
@@ -61,10 +61,13 @@ class DAPAdapter:
 
         self._runner: PLCRunner | None = None
         self._scan_gen: Generator[ScanStep, None, None] | None = None
+        self._current_scan_id: int | None = None
         self._current_step: ScanStep | None = None
         self._current_rung_index: int | None = None
         self._current_rung: Rung | None = None
         self._current_ctx: ScanContext | None = None
+        self._last_committed_scan_id: int | None = None
+        self._last_committed_rung_index: int | None = None
         self._program_path: str | None = None
 
         self._breakpoints_by_file: dict[str, set[int]] = {}
@@ -213,10 +216,13 @@ class DAPAdapter:
                 raise DAPAdapterError("Cannot launch while continue is running")
             self._runner = runner
             self._scan_gen = None
+            self._current_scan_id = None
             self._current_step = None
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
+            self._last_committed_scan_id = None
+            self._last_committed_rung_index = None
             self._program_path = str(program_path)
             self._breakpoints_by_file = {}
             self._breakpoint_rung_map = {}
@@ -491,19 +497,31 @@ class DAPAdapter:
         if not self._top_level_rungs(runner):
             runner.step()
             self._scan_gen = None
+            self._current_scan_id = None
             self._current_step = None
             self._current_rung_index = None
             self._current_rung = None
             self._current_ctx = None
+            self._last_committed_scan_id = runner.current_state.scan_id
+            self._last_committed_rung_index = None
             return False
 
         if self._scan_gen is None:
             self._scan_gen = runner.scan_steps_debug()
+            self._current_scan_id = runner.current_state.scan_id + 1
 
         try:
             step = next(self._scan_gen)
         except StopIteration:
+            # Exhausting the scan generator commits the in-flight scan.
+            previous_step = self._current_step
+            committed_scan_id = runner.current_state.scan_id
+            if previous_step is not None:
+                self._last_committed_scan_id = committed_scan_id
+                self._last_committed_rung_index = previous_step.rung_index
+
             self._scan_gen = runner.scan_steps_debug()
+            self._current_scan_id = runner.current_state.scan_id + 1
             step = next(self._scan_gen)
 
         self._current_step = step
@@ -837,110 +855,224 @@ class DAPAdapter:
         return list(runner.iter_top_level_rungs())
 
     def _current_trace_body_locked(self) -> dict[str, Any] | None:
+        runner = self._runner
         step = self._current_step
-        if step is None:
+
+        trace_source = "live"
+        trace: TraceEvent | None = None
+        if step is not None and isinstance(step.trace, TraceEvent):
+            trace = step.trace
+
+        step_kind: str | None = step.kind if step is not None else None
+        instruction_kind: str | None = step.instruction_kind if step is not None else None
+        enabled_state: str | None = step.enabled_state if step is not None else None
+        subroutine_name: str | None = step.subroutine_name if step is not None else None
+        call_stack: list[str] = list(step.call_stack) if step is not None else []
+        rung_index: int | None = step.rung_index if step is not None else None
+        source_line: int | None = (
+            step.source_line or step.rung.source_line if step is not None else None
+        )
+        end_line: int | None = (
+            step.end_line or step.source_line or step.rung.end_line if step is not None else None
+        )
+        step_source_file = (step.source_file or step.rung.source_file) if step is not None else None
+        scan_id = self._current_scan_id
+
+        if trace is None:
+            preferred_scan_id: int | None = None
+            preferred_rung_id: int | None = None
+            if (
+                runner is not None
+                and step is not None
+                and self._current_scan_id is not None
+                and self._current_scan_id <= runner.current_state.scan_id
+            ):
+                preferred_scan_id = self._current_scan_id
+                preferred_rung_id = step.rung_index
+
+            inspect_event = self._inspect_trace_event_locked(
+                preferred_scan_id=preferred_scan_id,
+                preferred_rung_id=preferred_rung_id,
+            )
+            if inspect_event is not None:
+                inspect_scan_id, inspect_rung_id, event = inspect_event
+                if isinstance(event.trace, TraceEvent):
+                    trace_source = "inspect"
+                    trace = event.trace
+                    scan_id = inspect_scan_id
+                    rung_index = inspect_rung_id
+                    if step is None:
+                        step_kind = event.kind
+                        instruction_kind = event.instruction_kind
+                        enabled_state = event.enabled_state
+                        subroutine_name = event.subroutine_name
+                        call_stack = list(event.call_stack)
+                        source_line = event.source_line
+                        end_line = event.end_line
+                        step_source_file = event.source_file
+
+        if step is None and step_kind is None:
             return None
 
-        regions: list[dict[str, Any]] = []
-        trace = step.trace
-        if isinstance(trace, TraceEvent):
-            for region in trace.regions:
-                source_body = None
-                source_path = (
-                    self._canonical_path(region.source.source_file)
-                    if isinstance(region.source.source_file, str)
-                    else None
-                )
-                if source_path:
-                    source_body = {"name": Path(source_path).name, "path": source_path}
-
-                conditions: list[dict[str, Any]] = []
-                for cond in region.conditions:
-                    cond_source = None
-                    cond_path = (
-                        self._canonical_path(cond.source_file)
-                        if isinstance(cond.source_file, str)
-                        else None
-                    )
-                    if cond_path:
-                        cond_source = {"name": Path(cond_path).name, "path": cond_path}
-                    details = [
-                        {
-                            "name": str(detail.get("name", "")),
-                            "value": self._format_value(detail.get("value")),
-                        }
-                        for detail in cond.details
-                        if isinstance(detail, dict)
-                    ]
-                    conditions.append(
-                        {
-                            "source": cond_source,
-                            "line": cond.source_line,
-                            "expression": cond.expression,
-                            "status": cond.status,
-                            "value": cond.value,
-                            "details": details,
-                            "summary": cond.summary,
-                            "annotation": cond.annotation,
-                        }
-                    )
-
-                regions.append(
-                    {
-                        "kind": region.kind,
-                        "enabledState": region.enabled_state,
-                        "source": source_body,
-                        "line": region.source.source_line,
-                        "endLine": region.source.end_line,
-                        "conditions": conditions,
-                    }
-                )
-
+        regions = self._regions_from_trace_event(trace)
         step_source = None
-        step_source_file = step.source_file or step.rung.source_file
         step_source_path = self._canonical_path(step_source_file)
         if step_source_path:
             step_source = {"name": Path(step_source_path).name, "path": step_source_path}
 
+        display_status = self._step_display_status_from_fields(enabled_state=enabled_state)
+        display_text = self._step_display_text_from_fields(
+            kind=step_kind,
+            instruction_kind=instruction_kind,
+            display_status=display_status,
+        )
+
         return {
             "traceVersion": self.TRACE_VERSION,
+            "traceSource": trace_source,
+            "scanId": scan_id,
+            "rungId": rung_index,
             "step": {
-                "kind": step.kind,
-                "instructionKind": step.instruction_kind,
-                "enabledState": step.enabled_state,
-                "displayStatus": self._step_display_status(step),
-                "displayText": self._step_display_text(step),
+                "kind": step_kind,
+                "instructionKind": instruction_kind,
+                "enabledState": enabled_state,
+                "displayStatus": display_status,
+                "displayText": display_text,
                 "source": step_source,
-                "line": step.source_line or step.rung.source_line,
-                "endLine": step.end_line or step.source_line or step.rung.end_line,
-                "subroutineName": step.subroutine_name,
-                "callStack": list(step.call_stack),
-                "rungIndex": step.rung_index,
+                "line": source_line,
+                "endLine": end_line if end_line is not None else source_line,
+                "subroutineName": subroutine_name,
+                "callStack": call_stack,
+                "rungIndex": rung_index,
             },
             "regions": regions,
         }
 
+    def _regions_from_trace_event(self, trace: TraceEvent | None) -> list[dict[str, Any]]:
+        regions: list[dict[str, Any]] = []
+        if not isinstance(trace, TraceEvent):
+            return regions
+
+        for region in trace.regions:
+            source_body = None
+            source_path = (
+                self._canonical_path(region.source.source_file)
+                if isinstance(region.source.source_file, str)
+                else None
+            )
+            if source_path:
+                source_body = {"name": Path(source_path).name, "path": source_path}
+
+            conditions: list[dict[str, Any]] = []
+            for cond in region.conditions:
+                cond_source = None
+                cond_path = (
+                    self._canonical_path(cond.source_file)
+                    if isinstance(cond.source_file, str)
+                    else None
+                )
+                if cond_path:
+                    cond_source = {"name": Path(cond_path).name, "path": cond_path}
+                details = [
+                    {
+                        "name": str(detail.get("name", "")),
+                        "value": self._format_value(detail.get("value")),
+                    }
+                    for detail in cond.details
+                    if isinstance(detail, dict)
+                ]
+                conditions.append(
+                    {
+                        "source": cond_source,
+                        "line": cond.source_line,
+                        "expression": cond.expression,
+                        "status": cond.status,
+                        "value": cond.value,
+                        "details": details,
+                        "summary": cond.summary,
+                        "annotation": cond.annotation,
+                    }
+                )
+
+            regions.append(
+                {
+                    "kind": region.kind,
+                    "enabledState": region.enabled_state,
+                    "source": source_body,
+                    "line": region.source.source_line,
+                    "endLine": region.source.end_line,
+                    "conditions": conditions,
+                }
+            )
+
+        return regions
+
+    def _inspect_trace_event_locked(
+        self,
+        *,
+        preferred_scan_id: int | None,
+        preferred_rung_id: int | None,
+    ) -> tuple[int, int, RungTraceEvent] | None:
+        runner = self._runner
+        if runner is None:
+            return None
+
+        candidates: list[tuple[int, int]] = []
+        if preferred_scan_id is not None and preferred_rung_id is not None:
+            candidates.append((preferred_scan_id, preferred_rung_id))
+        if self._last_committed_scan_id is not None and self._last_committed_rung_index is not None:
+            fallback = (self._last_committed_scan_id, self._last_committed_rung_index)
+            if fallback not in candidates:
+                candidates.append(fallback)
+
+        for scan_id, rung_id in candidates:
+            try:
+                trace = runner.inspect(rung_id=rung_id, scan_id=scan_id)
+            except KeyError:
+                continue
+
+            for event in reversed(trace.events):
+                if isinstance(event.trace, TraceEvent):
+                    return trace.scan_id, trace.rung_id, event
+
+        return None
+
     def _step_display_status(self, step: ScanStep) -> str:
-        if step.enabled_state == "enabled":
+        return self._step_display_status_from_fields(enabled_state=step.enabled_state)
+
+    def _step_display_text(self, step: ScanStep) -> str:
+        return self._step_display_text_from_fields(
+            kind=step.kind,
+            instruction_kind=step.instruction_kind,
+            display_status=self._step_display_status(step),
+        )
+
+    def _step_display_status_from_fields(self, *, enabled_state: str | None) -> str:
+        if enabled_state == "enabled":
             return "enabled"
-        if step.enabled_state == "disabled_parent":
+        if enabled_state == "disabled_parent":
             return "skipped"
         return "disabled"
 
-    def _step_display_text(self, step: ScanStep) -> str:
-        status = self._step_display_status(step)
-        if status == "enabled":
-            prefix = "[RUN]" if step.kind == "instruction" else "[ON]"
-        elif status == "skipped":
+    def _step_display_text_from_fields(
+        self,
+        *,
+        kind: str | None,
+        instruction_kind: str | None,
+        display_status: str,
+    ) -> str:
+        if display_status == "enabled":
+            prefix = "[RUN]" if kind == "instruction" else "[ON]"
+        elif display_status == "skipped":
             prefix = "[SKIP]"
         else:
             prefix = "[OFF]"
 
-        if step.kind == "instruction":
-            label = step.instruction_kind or "Instruction"
-        elif step.kind == "branch":
+        if kind == "instruction":
+            label = instruction_kind or "Instruction"
+        elif kind == "branch":
             label = "Branch"
-        elif step.kind == "subroutine":
+        elif kind == "subroutine":
             label = "Subroutine"
         else:
             label = "Rung"

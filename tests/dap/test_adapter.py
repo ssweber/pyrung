@@ -815,6 +815,9 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     assert traces
     body = traces[0]["body"]
     assert body["traceVersion"] == DAPAdapter.TRACE_VERSION
+    assert body["traceSource"] == "live"
+    assert body["scanId"] == 1
+    assert body["rungId"] == 0
     assert body["step"]["kind"] == "rung"
     assert body["step"]["enabledState"] == "disabled_local"
     assert body["step"]["displayStatus"] == "disabled"
@@ -835,6 +838,39 @@ def test_next_emits_trace_event_with_condition_details(tmp_path: Path):
     )
     detail_names = {item["name"] for item in conditions[0]["details"]}
     assert {"tag", "value"}.issubset(detail_names)
+
+
+def test_trace_body_falls_back_to_runner_inspect_for_committed_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    # First next stops on scan 1 rung without exhausting the generator.
+    _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+
+    # Second next crosses StopIteration, committing scan 1 and caching inspect data.
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    assert adapter._last_committed_scan_id == 1
+    assert adapter._last_committed_rung_index == 0
+
+    # Simulate no live step context; adapter should still surface committed trace.
+    adapter._current_step = None
+    adapter._current_ctx = None
+    adapter._current_rung = None
+    adapter._current_rung_index = None
+
+    body = adapter._current_trace_body_locked()
+    assert body is not None
+    assert body["traceSource"] == "inspect"
+    assert body["scanId"] == 1
+    assert body["rungId"] == 0
+    assert body["step"]["kind"] == "rung"
+    assert body["regions"]
 
 
 def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: Path):

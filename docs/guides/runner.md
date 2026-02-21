@@ -129,6 +129,39 @@ Behavior:
 - `step()` is independent of playhead and always appends at history tip.
 - If `history_limit` eviction removes the current playhead scan, playhead moves to the oldest retained scan.
 
+## Rung inspection (`inspect`)
+
+`PLCRunner.inspect()` returns retained rung-level debug trace data for a specific scan:
+
+```python
+trace = runner.inspect(rung_id=0)            # defaults to runner.playhead
+trace = runner.inspect(rung_id=0, scan_id=5) # explicit retained scan
+```
+
+Returned object model:
+
+- `RungTrace.scan_id`: committed scan id
+- `RungTrace.rung_id`: top-level rung index
+- `RungTrace.events`: ordered tuple of `RungTraceEvent`
+
+Each `RungTraceEvent` captures one debug boundary event with:
+
+- `kind`: `"rung" | "branch" | "subroutine" | "instruction"`
+- `source_file`, `source_line`, `end_line`
+- `subroutine_name`, `depth`, `call_stack`
+- `enabled_state`, `instruction_kind`
+- `trace`: `TraceEvent | None`
+
+Error behavior:
+
+- Missing/evicted scan id raises `KeyError(scan_id)`.
+- Existing scan with no retained rung trace raises `KeyError(rung_id)`.
+
+Current limitation (Phase 3 incremental):
+
+- Trace retention for `inspect()` is currently populated by `scan_steps_debug()` (including DAP stepping paths).
+- Scans produced only by `step()`/`run()`/`run_for()`/`run_until()` may not have retained rung trace yet.
+
 ## Injecting inputs
 
 ### `patch()` — one-shot inputs

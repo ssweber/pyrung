@@ -175,7 +175,7 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debuggin
 | `add_force()` / `remove_force()` | Debug console commands |
 | `when().pause()` | Breakpoints (gutter) |
 | Scan history | Call stack / timeline |
-| `inspect()` trace | Inline decorations |
+| `inspect()` + `ScanStep.trace` | Inline decorations (hybrid source) |
 
 Minimum source contract expected by adapter:
 
@@ -203,6 +203,17 @@ The extension consists of:
 - A small **protocol** between the adapter and the runner for trace and state queries
 
 DAP is an open protocol, so the debug adapter also works with Neovim, Emacs, and JetBrains with minimal changes.
+
+Incremental note (Phase 3, 2026-02-21):
+
+- The adapter emits `pyrungTrace` with:
+  - `traceSource` (`"live"` or `"inspect"`)
+  - `scanId`
+  - `rungId`
+- Trace emission now uses a hybrid source model:
+  - live `ScanStep.trace` while stepping mid-scan
+  - `runner.inspect(scan_id, rung_id)` fallback for committed trace contexts
+- This is additive. Full adapter simplification still depends on all-scan inspect coverage.
 
 ---
 
@@ -308,16 +319,27 @@ runner.inspect(rung_id, scan_id=None) -> RungTrace
 - `rung_id` is rung order index (0-based) in the compiled program.
 - Inspection is read-only.
 
-`RungTrace` includes at minimum:
+Current `RungTrace` v1 shape:
 
-- `scan_id`, `rung_id`, `powered`
-- condition results in evaluation order
-- instruction results in execution order
-- attempted writes and force re-apply events (pre-logic and post-logic)
+- `scan_id`
+- `rung_id`
+- `events: tuple[RungTraceEvent, ...]`
+
+`RungTraceEvent` includes:
+
+- `kind` (`"rung" | "branch" | "subroutine" | "instruction"`)
+- `source_file`, `source_line`, `end_line`
+- `subroutine_name`, `depth`, `call_stack`
+- `enabled_state`, `instruction_kind`
+- `trace` (`TraceEvent | None`)
 
 Missing scan/rung trace raises `KeyError`.
 
-The `RungTrace` schema will be refined during Phase 3 based on what the VS Code extension needs to render meaningful inline decorations.
+Planned future expansion:
+
+- attempted writes and force re-apply events (pre-logic and post-logic)
+
+The `RungTrace` schema will continue to evolve during Phase 3 based on editor rendering needs.
 
 ---
 
