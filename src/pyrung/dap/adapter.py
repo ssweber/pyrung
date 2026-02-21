@@ -171,6 +171,8 @@ class DAPAdapter:
             "supportsConfigurationDoneRequest": True,
             "supportsEvaluateForHovers": False,
             "supportsStepBack": False,
+            "supportsStepOut": True,
+            "supportsTerminateRequest": True,
         }
         return capabilities, [("initialized", {})]
 
@@ -178,9 +180,10 @@ class DAPAdapter:
         return {}, []
 
     def _on_disconnect(self, _args: dict[str, Any]) -> HandlerResult:
-        self._stop_event.set()
-        self._pause_event.set()
-        return {}, [("terminated", {})]
+        return self._shutdown()
+
+    def _on_terminate(self, _args: dict[str, Any]) -> HandlerResult:
+        return self._shutdown()
 
     def _on_threads(self, _args: dict[str, Any]) -> HandlerResult:
         return {"threads": [{"id": self.THREAD_ID, "name": "PLC Scan"}]}, []
@@ -332,6 +335,30 @@ class DAPAdapter:
             }:
                 if not self._advance_one_step_locked():
                     break
+        return {}, [("stopped", self._stopped_body("step"))]
+
+    def _on_stepOut(self, _args: dict[str, Any]) -> HandlerResult:
+        with self._state_lock:
+            self._assert_can_step_locked()
+            origin_step = self._current_step
+            origin_ctx = self._current_ctx
+            if origin_step is None:
+                self._advance_one_step_locked()
+            else:
+                origin_depth = origin_step.depth
+                origin_stack_len = len(origin_step.call_stack)
+                while True:
+                    if not self._advance_one_step_locked():
+                        break
+                    current_step = self._current_step
+                    if current_step is None:
+                        break
+                    if len(current_step.call_stack) < origin_stack_len:
+                        break
+                    if current_step.depth < origin_depth:
+                        break
+                    if self._current_ctx is not origin_ctx:
+                        break
         return {}, [("stopped", self._stopped_body("step"))]
 
     def _on_continue(self, _args: dict[str, Any]) -> HandlerResult:
@@ -799,6 +826,11 @@ class DAPAdapter:
         if self._runner is None:
             raise DAPAdapterError("No program launched")
         return self._runner
+
+    def _shutdown(self) -> HandlerResult:
+        self._stop_event.set()
+        self._pause_event.set()
+        return {}, [("terminated", {})]
 
     def _top_level_rungs(self, runner: PLCRunner) -> list[Rung]:
         """Return top-level rungs through the runner's public debug API."""

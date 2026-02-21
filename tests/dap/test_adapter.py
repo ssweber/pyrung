@@ -391,6 +391,36 @@ def _branch_then_call_script() -> str:
     )
 
 
+def test_initialize_advertises_capabilities():
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=1, command="initialize")
+    response = _single_response(messages)
+    body = response["body"]
+    assert response["success"] is True
+    assert body["supportsConfigurationDoneRequest"] is True
+    assert body["supportsEvaluateForHovers"] is False
+    assert body["supportsStepBack"] is False
+    assert body["supportsStepOut"] is True
+    assert body["supportsTerminateRequest"] is True
+    initialized = [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "initialized"]
+    assert initialized
+
+
+def test_terminate_stops_adapter_and_emits_terminated_event():
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=1, command="terminate")
+    response = _single_response(messages)
+    assert response["success"] is True
+    terminated = [msg for msg in messages if msg.get("type") == "event" and msg.get("event") == "terminated"]
+    assert terminated
+    assert adapter._stop_event.is_set() is True
+    assert adapter._pause_event.is_set() is True
+
+
 def test_launch_with_runner_emits_entry_stop(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -563,6 +593,82 @@ def test_stepin_enters_subroutine_but_next_skips_to_top_level_rung(tmp_path: Pat
     assert next_adapter._current_step is not None
     assert next_adapter._current_step.kind == "rung"
     assert next_adapter._current_rung_index == 0
+
+
+def test_stepout_returns_from_subroutine_to_caller_context(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="stepIn")
+    _drain_messages(out_stream)
+
+    assert adapter._current_step is not None
+    origin_stack_len = len(adapter._current_step.call_stack)
+    assert origin_stack_len > 0
+
+    messages = _send_request(adapter, out_stream, seq=4, command="stepOut")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_step is not None
+    assert len(adapter._current_step.call_stack) < origin_stack_len
+
+
+def test_stepout_exits_branch_to_parent_depth(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path, "branch_unpowered.py", _branch_unpowered_after_first_scan_script()
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="stepIn")
+    _drain_messages(out_stream)
+
+    assert adapter._current_step is not None
+    origin_depth = adapter._current_step.depth
+    assert origin_depth > 0
+
+    messages = _send_request(adapter, out_stream, seq=4, command="stepOut")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_step is not None
+    assert adapter._current_step.depth < origin_depth
+
+
+def test_stepout_from_top_level_advances_to_new_scan_context(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+
+    assert adapter._current_step is not None
+    assert adapter._current_step.depth == 0
+    assert len(adapter._current_step.call_stack) == 0
+    origin_ctx = adapter._current_ctx
+
+    messages = _send_request(adapter, out_stream, seq=3, command="stepOut")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_step is not None
+    assert adapter._current_ctx is not origin_ctx
 
 
 def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_lines(
