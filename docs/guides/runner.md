@@ -109,6 +109,26 @@ fork = runner.fork_from(scan_id=10)
 fork.step()   # advances independently of parent runner
 ```
 
+## Time-travel playhead
+
+You can navigate retained history for read-only inspection:
+
+```python
+runner.playhead              # current inspection scan_id
+runner.seek(scan_id=5)       # move playhead to retained scan
+runner.rewind(seconds=1.0)   # move playhead backward by simulation time
+
+snapshot = runner.history.at(runner.playhead)
+```
+
+Behavior:
+
+- `seek(scan_id)` raises `KeyError` if that scan is not retained.
+- `rewind(seconds)` raises `ValueError` for negative values.
+- `rewind(seconds)` moves to the nearest retained snapshot where `timestamp <= target`.
+- `step()` is independent of playhead and always appends at history tip.
+- If `history_limit` eviction removes the current playhead scan, playhead moves to the oldest retained scan.
+
 ## Injecting inputs
 
 ### `patch()` — one-shot inputs

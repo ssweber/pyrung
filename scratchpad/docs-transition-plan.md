@@ -124,7 +124,7 @@ In `src/pyrung/core/instruction/`: `CopyInstruction`, `MathInstruction`, `OnDela
 | `spec/core/dsl.md` | `ladder-logic.md` | Code examples translate directly. "Needs Specification" → delete. |
 | `spec/core/instructions.md` | `ladder-logic.md` + instruction class docstrings | Instruction Index table → guide. Math overflow tables → `MathInstruction` docstring. "Needs Specification" → delete. |
 | `spec/core/engine.md` | `runner.md` + PLCRunner/SystemState docstrings | Scan Cycle Phases 0-8 → `runner.md` and `SystemState` class docstring. "Needs Specification" → delete. |
-| `spec/core/debug.md` | `forces-debug.md` + `dap-vscode.md` | **Phase 1+2 only** → guides. Phase 3 items (history, seek, diff, fork) are **not yet implemented** — wrap in `!!! note "Planned"` admonitions only, not full guide sections. (See `scratchpad/debug-api-next-steps.md` for implementation order.) |
+| `spec/core/debug.md` | `forces-debug.md` + `dap-vscode.md` | Phase 1+2 fully guide-ready. For Phase 3, `history`, `seek/rewind/playhead`, `diff`, and `fork_from` are implemented; keep `inspect`, monitors, breakpoints, and labels in planned sections until shipped. (Track in `scratchpad/debug-api-next-steps.md`.) |
 | `spec/dialects/click.md` | `dialects/click.md` + click module docstrings | "Needs Specification" → delete. |
 | `spec/dialects/circuitpy.md` | `dialects/circuitpy.md` as stub | No source code exists yet; keep spec as internal reference until dialect is implemented. |
 

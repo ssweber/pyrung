@@ -98,6 +98,87 @@ def test_history_enforces_monotonic_scan_order_when_appending() -> None:
         history._append(SystemState())
 
 
+def test_playhead_defaults_to_current_scan_and_follows_tip() -> None:
+    runner = PLCRunner(logic=[])
+
+    assert runner.playhead == 0
+    runner.step()
+    assert runner.playhead == 1
+    runner.step()
+    assert runner.playhead == 2
+
+
+def test_seek_moves_playhead_without_changing_execution_tip() -> None:
+    runner = PLCRunner(logic=[])
+    runner.run(cycles=3)
+
+    state = runner.seek(1)
+    assert state.scan_id == 1
+    assert runner.playhead == 1
+    assert runner.current_state.scan_id == 3
+
+
+def test_seek_raises_for_missing_scan() -> None:
+    runner = PLCRunner(logic=[])
+
+    with pytest.raises(KeyError):
+        runner.seek(99)
+
+
+def test_rewind_moves_to_nearest_scan_at_or_before_target_timestamp() -> None:
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.5)
+    runner.run(cycles=5)  # scan 5 @ 2.5s
+
+    runner.seek(5)
+    state = runner.rewind(0.9)  # target: 1.6s -> scan 3 @ 1.5s
+
+    assert state.scan_id == 3
+    assert runner.playhead == 3
+
+
+def test_rewind_clamps_to_oldest_retained_scan_when_target_is_before_history() -> None:
+    runner = PLCRunner(logic=[], history_limit=3)
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=1.0)
+    runner.run(cycles=5)  # retained scans are [3, 4, 5]
+
+    runner.seek(5)
+    state = runner.rewind(100.0)
+
+    assert state.scan_id == 3
+    assert runner.playhead == 3
+
+
+def test_rewind_rejects_negative_seconds() -> None:
+    runner = PLCRunner(logic=[])
+
+    with pytest.raises(ValueError, match="seconds must be >= 0"):
+        runner.rewind(-0.1)
+
+
+def test_step_appends_at_tip_even_when_playhead_is_in_the_past() -> None:
+    runner = PLCRunner(logic=[])
+    runner.run(cycles=3)
+    runner.seek(1)
+
+    runner.step()
+
+    assert runner.current_state.scan_id == 4
+    assert runner.playhead == 1
+    assert _scan_ids(runner) == [0, 1, 2, 3, 4]
+
+
+def test_playhead_moves_to_oldest_retained_scan_when_evicted() -> None:
+    runner = PLCRunner(logic=[], history_limit=3)
+
+    runner.run(cycles=4)  # retained [2, 3, 4]
+    runner.seek(2)
+
+    runner.step()  # retained [3, 4, 5] -> playhead 2 evicted
+
+    assert runner.playhead == 3
+
+
 def test_diff_returns_only_changed_tags_sorted_and_treats_missing_as_none() -> None:
     initial = SystemState().with_tags({"B": 0, "A": 0})
     runner = PLCRunner(logic=[], initial_state=initial)

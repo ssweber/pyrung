@@ -6,14 +6,17 @@ The debugger platform is now in a strong state:
 
 - Phase 1 (Force): complete.
 - Phase 2 (Source Location + DAP): complete for current scope, including `stepOut` and terminate capability.
-- Phase 3: partially started with history retention/query support.
+- Phase 3: quick wins complete (`B1`, `B4`, `B5`, `B2`).
 
 Recently completed:
 
 - `A1`/`A2`: DAP `stepOut`, capability audit, and terminate capability.
 - `B1`: `PLCRunner` history retention and query API (`at`, `range`, `latest`) with bounded/unbounded retention.
+- `B4`: `runner.diff(scan_a, scan_b)` with changed-only tag diff, missing-as-`None`, deterministic ordering.
+- `B5`: `runner.fork_from(scan_id)` with clean mutable debug/runtime state and preserved time config.
+- `B2`: `runner.playhead`, `runner.seek(scan_id)`, `runner.rewind(seconds)` with eviction-safe playhead behavior.
 
-The next objective is to complete the quick Phase 3 wins built directly on top of history.
+The next objective is to complete the remaining Phase 3 APIs built on top of history.
 
 ---
 
@@ -38,8 +41,6 @@ The next objective is to complete the quick Phase 3 wins built directly on top o
 
 ---
 
-## Next Work (Phase 3)
-
 ### B4. `runner.diff(scan_a, scan_b)`
 
 - Compare `.tags` between two retained snapshots.
@@ -61,6 +62,10 @@ The next objective is to complete the quick Phase 3 wins built directly on top o
 - Add `runner.rewind(seconds)`.
 - Execution stays independent of playhead (`step()` appends at history tip).
 
+---
+
+## Next Work (Phase 3)
+
 ### B3. `runner.inspect(rung_id, scan_id=None)`
 
 - Store and query rung-level traces by scan/rung.
@@ -81,9 +86,6 @@ The next objective is to complete the quick Phase 3 wins built directly on top o
 ## Recommended Implementation Order
 
 ```text
-B4  diff                  <- immediate value, small surface
-B5  fork_from             <- immediate value, small surface
-B2  playhead/seek/rewind  <- enables time-travel UX
 B3  inspect               <- richer debugger rendering
 C3  monitors              <- independent and useful
 C1  predicate breakpoints <- depends on snapshot evaluation flow
@@ -96,10 +98,10 @@ C2  snapshot labels       <- extends C1 + history
 
 | File | Role |
 |---|---|
-| `src/pyrung/core/runner.py` | `diff`, `fork_from`, playhead APIs |
+| `src/pyrung/core/runner.py` | `diff`, `fork_from`, playhead APIs, upcoming `inspect` |
 | `src/pyrung/core/history.py` | Snapshot storage/query primitives |
 | `src/pyrung/dap/adapter.py` | DAP command handling and capabilities |
-| `tests/core/test_history.py` | History/diff/fork behavior tests |
+| `tests/core/test_history.py` | History/diff/fork/playhead behavior tests |
 | `tests/dap/test_adapter.py` | Step/continue/stepOut DAP tests |
 
 ---
@@ -108,5 +110,6 @@ C2  snapshot labels       <- extends C1 + history
 
 - `B4`: verify changed-only diff output, missing-as-None handling, deterministic key order.
 - `B5`: verify exact snapshot seeding, clean debug mutable state, independent parent/fork progression.
+- `B2`: verify seek/rewind semantics, playhead independence from execution tip, eviction-safe clamping.
 - Regression: run history tests and DAP stepOut tests.
 - Full gate: `make` (install + lint + test) should pass.

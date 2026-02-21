@@ -44,6 +44,28 @@ class History:
         tail_ids = retained[-n:]
         return [self._by_scan_id[scan_id] for scan_id in tail_ids]
 
+    @property
+    def oldest_scan_id(self) -> int:
+        """Oldest retained scan id."""
+        return self._order[0]
+
+    @property
+    def newest_scan_id(self) -> int:
+        """Newest retained scan id."""
+        return self._order[-1]
+
+    def contains(self, scan_id: int) -> bool:
+        """Return True if scan id is currently retained."""
+        return scan_id in self._by_scan_id
+
+    def at_or_before_timestamp(self, timestamp: float) -> SystemState | None:
+        """Return newest retained snapshot with state.timestamp <= timestamp."""
+        for scan_id in reversed(self._order):
+            state = self._by_scan_id[scan_id]
+            if state.timestamp <= timestamp:
+                return state
+        return None
+
     def _append(self, state: SystemState) -> None:
         """Append a newly committed state; for runner-internal use only."""
         scan_id = state.scan_id

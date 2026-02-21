@@ -119,6 +119,19 @@ The fork:
 - has clean runtime debug state (no active forces/patches)
 - retains only the fork snapshot initially in its own history
 
+## Time-travel playhead
+
+History can be navigated without changing execution tip:
+
+```python
+runner.playhead
+runner.seek(scan_id=5)
+runner.rewind(seconds=1.0)
+snapshot = runner.history.at(runner.playhead)
+```
+
+`seek()`/`rewind()` are inspection-only navigation APIs. Calling `step()` still appends a new scan at the history tip.
+
 ## Planned features (Phase 3)
 
 The following debug APIs are still planned:
@@ -135,14 +148,6 @@ The following debug APIs are still planned:
 
     ```python
     runner.monitor(Button, lambda curr, prev: print(f"{prev} -> {curr}"))
-    ```
-
-    **Time travel playhead**
-
-    ```python
-    runner.seek(scan_id)
-    runner.rewind(seconds=1.0)
-    runner.playhead
     ```
 
 See `spec/core/debug.md` for the full Phase 3 design.

@@ -105,6 +105,7 @@ class PLCRunner:
         self._state = initial_state if initial_state is not None else SystemState()
         self._history_limit = history_limit
         self._history = History(self._state, limit=history_limit)
+        self._playhead = self._state.scan_id
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
@@ -128,6 +129,32 @@ class PLCRunner:
     def history(self) -> History:
         """Read-only history query surface."""
         return self._history
+
+    @property
+    def playhead(self) -> int:
+        """Current scan id used for inspection/time-travel queries."""
+        return self._playhead
+
+    def seek(self, scan_id: int) -> SystemState:
+        """Move playhead to a retained scan and return that snapshot."""
+        state = self.history.at(scan_id)
+        self._playhead = state.scan_id
+        return state
+
+    def rewind(self, seconds: float) -> SystemState:
+        """Move playhead backward in time by ``seconds`` and return snapshot."""
+        if seconds < 0:
+            raise ValueError("seconds must be >= 0")
+
+        playhead_state = self.history.at(self._playhead)
+        target_timestamp = playhead_state.timestamp - seconds
+
+        target_state = self.history.at_or_before_timestamp(target_timestamp)
+        if target_state is None:
+            target_state = self.history.at(self.history.oldest_scan_id)
+
+        self._playhead = target_state.scan_id
+        return target_state
 
     def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
         """Return changed tag values between two retained historical scans."""
@@ -331,12 +358,20 @@ class PLCRunner:
 
     def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
         """Finalize one scan and commit all batched writes."""
+        previous_tip_scan_id = self._state.scan_id
         self._input_overrides.apply_post_logic(ctx)
 
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
         self._history._append(self._state)
+
+        # Keep playhead following newest state unless manually moved.
+        if self._playhead == previous_tip_scan_id:
+            self._playhead = self._state.scan_id
+
+        if not self._history.contains(self._playhead):
+            self._playhead = self._history.oldest_scan_id
 
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
