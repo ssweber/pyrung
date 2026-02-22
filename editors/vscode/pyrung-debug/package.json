@@ -12,10 +12,32 @@
     "Debuggers"
   ],
   "activationEvents": [
-    "onDebug"
+    "onDebug",
+    "onCommand:pyrung.addMonitor",
+    "onCommand:pyrung.removeMonitor",
+    "onCommand:pyrung.findLabel",
+    "onCommand:pyrung.monitorMenu"
   ],
   "main": "./extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "pyrung.addMonitor",
+        "title": "pyrung: Add Monitor"
+      },
+      {
+        "command": "pyrung.removeMonitor",
+        "title": "pyrung: Remove Monitor"
+      },
+      {
+        "command": "pyrung.findLabel",
+        "title": "pyrung: Find Label"
+      },
+      {
+        "command": "pyrung.monitorMenu",
+        "title": "pyrung: Monitor Menu"
+      }
+    ],
     "breakpoints": [
       {
         "language": "python"

@@ -18,7 +18,6 @@ from pyrung.core import (
     rise,
     subroutine,
     all_of,
-    nc,
 )
 
 Step = Int("Step")
@@ -60,7 +59,7 @@ with Program(strict=False) as logic:
     with Rung(Step == 1, AutoMode):
         out(MainLight)
         count_up(CountDone, CountAcc,
-                 setpoint=10) \
+                 preset=10) \
             .reset(ResetCount)
 
     # Pointer-condition playground for debug annotation formatting.

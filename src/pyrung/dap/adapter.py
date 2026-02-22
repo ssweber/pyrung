@@ -8,7 +8,8 @@ import runpy
 import sys
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -18,6 +19,10 @@ from pyrung.core.debug_trace import TraceEvent
 from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
+from pyrung.core.state import SystemState
+from pyrung.dap.expressions import ExpressionParseError
+from pyrung.dap.expressions import compile as compile_condition
+from pyrung.dap.expressions import parse as parse_condition
 from pyrung.dap.protocol import (
     MessageSequencer,
     make_event,
@@ -34,6 +39,19 @@ class DAPAdapterError(Exception):
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
+@dataclass
+class _SourceBreakpoint:
+    line: int
+    enabled: bool = True
+    condition_source: str | None = None
+    condition: Callable[[SystemState], bool] | None = None
+    hit_condition: int | None = None
+    hit_count: int = 0
+    log_message: str | None = None
+    snapshot_label: str | None = None
+    last_scan_id: int | None = None
+
+
 class DAPAdapter:
     """Minimal single-thread DAP adapter with async continue support."""
 
@@ -42,6 +60,7 @@ class DAPAdapter:
     TAGS_SCOPE_REF = 1
     FORCES_SCOPE_REF = 2
     MEMORY_SCOPE_REF = 3
+    MONITORS_SCOPE_REF = 4
 
     def __init__(
         self,
@@ -68,9 +87,17 @@ class DAPAdapter:
         self._current_ctx: ScanContext | None = None
         self._program_path: str | None = None
 
-        self._breakpoints_by_file: dict[str, set[int]] = {}
+        self._source_breakpoints_by_file: dict[str, dict[int, _SourceBreakpoint]] = {}
         self._breakpoint_rung_map: dict[str, set[int]] = {}
         self._subroutine_source_map: dict[str, tuple[str, int, int | None]] = {}
+        self._monitor_handles: dict[int, Any] = {}
+        self._monitor_meta: dict[int, dict[str, Any]] = {}
+        self._monitor_scope_ref: int = self.MONITORS_SCOPE_REF
+        self._monitor_values: dict[int, str] = {}
+        self._data_bp_handles: dict[str, Any] = {}
+        self._data_bp_meta: dict[str, dict[str, Any]] = {}
+        self._pending_snapshot_labels_by_scan: dict[int, set[str]] = {}
+        self._pending_predicate_pause = False
 
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
@@ -174,6 +201,10 @@ class DAPAdapter:
             "supportsStepBack": False,
             "supportsStepOut": True,
             "supportsTerminateRequest": True,
+            "supportsConditionalBreakpoints": True,
+            "supportsHitConditionalBreakpoints": True,
+            "supportsLogPoints": True,
+            "supportsDataBreakpoints": True,
         }
         return capabilities, [("initialized", {})]
 
@@ -212,6 +243,7 @@ class DAPAdapter:
         with self._state_lock:
             if self._thread_running_locked():
                 raise DAPAdapterError("Cannot launch while continue is running")
+            self._clear_debug_registrations_locked()
             self._runner = runner
             self._scan_gen = None
             self._current_scan_id = None
@@ -220,9 +252,10 @@ class DAPAdapter:
             self._current_rung = None
             self._current_ctx = None
             self._program_path = str(program_path)
-            self._breakpoints_by_file = {}
+            self._source_breakpoints_by_file = {}
             self._breakpoint_rung_map = {}
             self._subroutine_source_map = {}
+            self._pending_predicate_pause = False
             self._rebuild_breakpoint_index_locked()
 
         return {}, [("stopped", self._stopped_body("entry"))]
@@ -290,6 +323,18 @@ class DAPAdapter:
             {"name": "Forces", "variablesReference": self.FORCES_SCOPE_REF, "expensive": False},
             {"name": "Memory", "variablesReference": self.MEMORY_SCOPE_REF, "expensive": False},
         ]
+        with self._state_lock:
+            has_monitors = bool(self._monitor_handles)
+            monitor_count = len(self._monitor_handles)
+        if has_monitors:
+            scopes.append(
+                {
+                    "name": "PLC Monitors",
+                    "variablesReference": self._monitor_scope_ref,
+                    "expensive": False,
+                    "namedVariables": monitor_count,
+                }
+            )
         return {"scopes": scopes}, []
 
     def _on_variables(self, args: dict[str, Any]) -> HandlerResult:
@@ -315,27 +360,31 @@ class DAPAdapter:
                 values.update(getattr(current_ctx, "_memory_pending", {}))
             return {"variables": self._as_dap_variables(values)}, []
 
+        if ref == self._monitor_scope_ref:
+            variables = self._monitor_variables()
+            return {"variables": variables}, []
+
         raise DAPAdapterError(f"Unknown variablesReference: {ref}")
 
     def _on_next(self, _args: dict[str, Any]) -> HandlerResult:
         with self._state_lock:
             self._assert_can_step_locked()
-            self._advance_one_step_locked()
+            self._advance_with_step_logpoints_locked()
             while self._current_step is not None and self._current_step.kind != "rung":
-                if not self._advance_one_step_locked():
+                if not self._advance_with_step_logpoints_locked():
                     break
         return {}, [("stopped", self._stopped_body("step"))]
 
     def _on_stepIn(self, _args: dict[str, Any]) -> HandlerResult:
         with self._state_lock:
             self._assert_can_step_locked()
-            self._advance_one_step_locked()
+            self._advance_with_step_logpoints_locked()
             while self._current_step is not None and self._current_step.kind in {
                 "branch",
                 "rung",
                 "subroutine",
             }:
-                if not self._advance_one_step_locked():
+                if not self._advance_with_step_logpoints_locked():
                     break
         return {}, [("stopped", self._stopped_body("step"))]
 
@@ -345,12 +394,12 @@ class DAPAdapter:
             origin_step = self._current_step
             origin_ctx = self._current_ctx
             if origin_step is None:
-                self._advance_one_step_locked()
+                self._advance_with_step_logpoints_locked()
             else:
                 origin_depth = origin_step.depth
                 origin_stack_len = len(origin_step.call_stack)
                 while True:
-                    if not self._advance_one_step_locked():
+                    if not self._advance_with_step_logpoints_locked():
                         break
                     current_step = self._current_step
                     if current_step is None:
@@ -393,31 +442,103 @@ class DAPAdapter:
         if canonical is None:
             return {"breakpoints": []}, []
 
-        requested_lines = self._requested_breakpoint_lines(args)
+        requested_breakpoints = self._requested_breakpoints(args)
         with self._state_lock:
             valid_lines = self._breakpoint_rung_map.get(canonical, set())
-            verified_lines = {line for line in requested_lines if line in valid_lines}
-            self._breakpoints_by_file[canonical] = verified_lines
+            existing = self._source_breakpoints_by_file.get(canonical, {})
+            new_map: dict[int, _SourceBreakpoint] = {}
+            response_bps: list[dict[str, Any]] = []
 
-        response_bps = [
-            {"verified": line in verified_lines, "line": line} for line in requested_lines
-        ]
+            for requested in requested_breakpoints:
+                line = requested["line"]
+                if line not in valid_lines:
+                    response_bps.append({"verified": False, "line": line})
+                    continue
+
+                condition_source = requested.get("condition")
+                condition: Callable[[SystemState], bool] | None = None
+                if isinstance(condition_source, str) and condition_source.strip():
+                    try:
+                        condition = self._compile_condition(condition_source)
+                    except DAPAdapterError as exc:
+                        response_bps.append(
+                            {"verified": False, "line": line, "message": str(exc)}
+                        )
+                        continue
+
+                try:
+                    hit_condition = self._parse_hit_condition(requested.get("hitCondition"))
+                except DAPAdapterError as exc:
+                    response_bps.append({"verified": False, "line": line, "message": str(exc)})
+                    continue
+
+                enabled = bool(requested.get("enabled", True))
+                log_message = requested.get("logMessage")
+                if log_message is not None and not isinstance(log_message, str):
+                    response_bps.append(
+                        {"verified": False, "line": line, "message": "logMessage must be a string"}
+                    )
+                    continue
+                snapshot_label: str | None = None
+                if isinstance(log_message, str) and log_message.startswith("Snapshot:"):
+                    snapshot_label = log_message.split(":", 1)[1].strip()
+                    if not snapshot_label:
+                        response_bps.append(
+                            {
+                                "verified": False,
+                                "line": line,
+                                "message": "Snapshot logpoint requires a non-empty label",
+                            }
+                        )
+                        continue
+
+                previous = existing.get(line)
+                hit_count = previous.hit_count if previous is not None else 0
+                last_scan_id = previous.last_scan_id if previous is not None else None
+                new_map[line] = _SourceBreakpoint(
+                    line=line,
+                    enabled=enabled,
+                    condition_source=condition_source.strip() if isinstance(condition_source, str) else None,
+                    condition=condition,
+                    hit_condition=hit_condition,
+                    hit_count=hit_count,
+                    log_message=log_message,
+                    snapshot_label=snapshot_label,
+                    last_scan_id=last_scan_id,
+                )
+                response_bps.append({"verified": True, "line": line})
+
+            self._source_breakpoints_by_file[canonical] = new_map
+
         return {"breakpoints": response_bps}, []
 
-    def _requested_breakpoint_lines(self, args: dict[str, Any]) -> list[int]:
-        lines: list[int] = []
+    def _requested_breakpoints(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+        requested: list[dict[str, Any]] = []
+        raw_bps = args.get("breakpoints")
+        if isinstance(raw_bps, list):
+            for bp in raw_bps:
+                if not isinstance(bp, dict):
+                    continue
+                line = bp.get("line")
+                if not isinstance(line, int):
+                    continue
+                requested.append(
+                    {
+                        "line": line,
+                        "condition": bp.get("condition"),
+                        "hitCondition": bp.get("hitCondition"),
+                        "logMessage": bp.get("logMessage"),
+                        "enabled": bp.get("enabled", True),
+                    }
+                )
+            return requested
+
         raw_lines = args.get("lines")
         if isinstance(raw_lines, list):
             for line in raw_lines:
                 if isinstance(line, int):
-                    lines.append(line)
-        else:
-            raw_bps = args.get("breakpoints")
-            if isinstance(raw_bps, list):
-                for bp in raw_bps:
-                    if isinstance(bp, dict) and isinstance(bp.get("line"), int):
-                        lines.append(bp["line"])
-        return lines
+                    requested.append({"line": line, "enabled": True})
+        return requested
 
     def _on_evaluate(self, args: dict[str, Any]) -> HandlerResult:
         expression = args.get("expression")
@@ -436,7 +557,7 @@ class DAPAdapter:
                 value = self._parse_literal(raw_value)
                 runner.add_force(tag, value)
                 result = f"Forced {tag}={value!r}"
-            elif command == "remove_force":
+            elif command in {"remove_force", "unforce"}:
                 if len(parts) != 2:
                     raise DAPAdapterError("Usage: remove_force <tag>")
                 tag = parts[1]
@@ -447,13 +568,208 @@ class DAPAdapter:
                 result = "Cleared all forces"
             else:
                 raise DAPAdapterError(
-                    "Unsupported evaluate command. Use force/remove_force/clear_forces."
+                    "Unsupported evaluate command. Use force/remove_force/unforce/clear_forces."
                 )
 
         return {"result": result, "variablesReference": 0}, []
 
+    def _on_dataBreakpointInfo(self, args: dict[str, Any]) -> HandlerResult:
+        variables_reference = int(args.get("variablesReference", 0))
+        name = args.get("name")
+        if variables_reference != self._monitor_scope_ref or not isinstance(name, str):
+            return {"dataId": None, "description": "Data breakpoints are supported for PLC monitors"}, []
+
+        with self._state_lock:
+            monitor_tags = {meta["tag"] for meta in self._monitor_meta.values()}
+        if name not in monitor_tags:
+            return {"dataId": None, "description": f"No monitor registered for {name}"}, []
+
+        data_id = self._data_id_for_tag(name)
+        return {
+            "dataId": data_id,
+            "description": f"Break when {name} changes",
+            "canPersist": True,
+            "accessTypes": ["write"],
+        }, []
+
+    def _on_setDataBreakpoints(self, args: dict[str, Any]) -> HandlerResult:
+        raw_breakpoints = args.get("breakpoints")
+        if not isinstance(raw_breakpoints, list):
+            raw_breakpoints = []
+
+        parsed_requests: list[tuple[int, dict[str, Any]]] = []
+        responses: list[dict[str, Any] | None] = []
+        for raw_bp in raw_breakpoints:
+            if not isinstance(raw_bp, dict):
+                responses.append({"verified": False, "message": "Breakpoint entry must be an object"})
+                continue
+            data_id = raw_bp.get("dataId")
+            if not isinstance(data_id, str) or not data_id.strip():
+                responses.append({"verified": False, "message": "dataId is required"})
+                continue
+            data_id = data_id.strip()
+            condition_source = raw_bp.get("condition")
+            if condition_source is not None and not isinstance(condition_source, str):
+                responses.append({"verified": False, "message": "condition must be a string"})
+                continue
+            try:
+                hit_condition = self._parse_hit_condition(raw_bp.get("hitCondition"))
+            except DAPAdapterError as exc:
+                responses.append({"verified": False, "message": str(exc)})
+                continue
+            parsed_requests.append(
+                (
+                    len(responses),
+                    {
+                        "dataId": data_id,
+                        "condition": (
+                            condition_source.strip()
+                            if isinstance(condition_source, str)
+                            else None
+                        ),
+                        "hitCondition": hit_condition,
+                    },
+                )
+            )
+            responses.append(None)
+
+        with self._state_lock:
+            runner = self._require_runner_locked()
+            requested_data_ids = {requested_bp["dataId"] for _, requested_bp in parsed_requests}
+            stale = [
+                data_id for data_id in self._data_bp_handles if data_id not in requested_data_ids
+            ]
+            for data_id in stale:
+                handle = self._data_bp_handles.pop(data_id, None)
+                if handle is not None:
+                    handle.remove()
+                self._data_bp_meta.pop(data_id, None)
+
+            for response_index, requested_bp in parsed_requests:
+                data_id = requested_bp["dataId"]
+                condition_source = requested_bp["condition"]
+                existing_meta = self._data_bp_meta.get(data_id)
+                unchanged = (
+                    existing_meta is not None
+                    and existing_meta.get("conditionSource") == condition_source
+                    and existing_meta.get("hitCondition") == requested_bp["hitCondition"]
+                )
+                if unchanged:
+                    responses[response_index] = {"verified": True, "message": f"Watching {data_id}"}
+                    continue
+
+                if data_id in self._data_bp_handles:
+                    handle = self._data_bp_handles.pop(data_id, None)
+                    if handle is not None:
+                        handle.remove()
+                    self._data_bp_meta.pop(data_id, None)
+
+                condition: Callable[[SystemState], bool] | None = None
+                if condition_source:
+                    try:
+                        condition = self._compile_condition(condition_source)
+                    except DAPAdapterError as exc:
+                        responses[response_index] = {"verified": False, "message": str(exc)}
+                        continue
+
+                tag_name = self._tag_from_data_id(data_id)
+                if tag_name is None:
+                    responses[response_index] = {
+                        "verified": False,
+                        "message": f"Unsupported dataId: {data_id}",
+                    }
+                    continue
+
+                handle = runner.monitor(
+                    tag_name,
+                    self._build_data_breakpoint_callback(data_id=data_id),
+                )
+                self._data_bp_handles[data_id] = handle
+                self._data_bp_meta[data_id] = {
+                    "dataId": data_id,
+                    "tag": tag_name,
+                    "conditionSource": condition_source,
+                    "condition": condition,
+                    "hitCondition": requested_bp["hitCondition"],
+                    "hitCount": 0,
+                }
+                responses[response_index] = {"verified": True, "message": f"Watching {tag_name}"}
+
+        return {
+            "breakpoints": [
+                response if response is not None else {"verified": False, "message": "Invalid data breakpoint"}
+                for response in responses
+            ]
+        }, []
+
+    def _on_pyrungAddMonitor(self, args: dict[str, Any]) -> HandlerResult:
+        tag = args.get("tag")
+        if not isinstance(tag, str) or not tag.strip():
+            raise DAPAdapterError("pyrungAddMonitor.tag is required")
+        tag_name = tag.strip()
+
+        with self._state_lock:
+            runner = self._require_runner_locked()
+            monitor_id_ref: dict[str, int] = {"id": 0}
+            handle = runner.monitor(
+                tag_name,
+                self._build_monitor_callback(tag_name=tag_name, monitor_id_ref=monitor_id_ref),
+            )
+            monitor_id_ref["id"] = handle.id
+            self._monitor_handles[handle.id] = handle
+            self._monitor_meta[handle.id] = {"id": handle.id, "tag": tag_name, "enabled": True}
+            current = runner.current_state.tags.get(tag_name)
+            self._monitor_values[handle.id] = self._format_value(current)
+        return {"id": handle.id, "tag": tag_name, "enabled": True}, []
+
+    def _on_pyrungRemoveMonitor(self, args: dict[str, Any]) -> HandlerResult:
+        raw_id = args.get("id")
+        if not isinstance(raw_id, int):
+            raise DAPAdapterError("pyrungRemoveMonitor.id must be an integer")
+        with self._state_lock:
+            handle = self._monitor_handles.pop(raw_id, None)
+            if handle is not None:
+                handle.remove()
+            removed = raw_id in self._monitor_meta
+            self._monitor_meta.pop(raw_id, None)
+            self._monitor_values.pop(raw_id, None)
+        return {"id": raw_id, "removed": removed}, []
+
+    def _on_pyrungListMonitors(self, _args: dict[str, Any]) -> HandlerResult:
+        with self._state_lock:
+            monitors = []
+            for monitor_id in sorted(self._monitor_meta):
+                meta = self._monitor_meta[monitor_id]
+                monitors.append(
+                    {
+                        "id": monitor_id,
+                        "tag": meta["tag"],
+                        "enabled": bool(meta.get("enabled", True)),
+                        "value": self._monitor_values.get(monitor_id, "None"),
+                    }
+                )
+        return {"monitors": monitors}, []
+
+    def _on_pyrungFindLabel(self, args: dict[str, Any]) -> HandlerResult:
+        label = args.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise DAPAdapterError("pyrungFindLabel.label is required")
+        find_all = bool(args.get("all", False))
+
+        with self._state_lock:
+            runner = self._require_runner_locked()
+            if find_all:
+                states = runner.history.find_all(label)
+            else:
+                latest = runner.history.find(label)
+                states = [] if latest is None else [latest]
+
+        matches = [{"scanId": state.scan_id, "timestamp": state.timestamp} for state in states]
+        return {"matches": matches}, []
+
     def _continue_worker(self) -> None:
         try:
+            self._pending_predicate_pause = False
             while not self._stop_event.is_set():
                 if self._pause_event.is_set():
                     self._queue.put(
@@ -469,7 +785,12 @@ class DAPAdapter:
                     if self._runner is None:
                         return
                     advanced = self._advance_one_step_locked()
+                    self._flush_pending_snapshots_locked()
                     hit_breakpoint = self._current_rung_hits_breakpoint_locked()
+                    self._flush_pending_snapshots_locked()
+                    hit_data_breakpoint = self._pending_predicate_pause
+                    if hit_data_breakpoint:
+                        self._pending_predicate_pause = False
 
                 if hit_breakpoint:
                     self._queue.put(
@@ -481,11 +802,22 @@ class DAPAdapter:
                     )
                     return
 
+                if hit_data_breakpoint:
+                    self._queue.put(
+                        {
+                            "kind": "internal_event",
+                            "event": "stopped",
+                            "body": self._stopped_body("data breakpoint"),
+                        }
+                    )
+                    return
+
                 if not advanced:
                     time.sleep(0.005)
         finally:
             with self._state_lock:
                 self._continue_thread = None
+                self._pending_predicate_pause = False
             self._pause_event.clear()
 
     def _advance_one_step_locked(self) -> bool:
@@ -517,6 +849,13 @@ class DAPAdapter:
         self._current_ctx = step.ctx
         return True
 
+    def _advance_with_step_logpoints_locked(self) -> bool:
+        advanced = self._advance_one_step_locked()
+        self._flush_pending_snapshots_locked()
+        self._process_logpoints_for_current_rung_locked()
+        self._flush_pending_snapshots_locked()
+        return advanced
+
     def _advance_one_rung_locked(self) -> bool:
         """Backward-compatible alias for tests/helpers."""
         return self._advance_one_step_locked()
@@ -535,16 +874,101 @@ class DAPAdapter:
         source = self._canonical_path(self._current_rung.source_file)
         if source is None:
             return False
-        active_lines = self._breakpoints_by_file.get(source)
-        if not active_lines:
+        file_breakpoints = self._source_breakpoints_by_file.get(source)
+        if not file_breakpoints:
             return False
         if self._current_rung.source_line is None:
             return False
+        runner = self._runner
+        if runner is None:
+            return False
+
         start_line = int(self._current_rung.source_line)
         end_line = int(self._current_rung.end_line or self._current_rung.source_line)
         if end_line < start_line:
             start_line, end_line = end_line, start_line
-        return any(start_line <= line <= end_line for line in active_lines)
+
+        scan_id = self._current_scan_id
+        for line, breakpoint in file_breakpoints.items():
+            if not breakpoint.enabled:
+                continue
+            if not (start_line <= line <= end_line):
+                continue
+            if scan_id is not None and breakpoint.last_scan_id == scan_id:
+                continue
+            breakpoint.last_scan_id = scan_id
+
+            if breakpoint.condition is not None and not breakpoint.condition(runner.current_state):
+                continue
+
+            if not self._source_breakpoint_hit_matches_locked(breakpoint):
+                continue
+
+            if breakpoint.log_message is not None:
+                self._handle_logpoint_hit_locked(
+                    breakpoint,
+                    runner.current_state,
+                    active_scan_id=scan_id,
+                )
+                continue
+
+            return True
+
+        return False
+
+    def _process_logpoints_for_current_rung_locked(self) -> None:
+        if self._current_rung is None:
+            return
+        source = self._canonical_path(self._current_rung.source_file)
+        if source is None:
+            return
+        file_breakpoints = self._source_breakpoints_by_file.get(source)
+        if not file_breakpoints:
+            return
+        if self._current_rung.source_line is None:
+            return
+        runner = self._runner
+        if runner is None:
+            return
+
+        start_line = int(self._current_rung.source_line)
+        end_line = int(self._current_rung.end_line or self._current_rung.source_line)
+        if end_line < start_line:
+            start_line, end_line = end_line, start_line
+
+        scan_id = self._current_scan_id
+        for line, breakpoint in file_breakpoints.items():
+            if breakpoint.log_message is None:
+                continue
+            if not breakpoint.enabled:
+                continue
+            if not (start_line <= line <= end_line):
+                continue
+            if scan_id is not None and breakpoint.last_scan_id == scan_id:
+                continue
+            breakpoint.last_scan_id = scan_id
+
+            if breakpoint.condition is not None and not breakpoint.condition(runner.current_state):
+                continue
+
+            if not self._source_breakpoint_hit_matches_locked(breakpoint):
+                continue
+
+            self._handle_logpoint_hit_locked(
+                breakpoint,
+                runner.current_state,
+                active_scan_id=scan_id,
+            )
+
+    def _source_breakpoint_hit_matches_locked(self, breakpoint: _SourceBreakpoint) -> bool:
+        hit_condition = breakpoint.hit_condition
+        if hit_condition is None:
+            return True
+        breakpoint.hit_count += 1
+        if breakpoint.hit_count != hit_condition:
+            return False
+        breakpoint.hit_count = 0
+        return True
 
     def _rebuild_breakpoint_index_locked(self) -> None:
         self._breakpoint_rung_map = {}
@@ -827,12 +1251,220 @@ class DAPAdapter:
         end_line = int(step.rung.end_line) if step.rung.end_line is not None else None
         return source_path, int(step.rung.source_line), end_line
 
+    def _compile_condition(self, source: str) -> Callable[[SystemState], bool]:
+        try:
+            expr = parse_condition(source)
+        except ExpressionParseError as exc:
+            raise DAPAdapterError(str(exc)) from exc
+        return compile_condition(expr)
+
+    def _parse_hit_condition(self, raw_value: Any) -> int | None:
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, int):
+            if raw_value <= 0:
+                raise DAPAdapterError("hitCondition must be >= 1")
+            return raw_value
+        if isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                return None
+            if text.isdigit():
+                parsed = int(text)
+                if parsed <= 0:
+                    raise DAPAdapterError("hitCondition must be >= 1")
+                return parsed
+        raise DAPAdapterError("hitCondition must be a positive integer")
+
+    def _monitor_variables(self) -> list[dict[str, Any]]:
+        variables: list[dict[str, Any]] = []
+        for monitor_id in sorted(self._monitor_meta):
+            meta = self._monitor_meta[monitor_id]
+            tag_name = str(meta.get("tag"))
+            variables.append(
+                {
+                    "name": tag_name,
+                    "value": self._monitor_values.get(monitor_id, "None"),
+                    "type": "monitor",
+                    "evaluateName": tag_name,
+                    "variablesReference": 0,
+                }
+            )
+        return variables
+
+    def _build_monitor_callback(
+        self,
+        *,
+        tag_name: str,
+        monitor_id_ref: dict[str, int],
+    ) -> Callable[[Any, Any], None]:
+        def _callback(current: Any, previous: Any) -> None:
+            try:
+                monitor_id = monitor_id_ref.get("id")
+                if not isinstance(monitor_id, int) or monitor_id <= 0:
+                    return
+                if monitor_id not in self._monitor_handles:
+                    return
+                self._monitor_values[monitor_id] = self._format_value(current)
+                runner = self._runner
+                if runner is None:
+                    return
+                state = runner.current_state
+                self._queue.put(
+                    {
+                        "kind": "internal_event",
+                        "event": "pyrungMonitor",
+                        "body": {
+                            "id": monitor_id,
+                            "tag": tag_name,
+                            "current": self._format_value(current),
+                            "previous": self._format_value(previous),
+                            "scanId": state.scan_id,
+                            "timestamp": state.timestamp,
+                        },
+                    }
+                )
+            except Exception:
+                return
+
+        return _callback
+
+    def _build_data_breakpoint_callback(self, *, data_id: str) -> Callable[[Any, Any], None]:
+        def _callback(_current: Any, _previous: Any) -> None:
+            try:
+                meta = self._data_bp_meta.get(data_id)
+                runner = self._runner
+                if meta is None or runner is None:
+                    return
+
+                condition = meta.get("condition")
+                if callable(condition) and not condition(runner.current_state):
+                    return
+
+                hit_condition = meta.get("hitCondition")
+                hit_count = int(meta.get("hitCount", 0)) + 1
+                if hit_condition is None:
+                    meta["hitCount"] = hit_count
+                else:
+                    if hit_count != int(hit_condition):
+                        meta["hitCount"] = hit_count
+                        return
+                    meta["hitCount"] = 0
+
+                self._pending_predicate_pause = True
+            except Exception:
+                return
+
+        return _callback
+
+    def _data_id_for_tag(self, tag_name: str) -> str:
+        return f"tag:{tag_name}"
+
+    def _tag_from_data_id(self, data_id: str) -> str | None:
+        prefix = "tag:"
+        if not data_id.startswith(prefix):
+            return None
+        tag_name = data_id[len(prefix) :]
+        return tag_name or None
+
+    def _handle_logpoint_hit_locked(
+        self,
+        breakpoint: _SourceBreakpoint,
+        state: SystemState,
+        *,
+        active_scan_id: int | None,
+    ) -> None:
+        if breakpoint.snapshot_label:
+            if active_scan_id is None:
+                self._record_snapshot_locked(label=breakpoint.snapshot_label, state=state)
+            else:
+                pending = self._pending_snapshot_labels_by_scan.setdefault(active_scan_id, set())
+                pending.add(breakpoint.snapshot_label)
+            return
+
+        message = breakpoint.log_message or ""
+        self._queue.put(
+            {
+                "kind": "internal_event",
+                "event": "output",
+                "body": {"category": "console", "output": f"{message}\n"},
+            }
+        )
+
+    def _record_snapshot_locked(self, *, label: str, state: SystemState) -> None:
+        runner = self._runner
+        if runner is None:
+            return
+        runner.history._label_scan(label, state.scan_id)
+        self._queue.put(
+            {
+                "kind": "internal_event",
+                "event": "pyrungSnapshot",
+                "body": {
+                    "label": label,
+                    "scanId": state.scan_id,
+                    "timestamp": state.timestamp,
+                },
+            }
+        )
+        self._queue.put(
+            {
+                "kind": "internal_event",
+                "event": "output",
+                "body": {
+                    "category": "console",
+                    "output": f"Snapshot taken: {label} (scan {state.scan_id})\n",
+                },
+            }
+        )
+
+    def _flush_pending_snapshots_locked(self) -> None:
+        runner = self._runner
+        if runner is None:
+            return
+        committed_scan_id = runner.current_state.scan_id
+        labels = self._pending_snapshot_labels_by_scan.pop(committed_scan_id, None)
+        if not labels:
+            return
+        state = runner.current_state
+        for label in sorted(labels):
+            self._record_snapshot_locked(label=label, state=state)
+
+    def _clear_debug_registrations_locked(self) -> None:
+        for handle in self._monitor_handles.values():
+            try:
+                handle.remove()
+            except Exception:
+                continue
+        for handle in self._data_bp_handles.values():
+            try:
+                handle.remove()
+            except Exception:
+                continue
+        self._monitor_handles.clear()
+        self._monitor_meta.clear()
+        self._monitor_values.clear()
+        self._data_bp_handles.clear()
+        self._data_bp_meta.clear()
+        self._source_breakpoints_by_file.clear()
+        self._pending_snapshot_labels_by_scan.clear()
+        self._pending_predicate_pause = False
+
     def _require_runner_locked(self) -> PLCRunner:
         if self._runner is None:
             raise DAPAdapterError("No program launched")
         return self._runner
 
     def _shutdown(self) -> HandlerResult:
+        with self._state_lock:
+            self._clear_debug_registrations_locked()
+            self._runner = None
+            self._scan_gen = None
+            self._current_scan_id = None
+            self._current_step = None
+            self._current_rung_index = None
+            self._current_rung = None
+            self._current_ctx = None
         self._stop_event.set()
         self._pause_event.set()
         return {}, [("terminated", {})]

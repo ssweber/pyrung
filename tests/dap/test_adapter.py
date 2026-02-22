@@ -77,6 +77,50 @@ def _trace_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _events(messages: list[dict[str, Any]], event_name: str) -> list[dict[str, Any]]:
+    return [
+        msg
+        for msg in messages
+        if msg.get("type") == "event" and msg.get("event") == event_name
+    ]
+
+
+def _wait_for_stop_reason(
+    adapter: DAPAdapter,
+    out_stream: io.BytesIO,
+    *,
+    reason: str,
+    attempts: int = 100,
+) -> bool:
+    for _ in range(attempts):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == reason:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def _wait_for_event(
+    adapter: DAPAdapter,
+    out_stream: io.BytesIO,
+    *,
+    event_name: str,
+    predicate: Any = None,
+    attempts: int = 100,
+) -> dict[str, Any] | None:
+    for _ in range(attempts):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        matches = _events(flushed, event_name)
+        for match in matches:
+            if predicate is None or predicate(match):
+                return match
+        time.sleep(0.01)
+    return None
+
+
 def _runner_script() -> str:
     return (
         "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
@@ -87,6 +131,65 @@ def _runner_script() -> str:
         "with Program(strict=False) as prog:\n"
         "    with Rung(button):\n"
         "        out(light)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+    )
+
+
+def _conditional_breakpoint_script(*, button: bool) -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core.state import SystemState\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        out(light)\n"
+        "\n"
+        f"runner = PLCRunner(prog, initial_state=SystemState().with_tags({{'Button': {button!r}}}))\n"
+    )
+
+
+def _monitor_change_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "\n"
+        "Tick = Bool('Tick')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        out(Tick)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+    )
+
+
+def _snapshot_once_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core.state import SystemState\n"
+        "\n"
+        "Tick = Bool('Tick')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        out(Tick)\n"
+        "\n"
+        "runner = PLCRunner(prog, initial_state=SystemState().with_tags({'Tick': False}))\n"
+    )
+
+
+def _counter_change_script() -> str:
+    return (
+        "from pyrung.core import Int, PLCRunner, Program, Rung, copy\n"
+        "\n"
+        "Counter = Int('Counter')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(Counter + 1, Counter)\n"
         "\n"
         "runner = PLCRunner(prog)\n"
     )
@@ -1316,3 +1419,636 @@ def test_evaluate_force_commands_mutate_force_map(tmp_path: Path):
         arguments={"expression": "clear_forces"},
     )
     assert dict(adapter._runner.forces) == {}
+
+
+def test_set_breakpoints_with_condition_stops_only_when_true(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+    line = _line_number(script, "out(light)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    set_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "condition": "Button == true"}],
+        },
+    )
+    set_response = _single_response(set_messages)
+    assert set_response["body"]["breakpoints"][0]["verified"] is True
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    found = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == "breakpoint":
+            found = True
+            break
+        time.sleep(0.01)
+    assert found is True
+
+
+def test_set_breakpoints_with_bad_condition_returns_unverified(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+    line = _line_number(script, "out(light)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "condition": "MotorTemp >>"}],
+        },
+    )
+    response = _single_response(messages)
+    breakpoint = response["body"]["breakpoints"][0]
+    assert breakpoint["verified"] is False
+    assert "Expected literal value" in breakpoint["message"]
+
+
+def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "logMessage": "Snapshot: tick_hit"}],
+        },
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    saw_snapshot = False
+    saw_output = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        snapshots = _events(flushed, "pyrungSnapshot")
+        if snapshots:
+            saw_snapshot = True
+        outputs = _events(flushed, "output")
+        if any("Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", "")) for event in outputs):
+            saw_output = True
+        if saw_snapshot and saw_output:
+            break
+        time.sleep(0.01)
+    assert saw_snapshot is True
+    assert saw_output is True
+
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == "pause":
+            break
+        time.sleep(0.01)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungFindLabel",
+        arguments={"label": "tick_hit"},
+    )
+    response = _single_response(messages)
+    matches = response["body"]["matches"]
+    assert matches
+    assert matches[0]["scanId"] >= 1
+
+
+def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "snapshot_once.py", _snapshot_once_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [
+                {
+                    "line": line,
+                    "condition": "Tick == false",
+                    "logMessage": "Snapshot: tick_once",
+                }
+            ],
+        },
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    snapshot_scan_id: int | None = None
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        snapshots = _events(flushed, "pyrungSnapshot")
+        if snapshots:
+            snapshot_scan_id = int(snapshots[0]["body"]["scanId"])
+            break
+        time.sleep(0.01)
+    assert snapshot_scan_id is not None
+
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == "pause":
+            break
+        time.sleep(0.01)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungFindLabel",
+        arguments={"label": "tick_once"},
+    )
+    response = _single_response(messages)
+    matches = response["body"]["matches"]
+    assert len(matches) == 1
+    assert matches[0]["scanId"] == snapshot_scan_id
+    assert snapshot_scan_id == 1
+
+
+def test_plain_logpoint_emits_output_without_stopping(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "logMessage": "Tick executed"}],
+        },
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    saw_output = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        outputs = _events(flushed, "output")
+        if any("Tick executed" in str(event.get("body", {}).get("output", "")) for event in outputs):
+            saw_output = True
+            break
+        time.sleep(0.01)
+    assert saw_output is True
+
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+    paused = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == "pause":
+            paused = True
+            break
+        time.sleep(0.01)
+    assert paused is True
+
+
+def test_source_breakpoint_hit_condition_triggers_on_every_nth_hit(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "hitCondition": "2"}],
+        },
+    )
+    response = _single_response(messages)
+    assert response["body"]["breakpoints"][0]["verified"] is True
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
+    first_scan = adapter._current_scan_id
+    assert first_scan is not None
+
+    _send_request(adapter, out_stream, seq=4, command="continue")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
+    second_scan = adapter._current_scan_id
+    assert second_scan is not None
+    assert second_scan == first_scan + 2
+
+
+def test_step_next_emits_plain_logpoint_output(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "logMessage": "step log"}],
+        },
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    output_event = _wait_for_event(
+        adapter,
+        out_stream,
+        event_name="output",
+        predicate=lambda event: "step log" in str(event.get("body", {}).get("output", "")),
+    )
+    assert output_event is not None
+
+
+def test_step_next_emits_snapshot_event_and_labels_history(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={
+            "source": {"path": str(script)},
+            "breakpoints": [{"line": line, "logMessage": "Snapshot: step_snapshot"}],
+        },
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=4, command="next")
+    _drain_messages(out_stream)
+
+    snapshot_event = _wait_for_event(
+        adapter,
+        out_stream,
+        event_name="pyrungSnapshot",
+        predicate=lambda event: event.get("body", {}).get("label") == "step_snapshot",
+    )
+    assert snapshot_event is not None
+    snapshot_scan_id = int(snapshot_event["body"]["scanId"])
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungFindLabel",
+        arguments={"label": "step_snapshot"},
+    )
+    response = _single_response(messages)
+    matches = response["body"]["matches"]
+    assert matches
+    assert int(matches[0]["scanId"]) == snapshot_scan_id
+
+
+def test_step_next_with_source_breakpoint_still_reports_step_reason(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+    line = _line_number(script, "out(Tick)")
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={"source": {"path": str(script)}, "breakpoints": [{"line": line}]},
+    )
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    stops = _stopped_events(messages)
+    assert stops
+    assert stops[0]["body"]["reason"] == "step"
+
+
+def test_monitor_scope_and_variables_requests(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    add_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Button"},
+    )
+    add_response = _single_response(add_messages)
+    monitor_id = add_response["body"]["id"]
+    assert add_response["body"]["tag"] == "Button"
+
+    scope_messages = _send_request(adapter, out_stream, seq=3, command="scopes")
+    scope_response = _single_response(scope_messages)
+    scopes = scope_response["body"]["scopes"]
+    monitor_scope = next(scope for scope in scopes if scope["name"] == "PLC Monitors")
+
+    variable_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="variables",
+        arguments={"variablesReference": monitor_scope["variablesReference"]},
+    )
+    variable_response = _single_response(variable_messages)
+    monitor_values = {entry["name"]: entry["value"] for entry in variable_response["body"]["variables"]}
+    assert monitor_values["Button"] == "True"
+
+    remove_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungRemoveMonitor",
+        arguments={"id": monitor_id},
+    )
+    remove_response = _single_response(remove_messages)
+    assert remove_response["body"]["removed"] is True
+
+
+def test_data_breakpoint_info_and_stop_on_change(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Tick"},
+    )
+    _drain_messages(out_stream)
+
+    info_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="dataBreakpointInfo",
+        arguments={"variablesReference": adapter.MONITORS_SCOPE_REF, "name": "Tick"},
+    )
+    info_response = _single_response(info_messages)
+    data_id = info_response["body"]["dataId"]
+    assert data_id == "tag:Tick"
+
+    set_data_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="setDataBreakpoints",
+        arguments={"breakpoints": [{"dataId": data_id}]},
+    )
+    set_data_response = _single_response(set_data_messages)
+    assert set_data_response["body"]["breakpoints"][0]["verified"] is True
+
+    _send_request(adapter, out_stream, seq=5, command="continue")
+    _drain_messages(out_stream)
+
+    found = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        stops = _stopped_events(flushed)
+        if stops and stops[0]["body"]["reason"] == "data breakpoint":
+            found = True
+            break
+        time.sleep(0.01)
+    assert found is True
+
+
+def test_set_data_breakpoints_preserves_response_order(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Tick"},
+    )
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="setDataBreakpoints",
+        arguments={
+            "breakpoints": [
+                {"dataId": "tag:Tick"},
+                {"dataId": "   "},
+            ]
+        },
+    )
+    response = _single_response(messages)
+    breakpoints = response["body"]["breakpoints"]
+    assert len(breakpoints) == 2
+    assert breakpoints[0]["verified"] is True
+    assert breakpoints[1]["verified"] is False
+    assert breakpoints[1]["message"] == "dataId is required"
+
+
+def test_data_breakpoint_hit_condition_triggers_on_every_nth_change(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "counter_change.py", _counter_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Counter"},
+    )
+    _drain_messages(out_stream)
+
+    set_messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="setDataBreakpoints",
+        arguments={"breakpoints": [{"dataId": "tag:Counter", "hitCondition": "2"}]},
+    )
+    set_response = _single_response(set_messages)
+    assert set_response["body"]["breakpoints"][0]["verified"] is True
+
+    _send_request(adapter, out_stream, seq=4, command="continue")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="data breakpoint") is True
+    first_scan = adapter._runner.current_state.scan_id if adapter._runner is not None else None
+    assert first_scan is not None
+
+    _send_request(adapter, out_stream, seq=5, command="continue")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="data breakpoint") is True
+    second_scan = adapter._runner.current_state.scan_id if adapter._runner is not None else None
+    assert second_scan is not None
+    assert second_scan == first_scan + 2
+
+
+def test_monitor_callback_emits_custom_event(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Tick"},
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    saw_monitor_event = False
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        monitor_events = _events(flushed, "pyrungMonitor")
+        if monitor_events:
+            event_body = monitor_events[0]["body"]
+            assert event_body["tag"] == "Tick"
+            saw_monitor_event = True
+            break
+        time.sleep(0.01)
+    assert saw_monitor_event is True
+
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+    for _ in range(100):
+        adapter._drain_internal_events()
+        if _stopped_events(_drain_messages(out_stream)):
+            break
+        time.sleep(0.01)
+
+
+def test_shutdown_clears_monitor_and_data_breakpoint_registrations(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Tick"},
+    )
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="setDataBreakpoints",
+        arguments={"breakpoints": [{"dataId": "tag:Tick"}]},
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=4, command="terminate")
+    _drain_messages(out_stream)
+
+    assert adapter._monitor_handles == {}
+    assert adapter._monitor_meta == {}
+    assert adapter._monitor_values == {}
+    assert adapter._data_bp_handles == {}
+    assert adapter._data_bp_meta == {}
