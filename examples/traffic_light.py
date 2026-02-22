@@ -8,6 +8,8 @@ Demonstrates:
   5. Running a simulation with PLCRunner and FIXED_STEP timing
 """
 
+import os
+
 from pyrung.core import *
 
 
@@ -38,7 +40,6 @@ class Devices(AutoTag):
     SpeedIn = Int()
     LogEnable = Bool()
 
-
 # Memory blocks are declared outside AutoTag classes.
 DS = Block("DS", TagType.INT, 1, 5)
 
@@ -50,7 +51,8 @@ Devices.export(globals())
 # ---------------------------------------------------------------------------
 # 2. Traffic light state machine
 # ---------------------------------------------------------------------------
-with Program() as logic:
+@program
+def logic():
 
     # Green phase: 3 000 ms then transition to yellow
     with Rung(State == "g"):
@@ -91,26 +93,35 @@ with Program() as logic:
 # 5. Run the simulation
 # ---------------------------------------------------------------------------
 runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)  # 100 ms per scan
 
 # Initialize state to green
-runner.patch({"State": "g"})
-runner.step()
+with runner.active():
+    State.value = "g"
 
-# Simulate a few car detections and speed readings
-for speed in (45, 52, 38):
-    runner.patch({"CarSensor": True, "LogEnable": True, "SpeedIn": speed})
-    runner.step()
-    runner.patch({"CarSensor": False, "LogEnable": False})
+if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     runner.step()
 
-# Let the light cycle run for 10 seconds (1 000 scans x 10 ms)
-state = runner.run(cycles=1000)
+    # Simulate a few car detections and speed readings
+    for speed in (45, 52, 38):
+        with runner.active():
+            CarSensor.value = True
+            LogEnable.value = True
+            SpeedIn.value = speed
+        runner.step()
+        with runner.active():
+            CarSensor.value = False
+            LogEnable.value = False
+        runner.step()
 
-# ---------------------------------------------------------------------------
-# Print results
-# ---------------------------------------------------------------------------
-print(f"Light state : {state.tags['State']}")
-print(f"Sim time    : {state.timestamp:.1f} s")
-print(f"Cars counted: {state.tags['CarCountAcc']}")
-print(f"Speed log   : {[state.tags.get(f'DS{i}', 0) for i in range(1, 6)]}")
+    # Let the light cycle run for 10 seconds (1 000 scans x 10 ms)
+    runner.run(cycles=100)
+
+    # -----------------------------------------------------------------------
+    # Print results
+    # -----------------------------------------------------------------------
+    with runner.active():
+        print(f"Light state : {State.value}")
+        print(f"Sim time    : {runner.simulation_time:.1f} s")
+        print(f"Cars counted: {CarCountAcc.value}")
+        print(f"Speed log   : {[DS[i].value for i in range(1, 6)]}")
