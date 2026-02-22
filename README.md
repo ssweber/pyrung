@@ -15,7 +15,7 @@ A Python DSL (Domain Specific Language) for representing and simulating Ladder L
 ## Quick Example
 
 ```python
-from pyrung import *
+from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, out
 
 Button = Bool("Button")
 Light = Bool("Light")
@@ -36,6 +36,8 @@ runner.step()
 Direct `INT` tags can be used as rung conditions and are treated as nonzero truthiness:
 
 ```python
+from pyrung import Bool, Int, Program, Rung, out
+
 Step = Int("Step")
 with Program() as logic:
     with Rung(Step):  # equivalent to: with Rung(Step != 0)
@@ -52,7 +54,7 @@ truthiness and requires explicit comparisons.
 ## Function Call Instructions (`run_function` / `run_enabled_function`)
 
 For logic that does not map cleanly to built-in ladder instructions, pyrung provides
-function-call instructions in `pyrung.core`:
+function-call instructions in `pyrung`:
 
 - `run_function(fn, ins=None, outs=None, oneshot=False)`:
   - Runs only when rung power is true.
@@ -68,7 +70,7 @@ Both APIs validate signatures and reject `async def` callables.
 ### `run_function()` Example
 
 ```python
-from pyrung.core import Bool, Int, Program, Rung, run_function
+from pyrung import Bool, Int, Program, Rung, run_function
 
 Enable = Bool("Enable")
 Raw = Int("Raw")
@@ -85,7 +87,7 @@ with Program() as logic:
 ### `run_enabled_function()` Example
 
 ```python
-from pyrung.core import Bool, Int, Program, Rung, run_enabled_function
+from pyrung import Bool, Int, Program, Rung, run_enabled_function
 
 Enable = Bool("Enable")
 Busy = Bool("Busy")
@@ -116,7 +118,7 @@ Reference examples:
 ## Migration Note
 
 Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`.
-Click-style aliases moved from `pyrung.core` to `pyrung.click`:
+Click-style aliases moved from the base API to `pyrung.click`:
 `Bit`, `Int2`, `Float`, `Hex`, `Txt`.
 
 ## Auto Naming (Optional)
@@ -124,7 +126,7 @@ Click-style aliases moved from `pyrung.core` to `pyrung.click`:
 `AutoTag` provides opt-in class-based auto naming:
 
 ```python
-from pyrung.core import Bool, Int, AutoTag
+from pyrung import AutoTag, Bool, Int
 
 
 class Tags(AutoTag):
@@ -134,7 +136,7 @@ class Tags(AutoTag):
 
 This binds names from attribute identifiers (`"Step1_Event"`, `"Count"`).
 Explicit naming remains supported and unchanged: `Bool("Step1_Event")`.
-If you prefer flat module names, export once: `Tags.export(globals())`.
+Prefer class-qualified access (`Tags.Step1_Event`) for lint/type-check friendly code.
 `AutoTag` is for tags only; declare `Block`/`InputBlock`/`OutputBlock` outside the class.
 
 Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intentionally unsupported.
@@ -144,7 +146,7 @@ Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intenti
 `@udt` creates mixed-type structures, `@named_array` creates single-type instance-interleaved arrays:
 
 ```python
-from pyrung.core import udt, named_array, auto, Field, Int, Bool, Real
+from pyrung import Bool, Field, Int, Real, auto, named_array, udt
 
 @udt(count=3)
 class Alarm:

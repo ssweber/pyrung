@@ -17,7 +17,7 @@ The CircuitPython dialect will add:
 ## Planned API sketch
 
 ```python
-from pyrung.core import *
+from pyrung import PLCRunner, Program, Rung, out
 from pyrung.circuitpy import P1AM, generate_circuitpython
 
 hw = P1AM()

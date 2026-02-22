@@ -610,15 +610,13 @@ class AutoTag:
     the string duplication.
 
     Note:
-        ``AutoTag`` is not exported from ``pyrung``'s top-level
-        ``__all__``. Import it explicitly::
+        ``AutoTag`` is available from both ``pyrung`` and ``pyrung.core``::
 
-            from pyrung.core import AutoTag
+            from pyrung import AutoTag
 
     Example:
         ```python
-        from pyrung.core import AutoTag
-        from pyrung import Bool, Int, Real
+        from pyrung import AutoTag, Bool, Int, Real
 
         class Tags(AutoTag):
             Start    = Bool()

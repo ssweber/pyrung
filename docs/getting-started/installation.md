@@ -28,7 +28,7 @@
 
 ```python
 from importlib.metadata import version
-from pyrung.core import PLCRunner, Program
+from pyrung import PLCRunner, Program
 
 print("pyrung", version("pyrung"))
 print("imports ok:", PLCRunner, Program)

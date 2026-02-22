@@ -7,7 +7,7 @@ This guide walks through a complete pyrung program in five steps: define tags, w
 Tags are named, typed references to values. They hold no runtime state — values live in `SystemState`.
 
 ```python
-from pyrung.core import *
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, math, reset
 
 # Boolean (1 bit, not retentive by default)
 StartButton = Bool("StartButton")
@@ -98,7 +98,7 @@ with runner.active():
 ## Complete example
 
 ```python
-from pyrung.core import *
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, math, reset
 
 StartButton  = Bool("StartButton")
 MotorRunning = Bool("MotorRunning")

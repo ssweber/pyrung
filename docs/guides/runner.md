@@ -5,7 +5,7 @@
 ## Creating a runner
 
 ```python
-from pyrung.core import *
+from pyrung import PLCRunner
 
 runner = PLCRunner(logic)
 ```

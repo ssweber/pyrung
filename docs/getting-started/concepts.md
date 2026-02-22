@@ -82,7 +82,7 @@ A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 For larger programs, use `AutoTag` to auto-name tags from class attributes:
 
 ```python
-from pyrung.core import AutoTag, Block, Bool, Int, Real, TagType
+from pyrung import AutoTag, Block, Bool, Int, Real, Rung, TagType, latch
 
 class Tags(AutoTag):
     Start     = Bool()
@@ -96,8 +96,8 @@ Start, Stop = Tags.Start, Tags.Stop
 with Rung(Tags.Start):
     latch(Tags.Stop)
 
-# Optional: flatten into module scope
-Tags.export(globals())
+# Prefer class-qualified access in examples:
+# Tags.Start, Tags.Stop, Tags.Step
 
 # Blocks are declared separately (not inside AutoTag):
 DS = Block("DS", TagType.INT, 1, 100)
@@ -108,7 +108,7 @@ DS = Block("DS", TagType.INT, 1, 100)
 A `@udt` groups mixed-type fields into a reusable structure with multiple instances:
 
 ```python
-from pyrung.core import udt, auto, Field, Int, Bool, Real
+from pyrung import Bool, Field, Int, Real, auto, udt
 
 @udt(count=3)
 class Alarm:
@@ -138,7 +138,7 @@ Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), and `Field
 A `@named_array` groups single-type fields with instance-interleaved memory layout:
 
 ```python
-from pyrung.core import named_array, auto, Int, Block
+from pyrung import Block, Int, auto, named_array
 
 @named_array(Int, count=4, stride=2)
 class Sensor:
@@ -167,7 +167,7 @@ Sensor.map_to(DS.select(1, 8))  # 4 instances × stride 2 = 8 slots
 A `Block` is a named, typed, 1-indexed array of tags — used for physical I/O and grouped memory.
 
 ```python
-from pyrung.core import Block, InputBlock, OutputBlock, TagType
+from pyrung import Block, InputBlock, OutputBlock, TagType
 
 # Internal memory block (DS1..DS100)
 DS = Block("DS", TagType.INT, 1, 100)

@@ -3,7 +3,7 @@
 **Pythonic PLC simulation engine.** Write ladder logic as Python, simulate it with full step-through debugging, and optionally target real hardware through dialect modules.
 
 ```python
-from pyrung.core import *
+from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, out
 
 # Define tags
 Button = Bool("Button")
@@ -37,7 +37,7 @@ print(runner.current_state.tags["Light"])  # True
 
 - **Immutable state** — every scan produces a new `SystemState`; nothing is mutated in place.
 - **Consumer-driven** — you call `step()`, `run()`, or `patch()`; the engine never runs unsolicited.
-- **Hardware-agnostic core** — `pyrung.core` is dialect-free. Click-specific features live in `pyrung.click`.
+- **Hardware-agnostic engine** — base DSL/runtime APIs are exposed via `pyrung`. Click-specific features live in `pyrung.click`.
 
 ## Quick links
 

@@ -13,7 +13,7 @@ pip install pyrung
 ## Imports
 
 ```python
-from pyrung.core import *
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, TagMap
 ```
 
@@ -72,7 +72,7 @@ Click-style constructor aliases are available as convenience alternatives to IEC
 ## Writing a Click program
 
 ```python
-from pyrung.core import *
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, TagMap
 
 # Define semantic tags (hardware-agnostic)

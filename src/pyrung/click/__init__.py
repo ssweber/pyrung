@@ -96,7 +96,6 @@ from pyrung.core import (
     Word,
 )
 from pyrung.core.program import Program
-from pyrung.core.tag import MappingEntry
 
 Bit = Bool
 Int2 = Dint
@@ -188,8 +187,6 @@ from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.send_receive import receive, send
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
-    ClickFinding,
-    ClickValidationReport,
     ValidationMode,
     validate_click_program,
 )
@@ -235,10 +232,7 @@ __all__ = [
     "txt",
     "TagMap",
     "ClickDataProvider",
-    "ClickFinding",
-    "ClickValidationReport",
     "validate_click_program",
     "send",
     "receive",
-    "MappingEntry",
 ]

@@ -6,7 +6,7 @@ pyrung's immutable state and consumer-driven execution make it ideal for determi
 
 ```python
 # tests/test_motor.py
-from pyrung.core import *
+from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, latch, reset, rise
 
 def make_runner():
     StartButton  = Bool("StartButton")
@@ -140,8 +140,7 @@ assert state.tags.get("Fault", False) is False  # tag absent → use default
 For larger programs, `AutoTag` reduces boilerplate:
 
 ```python
-from pyrung.core import *
-from pyrung.core import AutoTag
+from pyrung import AutoTag, Bool, Int, PLCRunner, Program, Rung, TimeMode, latch
 
 class Tags(AutoTag):
     Start        = Bool()
@@ -195,7 +194,7 @@ For a shared runner across multiple tests in a module:
 
 ```python
 import pytest
-from pyrung.core import *
+from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, latch, reset
 
 @pytest.fixture
 def motor_runner():
