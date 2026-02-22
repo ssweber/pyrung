@@ -1421,6 +1421,117 @@ def test_evaluate_force_commands_mutate_force_map(tmp_path: Path):
     assert dict(adapter._runner.forces) == {}
 
 
+def test_evaluate_watch_predicate_expression_returns_boolean_result(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "Button == true", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "True"
+
+
+def test_evaluate_watch_bare_tag_returns_raw_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "seeded_state.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'Counter': 7}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "Counter", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "7"
+
+
+def test_evaluate_watch_uses_pending_values_mid_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_unconditional.py", _unconditional_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="evaluate",
+        arguments={"expression": "Light", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "True"
+
+
+def test_evaluate_watch_missing_reference_returns_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "MissingTag", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "Unknown tag or memory reference: MissingTag" in response["message"]
+
+
+def test_evaluate_repl_non_command_points_to_watch(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "Button == true", "context": "repl"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "Use Watch for predicate expressions." in response["message"]
+
+
 def test_set_breakpoints_with_condition_stops_only_when_true(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)

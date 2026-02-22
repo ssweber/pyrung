@@ -20,7 +20,12 @@ from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
+from pyrung.dap.expressions import And
+from pyrung.dap.expressions import Compare
+from pyrung.dap.expressions import Expr
 from pyrung.dap.expressions import ExpressionParseError
+from pyrung.dap.expressions import Not
+from pyrung.dap.expressions import Or
 from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
 from pyrung.dap.protocol import (
@@ -544,34 +549,103 @@ class DAPAdapter:
         expression = args.get("expression")
         if not isinstance(expression, str) or not expression.strip():
             raise DAPAdapterError("evaluate.expression is required")
-        parts = expression.strip().split()
-        command = parts[0]
+        context = args.get("context")
+        evaluate_context = context if isinstance(context, str) else "repl"
 
         with self._state_lock:
-            runner = self._require_runner_locked()
-            if command == "force":
-                if len(parts) < 3:
-                    raise DAPAdapterError("Usage: force <tag> <value>")
-                tag = parts[1]
-                raw_value = expression.strip().split(None, 2)[2]
-                value = self._parse_literal(raw_value)
-                runner.add_force(tag, value)
-                result = f"Forced {tag}={value!r}"
-            elif command in {"remove_force", "unforce"}:
-                if len(parts) != 2:
-                    raise DAPAdapterError("Usage: remove_force <tag>")
-                tag = parts[1]
-                runner.remove_force(tag)
-                result = f"Removed force {tag}"
-            elif command == "clear_forces":
-                runner.clear_forces()
-                result = "Cleared all forces"
+            self._require_runner_locked()
+            if evaluate_context == "watch":
+                result = self._evaluate_watch_expression_locked(expression)
             else:
-                raise DAPAdapterError(
-                    "Unsupported evaluate command. Use force/remove_force/unforce/clear_forces."
-                )
+                result = self._evaluate_repl_command_locked(expression)
 
-        return {"result": result, "variablesReference": 0}, []
+        return {"result": self._format_value(result), "variablesReference": 0}, []
+
+    def _evaluate_repl_command_locked(self, expression: str) -> str:
+        parts = expression.strip().split()
+        command = parts[0]
+        runner = self._require_runner_locked()
+        if command == "force":
+            if len(parts) < 3:
+                raise DAPAdapterError("Usage: force <tag> <value>")
+            tag = parts[1]
+            raw_value = expression.strip().split(None, 2)[2]
+            value = self._parse_literal(raw_value)
+            runner.add_force(tag, value)
+            return f"Forced {tag}={value!r}"
+        if command in {"remove_force", "unforce"}:
+            if len(parts) != 2:
+                raise DAPAdapterError("Usage: remove_force <tag>")
+            tag = parts[1]
+            runner.remove_force(tag)
+            return f"Removed force {tag}"
+        if command == "clear_forces":
+            runner.clear_forces()
+            return "Cleared all forces"
+        raise DAPAdapterError(
+            "Unsupported Debug Console command. Use force/remove_force/unforce/clear_forces. "
+            "Use Watch for predicate expressions."
+        )
+
+    def _evaluate_watch_expression_locked(self, expression: str) -> Any:
+        state = self._effective_evaluate_state_locked()
+        try:
+            parsed = parse_condition(expression)
+        except ExpressionParseError as exc:
+            raise DAPAdapterError(str(exc)) from exc
+
+        for name in sorted(self._expression_references(parsed)):
+            if not self._state_has_reference(state, name):
+                raise DAPAdapterError(f"Unknown tag or memory reference: {name}")
+
+        if isinstance(parsed, Compare) and parsed.op is None and parsed.right is None:
+            return self._state_value_for_reference(state, parsed.tag.name)
+
+        return compile_condition(parsed)(state)
+
+    def _effective_evaluate_state_locked(self) -> SystemState:
+        runner = self._require_runner_locked()
+        state = runner.current_state
+        current_ctx = self._current_ctx
+        if current_ctx is None:
+            return state
+
+        pending_tags = getattr(current_ctx, "_tags_pending", {})
+        if isinstance(pending_tags, dict) and pending_tags:
+            state = state.with_tags(dict(pending_tags))
+
+        pending_memory = getattr(current_ctx, "_memory_pending", {})
+        if isinstance(pending_memory, dict) and pending_memory:
+            state = state.with_memory(dict(pending_memory))
+
+        return state
+
+    def _expression_references(self, expr: Expr) -> set[str]:
+        if isinstance(expr, Compare):
+            return {expr.tag.name}
+        if isinstance(expr, Not):
+            return {expr.child.name}
+        if isinstance(expr, And):
+            refs: set[str] = set()
+            for child in expr.children:
+                refs.update(self._expression_references(child))
+            return refs
+        if isinstance(expr, Or):
+            refs: set[str] = set()
+            for child in expr.children:
+                refs.update(self._expression_references(child))
+            return refs
+        return set()
+
+    def _state_has_reference(self, state: SystemState, name: str) -> bool:
+        return name in state.tags or name in state.memory
+
+    def _state_value_for_reference(self, state: SystemState, name: str) -> Any:
+        if name in state.tags:
+            return state.tags.get(name)
+        if name in state.memory:
+            return state.memory.get(name)
+        return None
 
     def _on_dataBreakpointInfo(self, args: dict[str, Any]) -> HandlerResult:
         variables_reference = int(args.get("variablesReference", 0))

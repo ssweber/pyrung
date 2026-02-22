@@ -82,7 +82,19 @@ Monitors appear in:
 
 After adding a monitor, you can set a data breakpoint from the monitored variable to stop when its value changes.
 
+## Watch expressions
+
+Use the VS Code `Watch` panel for read-only expression evaluation.
+
+- Bare tag/memory names return the current raw value (`Counter`, `Fault`, `Step[CurStep]`).
+- Predicate expressions return `True`/`False` (`Fault & (MotorTemp > 100)`, `Mode == 1`).
+- Unknown names fail with an explicit error so typos are visible.
+
+Watch evaluation uses the same visible state as the Variables panel during stepping, including pending mid-scan values.
+
 ## Debug console force commands
+
+The Debug Console is command-only for force operations:
 
 ```text
 force TagName value
@@ -90,6 +102,8 @@ remove_force TagName
 unforce TagName
 clear_forces
 ```
+
+Use `Watch` for predicate evaluation.
 
 ## DAP to runner mapping
 
