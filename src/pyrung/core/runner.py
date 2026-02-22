@@ -620,7 +620,9 @@ class PLCRunner:
         self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
         self._evaluate_breakpoints(state=self._state)
 
-    def _evaluate_monitors(self, *, previous_state: SystemState, current_state: SystemState) -> None:
+    def _evaluate_monitors(
+        self, *, previous_state: SystemState, current_state: SystemState
+    ) -> None:
         for monitor_id in sorted(self._monitors_by_id):
             registration = self._monitors_by_id[monitor_id]
             if registration.removed or not registration.enabled:

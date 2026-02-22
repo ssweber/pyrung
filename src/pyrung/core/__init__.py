@@ -80,6 +80,7 @@ from pyrung.core.state import SystemState
 from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
 from pyrung.core.system_points import system
 from pyrung.core.tag import (
+    AutoTag,
     Bool,
     Char,
     Dint,
@@ -89,7 +90,6 @@ from pyrung.core.tag import (
     OutputTag,
     Real,
     Tag,
-    TagNamespace,
     TagType,
     Word,
 )
@@ -113,7 +113,7 @@ __all__ = [
     "InstanceView",
     # Tags (IEC 61131-3 names)
     "Tag",
-    "TagNamespace",
+    "AutoTag",
     "TagType",
     "Bool",
     "Int",

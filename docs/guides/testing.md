@@ -135,15 +135,15 @@ assert state.tags["Step"] == 3
 assert state.tags.get("Fault", False) is False  # tag absent → use default
 ```
 
-## Testing with TagNamespace
+## Testing with AutoTag
 
-For larger programs, `TagNamespace` reduces boilerplate:
+For larger programs, `AutoTag` reduces boilerplate:
 
 ```python
 from pyrung.core import *
-from pyrung.core import TagNamespace
+from pyrung.core import AutoTag
 
-class Tags(TagNamespace):
+class Tags(AutoTag):
     Start        = Bool()
     Stop         = Bool()
     MotorRunning = Bool()

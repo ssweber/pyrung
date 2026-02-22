@@ -588,7 +588,7 @@ class _AutoTagDecl:
     def __set_name__(self, owner: type, name: str) -> None:
         if not getattr(owner, "_PYRUNG_IS_TAG_NAMESPACE", False):
             raise TypeError(
-                f"Auto tag declaration '{name}' must be defined on a TagNamespace subclass. "
+                f"Auto tag declaration '{name}' must be defined on an AutoTag subclass. "
                 f"Use explicit naming instead: Bool('{name}')."
             )
         self._bound_tag = LiveTag(name, self._tag_type, self._retentive)
@@ -599,26 +599,26 @@ class _AutoTagDecl:
         return self._bound_tag
 
 
-class TagNamespace:
+class AutoTag:
     """Base class for class-body auto-naming of tags.
 
-    Subclass `TagNamespace` and declare tags using the type constructors
+    Subclass `AutoTag` and declare tags using the type constructors
     without a name argument. The attribute name is used as the tag name
     automatically. This is equivalent to ``Bool("Start")`` but removes
     the string duplication.
 
     Note:
-        ``TagNamespace`` is not exported from ``pyrung``'s top-level
+        ``AutoTag`` is not exported from ``pyrung``'s top-level
         ``__all__``. Import it explicitly::
 
-            from pyrung.core import TagNamespace
+            from pyrung.core import AutoTag
 
     Example:
         ```python
-        from pyrung.core import TagNamespace
+        from pyrung.core import AutoTag
         from pyrung import Bool, Int, Real
 
-        class Tags(TagNamespace):
+        class Tags(AutoTag):
             Start    = Bool()
             Stop     = Bool()
             Step     = Int(retentive=True)
@@ -632,7 +632,7 @@ class TagNamespace:
         Start, Stop, Step = Tags.Start, Tags.Stop, Tags.Step
         ```
 
-    Tag constructors called *outside* a `TagNamespace` class body without a
+    Tag constructors called *outside* an `AutoTag` class body without a
     name raise `TypeError`. Explicit naming (``Bool("Start")``) is always
     valid and is the canonical cross-context form.
 
@@ -750,9 +750,9 @@ class _TagTypeBase(LiveTag):
             return LiveTag(name, cls._tag_type, retentive)
         if not _is_class_declaration_context(stack_depth=2):
             raise TypeError(
-                f"{cls.__name__}() without a name is only valid in a TagNamespace class body. "
+                f"{cls.__name__}() without a name is only valid in an AutoTag class body. "
                 f"Use {cls.__name__}('TagName') or declare inside "
-                f"`class Tags(TagNamespace): ...`."
+                f"`class Tags(AutoTag): ...`."
             )
         return _AutoTagDecl(cls._tag_type, retentive)
 
@@ -767,8 +767,8 @@ class Bool(_TagTypeBase):
         Button = Bool("Button")
         Light  = Bool("Light", retentive=True)
 
-        # In a TagNamespace class body (auto-named):
-        class Tags(TagNamespace):
+        # In an AutoTag class body (auto-named):
+        class Tags(AutoTag):
             Start = Bool()
         ```
     """

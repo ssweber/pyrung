@@ -86,7 +86,7 @@ markdown_extensions:
 
 **`src/pyrung/core/tag.py`**
 - `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`: Add class docstrings — what type it creates, default retentive behavior, one-line example.
-- `TagNamespace`: Docstring explaining the class-body auto-naming pattern.
+- `AutoTag`: Docstring explaining the class-body auto-naming pattern.
 - `LiveTag.value`: Note that `.value` requires `runner.active()` scope.
 - `InputTag.immediate`, `OutputTag.immediate`: Two-sentence docstring on scan-cycle bypass.
 

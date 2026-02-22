@@ -77,14 +77,14 @@ A **retentive** tag is intended to preserve value across power-cycle workflows.
 A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 `PLCRunner` does not currently expose a built-in `reset()`/power-cycle API.
 
-### TagNamespace
+### AutoTag
 
-For larger programs, use `TagNamespace` to auto-name tags from class attributes:
+For larger programs, use `AutoTag` to auto-name tags from class attributes:
 
 ```python
-from pyrung.core import TagNamespace
+from pyrung.core import AutoTag
 
-class Tags(TagNamespace):
+class Tags(AutoTag):
     Start     = Bool()
     Stop      = Bool()
     Step      = Int(retentive=True)
@@ -95,6 +95,65 @@ Start, Stop = Tags.Start, Tags.Stop
 
 with Rung(Tags.Start):
     latch(Tags.Stop)
+```
+
+### UDT (User Defined Type)
+
+A `@udt` groups mixed-type fields into a reusable structure with multiple instances:
+
+```python
+from pyrung.core import udt, auto, Field, Int, Bool, Real
+
+@udt(count=3)
+class Alarm:
+    id: Int = auto()           # per-instance sequence: 1, 2, 3
+    active: Bool
+    level: Real = Field(retentive=True)
+```
+
+Field access uses two patterns:
+
+```python
+Alarm.id          # → Block (all 3 id tags)
+Alarm[1].id       # → LiveTag "Alarm1_id"
+Alarm[2].active   # → LiveTag "Alarm2_active"
+
+# Unpack instances for convenience:
+Alarm1, Alarm2, Alarm3 = Alarm[1], Alarm[2], Alarm[3]
+Alarm1.id         # → LiveTag "Alarm1_id"
+```
+
+Type annotations resolve Python primitives (`bool`, `int`, `float`, `str`) and IEC constructors (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) to the corresponding `TagType`.
+
+Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), and `Field(retentive=True)` to mark fields as retentive. Use `.clone(name)` to create a copy of the structure with a different base name.
+
+### named_array
+
+A `@named_array` groups single-type fields with instance-interleaved memory layout:
+
+```python
+from pyrung.core import named_array, auto, Int, Block
+
+@named_array(Int, count=4, stride=2)
+class Sensor:
+    reading = 0
+    offset = auto()
+```
+
+Access patterns are the same as UDT:
+
+```python
+Sensor.reading    # → Block (all 4 reading tags)
+Sensor[1].reading # → LiveTag "Sensor1_reading"
+```
+
+The `stride` parameter sets the per-instance memory footprint. With `stride=2` above, instance 1 occupies slots 0-1, instance 2 occupies slots 2-3, etc. Gaps between defined fields remain unmapped.
+
+Use `.map_to(block_range)` to map a named array to hardware memory:
+
+```python
+DS = Block("DS", TagType.INT, 1, 100)
+Sensor.map_to(DS.select(1, 8))  # 4 instances × stride 2 = 8 slots
 ```
 
 ## Blocks

@@ -1,8 +1,8 @@
-"""Tests for TagNamespace auto-naming declarations."""
+"""Tests for AutoTag auto-naming declarations."""
 
 import pytest
 
-from pyrung.core import Bool, Char, Dint, Int, Real, Tag, TagNamespace, TagType, Word
+from pyrung.core import AutoTag, Bool, Char, Dint, Int, Real, Tag, TagType, Word
 from pyrung.core.tag import LiveTag
 
 
@@ -20,7 +20,7 @@ from pyrung.core.tag import LiveTag
 def test_auto_naming_for_all_core_constructors(
     factory, expected_type: TagType, expected_retentive: bool, expected_default: object
 ):
-    class Tags(TagNamespace):
+    class Tags(AutoTag):
         Auto = factory()
 
     assert isinstance(Tags.Auto, Tag)
@@ -31,7 +31,7 @@ def test_auto_naming_for_all_core_constructors(
 
 
 def test_auto_naming_preserves_retentive_override():
-    class Tags(TagNamespace):
+    class Tags(AutoTag):
         Latched = Bool(retentive=True)
         VolatileCounter = Int(retentive=False)
 
@@ -40,7 +40,7 @@ def test_auto_naming_preserves_retentive_override():
 
 
 def test_namespace_registry_is_immutable_and_copyable():
-    class Tags(TagNamespace):
+    class Tags(AutoTag):
         Auto = Bool()
         Explicit = Int("Counter")
 
@@ -58,12 +58,12 @@ def test_namespace_registry_is_immutable_and_copyable():
 
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])
 def test_unnamed_constructor_outside_class_raises(factory):
-    with pytest.raises(TypeError, match="TagNamespace class body"):
+    with pytest.raises(TypeError, match="AutoTag class body"):
         factory()
 
 
 def test_unnamed_constructor_in_non_namespace_class_raises():
-    with pytest.raises(TypeError, match="TagNamespace subclass"):
+    with pytest.raises(TypeError, match="AutoTag subclass"):
 
         class NotNamespace:
             Auto = Bool()
@@ -72,13 +72,13 @@ def test_unnamed_constructor_in_non_namespace_class_raises():
 def test_duplicate_names_in_same_namespace_raise():
     with pytest.raises(ValueError, match="Duplicate tag names"):
 
-        class Bad(TagNamespace):
+        class Bad(AutoTag):
             Auto = Bool()
             AlsoAuto = Bool("Auto")
 
 
 def test_duplicate_names_across_inheritance_raise():
-    class Base(TagNamespace):
+    class Base(AutoTag):
         Auto = Bool()
 
     with pytest.raises(ValueError, match="Duplicate tag names"):
@@ -88,7 +88,7 @@ def test_duplicate_names_across_inheritance_raise():
 
 
 def test_redeclaring_same_attribute_name_in_subclass_raises():
-    class Base(TagNamespace):
+    class Base(AutoTag):
         Auto = Bool()
 
     with pytest.raises(ValueError, match="Duplicate tag names"):
@@ -98,7 +98,7 @@ def test_redeclaring_same_attribute_name_in_subclass_raises():
 
 
 def test_explicit_tag_attributes_are_normalized_and_included():
-    class Tags(TagNamespace):
+    class Tags(AutoTag):
         Explicit = Tag("Explicit")
         Auto = Bool()
 

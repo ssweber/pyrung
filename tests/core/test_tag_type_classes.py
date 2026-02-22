@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from pyrung.core import Bool, Char, Dint, Int, Real, TagNamespace, TagType, Word, named_array, udt
+from pyrung.core import AutoTag, Bool, Char, Dint, Int, Real, TagType, Word, named_array, udt
 from pyrung.core.tag import LiveTag
 
 
@@ -39,7 +39,7 @@ def test_tag_type_class_allows_retentive_override(factory):
 
 
 def test_tag_type_classes_support_tag_namespace_auto_naming():
-    class Tags(TagNamespace):
+    class Tags(AutoTag):
         A = Bool()
         B = Int()
 
@@ -51,7 +51,7 @@ def test_tag_type_classes_support_tag_namespace_auto_naming():
 
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])
 def test_unnamed_tag_type_class_outside_namespace_raises(factory):
-    with pytest.raises(TypeError, match="TagNamespace class body"):
+    with pytest.raises(TypeError, match="AutoTag class body"):
         factory()
 
 

@@ -74,7 +74,7 @@ class _TagTypeBase:
             return LiveTag(name, cls._tag_type, retentive)
         if not _is_class_declaration_context(stack_depth=2):
             raise TypeError(
-                f"{cls.__name__}() without a name is only valid in a TagNamespace class body."
+                f"{cls.__name__}() without a name is only valid in a AutoTag class body."
             )
         return _AutoTagDecl(cls._tag_type, retentive)
 
@@ -110,7 +110,7 @@ Click aliases (`Bit = Bool`, `Int2 = Dint`, `Float = Real`, `Hex = Word`, `Txt =
 - Keep `_AutoTagDecl`, `_is_class_declaration_context` unchanged
 - Adjust `stack_depth` in `_is_class_declaration_context` call if needed (test to verify)
 
-**Verify**: `make test` — all existing TagNamespace and tag constructor tests pass.
+**Verify**: `make test` — all existing AutoTag and tag constructor tests pass.
 
 ## Step 2: Add type annotation resolver
 
@@ -185,7 +185,7 @@ Reuse from current code: `_make_formatter`, `_make_default_factory`, `resolve_de
 - `tests/click/test_struct_mapping.py` → `tests/click/test_plc_mapping.py`
 
 **Add new**:
-- `tests/core/test_tag_type_classes.py` — test all 6 tag type classes (constructor, annotation, TagNamespace, errors) and primitive mappings (`bool`→`BOOL`, `int`→`INT`, `float`→`REAL`, `str`→`CHAR`)
+- `tests/core/test_tag_type_classes.py` — test all 6 tag type classes (constructor, annotation, AutoTag, errors) and primitive mappings (`bool`→`BOOL`, `int`→`INT`, `float`→`REAL`, `str`→`CHAR`)
 
 **Update in place**:
 - `tests/core/test_live_tag_proxy.py` — change Struct/PackedStruct usage to @udt/@named_array
@@ -219,7 +219,7 @@ Port all test cases 1:1, just change syntax from builder to decorator style.
 1. `make test` — all tests pass
 2. `make lint` — no lint/type errors
 3. Verify tag constructor behavior: `Int("name")` returns LiveTag
-4. Verify TagNamespace: `x = Int()` auto-names in class body
+4. Verify AutoTag: `x = Int()` auto-names in class body
 5. Verify decorator: `@udt(count=3)` creates correct blocks/tags
 6. Verify named array: `@named_array(Int, count=2, stride=2)` + `map_to()` works
 7. Verify Click integration: TagMap resolves decorated struct fields

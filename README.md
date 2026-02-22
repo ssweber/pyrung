@@ -121,13 +121,13 @@ Click-style aliases moved from `pyrung.core` to `pyrung.click`:
 
 ## Auto Naming (Optional)
 
-`TagNamespace` provides opt-in class-based auto naming:
+`AutoTag` provides opt-in class-based auto naming:
 
 ```python
-from pyrung.core import Bool, Int, TagNamespace
+from pyrung.core import Bool, Int, AutoTag
 
 
-class Tags(TagNamespace):
+class Tags(AutoTag):
     Step1_Event = Bool()
     Count = Int(retentive=True)
 ```
@@ -136,6 +136,31 @@ This binds names from attribute identifiers (`"Step1_Event"`, `"Count"`).
 Explicit naming remains supported and unchanged: `Bool("Step1_Event")`.
 
 Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intentionally unsupported.
+
+## Structured Tags
+
+`@udt` creates mixed-type structures, `@named_array` creates single-type instance-interleaved arrays:
+
+```python
+from pyrung.core import udt, named_array, auto, Field, Int, Bool, Real
+
+@udt(count=3)
+class Alarm:
+    id: Int = auto()
+    active: Bool
+    level: Real = Field(retentive=True)
+
+Alarm[1].id       # → LiveTag "Alarm1_id"
+Alarm.id          # → Block (all 3 id tags)
+
+@named_array(Int, count=4, stride=2)
+class Sensor:
+    reading = 0
+    offset = auto()
+
+Sensor[1].reading # → LiveTag "Sensor1_reading"
+Sensor.map_to(DS.select(1, 8))  # hardware mapping
+```
 
 ## Documentation
 
