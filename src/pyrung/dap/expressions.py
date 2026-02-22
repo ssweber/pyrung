@@ -127,9 +127,7 @@ class _Parser:
         expr = self._parse_expr()
         self._skip_ws()
         if not self._eof():
-            self._error(
-                f"Expected operator or end of expression, got {self._peek_snippet()!r}"
-            )
+            self._error(f"Expected operator or end of expression, got {self._peek_snippet()!r}")
         return expr
 
     def _parse_expr(self) -> Expr:
@@ -225,9 +223,7 @@ class _Parser:
             self._expect(",")
             args.append(self._parse_or().expr)
 
-    def _reject_bare_comparison_in_boolean_operator(
-        self, node: _ParsedNode, operator: str
-    ) -> None:
+    def _reject_bare_comparison_in_boolean_operator(self, node: _ParsedNode, operator: str) -> None:
         if not node.bare_comparison:
             return
         self._error(

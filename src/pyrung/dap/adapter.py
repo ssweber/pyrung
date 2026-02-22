@@ -20,12 +20,7 @@ from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
 from pyrung.core.state import SystemState
-from pyrung.dap.expressions import And
-from pyrung.dap.expressions import Compare
-from pyrung.dap.expressions import Expr
-from pyrung.dap.expressions import ExpressionParseError
-from pyrung.dap.expressions import Not
-from pyrung.dap.expressions import Or
+from pyrung.dap.expressions import And, Compare, Expr, ExpressionParseError, Not, Or
 from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
 from pyrung.dap.protocol import (
@@ -466,9 +461,7 @@ class DAPAdapter:
                     try:
                         condition = self._compile_condition(condition_source)
                     except DAPAdapterError as exc:
-                        response_bps.append(
-                            {"verified": False, "line": line, "message": str(exc)}
-                        )
+                        response_bps.append({"verified": False, "line": line, "message": str(exc)})
                         continue
 
                 try:
@@ -503,7 +496,9 @@ class DAPAdapter:
                 new_map[line] = _SourceBreakpoint(
                     line=line,
                     enabled=enabled,
-                    condition_source=condition_source.strip() if isinstance(condition_source, str) else None,
+                    condition_source=condition_source.strip()
+                    if isinstance(condition_source, str)
+                    else None,
                     condition=condition,
                     hit_condition=hit_condition,
                     hit_count=hit_count,
@@ -651,7 +646,10 @@ class DAPAdapter:
         variables_reference = int(args.get("variablesReference", 0))
         name = args.get("name")
         if variables_reference != self._monitor_scope_ref or not isinstance(name, str):
-            return {"dataId": None, "description": "Data breakpoints are supported for PLC monitors"}, []
+            return {
+                "dataId": None,
+                "description": "Data breakpoints are supported for PLC monitors",
+            }, []
 
         with self._state_lock:
             monitor_tags = {meta["tag"] for meta in self._monitor_meta.values()}
@@ -675,7 +673,9 @@ class DAPAdapter:
         responses: list[dict[str, Any] | None] = []
         for raw_bp in raw_breakpoints:
             if not isinstance(raw_bp, dict):
-                responses.append({"verified": False, "message": "Breakpoint entry must be an object"})
+                responses.append(
+                    {"verified": False, "message": "Breakpoint entry must be an object"}
+                )
                 continue
             data_id = raw_bp.get("dataId")
             if not isinstance(data_id, str) or not data_id.strip():
@@ -697,9 +697,7 @@ class DAPAdapter:
                     {
                         "dataId": data_id,
                         "condition": (
-                            condition_source.strip()
-                            if isinstance(condition_source, str)
-                            else None
+                            condition_source.strip() if isinstance(condition_source, str) else None
                         ),
                         "hitCondition": hit_condition,
                     },
@@ -771,7 +769,9 @@ class DAPAdapter:
 
         return {
             "breakpoints": [
-                response if response is not None else {"verified": False, "message": "Invalid data breakpoint"}
+                response
+                if response is not None
+                else {"verified": False, "message": "Invalid data breakpoint"}
                 for response in responses
             ]
         }, []

@@ -79,9 +79,7 @@ def _trace_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _events(messages: list[dict[str, Any]], event_name: str) -> list[dict[str, Any]]:
     return [
-        msg
-        for msg in messages
-        if msg.get("type") == "event" and msg.get("event") == event_name
+        msg for msg in messages if msg.get("type") == "event" and msg.get("event") == event_name
     ]
 
 
@@ -1424,7 +1422,9 @@ def test_evaluate_force_commands_mutate_force_map(tmp_path: Path):
 def test_evaluate_watch_predicate_expression_returns_boolean_result(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+    script = _write_script(
+        tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True)
+    )
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
@@ -1535,7 +1535,9 @@ def test_evaluate_repl_non_command_points_to_watch(tmp_path: Path):
 def test_set_breakpoints_with_condition_stops_only_when_true(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+    script = _write_script(
+        tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True)
+    )
     line = _line_number(script, "out(light)")
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
@@ -1627,7 +1629,10 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
         if snapshots:
             saw_snapshot = True
         outputs = _events(flushed, "output")
-        if any("Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", "")) for event in outputs):
+        if any(
+            "Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", ""))
+            for event in outputs
+        ):
             saw_output = True
         if saw_snapshot and saw_output:
             break
@@ -1752,7 +1757,9 @@ def test_plain_logpoint_emits_output_without_stopping(tmp_path: Path):
         adapter._drain_internal_events()
         flushed = _drain_messages(out_stream)
         outputs = _events(flushed, "output")
-        if any("Tick executed" in str(event.get("body", {}).get("output", "")) for event in outputs):
+        if any(
+            "Tick executed" in str(event.get("body", {}).get("output", "")) for event in outputs
+        ):
             saw_output = True
             break
         time.sleep(0.01)
@@ -1916,7 +1923,9 @@ def test_step_next_with_source_breakpoint_still_reports_step_reason(tmp_path: Pa
 def test_monitor_scope_and_variables_requests(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True))
+    script = _write_script(
+        tmp_path, "conditional_logic.py", _conditional_breakpoint_script(button=True)
+    )
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
@@ -1945,7 +1954,9 @@ def test_monitor_scope_and_variables_requests(tmp_path: Path):
         arguments={"variablesReference": monitor_scope["variablesReference"]},
     )
     variable_response = _single_response(variable_messages)
-    monitor_values = {entry["name"]: entry["value"] for entry in variable_response["body"]["variables"]}
+    monitor_values = {
+        entry["name"]: entry["value"] for entry in variable_response["body"]["variables"]
+    }
     assert monitor_values["Button"] == "True"
 
     remove_messages = _send_request(
