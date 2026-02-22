@@ -19,7 +19,7 @@ _IF_HINT = "Use `Rung(condition)` to express conditional logic"
 _BOOL_HINT = "Use `all_of()` / `any_of()` for compound conditions"
 
 
-_NOT_HINT = "Use `nc()` for normally-closed contacts"
+_NOT_HINT = "Use `~Tag` for normally-closed contacts"
 
 
 _LOOP_HINT = "Each rung is independent; express repeated patterns as separate rungs"

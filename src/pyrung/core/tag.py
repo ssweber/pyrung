@@ -458,7 +458,14 @@ class Tag:
         return other >> TagExpr(self)
 
     def __invert__(self) -> Any:
-        """Create bitwise invert expression: ~Tag."""
+        """Create a normally-closed condition for BOOL, bitwise invert expression otherwise."""
+        if self.type == TagType.BOOL:
+            from pyrung.core.condition import NormallyClosedCondition
+
+            cond = NormallyClosedCondition(self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            return cond
+
         from pyrung.core.expression import TagExpr
 
         return ~TagExpr(self)

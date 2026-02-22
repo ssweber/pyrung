@@ -37,6 +37,7 @@ CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
 CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
+CLK_TILDE_BOOL_CONTACT_ONLY = "CLK_TILDE_BOOL_CONTACT_ONLY"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
@@ -283,6 +284,18 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
             )
         return "Move expression into math(expr, temp) and use temp in this context."
 
+    if code == CLK_TILDE_BOOL_CONTACT_ONLY:
+        expr_dsl = str(meta.get("expr_dsl", ""))
+        if expr_dsl:
+            return (
+                f"Expression '{expr_dsl}' uses `~`. Click portability reserves `~` for BOOL "
+                "contact inversion in rung conditions. Rewrite with explicit math or masking."
+            )
+        return (
+            "Click portability reserves `~` for BOOL contact inversion in rung conditions. "
+            "Rewrite bitwise inversion with explicit math or masking."
+        )
+
     if code == CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED:
         return (
             "Click portability prefers explicit INT comparisons in conditions. "
@@ -393,6 +406,20 @@ def _evaluate_fact(
                     message=f"Expression used outside math instruction at {location_str}.",
                     location=location_str,
                     suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_MATH, fact, tag_map),
+                )
+            )
+        expr_dsl = str(fact.metadata.get("expr_dsl", ""))
+        if "~" in expr_dsl:
+            findings.append(
+                ClickFinding(
+                    code=CLK_TILDE_BOOL_CONTACT_ONLY,
+                    severity=_route_severity(CLK_TILDE_BOOL_CONTACT_ONLY, mode),
+                    message=(
+                        f"Expression uses `~` (bitwise invert) at {location_str}. "
+                        "Click portability reserves `~` for BOOL contact inversion."
+                    ),
+                    location=location_str,
+                    suggestion=_build_suggestion(CLK_TILDE_BOOL_CONTACT_ONLY, fact, tag_map),
                 )
             )
 

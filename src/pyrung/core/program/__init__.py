@@ -25,7 +25,6 @@ from .conditions import (
     all_of,
     any_of,
     fall,
-    nc,
     rise,
 )
 from .context import (
@@ -83,7 +82,6 @@ __all__ = [
     "all_of",
     "any_of",
     "fall",
-    "nc",
     "rise",
     # Basic Instructions
     "call",

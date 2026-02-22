@@ -23,7 +23,6 @@ from pyrung.core import (
     count_up,
     forloop,
     latch,
-    nc,
     on_delay,
     out,
     rise,
@@ -66,7 +65,7 @@ def test_condition_helpers_and_operators_capture_source_lines():
     step = Int("Step")
 
     line_nc = _line_no() + 1
-    cond_nc = nc(a)
+    cond_nc = ~a
     line_rise = _line_no() + 1
     cond_rise = rise(b)
     line_any = _line_no() + 1

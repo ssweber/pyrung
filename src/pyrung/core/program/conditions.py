@@ -10,7 +10,6 @@ from pyrung.core.condition import (
     AnyCondition,
     Condition,
     FallingEdgeCondition,
-    NormallyClosedCondition,
     RisingEdgeCondition,
 )
 from pyrung.core.tag import Tag
@@ -37,18 +36,6 @@ def _make_condition(
                 child.source_line = source_line
 
     return condition
-
-
-def nc(tag: Tag) -> NormallyClosedCondition:
-    """Normally closed contact (XIO).
-
-    True when tag is False/0.
-
-    Example:
-        with Rung(StartButton, nc(StopButton)):
-            latch(MotorRunning)
-    """
-    return _make_condition(NormallyClosedCondition, tag)
 
 
 def rise(tag: Tag) -> RisingEdgeCondition:

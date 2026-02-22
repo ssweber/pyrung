@@ -57,7 +57,6 @@ from pyrung.core.program import (
     forloop,
     latch,
     math,
-    nc,
     off_delay,
     on_delay,
     out,
@@ -167,7 +166,6 @@ __all__ = [
     "on_delay",
     "off_delay",
     # Conditions
-    "nc",
     "rise",
     "fall",
     "all_of",

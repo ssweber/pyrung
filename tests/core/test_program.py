@@ -261,15 +261,15 @@ class TestRungDSL:
         assert new_state.tags["DH1"] == 0x0000
         assert new_state.tags["DH2"] == 0x3F80
 
-    def test_rung_with_nc_condition(self):
-        """nc() creates normally closed condition."""
-        from pyrung.core.program import Program, Rung, nc, out
+    def test_rung_with_tilde_normally_closed_condition(self):
+        """~Bool creates normally closed condition."""
+        from pyrung.core.program import Program, Rung, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as prog:
-            with Rung(nc(Button)):  # Light on when Button is OFF
+            with Rung(~Button):  # Light on when Button is OFF
                 out(Light)
 
         # Button OFF -> Light ON
@@ -281,6 +281,18 @@ class TestRungDSL:
         state = SystemState().with_tags({"Button": True, "Light": False})
         new_state = evaluate_rung(prog.rungs[0], state)
         assert new_state.tags["Light"] is False
+
+    def test_rung_rejects_inverted_int_expression_as_condition(self):
+        """~Int creates an expression and is invalid as a direct rung condition."""
+        from pyrung.core.program import Program, Rung, out
+
+        Step = Int("Step")
+        Light = Bool("Light")
+
+        with pytest.raises(TypeError, match="Expected Condition or Tag"):
+            with Program():
+                with Rung(~Step):
+                    out(Light)
 
 
 class TestSearchDSL:
@@ -471,7 +483,7 @@ class TestStrictDslControlFlowGuard:
         A = Bool("A")
         Light = Bool("Light")
 
-        with pytest.raises(ForbiddenControlFlowError, match="Use `nc\\(\\)`"):
+        with pytest.raises(ForbiddenControlFlowError, match="Use `~Tag`"):
             with Program():
                 with Rung(not A):  # type: ignore[arg-type]
                     out(Light)

@@ -12,6 +12,7 @@ from pyrung.click.validation import (
     CLK_PTR_DS_UNVERIFIED,
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
+    CLK_TILDE_BOOL_CONTACT_ONLY,
     ClickValidationReport,
     validate_click_program,
 )
@@ -299,6 +300,52 @@ class TestExpressionInMath:
             if f.code == CLK_EXPR_ONLY_IN_MATH
         ]
         assert expr_findings == []
+
+
+class TestTildeExpressionPortability:
+    def test_warn_mode_gives_hint(self):
+        A = Tag("A", TagType.INT)
+        Dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                math(~A, Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_TILDE_BOOL_CONTACT_ONLY for f in report.hints)
+
+    def test_strict_mode_gives_error(self):
+        A = Tag("A", TagType.INT)
+        Dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                math(~A, Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_TILDE_BOOL_CONTACT_ONLY for f in report.errors)
+
+    def test_bool_contact_inversion_does_not_emit_tilde_expression_finding(self):
+        Start = Bool("Start")
+
+        def logic():
+            with Rung(~Start):
+                pass
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_TILDE_BOOL_CONTACT_ONLY
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
 
 
 # ---------------------------------------------------------------------------

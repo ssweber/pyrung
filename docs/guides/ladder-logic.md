@@ -40,7 +40,7 @@ with Rung(Button):          # True when Button is True
 ### Normally closed (examine-off)
 
 ```python
-with Rung(nc(Button)):      # True when Button is False
+with Rung(~Button):      # True when Button is False
     out(FaultLight)
 ```
 
@@ -58,11 +58,11 @@ with Rung(fall(Button)):    # True for ONE scan on True→False transition
 
 ```python
 # Comma syntax — all must be True
-with Rung(Button, nc(Fault), AutoMode):
+with Rung(Button, ~Fault, AutoMode):
     out(Motor)
 
 # all_of() — explicit AND
-with Rung(all_of(Button, nc(Fault), AutoMode)):
+with Rung(all_of(Button, ~Fault, AutoMode)):
     out(Motor)
 ```
 
@@ -442,3 +442,4 @@ See the [API Reference](../reference/index.md) for full parameter documentation:
 - [`Tag`](../reference/api/core/tag.md)
 - [`Block` / `InputBlock` / `OutputBlock`](../reference/api/core/memory_block.md)
 - Instructions: [`out`, `latch`, `reset`, `copy`, `math`, `on_delay`, `count_up`, ...](../reference/api/core/instruction.md)
+

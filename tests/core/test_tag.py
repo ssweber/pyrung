@@ -325,6 +325,28 @@ class TestTagComparison:
         assert Button.type == TagType.BOOL
 
 
+class TestTagInvertOperator:
+    def test_bool_invert_creates_normally_closed_condition(self):
+        from pyrung.core import Bool
+        from pyrung.core.condition import NormallyClosedCondition
+
+        button = Bool("Button")
+        cond = ~button
+
+        assert isinstance(cond, NormallyClosedCondition)
+        assert cond.tag is button
+        assert cond.source_line is not None
+
+    def test_int_invert_stays_expression(self):
+        from pyrung.core import Int
+        from pyrung.core.expression import InvertExpr
+
+        step = Int("Step")
+        expr = ~step
+
+        assert isinstance(expr, InvertExpr)
+
+
 class TestTagCopyModifierHelpers:
     def test_as_value_helper(self):
         from pyrung.core import Char
