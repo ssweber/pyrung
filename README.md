@@ -134,6 +134,8 @@ class Tags(AutoTag):
 
 This binds names from attribute identifiers (`"Step1_Event"`, `"Count"`).
 Explicit naming remains supported and unchanged: `Bool("Step1_Event")`.
+If you prefer flat module names, export once: `Tags.export(globals())`.
+`AutoTag` is for tags only; declare `Block`/`InputBlock`/`OutputBlock` outside the class.
 
 Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intentionally unsupported.
 

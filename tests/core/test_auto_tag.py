@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import AutoTag, Bool, Char, Dint, Int, Real, Tag, TagType, Word
+from pyrung.core import AutoTag, Block, Bool, Char, Dint, InputBlock, Int, OutputBlock, Real, Tag, TagType, Word
 from pyrung.core.tag import LiveTag
 
 
@@ -56,6 +56,39 @@ def test_namespace_registry_is_immutable_and_copyable():
     assert Tags.Auto.name == "Auto"
 
 
+def test_export_flattens_tags_into_target_namespace():
+    class Tags(AutoTag):
+        Start = Bool()
+        Count = Int()
+
+    target: dict[str, object] = {}
+    exported = Tags.export(target)
+
+    assert set(exported) == {"Start", "Count"}
+    assert target["Start"] is Tags.Start
+    assert target["Count"] is Tags.Count
+
+
+def test_export_rejects_name_conflicts_by_default():
+    class Tags(AutoTag):
+        Start = Bool()
+
+    target: dict[str, object] = {"Start": object()}
+    with pytest.raises(ValueError, match="conflicts with existing names"):
+        Tags.export(target)
+
+
+def test_export_overwrite_replaces_conflicting_names():
+    class Tags(AutoTag):
+        Start = Bool()
+
+    sentinel = object()
+    target: dict[str, object] = {"Start": sentinel}
+    Tags.export(target, overwrite=True)
+
+    assert target["Start"] is Tags.Start
+
+
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])
 def test_unnamed_constructor_outside_class_raises(factory):
     with pytest.raises(TypeError, match="AutoTag class body"):
@@ -106,3 +139,11 @@ def test_explicit_tag_attributes_are_normalized_and_included():
     assert Tags.Explicit.name == "Explicit"
     assert isinstance(Tags.Explicit, LiveTag)
     assert set(Tags.__pyrung_tags__) == {"Explicit", "Auto"}
+
+
+@pytest.mark.parametrize("factory", [Block, InputBlock, OutputBlock])
+def test_blocks_are_not_allowed_in_autotag_subclass(factory):
+    with pytest.raises(TypeError, match="Block declarations are not allowed on AutoTag subclasses"):
+
+        class Bad(AutoTag):
+            Region = factory("DS", TagType.INT, 1, 5)

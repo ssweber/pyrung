@@ -638,6 +638,10 @@ class AutoTag:
     name raise `TypeError`. Explicit naming (``Bool("Start")``) is always
     valid and is the canonical cross-context form.
 
+    `AutoTag` class bodies accept tag declarations only. Memory blocks
+    (``Block``, ``InputBlock``, ``OutputBlock``) must be declared outside
+    the `AutoTag` class.
+
     Duplicate tag names across the class hierarchy are detected at class
     definition time and raise `ValueError`.
     """
@@ -647,6 +651,8 @@ class AutoTag:
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+
+        from pyrung.core.memory_block import Block, InputBlock, OutputBlock
 
         inherited_tags: dict[str, LiveTag] = {}
         inherited_origins: list[tuple[str, LiveTag]] = []
@@ -678,6 +684,12 @@ class AutoTag:
                     setattr(cls, attr_name, live_tag)
                 local_tags[attr_name] = live_tag
                 local_origins.append((f"{cls.__name__}.{attr_name}", live_tag))
+            elif isinstance(value, (Block, InputBlock, OutputBlock)):
+                raise TypeError(
+                    f"{cls.__name__}.{attr_name} is {type(value).__name__}. "
+                    "Block declarations are not allowed on AutoTag subclasses; "
+                    "declare Block/InputBlock/OutputBlock at module scope."
+                )
 
         _validate_duplicate_names(cls.__name__, inherited_origins + local_origins)
 
@@ -688,6 +700,41 @@ class AutoTag:
     @classmethod
     def tags(cls) -> dict[str, LiveTag]:
         """Return a copy of this class' declared tag registry."""
+        return dict(cls.__pyrung_tags__)
+
+    @classmethod
+    def export(cls, namespace: dict[str, Any], *, overwrite: bool = False) -> dict[str, LiveTag]:
+        """Export declared tags into a target namespace mapping.
+
+        Typical usage is flattening class-declared tags into module scope:
+
+            class Devices(AutoTag):
+                Start = Bool()
+                Count = Int()
+
+            Devices.export(globals())
+
+        Args:
+            namespace: Mapping to receive exported names (for example, ``globals()``).
+            overwrite: If ``False`` (default), raising ``ValueError`` on conflicting
+                existing names. If ``True``, existing names are replaced.
+
+        Returns:
+            Copy of tags exported to ``namespace``.
+        """
+        conflicts = [
+            name
+            for name, tag in cls.__pyrung_tags__.items()
+            if name in namespace and namespace[name] is not tag and not overwrite
+        ]
+        if conflicts:
+            joined = ", ".join(sorted(conflicts))
+            raise ValueError(
+                f"{cls.__name__}.export() conflicts with existing names: {joined}. "
+                "Pass overwrite=True to replace them."
+            )
+
+        namespace.update(cls.__pyrung_tags__)
         return dict(cls.__pyrung_tags__)
 
 

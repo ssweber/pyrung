@@ -82,7 +82,7 @@ A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 For larger programs, use `AutoTag` to auto-name tags from class attributes:
 
 ```python
-from pyrung.core import AutoTag
+from pyrung.core import AutoTag, Block, Bool, Int, Real, TagType
 
 class Tags(AutoTag):
     Start     = Bool()
@@ -95,6 +95,12 @@ Start, Stop = Tags.Start, Tags.Stop
 
 with Rung(Tags.Start):
     latch(Tags.Stop)
+
+# Optional: flatten into module scope
+Tags.export(globals())
+
+# Blocks are declared separately (not inside AutoTag):
+DS = Block("DS", TagType.INT, 1, 100)
 ```
 
 ### UDT (User Defined Type)
