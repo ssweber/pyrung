@@ -252,14 +252,14 @@ Timers use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`INT`).
 
 ```python
 # TON: Auto-reset when rung goes False
-on_delay(TimerDone, accumulator=TimerAcc, setpoint=100, time_unit=Tms)
+on_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
 
 # RTON: Hold accumulator when rung goes False (manual reset required)
-on_delay(TimerDone, accumulator=TimerAcc, setpoint=100).reset(ResetButton)
+on_delay(TimerDone, accumulator=TimerAcc, preset=100).reset(ResetButton)
 ```
 
 **TON behavior:**
-- Rung True → accumulator counts up; done = True when acc ≥ setpoint
+- Rung True → accumulator counts up; done = True when acc ≥ preset
 - Rung False → immediately resets acc and done
 
 **RTON behavior:**
@@ -270,12 +270,12 @@ on_delay(TimerDone, accumulator=TimerAcc, setpoint=100).reset(ResetButton)
 ### Off-Delay Timer (TOF)
 
 ```python
-off_delay(TimerDone, accumulator=TimerAcc, setpoint=100, time_unit=Tms)
+off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
 ```
 
 **TOF behavior:**
 - Rung True → done = True, acc = 0
-- Rung False → accumulator counts up; done = False when acc ≥ setpoint
+- Rung False → accumulator counts up; done = False when acc ≥ preset
 
 ### Time units
 
@@ -287,7 +287,7 @@ off_delay(TimerDone, accumulator=TimerAcc, setpoint=100, time_unit=Tms)
 | `Th` | Hours |
 | `Td` | Days |
 
-The accumulator stores integer ticks in the selected `time_unit`. The time unit controls how `dt` is converted to accumulator ticks.
+The accumulator stores integer ticks in the selected `unit`. The time unit controls how `dt` is converted to accumulator ticks.
 
 ---
 
@@ -302,25 +302,25 @@ Counters use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`DINT`
 ### Count Up (CTU)
 
 ```python
-count_up(CountDone, accumulator=CountAcc, setpoint=100).reset(ResetButton)
+count_up(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 ```
 
-- Rung True → accumulator increments each scan; done = True when acc ≥ setpoint
+- Rung True → accumulator increments each scan; done = True when acc ≥ preset
 - `reset(tag)` → resets acc and done when that tag is True
 
 ### Count Down (CTD)
 
 ```python
-count_down(CountDone, accumulator=CountAcc, setpoint=100).reset(ResetButton)
+count_down(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 ```
 
 - Accumulator starts at 0 and goes negative each scan
-- done = True when acc ≤ −setpoint
+- done = True when acc ≤ −preset
 
 ### Bidirectional counter
 
 ```python
-count_up(CountDone, accumulator=CountAcc, setpoint=100) \
+count_up(CountDone, accumulator=CountAcc, preset=100) \
     .down(DownCondition) \
     .reset(ResetButton)
 ```

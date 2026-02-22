@@ -58,14 +58,14 @@ def test_stop_resets_motor():
 ## Testing timers
 
 ```python
-def test_on_delay_fires_after_setpoint():
+def test_on_delay_fires_after_preset():
     TimerDone = Bool("TimerDone")
     TimerAcc  = Int("TimerAcc")
     Enable    = Bool("Enable")
 
     with Program() as logic:
         with Rung(Enable):
-            on_delay(TimerDone, accumulator=TimerAcc, setpoint=5, time_unit=Tms)
+            on_delay(TimerDone, accumulator=TimerAcc, preset=5, unit=Tms)
 
     runner = PLCRunner(logic)
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.001)  # 1ms per scan
@@ -173,7 +173,7 @@ def test_counter_reaches_target():
 
     with Program() as logic:
         with Rung(rise(Pulse)):
-            count_up(CountDone, accumulator=CountAcc, setpoint=10).reset(Bool("_never"))
+            count_up(CountDone, accumulator=CountAcc, preset=10).reset(Bool("_never"))
 
     runner = PLCRunner(logic)
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)

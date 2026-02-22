@@ -188,15 +188,15 @@ class CountUpBuilder(_BuilderBase):
     """Builder for count_up instruction with chaining API (Click-style).
 
     Supports optional .down() and required .reset() chaining:
-        count_up(done, acc, setpoint=100).reset(reset_tag)
-        count_up(done, acc, setpoint=50).down(down_cond).reset(reset_tag)
+        count_up(done, acc, preset=100).reset(reset_tag)
+        count_up(done, acc, preset=50).down(down_cond).reset(reset_tag)
     """
 
     def __init__(
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         up_condition: Any,
         source_file: str | None = None,
         source_line: int | None = None,
@@ -204,7 +204,7 @@ class CountUpBuilder(_BuilderBase):
         super().__init__(func_name="count_up", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
-        self._setpoint = setpoint
+        self._preset = preset
         self._up_condition = up_condition  # From rung conditions
         self._down_condition: Condition | Tag | None = None
         self._reset_condition: Condition | Tag | None = None
@@ -246,7 +246,7 @@ class CountUpBuilder(_BuilderBase):
         instr = CountUpInstruction(
             self._done_bit,
             self._accumulator,
-            self._setpoint,
+            self._preset,
             self._up_condition,
             self._reset_condition,
             self._down_condition,
@@ -288,14 +288,14 @@ class CountDownBuilder(_BuilderBase):
     """Builder for count_down instruction with chaining API (Click-style).
 
     Supports required .reset() chaining:
-        count_down(done, acc, setpoint=25).reset(reset_tag)
+        count_down(done, acc, preset=25).reset(reset_tag)
     """
 
     def __init__(
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         down_condition: Any,
         source_file: str | None = None,
         source_line: int | None = None,
@@ -303,7 +303,7 @@ class CountDownBuilder(_BuilderBase):
         super().__init__(func_name="count_down", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
-        self._setpoint = setpoint
+        self._preset = preset
         self._down_condition = down_condition  # From rung conditions
         self._reset_condition: Condition | Tag | None = None
         self._reset_source_file: str | None = None
@@ -312,7 +312,7 @@ class CountDownBuilder(_BuilderBase):
     def reset(self, condition: Condition | Tag) -> Tag:
         """Add reset condition (required).
 
-        When reset condition is true, loads setpoint into accumulator
+        When reset condition is true, loads preset into accumulator
         and clears done bit.
 
         Args:
@@ -327,7 +327,7 @@ class CountDownBuilder(_BuilderBase):
         instr = CountDownInstruction(
             self._done_bit,
             self._accumulator,
-            self._setpoint,
+            self._preset,
             self._down_condition,
             self._reset_condition,
         )
@@ -354,22 +354,24 @@ class CountDownBuilder(_BuilderBase):
 def count_up(
     done_bit: Tag,
     accumulator: Tag,
-    setpoint: Tag | int,
+    *,
+    preset: Tag | int,
 ) -> CountUpBuilder:
     """Count Up instruction (CTU) - Click-style.
 
-    Creates a counter that increments on each rising edge of the rung condition.
+    Creates a counter that increments every scan while the rung condition is True.
+    Use `rise()` on the condition for edge-triggered counting.
 
     Example:
         with Rung(rise(PartSensor)):
-            count_up(done_bit, acc, setpoint=100).reset(ResetBtn)
+            count_up(done_bit, acc, preset=100).reset(ResetBtn)
 
     This is a terminal instruction. Requires .reset() chaining.
 
     Args:
-        done_bit: Tag to set when accumulator >= setpoint.
-        accumulator: Tag to increment on each rising edge.
-        setpoint: Target value (Tag or int).
+        done_bit: Tag to set when accumulator >= preset.
+        accumulator: Tag to increment while rung condition is True.
+        preset: Target value (Tag or int).
 
     Returns:
         Builder for chaining .down() and .reset().
@@ -378,7 +380,7 @@ def count_up(
     return CountUpBuilder(
         done_bit,
         accumulator,
-        setpoint,
+        preset,
         up_condition,
         source_file=source_file,
         source_line=source_line,
@@ -388,22 +390,24 @@ def count_up(
 def count_down(
     done_bit: Tag,
     accumulator: Tag,
-    setpoint: Tag | int,
+    *,
+    preset: Tag | int,
 ) -> CountDownBuilder:
     """Count Down instruction (CTD) - Click-style.
 
-    Creates a counter that decrements on each rising edge of the rung condition.
+    Creates a counter that decrements every scan while the rung condition is True.
+    Use `rise()` on the condition for edge-triggered counting.
 
     Example:
         with Rung(rise(Dispense)):
-            count_down(done_bit, acc, setpoint=25).reset(Reload)
+            count_down(done_bit, acc, preset=25).reset(Reload)
 
     This is a terminal instruction. Requires .reset() chaining.
 
     Args:
-        done_bit: Tag to set when accumulator <= -setpoint.
-        accumulator: Tag to decrement on each rising edge.
-        setpoint: Target value (Tag or int).
+        done_bit: Tag to set when accumulator <= -preset.
+        accumulator: Tag to decrement while rung condition is True.
+        preset: Target value (Tag or int).
 
     Returns:
         Builder for chaining .reset().
@@ -412,7 +416,7 @@ def count_down(
     return CountDownBuilder(
         done_bit,
         accumulator,
-        setpoint,
+        preset,
         down_condition,
         source_file=source_file,
         source_line=source_line,
@@ -430,18 +434,18 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         enable_condition: Any,
-        time_unit: TimeUnit,
+        unit: TimeUnit,
         source_file: str | None = None,
         source_line: int | None = None,
     ):
         super().__init__(func_name="on_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
-        self._setpoint = setpoint
+        self._preset = preset
         self._enable_condition = enable_condition
-        self._time_unit = time_unit
+        self._unit = unit
         self._reset_condition: Condition | Tag | None = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
@@ -469,10 +473,10 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
             instr = OnDelayInstruction(
                 self._done_bit,
                 self._accumulator,
-                self._setpoint,
+                self._preset,
                 self._enable_condition,
                 self._reset_condition,
-                self._time_unit,
+                self._unit,
             )
             if instr.reset_condition is not None:
                 instr.debug_substeps = (
@@ -511,18 +515,18 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         enable_condition: Any,
-        time_unit: TimeUnit,
+        unit: TimeUnit,
         source_file: str | None = None,
         source_line: int | None = None,
     ):
         super().__init__(func_name="off_delay", source_file=source_file, source_line=source_line)
         self._done_bit = done_bit
         self._accumulator = accumulator
-        self._setpoint = setpoint
+        self._preset = preset
         self._enable_condition = enable_condition
-        self._time_unit = time_unit
+        self._unit = unit
 
     def _finalize(self) -> None:
         """Build and add the instruction to the rung."""
@@ -530,9 +534,9 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
             lambda: OffDelayInstruction(
                 self._done_bit,
                 self._accumulator,
-                self._setpoint,
+                self._preset,
                 self._enable_condition,
-                self._time_unit,
+                self._unit,
             )
         )
 
@@ -544,8 +548,9 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
 def on_delay(
     done_bit: Tag,
     accumulator: Tag,
-    setpoint: Tag | int,
-    time_unit: TimeUnit = TimeUnit.Tms,
+    *,
+    preset: Tag | int,
+    unit: TimeUnit = TimeUnit.Tms,
 ) -> OnDelayBuilder:
     """On-Delay Timer instruction (TON/RTON) - Click-style.
 
@@ -553,17 +558,17 @@ def on_delay(
 
     Example:
         with Rung(MotorRunning):
-            on_delay(done_bit, acc, setpoint=5000)                 # TON
-            on_delay(done_bit, acc, setpoint=5000).reset(ResetBtn) # RTON
+            on_delay(done_bit, acc, preset=5000)                 # TON
+            on_delay(done_bit, acc, preset=5000).reset(ResetBtn) # RTON
 
     This is a terminal instruction (must be last in rung).
     Optional .reset() chaining for retentive behavior.
 
     Args:
-        done_bit: Tag to set when accumulator >= setpoint.
+        done_bit: Tag to set when accumulator >= preset.
         accumulator: Tag to increment while enabled.
-        setpoint: Target value in time units (Tag or int).
-        time_unit: Time unit for accumulator (default: Tms).
+        preset: Target value in time units (Tag or int).
+        unit: Time unit for accumulator (default: Tms).
 
     Returns:
         Builder for optional .reset() chaining.
@@ -572,9 +577,9 @@ def on_delay(
     return OnDelayBuilder(
         done_bit,
         accumulator,
-        setpoint,
+        preset,
         enable_condition,
-        time_unit,
+        unit,
         source_file=source_file,
         source_line=source_line,
     )
@@ -583,25 +588,26 @@ def on_delay(
 def off_delay(
     done_bit: Tag,
     accumulator: Tag,
-    setpoint: Tag | int,
-    time_unit: TimeUnit = TimeUnit.Tms,
+    *,
+    preset: Tag | int,
+    unit: TimeUnit = TimeUnit.Tms,
 ) -> OffDelayBuilder:
     """Off-Delay Timer instruction (TOF) - Click-style.
 
-    Done bit is True while enabled. After disable, counts until setpoint,
+    Done bit is True while enabled. After disable, counts until preset,
     then done bit goes False. Auto-resets when re-enabled.
 
     Example:
         with Rung(MotorCommand):
-            off_delay(done_bit, acc, setpoint=10000)
+            off_delay(done_bit, acc, preset=10000)
 
     This is a terminal instruction (must be last in rung).
 
     Args:
-        done_bit: Tag that stays True for setpoint time after rung goes false.
+        done_bit: Tag that stays True for preset time after rung goes false.
         accumulator: Tag to increment while disabled.
-        setpoint: Delay time in time units (Tag or int).
-        time_unit: Time unit for accumulator (default: Tms).
+        preset: Delay time in time units (Tag or int).
+        unit: Time unit for accumulator (default: Tms).
 
     Returns:
         Builder for the off_delay instruction.
@@ -610,9 +616,9 @@ def off_delay(
     return OffDelayBuilder(
         done_bit,
         accumulator,
-        setpoint,
+        preset,
         enable_condition,
-        time_unit,
+        unit,
         source_file=source_file,
         source_line=source_line,
     )

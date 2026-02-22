@@ -385,7 +385,7 @@ class TestExprDslMetadata:
 
 
 class TestMissingFieldsCaptured:
-    """Verify time_unit, mode, continuous fields are now captured."""
+    """Verify unit, mode, continuous fields are now captured."""
 
     def test_math_mode_captured(self):
         Dest = Int("Dest")
@@ -408,10 +408,10 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung(Bool("Enable")):
-                on_delay(done, acc, 100, TimeUnit.Ts)
+                on_delay(done, acc, preset=100, unit=TimeUnit.Ts)
 
         facts = walk_program(prog)
-        tu_facts = _facts_at(facts, "instruction.time_unit")
+        tu_facts = _facts_at(facts, "instruction.unit")
         assert tu_facts
         assert tu_facts[0].value_kind == "literal"
         assert "Ts" in tu_facts[0].summary
@@ -424,10 +424,10 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung(Bool("Enable2")):
-                off_delay(done, acc, 100, TimeUnit.Tm)
+                off_delay(done, acc, preset=100, unit=TimeUnit.Tm)
 
         facts = walk_program(prog)
-        tu_facts = _facts_at(facts, "instruction.time_unit")
+        tu_facts = _facts_at(facts, "instruction.unit")
         assert tu_facts
         assert tu_facts[0].value_kind == "literal"
         assert "Tm" in tu_facts[0].summary

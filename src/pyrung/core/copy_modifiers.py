@@ -13,6 +13,7 @@ class CopyModifier:
     mode: CopyMode
     source: Any
     suppress_zero: bool = True
+    pad: int | None = None
     exponential: bool = False
     termination_code: int | str | None = None
 
@@ -31,6 +32,16 @@ def _normalize_termination_code(value: int | str | None) -> int | None:
     return value
 
 
+def _normalize_pad(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise TypeError("pad must be int or None")
+    if value < 0:
+        raise ValueError("pad must be >= 0")
+    return value
+
+
 def as_value(source: Any) -> CopyModifier:
     return CopyModifier(mode="value", source=source)
 
@@ -43,6 +54,7 @@ def as_text(
     source: Any,
     *,
     suppress_zero: bool = True,
+    pad: int | None = None,
     exponential: bool = False,
     termination_code: int | str | None = None,
 ) -> CopyModifier:
@@ -50,6 +62,7 @@ def as_text(
         mode="text",
         source=source,
         suppress_zero=bool(suppress_zero),
+        pad=_normalize_pad(pad),
         exponential=bool(exponential),
         termination_code=_normalize_termination_code(termination_code),
     )

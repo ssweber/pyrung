@@ -11,7 +11,7 @@ from .conversions import (
     _clamp_dint,
 )
 from .utils import (
-    resolve_setpoint_ctx,
+    resolve_preset_ctx,
     to_condition,
 )
 
@@ -31,13 +31,13 @@ class CountUpInstruction(Instruction):
         to count leading edges instead.
 
     - Accumulator type: DINT (32-bit signed, clamps at ±2 147 483 647).
-    - Done bit: True when acc ≥ setpoint.
+    - Done bit: True when acc ≥ preset.
     - Reset condition: clears acc to 0 and done to False (level-sensitive).
 
     Args:
-        done_bit: BOOL tag set when acc ≥ setpoint.
+        done_bit: BOOL tag set when acc ≥ preset.
         accumulator: DINT tag storing the current count.
-        setpoint: Target count (constant or DINT tag).
+        preset: Target count (constant or DINT tag).
         up_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Tag or condition that resets acc and done.
         down_condition: Optional tag or condition for bidirectional counting.
@@ -50,14 +50,14 @@ class CountUpInstruction(Instruction):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         up_condition: Any,
         reset_condition: Any,
         down_condition: Any = None,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
-        self.setpoint = setpoint
+        self.preset = preset
 
         # Convert Tags to Conditions if needed
         self.up_condition = to_condition(up_condition)
@@ -90,8 +90,8 @@ class CountUpInstruction(Instruction):
         # Apply net delta once, then clamp to DINT range
         acc_value = _clamp_dint(acc_value + delta)
 
-        # Compute done bit (resolve setpoint dynamically)
-        sp = resolve_setpoint_ctx(self.setpoint, ctx)
+        # Compute done bit (resolve preset dynamically)
+        sp = resolve_preset_ctx(self.preset, ctx)
         done = acc_value >= sp
 
         # Update tags
@@ -102,7 +102,7 @@ class CountDownInstruction(Instruction):
     """Count-Down (CTD) counter.
 
     Decrements the accumulator every scan the rung is True.  The accumulator
-    starts at 0 and counts negative; done = True when acc ≤ −setpoint.
+    starts at 0 and counts negative; done = True when acc ≤ −preset.
 
     .. warning::
         Not edge-triggered. The accumulator decrements by one per scan while
@@ -113,9 +113,9 @@ class CountDownInstruction(Instruction):
     - Reset condition: resets acc to 0 and done to False (level-sensitive).
 
     Args:
-        done_bit: BOOL tag set when acc ≤ −setpoint.
+        done_bit: BOOL tag set when acc ≤ −preset.
         accumulator: DINT tag storing the current (negative) count.
-        setpoint: Target magnitude (positive constant or DINT tag).
+        preset: Target magnitude (positive constant or DINT tag).
         down_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Tag or condition that resets acc and done.
     """
@@ -127,13 +127,13 @@ class CountDownInstruction(Instruction):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         down_condition: Any,
         reset_condition: Any,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
-        self.setpoint = setpoint
+        self.preset = preset
 
         # Convert Tags to Conditions if needed
         self.down_condition = to_condition(down_condition)
@@ -158,8 +158,8 @@ class CountDownInstruction(Instruction):
         # Clamp to DINT range
         acc_value = _clamp_dint(acc_value)
 
-        # Compute done bit (resolve setpoint dynamically)
-        sp = resolve_setpoint_ctx(self.setpoint, ctx)
+        # Compute done bit (resolve preset dynamically)
+        sp = resolve_preset_ctx(self.preset, ctx)
         done = acc_value <= -sp
 
         # Update tags

@@ -67,8 +67,8 @@ def test_r7_timer_role_validation():
 
     def logic():
         with Rung():
-            on_delay(done_ok, acc_ok, setpoint=10)
-            on_delay(done_bad, acc_bad, setpoint=10)
+            on_delay(done_ok, acc_ok, preset=10)
+            on_delay(done_bad, acc_bad, preset=10)
 
     prog = _build_program(logic)
     tag_map = TagMap(

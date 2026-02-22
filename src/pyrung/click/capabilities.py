@@ -14,10 +14,10 @@ from pyclickplc.banks import BANKS
 InstructionRole = Literal[
     "timer_done_bit",
     "timer_accumulator",
-    "timer_setpoint",
+    "timer_preset",
     "counter_done_bit",
     "counter_accumulator",
-    "counter_setpoint",
+    "counter_preset",
     "copy_pointer",
 ]
 
@@ -103,10 +103,10 @@ LADDER_BANK_CAPABILITIES: dict[str, BankCapability] = {
 INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "timer_done_bit": frozenset({"T"}),
     "timer_accumulator": frozenset({"TD"}),
-    "timer_setpoint": frozenset({"DS"}),
+    "timer_preset": frozenset({"DS"}),
     "counter_done_bit": frozenset({"CT"}),
     "counter_accumulator": frozenset({"CTD"}),
-    "counter_setpoint": frozenset({"DS", "DD"}),
+    "counter_preset": frozenset({"DS", "DD"}),
     "copy_pointer": frozenset({"DS"}),
 }
 

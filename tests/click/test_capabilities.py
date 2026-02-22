@@ -65,10 +65,10 @@ def test_is_writable_sd_subset():
     [
         ("timer_done_bit", "T", "C"),
         ("timer_accumulator", "TD", "DS"),
-        ("timer_setpoint", "DS", "DD"),
+        ("timer_preset", "DS", "DD"),
         ("counter_done_bit", "CT", "C"),
         ("counter_accumulator", "CTD", "DD"),
-        ("counter_setpoint", "DD", "TD"),
+        ("counter_preset", "DD", "TD"),
         ("copy_pointer", "DS", "DD"),
     ],
 )

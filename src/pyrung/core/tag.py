@@ -236,6 +236,7 @@ class Tag:
         self,
         *,
         suppress_zero: bool = True,
+        pad: int | None = None,
         exponential: bool = False,
         termination_code: int | str | None = None,
     ) -> Any:
@@ -245,6 +246,7 @@ class Tag:
         return as_text(
             self,
             suppress_zero=suppress_zero,
+            pad=pad,
             exponential=exponential,
             termination_code=termination_code,
         )
@@ -622,7 +624,7 @@ class AutoTag:
             Start    = Bool()
             Stop     = Bool()
             Step     = Int(retentive=True)
-            Setpoint = Real()
+            preset = Real()
 
         # Access tags via the class:
         with Rung(Tags.Start):
@@ -785,7 +787,7 @@ class Int(_TagTypeBase):
     Example:
         ```python
         Step     = Int("Step")
-        Setpoint = Int("Setpoint", retentive=False)
+        preset = Int("preset", retentive=False)
         ```
     """
 
@@ -811,7 +813,7 @@ class Dint(_TagTypeBase):
 class Real(_TagTypeBase):
     """Create a REAL (32-bit IEEE 754 float) tag.
 
-    Retentive by default. Use for analog setpoints and process values.
+    Retentive by default. Use for analog presets and process values.
 
     Example:
         ```python

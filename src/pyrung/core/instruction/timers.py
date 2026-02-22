@@ -9,7 +9,7 @@ from pyrung.core.time_mode import TimeUnit
 
 from .base import Instruction
 from .utils import (
-    resolve_setpoint_ctx,
+    resolve_preset_ctx,
     to_condition,
 )
 
@@ -21,7 +21,7 @@ class OnDelayInstruction(Instruction):
     """On-Delay Timer — TON (auto-reset) or RTON (manual reset).
 
     Accumulates elapsed time while the rung is True. When the accumulator
-    reaches `setpoint`, the done bit is set True.
+    reaches `preset`, the done bit is set True.
 
     **TON (no reset arg):**
     Resets the accumulator and done bit immediately when the rung goes False.
@@ -31,15 +31,15 @@ class OnDelayInstruction(Instruction):
     The reset condition clears both regardless of rung state.
 
     The accumulator is an INT tag (max 32 767). It clamps at the maximum and
-    never overflows. `setpoint` may be an INT tag (dynamic) or a constant.
+    never overflows. `preset` may be an INT tag (dynamic) or a constant.
 
     Args:
-        done_bit: BOOL tag set when acc ≥ setpoint.
-        accumulator: INT tag storing elapsed time in the selected `time_unit`.
-        setpoint: Target value (constant or INT tag).
+        done_bit: BOOL tag set when acc ≥ preset.
+        accumulator: INT tag storing elapsed time in the selected `unit`.
+        preset: Target value (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Optional condition to reset acc+done (creates RTON).
-        time_unit: Time unit for accumulator. Default `Tms` (milliseconds).
+        unit: Time unit for accumulator. Default `Tms` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -49,15 +49,15 @@ class OnDelayInstruction(Instruction):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         enable_condition: Any,
         reset_condition: Any = None,
-        time_unit: TimeUnit = TimeUnit.Tms,
+        unit: TimeUnit = TimeUnit.Tms,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
-        self.setpoint = setpoint
-        self.time_unit = time_unit
+        self.preset = preset
+        self.unit = unit
         self.has_reset = reset_condition is not None
 
         # Convert Tags to Conditions if needed
@@ -85,15 +85,15 @@ class OnDelayInstruction(Instruction):
             frac = ctx.get_memory(frac_key, 0.0)
 
             # Convert dt to timer units and add fractional remainder
-            dt_units = self.time_unit.dt_to_units(dt) + frac
+            dt_units = self.unit.dt_to_units(dt) + frac
             int_units = int(dt_units)
             new_frac = dt_units - int_units
 
             # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)
 
-            # Compute done bit (resolve setpoint dynamically)
-            sp = resolve_setpoint_ctx(self.setpoint, ctx)
+            # Compute done bit (resolve preset dynamically)
+            sp = resolve_preset_ctx(self.preset, ctx)
             done = acc_value >= sp
 
             # Update state
@@ -116,18 +116,18 @@ class OffDelayInstruction(Instruction):
     Keeps the done bit True for a specified time after the rung goes False.
 
     - **Rung True:** done = True, accumulator = 0 (resets immediately)
-    - **Rung False:** accumulator counts up; done = False once acc ≥ setpoint
+    - **Rung False:** accumulator counts up; done = False once acc ≥ preset
     - **Re-enabling:** re-enables immediately (acc and done reset)
 
-    If `setpoint` is a dynamic tag that increases past the current accumulator
+    If `preset` is a dynamic tag that increases past the current accumulator
     after the timer has already fired, done re-enables until acc catches up.
 
     Args:
         done_bit: BOOL tag that stays True until delay expires.
-        accumulator: INT tag storing elapsed off-time in `time_unit` ticks.
-        setpoint: Delay duration (constant or INT tag).
+        accumulator: INT tag storing elapsed off-time in `unit` ticks.
+        preset: Delay duration (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
-        time_unit: Time unit for accumulator. Default `Tms` (milliseconds).
+        unit: Time unit for accumulator. Default `Tms` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -137,14 +137,14 @@ class OffDelayInstruction(Instruction):
         self,
         done_bit: Tag,
         accumulator: Tag,
-        setpoint: Tag | int,
+        preset: Tag | int,
         enable_condition: Any,
-        time_unit: TimeUnit = TimeUnit.Tms,
+        unit: TimeUnit = TimeUnit.Tms,
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
-        self.setpoint = setpoint
-        self.time_unit = time_unit
+        self.preset = preset
+        self.unit = unit
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)
@@ -157,22 +157,22 @@ class OffDelayInstruction(Instruction):
             ctx.set_memory(frac_key, 0.0)
             ctx.set_tags({self.done_bit.name: True, self.accumulator.name: 0})
         else:
-            # Disabled: count up towards (and past) setpoint
+            # Disabled: count up towards (and past) preset
             acc_value = ctx.get_tag(self.accumulator.name, 0)
-            sp = resolve_setpoint_ctx(self.setpoint, ctx)
+            sp = resolve_preset_ctx(self.preset, ctx)
 
             # Always count while disabled (accumulator continues to max int)
             dt = ctx.get_memory("_dt", 0.0)
             frac = ctx.get_memory(frac_key, 0.0)
 
-            dt_units = self.time_unit.dt_to_units(dt) + frac
+            dt_units = self.unit.dt_to_units(dt) + frac
             int_units = int(dt_units)
             new_frac = dt_units - int_units
 
             # Update accumulator, clamp at INT16_MAX (32767)
             acc_value = min(acc_value + int_units, 32767)
 
-            # Done is True while acc < setpoint, False when acc >= setpoint
+            # Done is True while acc < preset, False when acc >= preset
             done = acc_value < sp
 
             ctx.set_memory(frac_key, new_frac)

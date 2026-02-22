@@ -98,6 +98,7 @@ def _render_text_from_numeric(
     *,
     source_tag: Tag | None,
     suppress_zero: bool,
+    pad: int | None = None,
     exponential: bool,
 ) -> str:
     from pyrung.core.tag import TagType
@@ -110,13 +111,22 @@ def _render_text_from_numeric(
         return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"
 
     number = int(value)
+    effective_suppress_zero = suppress_zero if pad is None else False
+    signed_width = max(pad - 1, 0) if pad is not None and number < 0 else pad
+
     if source_type == TagType.WORD:
-        return _format_int_text(number & 0xFFFF, 4, suppress_zero, signed=False)
+        width = 4 if pad is None else pad
+        return _format_int_text(number & 0xFFFF, width, effective_suppress_zero, signed=False)
     if source_type == TagType.DINT:
-        return _format_int_text(number, 10, suppress_zero)
+        width = 10 if signed_width is None else signed_width
+        return _format_int_text(number, width, effective_suppress_zero)
     if source_type == TagType.INT:
-        return _format_int_text(number, 5, suppress_zero)
-    return str(number) if suppress_zero else f"{number:05d}"
+        width = 5 if signed_width is None else signed_width
+        return _format_int_text(number, width, effective_suppress_zero)
+    if pad is None:
+        return str(number) if suppress_zero else f"{number:05d}"
+    width = 5 if signed_width is None else signed_width
+    return _format_int_text(number, width, suppress_zero=False)
 
 
 def _parse_pack_text_value(text: str, dest_tag: Tag) -> Any:

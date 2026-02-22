@@ -106,16 +106,16 @@ _R6_WRITE_TARGETS: frozenset[tuple[str, str]] = frozenset(
 _R7_ROLE_FIELDS: dict[tuple[str, str], str] = {
     ("OnDelayInstruction", "done_bit"): "timer_done_bit",
     ("OnDelayInstruction", "accumulator"): "timer_accumulator",
-    ("OnDelayInstruction", "setpoint"): "timer_setpoint",
+    ("OnDelayInstruction", "preset"): "timer_preset",
     ("OffDelayInstruction", "done_bit"): "timer_done_bit",
     ("OffDelayInstruction", "accumulator"): "timer_accumulator",
-    ("OffDelayInstruction", "setpoint"): "timer_setpoint",
+    ("OffDelayInstruction", "preset"): "timer_preset",
     ("CountUpInstruction", "done_bit"): "counter_done_bit",
     ("CountUpInstruction", "accumulator"): "counter_accumulator",
-    ("CountUpInstruction", "setpoint"): "counter_setpoint",
+    ("CountUpInstruction", "preset"): "counter_preset",
     ("CountDownInstruction", "done_bit"): "counter_done_bit",
     ("CountDownInstruction", "accumulator"): "counter_accumulator",
-    ("CountDownInstruction", "setpoint"): "counter_setpoint",
+    ("CountDownInstruction", "preset"): "counter_preset",
 }
 
 _R8_COPY_FIELDS: dict[str, tuple[str, str, str]] = {
@@ -728,7 +728,7 @@ def _evaluate_r7(
             continue
 
         value = getattr(instruction, field_name)
-        if field_name == "setpoint" and not isinstance(value, Tag):
+        if field_name == "preset" and not isinstance(value, Tag):
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")

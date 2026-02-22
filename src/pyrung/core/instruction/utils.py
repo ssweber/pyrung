@@ -44,13 +44,13 @@ def to_condition(obj: Any) -> Any:
     return obj
 
 
-def resolve_setpoint_ctx(setpoint: Tag | int, ctx: ScanContext) -> int:
-    """Resolve setpoint to int value (supports Tag or literal)."""
+def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:
+    """Resolve preset to int value (supports Tag or literal)."""
     from pyrung.core.tag import Tag as TagClass
 
-    if isinstance(setpoint, TagClass):
-        return ctx.get_tag(setpoint.name, setpoint.default)
-    return setpoint
+    if isinstance(preset, TagClass):
+        return ctx.get_tag(preset.name, preset.default)
+    return preset
 
 
 def _allowed_type_text(allowed_types: Iterable[TagType]) -> str:

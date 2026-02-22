@@ -295,13 +295,13 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
 
     with Program(strict=False) as logic:
         with Rung(enable):
-            count_up(up_done, up_acc, setpoint=5).down(down).reset(reset)
+            count_up(up_done, up_acc, preset=5).down(down).reset(reset)
 
         with Rung(enable):
-            count_down(down_done, down_acc, setpoint=5).reset(reset)
+            count_down(down_done, down_acc, preset=5).reset(reset)
 
         with Rung(enable):
-            on_delay(timer_done, timer_acc, setpoint=50).reset(reset)
+            on_delay(timer_done, timer_acc, preset=50).reset(reset)
 
         with Rung(enable):
             shift(bits.select(1, 4)).clock(clock).reset(reset)

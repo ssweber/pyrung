@@ -365,9 +365,12 @@ class TestTagCopyModifierHelpers:
     def test_as_text_helper_and_options(self):
         from pyrung.core import Int
 
-        modifier = Int("DS1").as_text(suppress_zero=False, exponential=True, termination_code=13)
+        modifier = Int("DS1").as_text(
+            suppress_zero=False, pad=7, exponential=True, termination_code=13
+        )
         assert modifier.mode == "text"
         assert modifier.suppress_zero is False
+        assert modifier.pad == 7
         assert modifier.exponential is True
         assert modifier.termination_code == 13
 

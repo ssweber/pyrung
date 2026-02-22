@@ -95,6 +95,13 @@ from pyrung.core.tag import (
 )
 from pyrung.core.time_mode import TimeMode, TimeUnit
 
+# Time unit aliases for DSL ergonomics
+Tms = TimeUnit.Tms
+Ts = TimeUnit.Ts
+Tm = TimeUnit.Tm
+Th = TimeUnit.Th
+Td = TimeUnit.Td
+
 __all__ = [
     "PLCRunner",
     "ScanContext",
@@ -104,6 +111,11 @@ __all__ = [
     "system",
     "TimeMode",
     "TimeUnit",
+    "Tms",
+    "Ts",
+    "Tm",
+    "Th",
+    "Td",
     # Structured factories
     "Field",
     "AutoDefault",

@@ -41,7 +41,7 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
@@ -58,15 +58,15 @@ class TestOnDelayTON:
                 f"After {i + 1} scans, acc should be {expected}"
             )
 
-    def test_ton_done_bit_when_setpoint_reached(self):
-        """TON done bit turns ON when accumulator >= setpoint."""
+    def test_ton_done_bit_when_preset_reached(self):
+        """TON done bit turns ON when accumulator >= preset."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=50)  # 50ms setpoint
+                on_delay(Timer_done, Timer_acc, preset=50)  # 50ms preset
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
@@ -99,7 +99,7 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
@@ -126,7 +126,7 @@ class TestOnDelayTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -159,7 +159,7 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -181,7 +181,7 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -213,7 +213,7 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -245,14 +245,14 @@ class TestOnDelayRTON:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
-        # Accumulate past setpoint (done = True)
+        # Accumulate past preset (done = True)
         runner.patch({"Enable": True})
         for _ in range(6):
             runner.step()
@@ -283,7 +283,7 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -305,14 +305,14 @@ class TestOffDelayTOF:
         assert runner.current_state.tags["td.Timer_acc"] == 0
 
     def test_tof_counts_after_disable_done_stays_true(self):
-        """TOF counts up after disable, done stays True until setpoint."""
+        """TOF counts up after disable, done stays True until preset."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -331,15 +331,15 @@ class TestOffDelayTOF:
             assert runner.current_state.tags["td.Timer_acc"] == expected
             assert runner.current_state.tags["t.Timer"] is True  # Still True
 
-    def test_tof_done_false_when_setpoint_reached(self):
-        """TOF done goes False when acc >= setpoint after disable."""
+    def test_tof_done_false_when_preset_reached(self):
+        """TOF done goes False when acc >= preset after disable."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -351,13 +351,13 @@ class TestOffDelayTOF:
         runner.step()
         runner.patch({"Enable": False})
 
-        # Count to just before setpoint (40ms)
+        # Count to just before preset (40ms)
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 40
         assert runner.current_state.tags["t.Timer"] is True
 
-        # One more scan to reach setpoint (50ms)
+        # One more scan to reach preset (50ms)
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 50
         assert runner.current_state.tags["t.Timer"] is False  # Done goes False
@@ -370,7 +370,7 @@ class TestOffDelayTOF:
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -410,7 +410,7 @@ class TestTimerIntegration:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=1000)
+                on_delay(Timer_done, Timer_acc, preset=1000)
 
             with Rung(Enable):
                 copy(Timer_acc, CapturedAcc)
@@ -447,7 +447,7 @@ class TestTimerIntegration:
         with Program() as logic:
             with Rung(Enable):
                 # Using default Tms - accumulator in milliseconds
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.025)  # 25ms per scan
@@ -466,7 +466,7 @@ class TestTimerIntegration:
 
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is True  # Done at setpoint
+        assert runner.current_state.tags["t.Timer"] is True  # Done at preset
 
     def test_ton_and_tof_in_same_program(self):
         """TON and TOF can coexist in the same program."""
@@ -481,11 +481,11 @@ class TestTimerIntegration:
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
             with Rung(Motor):
-                on_delay(TON_done, TON_acc, setpoint=50)
+                on_delay(TON_done, TON_acc, preset=50)
 
             # Stop delay: Output stays on 50ms after motor stops
             with Rung(Motor):
-                off_delay(TOF_done, TOF_acc, setpoint=50)
+                off_delay(TOF_done, TOF_acc, preset=50)
 
             # Output logic: TON done AND TOF done
             with Rung(TON_done, TOF_done):
@@ -528,7 +528,7 @@ class TestTimerIntegration:
         with Program() as logic:
             with Rung(MotorRunning):
                 # 5000ms = 5 seconds (scaled down from 5 minutes for test)
-                on_delay(PumpReady, PumpTmr_acc, setpoint=5000)
+                on_delay(PumpReady, PumpTmr_acc, preset=5000)
 
             with Rung(PumpReady):
                 out(PumpOutput)
@@ -559,29 +559,29 @@ class TestTimerIntegration:
         assert runner.current_state.tags["PumpOutput"] is False
 
 
-class TestDynamicSetpoints:
-    """Tests for dynamic setpoints (Tag references instead of literals)."""
+class TestDynamicpresets:
+    """Tests for dynamic presets (Tag references instead of literals)."""
 
-    def test_ton_with_dynamic_setpoint(self):
-        """TON supports Tag setpoint that can change at runtime."""
+    def test_ton_with_dynamic_preset(self):
+        """TON supports Tag preset that can change at runtime."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=Setpoint)
+                on_delay(Timer_done, Timer_acc, preset=preset)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
-        runner.patch({"Enable": False, "Setpoint": 50})
+        runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
         # Enable timer
         runner.patch({"Enable": True})
 
-        # Run 4 scans (40ms) - not done yet with setpoint=50
+        # Run 4 scans (40ms) - not done yet with preset=50
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 40
@@ -592,39 +592,39 @@ class TestDynamicSetpoints:
         assert runner.current_state.tags["td.Timer_acc"] == 50
         assert runner.current_state.tags["t.Timer"] is True
 
-        # Change setpoint to 100 - done should go back to False
-        runner.patch({"Setpoint": 100})
+        # Change preset to 100 - done should go back to False
+        runner.patch({"preset": 100})
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 60
         assert runner.current_state.tags["t.Timer"] is False  # Now not done
 
-        # Continue until new setpoint
+        # Continue until new preset
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 100
         assert runner.current_state.tags["t.Timer"] is True  # Done again
 
-    def test_tof_setpoint_increase_after_timeout_re_enables_done(self):
-        """TOF: If setpoint increases past acc after timeout, done goes True.
+    def test_tof_preset_increase_after_timeout_re_enables_done(self):
+        """TOF: If preset increases past acc after timeout, done goes True.
 
         This matches CLICK behavior per the manual warning:
-        "After the Off-Delay Counter has been finished, if the Setpoint value
+        "After the Off-Delay Counter has been finished, if the preset value
         is then changed to a value which is GREATER than the Current time value,
         then the output of the timer will come on again until the new, higher
-        Setpoint value is reached."
+        preset value is reached."
         """
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=Setpoint)
+                off_delay(Timer_done, Timer_acc, preset=preset)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
-        runner.patch({"Enable": False, "Setpoint": 50})
+        runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
         # Enable then disable
@@ -633,39 +633,39 @@ class TestDynamicSetpoints:
         assert runner.current_state.tags["t.Timer"] is True
         runner.patch({"Enable": False})
 
-        # Count to setpoint (50ms = 5 scans)
+        # Count to preset (50ms = 5 scans)
         for _ in range(5):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 50
         assert runner.current_state.tags["t.Timer"] is False  # Timed out
 
-        # Increase setpoint to 100 - done should go back to True
-        runner.patch({"Setpoint": 100})
+        # Increase preset to 100 - done should go back to True
+        runner.patch({"preset": 100})
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 60  # Resumed counting
         assert runner.current_state.tags["t.Timer"] is True  # Re-enabled!
 
-        # Continue counting to new setpoint
+        # Continue counting to new preset
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 100
         assert runner.current_state.tags["t.Timer"] is False  # Timed out again
 
-    def test_rton_with_dynamic_setpoint(self):
-        """RTON supports Tag setpoint."""
+    def test_rton_with_dynamic_preset(self):
+        """RTON supports Tag preset."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=Setpoint).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=preset).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
-        runner.patch({"Enable": False, "ResetBtn": False, "Setpoint": 50})
+        runner.patch({"Enable": False, "ResetBtn": False, "preset": 50})
         runner.step()
 
         # Accumulate, disable, hold
@@ -674,13 +674,13 @@ class TestDynamicSetpoints:
             runner.step()
         assert runner.current_state.tags["t.Timer"] is True  # Done at 50
 
-        # Change setpoint to 100 while still enabled
-        runner.patch({"Setpoint": 100})
+        # Change preset to 100 while still enabled
+        runner.patch({"preset": 100})
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 60
         assert runner.current_state.tags["t.Timer"] is False  # Not done anymore
 
-        # Continue to new setpoint
+        # Continue to new preset
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 100
@@ -690,7 +690,7 @@ class TestDynamicSetpoints:
 class TestTimerAccumulatorOverflow:
     """Tests for timer accumulator behavior approaching max int value.
 
-    Hardware-verified: Timer accumulators continue counting past setpoint
+    Hardware-verified: Timer accumulators continue counting past preset
     until they hit the maximum value for a 16-bit signed integer (32767),
     then clamp at that value.
 
@@ -699,15 +699,15 @@ class TestTimerAccumulatorOverflow:
 
     INT16_MAX = 32767
 
-    def test_ton_accumulates_past_setpoint(self):
-        """TON accumulator continues past setpoint towards max int."""
+    def test_ton_accumulates_past_preset(self):
+        """TON accumulator continues past preset towards max int."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
@@ -716,14 +716,14 @@ class TestTimerAccumulatorOverflow:
 
         runner.patch({"Enable": True})
 
-        # Run past setpoint
+        # Run past preset
         for _ in range(15):
             runner.step()
 
         assert runner.current_state.tags["td.Timer_acc"] == 150
         assert runner.current_state.tags["t.Timer"] is True
 
-        # Continue - accumulator keeps going past setpoint
+        # Continue - accumulator keeps going past preset
         for _ in range(10):
             runner.step()
 
@@ -741,7 +741,7 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100)
+                on_delay(Timer_done, Timer_acc, preset=100)
 
         runner = PLCRunner(logic)
         # Use large dt (10 seconds per scan = 10000ms) to reach max int quickly
@@ -771,8 +771,8 @@ class TestTimerAccumulatorOverflow:
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 32767
 
-    def test_rton_accumulator_continues_past_setpoint(self):
-        """RTON accumulator continues past setpoint when enabled."""
+    def test_rton_accumulator_continues_past_preset(self):
+        """RTON accumulator continues past preset when enabled."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
         Timer_done = Bool("t.Timer")
@@ -780,7 +780,7 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=50).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -789,7 +789,7 @@ class TestTimerAccumulatorOverflow:
 
         runner.patch({"Enable": True})
 
-        # Run well past setpoint
+        # Run well past preset
         for _ in range(20):
             runner.step()
 
@@ -805,7 +805,7 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, setpoint=100).reset(ResetBtn)
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=10.0)  # 10000ms per scan
@@ -833,15 +833,15 @@ class TestTimerAccumulatorOverflow:
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 32767
 
-    def test_tof_accumulator_continues_past_setpoint(self):
-        """TOF accumulator continues counting past setpoint while disabled."""
+    def test_tof_accumulator_continues_past_preset(self):
+        """TOF accumulator continues counting past preset while disabled."""
         Enable = Bool("Enable")
         Timer_done = Bool("t.Timer")
         Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
@@ -853,7 +853,7 @@ class TestTimerAccumulatorOverflow:
         runner.step()
         runner.patch({"Enable": False})
 
-        # Run past setpoint
+        # Run past preset
         for _ in range(10):
             runner.step()
 
@@ -868,7 +868,7 @@ class TestTimerAccumulatorOverflow:
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, setpoint=50)
+                off_delay(Timer_done, Timer_acc, preset=50)
 
         runner = PLCRunner(logic)
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=10.0)  # 10000ms per scan
@@ -883,7 +883,7 @@ class TestTimerAccumulatorOverflow:
         # Accumulate large values
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 10000
-        assert runner.current_state.tags["t.Timer"] is False  # Past setpoint
+        assert runner.current_state.tags["t.Timer"] is False  # Past preset
 
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 20000
@@ -912,4 +912,4 @@ class TestTimerConditionTypeGuards:
         with Program():
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
-                    on_delay(Done, Acc, setpoint=100).reset(ResetValue)
+                    on_delay(Done, Acc, preset=100).reset(ResetValue)

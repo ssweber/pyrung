@@ -1727,6 +1727,74 @@ class TestCopyTextModifiers:
         assert new_state.tags["CH4"] == "2"
         assert new_state.tags["CH5"] == "3"
 
+    def test_copy_as_text_with_pad(self):
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(Source.as_text(pad=7), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
+
+        assert new_state.tags["CH1"] == "0"
+        assert new_state.tags["CH2"] == "0"
+        assert new_state.tags["CH3"] == "0"
+        assert new_state.tags["CH4"] == "0"
+        assert new_state.tags["CH5"] == "1"
+        assert new_state.tags["CH6"] == "2"
+        assert new_state.tags["CH7"] == "3"
+
+    def test_copy_as_text_pad_smaller_than_value(self):
+        from pyrung.core.copy_modifiers import as_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(as_text(Source, pad=3), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 12345}))
+
+        assert new_state.tags["CH1"] == "1"
+        assert new_state.tags["CH2"] == "2"
+        assert new_state.tags["CH3"] == "3"
+        assert new_state.tags["CH4"] == "4"
+        assert new_state.tags["CH5"] == "5"
+
+    def test_copy_as_text_pad_with_dint(self):
+        from pyrung.core.copy_modifiers import as_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 12)
+        Source = Dint("Source")
+        instr = CopyInstruction(as_text(Source, pad=11), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
+
+        assert new_state.tags["CH1"] == "0"
+        assert new_state.tags["CH2"] == "0"
+        assert new_state.tags["CH3"] == "0"
+        assert new_state.tags["CH4"] == "0"
+        assert new_state.tags["CH5"] == "0"
+        assert new_state.tags["CH6"] == "0"
+        assert new_state.tags["CH7"] == "0"
+        assert new_state.tags["CH8"] == "0"
+        assert new_state.tags["CH9"] == "1"
+        assert new_state.tags["CH10"] == "2"
+        assert new_state.tags["CH11"] == "3"
+
+    def test_copy_as_text_pad_with_negative(self):
+        from pyrung.core.copy_modifiers import as_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(as_text(Source, pad=6), CH[1])
+        new_state = execute(instr, SystemState().with_tags({"Source": -123}))
+
+        assert new_state.tags["CH1"] == "-"
+        assert new_state.tags["CH2"] == "0"
+        assert new_state.tags["CH3"] == "0"
+        assert new_state.tags["CH4"] == "1"
+        assert new_state.tags["CH5"] == "2"
+        assert new_state.tags["CH6"] == "3"
+
     def test_copy_as_text_with_termination_code(self):
         from pyrung.core.copy_modifiers import as_text
         from pyrung.core.instruction import CopyInstruction

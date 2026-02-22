@@ -286,16 +286,16 @@ def _chained_builder_debug_script() -> str:
         "\n"
         "with Program(strict=False) as prog:\n"
         "    with Rung(Enable):\n"
-        "        cu_builder = count_up(DoneUp, AccUp, setpoint=5)\n"
+        "        cu_builder = count_up(DoneUp, AccUp, preset=5)\n"
         "        cu_builder = cu_builder.down(Down)\n"
         "        cu_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        cd_builder = count_down(DoneDown, AccDown, setpoint=5)\n"
+        "        cd_builder = count_down(DoneDown, AccDown, preset=5)\n"
         "        cd_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)\n"
+        "        timer_builder = on_delay(TimerDone, TimerAcc, preset=50)\n"
         "        timer_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
@@ -680,17 +680,17 @@ def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_li
     expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
 
     expected = [
-        ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, setpoint=5)")),
+        ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, preset=5)")),
         ("Count Down", _line_number(script, "cu_builder = cu_builder.down(Down)")),
         ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
         (
             "Count Down",
-            _line_number(script, "cd_builder = count_down(DoneDown, AccDown, setpoint=5)"),
+            _line_number(script, "cd_builder = count_down(DoneDown, AccDown, preset=5)"),
         ),
         ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
         (
             "Enable",
-            _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, setpoint=50)"),
+            _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, preset=50)"),
         ),
         ("Reset", _line_number(script, "timer_builder.reset(Reset)")),
         ("Data", _line_number(script, "shift_builder = shift(C.select(1, 3))")),

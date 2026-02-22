@@ -24,7 +24,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(PartSensor):
-                count_up(PartCount_done, PartCount_acc, setpoint=5).reset(ResetBtn)
+                count_up(PartCount_done, PartCount_acc, preset=5).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -48,8 +48,8 @@ class TestCountUpInstruction:
         runner.step()
         assert runner.current_state.tags["ctd.PartCount_acc"] == 3
 
-    def test_count_up_sets_done_bit_at_setpoint(self):
-        """CTU done bit turns ON when accumulator >= setpoint."""
+    def test_count_up_sets_done_bit_at_preset(self):
+        """CTU done bit turns ON when accumulator >= preset."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         Counter_done = Bool("ct.Counter")
@@ -57,7 +57,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=3).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=3).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -65,12 +65,12 @@ class TestCountUpInstruction:
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
-        # Count up to setpoint - 3 scans with trigger enabled
+        # Count up to preset - 3 scans with trigger enabled
         runner.patch({"Trigger": True})
         for _ in range(3):
             runner.step()
 
-        # Should be at setpoint now
+        # Should be at preset now
         assert runner.current_state.tags["ctd.Counter_acc"] == 3
         assert runner.current_state.tags["ct.Counter"] is True  # Done bit ON
 
@@ -88,7 +88,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=5).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=5).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -120,7 +120,7 @@ class TestCountUpInstruction:
 
         with Program() as logic:
             with Rung(rise(Enter)):
-                count_up(Zone_done, Zone_acc, setpoint=10).down(rise(Exit)).reset(ResetBtn)
+                count_up(Zone_done, Zone_acc, preset=10).down(rise(Exit)).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -169,7 +169,7 @@ class TestCountDownInstruction:
 
         with Program() as logic:
             with Rung(Dispense):
-                count_down(Remaining_done, Remaining_acc, setpoint=5).reset(Reload)
+                count_down(Remaining_done, Remaining_acc, preset=5).reset(Reload)
 
         from pyrung.core import PLCRunner
 
@@ -201,10 +201,10 @@ class TestCountDownInstruction:
         runner.step()
         assert runner.current_state.tags["ctd.Remaining_acc"] == -3
 
-    def test_count_down_sets_done_bit_at_negative_setpoint(self):
-        """CTD done bit turns ON when accumulator <= -setpoint.
+    def test_count_down_sets_done_bit_at_negative_preset(self):
+        """CTD done bit turns ON when accumulator <= -preset.
 
-        Click behavior: Done bit activates when reaching negative setpoint value.
+        Click behavior: Done bit activates when reaching negative preset value.
         """
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -213,7 +213,7 @@ class TestCountDownInstruction:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_down(Counter_done, Counter_acc, setpoint=3).reset(ResetBtn)
+                count_down(Counter_done, Counter_acc, preset=3).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -251,7 +251,7 @@ class TestCountDownInstruction:
     def test_count_down_reset_clears_to_zero(self):
         """CTD reset clears accumulator to 0.
 
-        Click behavior: Reset sets acc to 0, not to setpoint.
+        Click behavior: Reset sets acc to 0, not to preset.
         """
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -260,7 +260,7 @@ class TestCountDownInstruction:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_down(Counter_done, Counter_acc, setpoint=10).reset(ResetBtn)
+                count_down(Counter_done, Counter_acc, preset=10).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -297,7 +297,7 @@ class TestCounterAccumulatorClamp:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=2147483647).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=2147483647).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -325,7 +325,7 @@ class TestCounterAccumulatorClamp:
 
         with Program() as logic:
             with Rung(Trigger):
-                count_down(Counter_done, Counter_acc, setpoint=1).reset(ResetBtn)
+                count_down(Counter_done, Counter_acc, preset=1).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -354,7 +354,7 @@ class TestCounterAccumulatorClamp:
 
         with Program() as logic:
             with Rung(Enable):
-                count_up(Counter_done, Counter_acc, setpoint=2147483647).down(Down).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=2147483647).down(Down).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -399,7 +399,7 @@ class TestCounterIntegration:
         with Program() as logic:
             # Rung 1: Count up when DataTest == 1, reset when DataTest == 2
             with Rung(DataTest == 1):
-                count_up(TestCounter_done, TestCounter_acc, setpoint=10).reset(DataTest == 2)
+                count_up(TestCounter_done, TestCounter_acc, preset=10).reset(DataTest == 2)
 
             # Rung 2: When counter acc reaches 1, do operations (mid-scan!)
             # This rung should execute IN THE SAME SCAN as the counter increment
@@ -471,7 +471,7 @@ class TestCounterIntegration:
         with Program() as logic:
             # Rung 1: Count up every scan when Trigger is true
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=5).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=5).reset(ResetBtn)
 
             # Rung 2: Set flag if we see counter == 1
             with Rung(Counter_acc == 1):
@@ -522,7 +522,7 @@ class TestCounterIntegration:
         with Program() as logic:
             # Count parts
             with Rung(rise(PartSensor)):
-                count_up(PartCount_done, PartCount_acc, setpoint=100).reset(ResetButton)
+                count_up(PartCount_done, PartCount_acc, preset=100).reset(ResetButton)
 
             # Batch complete output
             with Rung(PartCount_done):
@@ -580,7 +580,7 @@ class TestCounterIntegration:
         with Program() as logic:
             with Rung(Step == 0):
                 with branch(AutoMode):
-                    count_up(Counter_done, Counter_acc, setpoint=5).reset(ResetBtn)
+                    count_up(Counter_done, Counter_acc, preset=5).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -622,7 +622,7 @@ class TestCounterIntegration:
         with Program() as logic:
             with Rung(Enable):
                 with branch(Mode):
-                    count_down(Counter_done, Counter_acc, setpoint=10).reset(ResetBtn)
+                    count_down(Counter_done, Counter_acc, preset=10).reset(ResetBtn)
 
         from pyrung.core import PLCRunner
 
@@ -654,67 +654,67 @@ class TestCounterIntegration:
         assert runner.current_state.tags["ctd.Counter_acc"] == -1
 
 
-class TestDynamicSetpoints:
-    """Tests for dynamic setpoints (Tag references instead of literals)."""
+class TestDynamicpresets:
+    """Tests for dynamic presets (Tag references instead of literals)."""
 
-    def test_ctu_with_dynamic_setpoint(self):
-        """CTU supports Tag setpoint that can change at runtime."""
+    def test_ctu_with_dynamic_preset(self):
+        """CTU supports Tag preset that can change at runtime."""
         from pyrung.core import PLCRunner
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         Counter_done = Bool("ct.Counter")
         Counter_acc = Dint("ctd.Counter_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=Setpoint).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
         runner = PLCRunner(logic)
-        runner.patch({"Trigger": False, "ResetBtn": False, "Setpoint": 5})
+        runner.patch({"Trigger": False, "ResetBtn": False, "preset": 5})
         runner.step()
 
-        # Count up to 4 - not done yet with setpoint=5
+        # Count up to 4 - not done yet with preset=5
         runner.patch({"Trigger": True})
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == 4
         assert runner.current_state.tags["ct.Counter"] is False
 
-        # Count one more - done at setpoint=5
+        # Count one more - done at preset=5
         runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == 5
         assert runner.current_state.tags["ct.Counter"] is True
 
-        # Change setpoint to 10 - done should go back to False
-        runner.patch({"Setpoint": 10})
+        # Change preset to 10 - done should go back to False
+        runner.patch({"preset": 10})
         runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == 6
         assert runner.current_state.tags["ct.Counter"] is False  # Not done anymore
 
-        # Continue to new setpoint
+        # Continue to new preset
         for _ in range(4):
             runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == 10
         assert runner.current_state.tags["ct.Counter"] is True  # Done again
 
-    def test_ctd_with_dynamic_setpoint(self):
-        """CTD supports Tag setpoint that can change at runtime."""
+    def test_ctd_with_dynamic_preset(self):
+        """CTD supports Tag preset that can change at runtime."""
         from pyrung.core import PLCRunner
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         Counter_done = Bool("ct.Counter")
         Counter_acc = Dint("ctd.Counter_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Trigger):
-                count_down(Counter_done, Counter_acc, setpoint=Setpoint).reset(ResetBtn)
+                count_down(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
         runner = PLCRunner(logic)
-        runner.patch({"Trigger": False, "ResetBtn": False, "Setpoint": 3})
+        runner.patch({"Trigger": False, "ResetBtn": False, "preset": 3})
         runner.step()
 
         # Reset to start at 0
@@ -723,20 +723,20 @@ class TestDynamicSetpoints:
         runner.patch({"ResetBtn": False})
         runner.step()
 
-        # Count down: 0 → -1 → -2 (not done yet with setpoint=3)
+        # Count down: 0 → -1 → -2 (not done yet with preset=3)
         runner.patch({"Trigger": True})
         for _ in range(2):
             runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == -2
         assert runner.current_state.tags["ct.Counter"] is False
 
-        # Count one more - done at -3 (meets -setpoint)
+        # Count one more - done at -3 (meets -preset)
         runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == -3
         assert runner.current_state.tags["ct.Counter"] is True
 
-        # Change setpoint to 5 - done should go back to False
-        runner.patch({"Setpoint": 5})
+        # Change preset to 5 - done should go back to False
+        runner.patch({"preset": 5})
         runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == -4
         assert runner.current_state.tags["ct.Counter"] is False  # Not done anymore
@@ -746,34 +746,34 @@ class TestDynamicSetpoints:
         assert runner.current_state.tags["ctd.Counter_acc"] == -5
         assert runner.current_state.tags["ct.Counter"] is True  # Done again
 
-    def test_setpoint_decrease_affects_done_immediately(self):
-        """When setpoint decreases below acc, done bit changes immediately."""
+    def test_preset_decrease_affects_done_immediately(self):
+        """When preset decreases below acc, done bit changes immediately."""
         from pyrung.core import PLCRunner
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         Counter_done = Bool("ct.Counter")
         Counter_acc = Dint("ctd.Counter_acc")
-        Setpoint = Int("Setpoint")
+        preset = Int("preset")
 
         with Program() as logic:
             with Rung(Trigger):
-                count_up(Counter_done, Counter_acc, setpoint=Setpoint).reset(ResetBtn)
+                count_up(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
         runner = PLCRunner(logic)
-        runner.patch({"Trigger": False, "ResetBtn": False, "Setpoint": 100})
+        runner.patch({"Trigger": False, "ResetBtn": False, "preset": 100})
         runner.step()
 
-        # Count up to 10 - not done (setpoint=100)
+        # Count up to 10 - not done (preset=100)
         runner.patch({"Trigger": True})
         for _ in range(10):
             runner.step()
         assert runner.current_state.tags["ctd.Counter_acc"] == 10
         assert runner.current_state.tags["ct.Counter"] is False
 
-        # Decrease setpoint to 5 - done should become True immediately
-        runner.patch({"Setpoint": 5})
-        runner.step()  # Acc goes to 11, but setpoint is now 5
+        # Decrease preset to 5 - done should become True immediately
+        runner.patch({"preset": 5})
+        runner.step()  # Acc goes to 11, but preset is now 5
         assert runner.current_state.tags["ctd.Counter_acc"] == 11
         assert runner.current_state.tags["ct.Counter"] is True  # Now done!
 
@@ -790,7 +790,7 @@ class TestCounterConditionTypeGuards:
         with Program():
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
-                    count_up(Done, Acc, setpoint=5).reset(ResetValue)
+                    count_up(Done, Acc, preset=5).reset(ResetValue)
 
     def test_count_up_down_rejects_int_tag(self):
         Enable = Bool("Enable")
@@ -802,7 +802,7 @@ class TestCounterConditionTypeGuards:
         with Program():
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
-                    count_up(Done, Acc, setpoint=5).down(DownValue).reset(Reset)
+                    count_up(Done, Acc, preset=5).down(DownValue).reset(Reset)
 
     def test_count_down_reset_rejects_int_tag(self):
         Enable = Bool("Enable")
@@ -813,4 +813,4 @@ class TestCounterConditionTypeGuards:
         with Program():
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
-                    count_down(Done, Acc, setpoint=5).reset(ResetValue)
+                    count_down(Done, Acc, preset=5).reset(ResetValue)

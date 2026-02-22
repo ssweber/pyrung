@@ -198,7 +198,7 @@ X.select(1, 16)       # → BlockRange of X1..X16
 The engine never runs unsolicited. You call:
 
 - `runner.step()` — one complete scan cycle
-- `runner.run(n)` — exactly N scan cycles
+- `runner.run(cycles)` — exactly N scan cycles
 - `runner.run_for(seconds)` — run until simulation time advances by N seconds
 - `runner.run_until(predicate)` — run until a condition is met
 - `runner.scan_steps()` — rung-by-rung generator for DAP debugging

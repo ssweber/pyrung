@@ -182,6 +182,7 @@ class CopyInstruction(OneShotMixin, Instruction):
                 value,
                 source_tag=source_tag,
                 suppress_zero=modifier.suppress_zero,
+                pad=modifier.pad,
                 exponential=modifier.exponential,
             )
             rendered += _termination_char(modifier.termination_code)
@@ -296,6 +297,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
                         ctx.get_tag(src_tag.name, src_tag.default),
                         source_tag=src_tag,
                         suppress_zero=modifier.suppress_zero,
+                        pad=modifier.pad,
                         exponential=modifier.exponential,
                     )
                     for src_tag in src_tags
@@ -390,6 +392,7 @@ class FillInstruction(OneShotMixin, Instruction):
                 resolve_tag_or_value_ctx(modifier.source, ctx),
                 source_tag=source_tag,
                 suppress_zero=modifier.suppress_zero,
+                pad=modifier.pad,
                 exponential=modifier.exponential,
             )
             rendered += _termination_char(modifier.termination_code)

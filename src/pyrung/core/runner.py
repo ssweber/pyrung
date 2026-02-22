@@ -334,7 +334,7 @@ class PLCRunner:
         """System point runtime component."""
         return self._system_runtime
 
-    def set_time_mode(self, mode: TimeMode, dt: float = 0.1) -> None:
+    def set_time_mode(self, mode: TimeMode, *, dt: float = 0.1) -> None:
         """Set the time mode for simulation.
 
         Args:
@@ -850,6 +850,7 @@ class PLCRunner:
     def run_until(
         self,
         predicate: Callable[[SystemState], bool],
+        *,
         max_cycles: int = 10000,
     ) -> SystemState:
         """Run until predicate returns True, pause breakpoint fires, or max_cycles reached.
