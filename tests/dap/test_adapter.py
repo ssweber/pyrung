@@ -579,6 +579,128 @@ def test_launch_reports_clear_discovery_error(tmp_path: Path):
     assert "Found 0 PLCRunner(s), 0 Program(s)" in response["message"]
 
 
+def test_launch_requires_program_string(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    _write_script(tmp_path, "logic.py", _runner_script())
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=1,
+        command="launch",
+        arguments={"program": 123},
+    )
+
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert response["message"] == "launch.program must be a Python file path"
+
+
+def test_variables_reference_coerces_numeric_string(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="variables",
+        arguments={"variablesReference": "1"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "variables" in response["body"]
+
+
+def test_stacktrace_startframe_and_levels_coerce_numeric_strings(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="stackTrace",
+        arguments={"startFrame": "0", "levels": "1"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["totalFrames"] >= 1
+    assert len(response["body"]["stackFrames"]) == 1
+
+
+def test_pyrung_add_monitor_requires_non_empty_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungAddMonitor",
+        arguments={"tag": "   "},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert response["message"] == "pyrungAddMonitor.tag is required"
+
+
+def test_pyrung_remove_monitor_requires_int_id(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungRemoveMonitor",
+        arguments={"id": "1"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert response["message"] == "pyrungRemoveMonitor.id must be an integer"
+
+
+def test_pyrung_find_label_requires_non_empty_label(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungFindLabel",
+        arguments={"label": ""},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert response["message"] == "pyrungFindLabel.label is required"
+
+
 def test_set_breakpoints_verifies_instruction_line(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
