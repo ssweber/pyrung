@@ -214,3 +214,45 @@ def test_udt_count_one_fields_and_field_names():
     assert alarm.fields["id"].type == TagType.INT
     assert alarm.fields["id"].default == 1
     assert alarm.fields["On"].retentive is True
+
+
+def test_udt_numbered_forces_numbered_names_for_count_one():
+    @udt(numbered=True)
+    class Alarm:
+        id: Int
+        On: Bool
+
+    alarm = cast(Any, Alarm)
+    assert alarm.id.name == "Alarm1_id"
+    assert alarm.On.name == "Alarm1_On"
+    assert alarm[1].id.name == "Alarm1_id"
+
+
+def test_udt_numbered_is_noop_for_count_greater_than_one():
+    @udt(count=3, numbered=True)
+    class Alarm:
+        id: Int
+
+    alarms = cast(Any, Alarm)
+    assert alarms[1].id.name == "Alarm1_id"
+    assert alarms[3].id.name == "Alarm3_id"
+
+
+def test_udt_numbered_clone_preserves_flag():
+    @udt(numbered=True)
+    class Device:
+        total: Int
+
+    Pump = cast(Any, Device).clone("Pump")
+    assert Pump.total.name == "Pump1_total"
+    assert Pump.numbered is True
+
+
+def test_udt_numbered_default_is_false():
+    @udt()
+    class Alarm:
+        id: Int
+
+    alarm = cast(Any, Alarm)
+    assert alarm.numbered is False
+    assert alarm.id.name == "Alarm_id"

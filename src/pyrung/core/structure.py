@@ -117,13 +117,21 @@ class InstanceView:
 class _StructRuntime:
     """Runtime object returned by `@udt`."""
 
-    def __init__(self, name: str, count: int, field_specs: tuple[_FieldSpec, ...]):
+    def __init__(
+        self,
+        name: str,
+        count: int,
+        field_specs: tuple[_FieldSpec, ...],
+        *,
+        numbered: bool = False,
+    ):
         _validate_name(name)
         _validate_count(count)
         _validate_fields_present(field_specs)
 
         self.name = name
         self.count = count
+        self.numbered = numbered
         self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
@@ -143,7 +151,7 @@ class _StructRuntime:
                 retentive=field_spec.retentive,
                 address_formatter=(
                     _make_compact_formatter(name, field_spec.name)
-                    if self.count == 1
+                    if self.count == 1 and not self.numbered
                     else _make_formatter(name, field_spec.name)
                 ),
                 default_factory=_make_default_factory(field_spec.default),
@@ -155,6 +163,7 @@ class _StructRuntime:
             name=name,
             count=self.count,
             field_specs=self._original_field_specs,
+            numbered=self.numbered,
         )
 
     @property
@@ -252,7 +261,7 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1) -> Callable[[type[Any]], _StructRuntime]:
+def udt(*, count: int = 1, numbered: bool = False) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
@@ -260,7 +269,7 @@ def udt(*, count: int = 1) -> Callable[[type[Any]], _StructRuntime]:
         name = cls.__name__
         _validate_name(name)
         field_specs = _parse_udt_fields(cls)
-        return _StructRuntime(name=name, count=count, field_specs=field_specs)
+        return _StructRuntime(name=name, count=count, field_specs=field_specs, numbered=numbered)
 
     return _decorator
 
