@@ -6,6 +6,7 @@ Must preserve evaluate command semantics and error message text.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,11 @@ from pyrung.dap.expressions import compile as compile_condition
 from pyrung.dap.expressions import parse as parse_condition
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+_SIMPLE_ATTR_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$")
+_INDEXED_TAG_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$")
+_INSTANCE_FIELD_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]\.([A-Za-z_][A-Za-z0-9_]*)$")
+_FIELD_INDEX_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$")
 
 
 @dataclass(frozen=True)
@@ -178,14 +184,16 @@ def evaluate_watch_expression_locked(adapter: Any, expression: str) -> Any:
     except ExpressionParseError as exc:
         raise adapter.DAPAdapterError(str(exc)) from exc
 
-    for name in sorted(adapter._expression_references(parsed)):
+    references = adapter._expression_references(parsed)
+    for name in sorted(references):
         if not adapter._state_has_reference(state, name):
             raise adapter.DAPAdapterError(f"Unknown tag or memory reference: {name}")
 
     if isinstance(parsed, Compare) and parsed.op is None and parsed.right is None:
         return adapter._state_value_for_reference(state, parsed.tag.name)
 
-    return compile_condition(parsed)(state)
+    state_for_eval = _state_with_reference_aliases(adapter, state, references)
+    return compile_condition(parsed)(state_for_eval)
 
 
 def effective_evaluate_state_locked(adapter: Any) -> SystemState:
@@ -225,12 +233,115 @@ def expression_references(adapter: Any, expr: Expr) -> set[str]:
 
 
 def state_has_reference(adapter: Any, state: SystemState, name: str) -> bool:
-    return name in state.tags or name in state.memory
+    return _resolve_reference_name(adapter, state, name) is not None
 
 
 def state_value_for_reference(adapter: Any, state: SystemState, name: str) -> Any:
-    if name in state.tags:
-        return state.tags.get(name)
-    if name in state.memory:
-        return state.memory.get(name)
+    resolved = _resolve_reference_name(adapter, state, name)
+    if resolved is None:
+        return None
+    if resolved in state.tags:
+        return state.tags.get(resolved)
+    if resolved in state.memory:
+        return state.memory.get(resolved)
     return None
+
+
+def _state_with_reference_aliases(
+    adapter: Any,
+    state: SystemState,
+    references: set[str],
+) -> SystemState:
+    tag_aliases: dict[str, Any] = {}
+    memory_aliases: dict[str, Any] = {}
+    for reference in references:
+        if reference in state.tags or reference in state.memory:
+            continue
+        resolved = _resolve_reference_name(adapter, state, reference)
+        if resolved is None:
+            continue
+        if resolved in state.tags:
+            tag_aliases[reference] = state.tags.get(resolved)
+            continue
+        if resolved in state.memory:
+            memory_aliases[reference] = state.memory.get(resolved)
+
+    if tag_aliases:
+        state = state.with_tags(tag_aliases)
+    if memory_aliases:
+        state = state.with_memory(memory_aliases)
+    return state
+
+
+def _resolve_reference_name(adapter: Any, state: SystemState, name: str) -> str | None:
+    reference = name.strip()
+    if not reference:
+        return None
+
+    if reference in state.tags or reference in state.memory:
+        return reference
+
+    for candidate in _reference_alias_candidates(adapter, state, reference):
+        if candidate in state.tags or candidate in state.memory:
+            return candidate
+    return None
+
+
+def _reference_alias_candidates(adapter: Any, state: SystemState, reference: str) -> list[str]:
+    del adapter
+
+    candidates: list[str] = []
+
+    simple_attr = _SIMPLE_ATTR_RE.match(reference)
+    if simple_attr is not None:
+        root_name = simple_attr.group(1)
+        leaf_name = simple_attr.group(2)
+        if root_name and root_name[0].isupper():
+            _append_candidate(candidates, leaf_name)
+
+    indexed_tag = _INDEXED_TAG_RE.match(reference)
+    if indexed_tag is not None:
+        _append_candidate(candidates, f"{indexed_tag.group(1)}{indexed_tag.group(2)}")
+
+    instance_field = _INSTANCE_FIELD_RE.match(reference)
+    if instance_field is not None:
+        _append_struct_candidates(
+            candidates,
+            state,
+            base=instance_field.group(1),
+            index=instance_field.group(2),
+            field=instance_field.group(3),
+        )
+
+    field_index = _FIELD_INDEX_RE.match(reference)
+    if field_index is not None:
+        _append_struct_candidates(
+            candidates,
+            state,
+            base=field_index.group(1),
+            index=field_index.group(3),
+            field=field_index.group(2),
+        )
+
+    return candidates
+
+
+def _append_struct_candidates(
+    candidates: list[str],
+    state: SystemState,
+    *,
+    base: str,
+    index: str,
+    field: str,
+) -> None:
+    _append_candidate(candidates, f"{base}{index}_{field}")
+
+    suffix = f"{index}_{field}"
+    suffix_matches = [tag_name for tag_name in state.tags if tag_name.endswith(suffix)]
+    if len(suffix_matches) == 1:
+        _append_candidate(candidates, suffix_matches[0])
+
+
+def _append_candidate(candidates: list[str], value: str) -> None:
+    if value and value not in candidates:
+        candidates.append(value)

@@ -73,24 +73,22 @@ class PyrungInlineValuesProvider {
 
       const sourceLine = document.lineAt(lineIdx).text;
       const code = this._stripCommentsAndStrings(sourceLine);
-      const regex = /\b[A-Za-z_][A-Za-z0-9_]*\b/g;
-      let match = regex.exec(code);
-      while (match) {
-        const name = match[0];
-        const startCol = match.index;
-        const endCol = startCol + name.length;
-        const key = `${lineIdx}:${startCol}:${name}`;
-        if (!seen.has(key) && this._isLookupCandidate(code, name, startCol, endCol)) {
+      const references = this._extractReferences(code);
+      for (const reference of references) {
+        const key = `${lineIdx}:${reference.startCol}:${reference.name}`;
+        if (
+          !seen.has(key) &&
+          this._isLookupCandidate(code, reference.name, reference.startCol, reference.endCol)
+        ) {
           values.push(
             new vscode.InlineValueVariableLookup(
-              new vscode.Range(lineIdx, startCol, lineIdx, endCol),
-              name,
+              new vscode.Range(lineIdx, reference.startCol, lineIdx, reference.endCol),
+              reference.name,
               true
             )
           );
           seen.add(key);
         }
-        match = regex.exec(code);
       }
     }
 
@@ -104,16 +102,33 @@ class PyrungInlineValuesProvider {
     return text;
   }
 
-  _isLookupCandidate(line, name, startCol, endCol) {
-    if (IGNORED_INLINE_IDENTIFIERS.has(name)) {
-      return false;
+  _extractReferences(line) {
+    const references = [];
+    const regex =
+      /\b[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[[0-9]+\])?)*\b/g;
+    let match = regex.exec(line);
+    while (match) {
+      const name = match[0];
+      const startCol = match.index;
+      references.push({
+        name,
+        startCol,
+        endCol: startCol + name.length,
+      });
+      match = regex.exec(line);
     }
+    return references;
+  }
 
-    if (startCol > 0) {
-      const prev = line[startCol - 1];
-      if (prev === ".") {
-        return false;
-      }
+  _rootIdentifier(name) {
+    const match = /^[A-Za-z_][A-Za-z0-9_]*/.exec(name);
+    return match ? match[0] : name;
+  }
+
+  _isLookupCandidate(line, name, startCol, endCol) {
+    const root = this._rootIdentifier(name);
+    if (IGNORED_INLINE_IDENTIFIERS.has(root)) {
+      return false;
     }
 
     const trailing = line.slice(endCol).trimStart();

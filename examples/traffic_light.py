@@ -34,10 +34,10 @@ from pyrung import (
 # ---------------------------------------------------------------------------
 # 1. Tag declarations
 # ---------------------------------------------------------------------------
-class Devices(AutoTag):
-    # Traffic light state: "g"reen, "y"ellow, "r"ed
-    State = Char()
+# Traffic light state: "g"reen, "y"ellow, "r"ed
+State = Char("State")
 
+class Tmr(AutoTag):
     # One timer per transition (done bit + accumulator)
     GreenDone = Bool()
     GreenAcc = Int()
@@ -48,10 +48,11 @@ class Devices(AutoTag):
     RedDone = Bool()
     RedAcc = Int()
 
+class Car(AutoTag):
     # Car counter: rising-edge sensor
-    CarSensor = Bool()
-    CarCountDone = Bool()
-    CarCountAcc = Dint()
+    Sensor = Bool()
+    CountDone = Bool()
+    CountAcc = Dint()
     CountReset = Bool()
 
     # Speed history log (5 slots, newest at DS1)
@@ -69,38 +70,38 @@ DS = Block("DS", TagType.INT, 1, 5)
 def logic():
 
     # Green phase: 3 000 ms then transition to yellow
-    with Rung(Devices.State == "g"):
-        on_delay(Devices.GreenDone, Devices.GreenAcc, preset=3000, unit=Tms)
+    with Rung(State == "g"):
+        on_delay(Tmr.GreenDone, Tmr.GreenAcc, preset=3000, unit=Tms)
 
-    with Rung(Devices.GreenDone):
-        copy("y", Devices.State)
+    with Rung(Tmr.GreenDone):
+        copy("y", State)
 
     # Yellow phase: 1 000 ms then transition to red
-    with Rung(Devices.State == "y"):
-        on_delay(Devices.YellowDone, Devices.YellowAcc, preset=1000, unit=Tms)
+    with Rung(State == "y"):
+        on_delay(Tmr.YellowDone, Tmr.YellowAcc, preset=1000, unit=Tms)
 
-    with Rung(Devices.YellowDone):
-        copy("r", Devices.State)
+    with Rung(Tmr.YellowDone):
+        copy("r", State)
 
     # Red phase: 3 000 ms then transition to green
-    with Rung(Devices.State == "r"):
-        on_delay(Devices.RedDone, Devices.RedAcc, preset=3000, unit=Tms)
+    with Rung(State == "r"):
+        on_delay(Tmr.RedDone, Tmr.RedAcc, preset=3000, unit=Tms)
 
-    with Rung(Devices.RedDone):
-        copy("g", Devices.State)
+    with Rung(Tmr.RedDone):
+        copy("g", State)
 
     # ------------------------------------------------------------------
     # 3. Car counter: count rising edges of CarSensor
     # ------------------------------------------------------------------
-    with Rung(rise(Devices.CarSensor)):
-        count_up(Devices.CarCountDone, Devices.CarCountAcc, preset=9999).reset(Devices.CountReset)
+    with Rung(rise(Car.Sensor)):
+        count_up(Car.CountDone, Car.CountAcc, preset=9999).reset(Car.CountReset)
 
     # ------------------------------------------------------------------
     # 4. Speed history: shift DS2..DS4 -> DS3..DS5 then write new value
     # ------------------------------------------------------------------
-    with Rung(rise(Devices.LogEnable)):
+    with Rung(rise(Car.LogEnable)):
         blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up
-        copy(Devices.SpeedIn, DS[1])                 # newest into slot 1
+        copy(Car.SpeedIn, DS[1])                 # newest into slot 1
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +112,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
 
 # Initialize state to green
 with runner.active():
-    Devices.State.value = "g"
+    State.value = "g"
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     runner.step()
@@ -119,13 +120,13 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     # Simulate a few car detections and speed readings
     for speed in (45, 52, 38):
         with runner.active():
-            Devices.CarSensor.value = True
-            Devices.LogEnable.value = True
-            Devices.SpeedIn.value = speed
+            Car.Sensor.value = True
+            Car.LogEnable.value = True
+            Car.SpeedIn.value = speed
         runner.step()
         with runner.active():
-            Devices.CarSensor.value = False
-            Devices.LogEnable.value = False
+            Car.Sensor.value = False
+            Car.LogEnable.value = False
         runner.step()
 
     # Let the light cycle run for 10 seconds (1 000 scans x 10 ms)
@@ -135,7 +136,7 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     # Print results
     # -----------------------------------------------------------------------
     with runner.active():
-        print(f"Light state : {Devices.State.value}")
+        print(f"Light state : {State.value}")
         print(f"Sim time    : {runner.simulation_time:.1f} s")
-        print(f"Cars counted: {Devices.CarCountAcc.value}")
+        print(f"Cars counted: {Car.CountAcc.value}")
         print(f"Speed log   : {[DS[i].value for i in range(1, 6)]}")

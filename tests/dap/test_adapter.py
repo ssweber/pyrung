@@ -1711,6 +1711,185 @@ def test_evaluate_watch_bare_tag_returns_raw_value(tmp_path: Path):
     assert response["body"]["result"] == "7"
 
 
+def test_evaluate_watch_autotag_qualified_reference_resolves(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "autotag_state.py",
+        (
+            "from pyrung.core import AutoTag, Bool, PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "class Tmr(AutoTag):\n"
+            "    GreenDone = Bool()\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'GreenDone': True}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "Tmr.GreenDone == true", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "True"
+
+
+def test_evaluate_watch_indexed_tag_reference_resolves(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "indexed_state.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'DS1': 123}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "DS[1]", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "123"
+
+
+def test_evaluate_watch_struct_instance_reference_resolves_with_unique_suffix(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "struct_state.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'Alarm1_id': 42}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "alarms[1].id", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "42"
+
+
+def test_evaluate_watch_named_array_instance_reference_resolves(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "named_array_state.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "SubName[1].xCall", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "9"
+
+
+def test_evaluate_watch_field_index_reference_resolves(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "field_index_state.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "SubName.xCall[1]", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["result"] == "9"
+
+
+def test_evaluate_watch_struct_instance_reference_ambiguous_suffix_errors(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(
+        tmp_path,
+        "struct_state_ambiguous.py",
+        (
+            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core.state import SystemState\n"
+            "\n"
+            "runner = PLCRunner(\n"
+            "    initial_state=SystemState().with_tags({'Alarm1_id': 42, 'Pump1_id': 84})\n"
+            ")\n"
+        ),
+    )
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="evaluate",
+        arguments={"expression": "items[1].id", "context": "watch"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "Unknown tag or memory reference: items[1].id" in response["message"]
+
+
 def test_evaluate_watch_uses_pending_values_mid_scan(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
