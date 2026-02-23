@@ -135,9 +135,9 @@ assert state.tags["Step"] == 3
 assert state.tags.get("Fault", False) is False  # tag absent → use default
 ```
 
-## Testing with singleton udt
+## Testing with count-one udt
 
-For larger programs, singleton `@udt()` keeps class-qualified names without string duplication:
+For larger programs, count-one `@udt()` keeps class-qualified names without string duplication:
 
 ```python
 from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, udt

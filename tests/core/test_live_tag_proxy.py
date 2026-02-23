@@ -99,9 +99,9 @@ def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
         assert sub_name_1.xCall.value == 1
 
     runner.step()
-    assert runner.current_state.tags["Alarm1_id"] == 42
-    assert runner.current_state.tags["Alarm1_on"] is True
-    assert runner.current_state.tags["SubName1_xCall"] == 1
+    assert runner.current_state.tags["Alarm_id"] == 42
+    assert runner.current_state.tags["Alarm_on"] is True
+    assert runner.current_state.tags["SubName_xCall"] == 1
 
 
 def test_live_value_supports_system_tags_and_enforces_read_only() -> None:

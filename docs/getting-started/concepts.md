@@ -77,9 +77,9 @@ A **retentive** tag is intended to preserve value across power-cycle workflows.
 A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 `PLCRunner` does not currently expose a built-in `reset()`/power-cycle API.
 
-### Singleton UDT
+### Count-One UDT
 
-For class-qualified auto naming without string duplication, use singleton `@udt()`:
+For class-qualified auto naming without string duplication, use `@udt()` (defaults to `count=1`):
 
 ```python
 from pyrung import Bool, Int, Real, Rung, latch, udt
@@ -95,12 +95,12 @@ with Rung(Tags.Start):
     latch(Tags.Stop)
 ```
 
-Singleton UDT field names are generated as `Struct_field` (for example, `Tags_Start`).
+Count-one UDT field names are generated as `Struct_field` (for example, `Tags_Start`).
 
 ### UDT (User Defined Type)
 
-A `@udt` groups mixed-type fields into a reusable structure. Use `@udt()` for a singleton,
-or set `count` for multiple instances:
+A `@udt` groups mixed-type fields into a reusable structure. `@udt()` defaults to `count=1`;
+set `count` higher for multiple instances:
 
 ```python
 from pyrung import Bool, Field, Int, Real, auto, udt
@@ -117,10 +117,10 @@ class Alarm:
     level: Real = Field(retentive=True)
 ```
 
-Field access depends on mode:
+Field access depends on `count`:
 
 ```python
-Config.enable     # → LiveTag "Config_enable" (singleton)
+Config.enable     # → LiveTag "Config_enable" (count=1)
 
 Alarm.id          # → Block (all 3 id tags, array mode)
 Alarm[1].id       # → LiveTag "Alarm1_id"

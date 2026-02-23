@@ -117,16 +117,13 @@ class InstanceView:
 class _StructRuntime:
     """Runtime object returned by `@udt`."""
 
-    def __init__(self, name: str, count: int | None, field_specs: tuple[_FieldSpec, ...]):
+    def __init__(self, name: str, count: int, field_specs: tuple[_FieldSpec, ...]):
         _validate_name(name)
         _validate_count(count)
         _validate_fields_present(field_specs)
 
-        self._singleton = count is None
-        resolved_count = 1 if count is None else count
-
         self.name = name
-        self.count = resolved_count
+        self.count = count
         self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
@@ -142,11 +139,11 @@ class _StructRuntime:
                 name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
                 start=1,
-                end=resolved_count,
+                end=self.count,
                 retentive=field_spec.retentive,
                 address_formatter=(
-                    _make_singleton_formatter(name, field_spec.name)
-                    if self._singleton
+                    _make_compact_formatter(name, field_spec.name)
+                    if self.count == 1
                     else _make_formatter(name, field_spec.name)
                 ),
                 default_factory=_make_default_factory(field_spec.default),
@@ -156,7 +153,7 @@ class _StructRuntime:
         """Create a copy of this structure with a different base name."""
         return _StructRuntime(
             name=name,
-            count=None if self._singleton else self.count,
+            count=self.count,
             field_specs=self._original_field_specs,
         )
 
@@ -169,8 +166,6 @@ class _StructRuntime:
         return self._field_order
 
     def __getitem__(self, index: int) -> InstanceView:
-        if self._singleton:
-            raise TypeError("singleton struct, no indexing")
         if not isinstance(index, int):
             raise TypeError(f"{type(self).__name__} index must be an int.")
         if index < 1 or index > self.count:
@@ -181,14 +176,13 @@ class _StructRuntime:
         block = self._blocks.get(field_name)
         if block is None:
             raise AttributeError(f"{type(self).__name__} has no field {field_name!r}.")
-        if self._singleton:
+        if self.count == 1:
             return block[1]
         return block
 
     def __repr__(self) -> str:
-        rendered_count = None if self._singleton else self.count
         return (
-            f"{type(self).__name__}({self.name!r}, count={rendered_count}, "
+            f"{type(self).__name__}({self.name!r}, count={self.count}, "
             f"fields={self._field_order!r})"
         )
 
@@ -201,7 +195,7 @@ class _NamedArrayRuntime(_StructRuntime):
         name: str,
         type: TagType,
         *,
-        count: int | None,
+        count: int,
         stride: int,
         field_specs: tuple[_FieldSpec, ...],
     ):
@@ -220,15 +214,13 @@ class _NamedArrayRuntime(_StructRuntime):
         return _NamedArrayRuntime(
             name=name,
             type=self.type,
-            count=None if self._singleton else self.count,
+            count=self.count,
             stride=self.stride,
             field_specs=self._original_field_specs,
         )
 
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
         """Map this named-array layout to a hardware range."""
-        if self._singleton:
-            raise TypeError("singleton named_array, no hardware mapping")
         if not isinstance(target, BlockRange):
             raise TypeError("named_array.map_to target must be a BlockRange.")
 
@@ -254,14 +246,13 @@ class _NamedArrayRuntime(_StructRuntime):
         return entries
 
     def __repr__(self) -> str:
-        rendered_count = None if self._singleton else self.count
         return (
-            f"{type(self).__name__}({self.name!r}, {self.type}, count={rendered_count}, "
+            f"{type(self).__name__}({self.name!r}, {self.type}, count={self.count}, "
             f"stride={self.stride}, fields={self._field_order!r})"
         )
 
 
-def udt(*, count: int | None = None) -> Callable[[type[Any]], _StructRuntime]:
+def udt(*, count: int = 1) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
@@ -275,7 +266,7 @@ def udt(*, count: int | None = None) -> Callable[[type[Any]], _StructRuntime]:
 
 
 def named_array(
-    base_type: object, *, count: int | None = None, stride: int = 1
+    base_type: object, *, count: int = 1, stride: int = 1
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -438,7 +429,7 @@ def _make_formatter(struct_name: str, field_name: str):
     return _formatter
 
 
-def _make_singleton_formatter(struct_name: str, field_name: str):
+def _make_compact_formatter(struct_name: str, field_name: str):
     def _formatter(_: str, __: int) -> str:
         return f"{struct_name}_{field_name}"
 
@@ -450,9 +441,7 @@ def _validate_name(name: str) -> None:
         raise ValueError("Struct name must be a non-empty string.")
 
 
-def _validate_count(count: int | None) -> None:
-    if count is None:
-        return
+def _validate_count(count: int) -> None:
     if not isinstance(count, int) or count < 1:
         raise ValueError(f"count must be an int >= 1, got {count!r}.")
 

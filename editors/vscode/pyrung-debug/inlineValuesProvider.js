@@ -131,7 +131,7 @@ class PyrungInlineValuesProvider {
     if (simpleMember) {
       const root = simpleMember[1];
       const leaf = simpleMember[2];
-      // Class-qualified (including singleton-udt) references resolve to class-prefixed names.
+      // Class-qualified (including count-one udt) references resolve to class-prefixed names.
       if (root && root[0] && root[0] === root[0].toUpperCase()) {
         return `${root}_${leaf}`;
       }

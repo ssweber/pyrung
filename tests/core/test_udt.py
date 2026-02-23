@@ -116,8 +116,8 @@ def test_udt_allows_underscored_fields():
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("_x", "val")
-    assert alarms[1]._x.name == "Alarm1__x"
-    assert alarms[1].val.name == "Alarm1_val"
+    assert alarms[1]._x.name == "Alarm__x"
+    assert alarms[1].val.name == "Alarm_val"
 
 
 def test_udt_clone_produces_independent_copy_with_new_name():
@@ -157,7 +157,7 @@ def test_udt_skips_classvar_fields():
         _ = alarms._meta
 
 
-def test_udt_singleton_returns_livetag_from_getattr():
+def test_udt_count_one_returns_livetag_from_getattr():
     @udt()
     class Alarm:
         id: Int
@@ -168,7 +168,7 @@ def test_udt_singleton_returns_livetag_from_getattr():
     assert alarm.id.type == TagType.INT
 
 
-def test_udt_singleton_naming_has_no_number():
+def test_udt_count_one_naming_has_no_number():
     @udt()
     class Alarm:
         id: Int
@@ -179,28 +179,30 @@ def test_udt_singleton_naming_has_no_number():
     assert alarm.On.name == "Alarm_On"
 
 
-def test_udt_singleton_getitem_raises():
+def test_udt_count_one_getitem_supports_only_index_one():
     @udt()
     class Alarm:
         id: Int
 
     alarm = cast(Any, Alarm)
-    with pytest.raises(TypeError, match="singleton struct, no indexing"):
-        _ = alarm[1]
+    assert alarm[1].id is alarm.id
+    with pytest.raises(IndexError, match="out of range"):
+        _ = alarm[0]
+    with pytest.raises(IndexError, match="out of range"):
+        _ = alarm[2]
 
 
-def test_udt_singleton_clone_preserves_singleton():
+def test_udt_count_one_clone_preserves_count():
     @udt()
     class Device:
         total: Int
 
     Pump = cast(Any, Device).clone("Pump")
     assert Pump.total.name == "Pump_total"
-    with pytest.raises(TypeError, match="singleton struct, no indexing"):
-        _ = Pump[1]
+    assert Pump[1].total is Pump.total
 
 
-def test_udt_singleton_fields_and_field_names():
+def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:
         id: Int = 1  # type: ignore[invalid-assignment]

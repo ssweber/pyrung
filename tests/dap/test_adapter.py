@@ -1711,7 +1711,7 @@ def test_evaluate_watch_bare_tag_returns_raw_value(tmp_path: Path):
     assert response["body"]["result"] == "7"
 
 
-def test_evaluate_watch_udt_singleton_qualified_reference_resolves(tmp_path: Path):
+def test_evaluate_watch_udt_count_one_qualified_reference_resolves(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(

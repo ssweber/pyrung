@@ -115,8 +115,8 @@ def test_named_array_allows_underscored_field_names():
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("_x", "val")
-    assert alarms[1]._x.name == "Alarm1__x"
-    assert alarms[1].val.name == "Alarm1_val"
+    assert alarms[1]._x.name == "Alarm__x"
+    assert alarms[1].val.name == "Alarm_val"
 
 
 def test_named_array_clone_produces_independent_copy_with_new_name():
@@ -158,7 +158,7 @@ def test_named_array_skips_classvar_fields():
         _ = alarms._meta
 
 
-def test_named_array_singleton_returns_livetag_from_getattr():
+def test_named_array_count_one_returns_livetag_from_getattr():
     @named_array(Int)
     class Alarm:
         id = auto()
@@ -169,7 +169,7 @@ def test_named_array_singleton_returns_livetag_from_getattr():
     assert alarm.id.default == 1
 
 
-def test_named_array_singleton_map_to_raises():
+def test_named_array_count_one_map_to_succeeds():
     @named_array(Int, stride=2)
     class Alarm:
         id = 0
@@ -177,5 +177,8 @@ def test_named_array_singleton_map_to_raises():
 
     alarm = cast(Any, Alarm)
     hardware = Block("HW", TagType.INT, 1, 20)
-    with pytest.raises(TypeError, match="singleton named_array, no hardware mapping"):
-        alarm.map_to(hardware.select(1, 2))
+    entries = alarm.map_to(hardware.select(1, 2))
+
+    assert len(entries) == 2
+    assert [entry.source.name for entry in entries] == ["Alarm_id", "Alarm_val"]
+    assert [cast(Tag, entry.target).name for entry in entries] == ["HW1", "HW2"]
