@@ -597,6 +597,48 @@ def test_launch_requires_program_string(tmp_path: Path):
     assert response["message"] == "launch.program must be a Python file path"
 
 
+def test_variables_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    adapter.handle_request(
+        {
+            "seq": 2,
+            "type": "request",
+            "command": "variables",
+            "arguments": [1],
+        }
+    )
+    response = _single_response(_drain_messages(out_stream))
+    assert response["success"] is False
+    assert response["message"] == "Internal adapter error: 'list' object has no attribute 'get'"
+
+
+def test_set_breakpoints_non_object_arguments_keep_legacy_internal_error_shape(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    adapter.handle_request(
+        {
+            "seq": 2,
+            "type": "request",
+            "command": "setBreakpoints",
+            "arguments": [1],
+        }
+    )
+    response = _single_response(_drain_messages(out_stream))
+    assert response["success"] is False
+    assert response["message"] == "Internal adapter error: 'list' object has no attribute 'get'"
+
+
 def test_variables_reference_coerces_numeric_string(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -1473,6 +1515,83 @@ def test_pause_stops_running_continue_loop(tmp_path: Path):
             break
         time.sleep(0.01)
     assert found is True
+
+
+def test_continue_pause_cycles_emit_single_pause_stop_per_cycle(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    seq = 2
+    for _ in range(3):
+        _send_request(adapter, out_stream, seq=seq, command="continue")
+        seq += 1
+        _drain_messages(out_stream)
+        _send_request(adapter, out_stream, seq=seq, command="pause")
+        seq += 1
+        _drain_messages(out_stream)
+
+        pause_stops = 0
+        for _ in range(100):
+            adapter._drain_internal_events()
+            flushed = _drain_messages(out_stream)
+            for stopped in _stopped_events(flushed):
+                if stopped["body"]["reason"] == "pause":
+                    pause_stops += 1
+            if pause_stops:
+                break
+            time.sleep(0.01)
+        assert pause_stops == 1
+
+        # After a pause transition, additional drains should not emit duplicate stops.
+        for _ in range(5):
+            adapter._drain_internal_events()
+            flushed = _drain_messages(out_stream)
+            assert _stopped_events(flushed) == []
+
+
+def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="setBreakpoints",
+        arguments={"source": {"path": str(script)}, "lines": [8]},
+    )
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    breakpoint_stops = 0
+    traces = 0
+    for _ in range(100):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        for stopped in _stopped_events(flushed):
+            if stopped["body"]["reason"] == "breakpoint":
+                breakpoint_stops += 1
+        traces += len(_trace_events(flushed))
+        if breakpoint_stops and traces:
+            break
+        time.sleep(0.01)
+
+    assert breakpoint_stops == 1
+    assert traces >= 1
+
+    for _ in range(5):
+        adapter._drain_internal_events()
+        flushed = _drain_messages(out_stream)
+        assert _stopped_events(flushed) == []
 
 
 def test_variables_overlay_pending_mid_scan_values(tmp_path: Path):

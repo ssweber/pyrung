@@ -52,6 +52,10 @@ class BreakpointManager:
     def source_breakpoints(self, source_path: str) -> dict[int, SourceBreakpoint]:
         return self.source_breakpoints_by_file.get(source_path, {})
 
+    def subroutine_sources(self) -> dict[str, tuple[str, int, int | None]]:
+        """Return a detached view of indexed subroutine source locations."""
+        return dict(self.subroutine_source_map)
+
     def set_source_breakpoints(
         self, source_path: str, breakpoints: dict[int, SourceBreakpoint]
     ) -> None:

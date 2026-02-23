@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeVar
 
 from pyrung.core import PLCRunner, Program
 from pyrung.core.context import ScanContext
@@ -39,6 +39,7 @@ class DAPAdapterError(Exception):
 
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+ParsedArgs = TypeVar("ParsedArgs")
 
 
 @dataclass
@@ -336,6 +337,13 @@ class DAPAdapter:
             return
         self._send_event("pyrungTrace", body)
 
+    def _parse_request_args(self, model: type[ParsedArgs], args: Any) -> ParsedArgs:
+        """Parse handler arguments while preserving legacy non-object failures."""
+        if not isinstance(args, dict):
+            typename = type(args).__name__
+            raise AttributeError(f"'{typename}' object has no attribute 'get'")
+        return parse_args(model, args, error=DAPAdapterError)
+
     def _on_initialize(self, _args: dict[str, Any]) -> HandlerResult:
         capabilities = {
             "supportsConfigurationDoneRequest": True,
@@ -363,7 +371,7 @@ class DAPAdapter:
         return {"threads": [{"id": self.THREAD_ID, "name": "PLC Scan"}]}, []
 
     def _on_launch(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_LaunchRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_LaunchRequestArgs, args)
         program_arg = parsed.program
         if not isinstance(program_arg, str) or not program_arg.strip():
             raise DAPAdapterError("launch.program must be a Python file path")
@@ -434,7 +442,7 @@ class DAPAdapter:
             frames = self._formatter.build_current_stack_frames(
                 current_step=current_step,
                 rungs=rungs,
-                subroutine_source_map=self._breakpoints.subroutine_source_map,
+                subroutine_source_map=self._breakpoints.subroutine_sources(),
                 canonical_path=self._canonical_path,
             )
         elif rungs:
@@ -484,7 +492,7 @@ class DAPAdapter:
         return {"scopes": scopes}, []
 
     def _on_variables(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_VariablesRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_VariablesRequestArgs, args)
         ref = int(parsed.variablesReference)
         with self._state_lock:
             runner = self._require_runner_locked()
@@ -567,7 +575,7 @@ class DAPAdapter:
         return {}, []
 
     def _on_setBreakpoints(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_SetBreakpointsRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_SetBreakpointsRequestArgs, args)
         source = parsed.source
         if not isinstance(source, dict):
             raise DAPAdapterError("setBreakpoints.source is required")
@@ -651,7 +659,7 @@ class DAPAdapter:
         return {"breakpoints": response_bps}, []
 
     def _requested_breakpoints(self, args: dict[str, Any]) -> list[dict[str, Any]]:
-        parsed = parse_args(_SetBreakpointsRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_SetBreakpointsRequestArgs, args)
         requested: list[dict[str, Any]] = []
         raw_bps = parsed.breakpoints
         if isinstance(raw_bps, list):
@@ -681,7 +689,7 @@ class DAPAdapter:
         return requested
 
     def _on_evaluate(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_EvaluateRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_EvaluateRequestArgs, args)
         expression = parsed.expression
         if not isinstance(expression, str) or not expression.strip():
             raise DAPAdapterError("evaluate.expression is required")
@@ -784,7 +792,7 @@ class DAPAdapter:
         return None
 
     def _on_dataBreakpointInfo(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_DataBreakpointInfoRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_DataBreakpointInfoRequestArgs, args)
         variables_reference = int(parsed.variablesReference)
         name = parsed.name
         if variables_reference != self._monitor_scope_ref or not isinstance(name, str):
@@ -807,7 +815,7 @@ class DAPAdapter:
         }, []
 
     def _on_setDataBreakpoints(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_SetDataBreakpointsRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_SetDataBreakpointsRequestArgs, args)
         raw_breakpoints = parsed.breakpoints
         if not isinstance(raw_breakpoints, list):
             raw_breakpoints = []
@@ -921,7 +929,7 @@ class DAPAdapter:
         }, []
 
     def _on_pyrungAddMonitor(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_AddMonitorRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_AddMonitorRequestArgs, args)
         tag = parsed.tag
         if not isinstance(tag, str) or not tag.strip():
             raise DAPAdapterError("pyrungAddMonitor.tag is required")
@@ -942,7 +950,7 @@ class DAPAdapter:
         return {"id": handle.id, "tag": tag_name, "enabled": True}, []
 
     def _on_pyrungRemoveMonitor(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_RemoveMonitorRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_RemoveMonitorRequestArgs, args)
         raw_id = parsed.id
         if not isinstance(raw_id, int):
             raise DAPAdapterError("pyrungRemoveMonitor.id must be an integer")
@@ -971,7 +979,7 @@ class DAPAdapter:
         return {"monitors": monitors}, []
 
     def _on_pyrungFindLabel(self, args: dict[str, Any]) -> HandlerResult:
-        parsed = parse_args(_FindLabelRequestArgs, args, error=DAPAdapterError)
+        parsed = self._parse_request_args(_FindLabelRequestArgs, args)
         label = parsed.label
         if not isinstance(label, str) or not label.strip():
             raise DAPAdapterError("pyrungFindLabel.label is required")
