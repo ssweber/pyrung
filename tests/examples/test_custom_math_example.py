@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, run_function
-from pyrung.examples.custom_math import weighted_average
+from examples.custom_math import weighted_average
 
 
 def test_weighted_average_end_to_end():

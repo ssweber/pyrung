@@ -1,4 +1,4 @@
-"""Asynchronous run_enabled_function() example for Click-style email behavior."""
+"""Threaded run_enabled_function() example for Click-style email behavior."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ def _cancel_pending_request(pending: Future[_EmailResult] | None) -> None:
 
 
 class EmailInstruction:
-    """Callable instruction object for run_enabled_function()."""
+    """Synchronous callable object for run_enabled_function()."""
 
     def __init__(self, *, smtp_host: str, smtp_port: int, recipients: tuple[str, ...]):
         self._smtp_host = smtp_host

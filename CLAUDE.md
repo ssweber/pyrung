@@ -12,7 +12,7 @@ A Pythonic ladder logic framework with an immutable, pure-functional architectur
 - `src/pyrung/core/` — Engine, DSL, instructions, tags, validation
 - `src/pyrung/click/` — Click PLC dialect (memory banks, TagMap, Modbus, profiles)
 - `src/pyrung/dap/` — VS Code Debug Adapter Protocol integration
-- `src/pyrung/examples/` — Example programs
+- `examples/` — Example programs
 - `tests/` — Core, Click, DAP, and example tests
 
 ### Documentation (`docs/`)

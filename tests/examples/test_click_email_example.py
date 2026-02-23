@@ -10,7 +10,7 @@ from pyrung.core import Bool, Int, PLCRunner, Program, Rung, run_enabled_functio
 
 
 def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.examples.click_email as click_email
+    import examples.click_email as click_email
 
     submissions: list[dict[str, object]] = []
     futures: list[Future[click_email._EmailResult]] = []
@@ -101,7 +101,7 @@ def test_click_email_scan_state_machine(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_click_email_disable_clears_and_cancels_pending(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.examples.click_email as click_email
+    import examples.click_email as click_email
 
     class TrackingFuture(Future[click_email._EmailResult]):
         def __init__(self):
