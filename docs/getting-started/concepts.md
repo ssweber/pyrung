@@ -77,33 +77,12 @@ A **retentive** tag is intended to preserve value across power-cycle workflows.
 A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 `PLCRunner` does not currently expose a built-in `reset()`/power-cycle API.
 
-### Count-One UDT
-
-For class-qualified auto naming without string duplication, use `@udt()` (defaults to `count=1`):
-
-```python
-from pyrung import Bool, Int, Real, Rung, latch, udt
-
-@udt()
-class Tags:
-    Start: Bool
-    Stop: Bool
-    Step: Int
-    Setpoint: Real
-
-with Rung(Tags.Start):
-    latch(Tags.Stop)
-```
-
-Count-one UDT field names are generated as `Struct_field` (for example, `Tags_Start`).
-
 ### UDT (User Defined Type)
 
-A `@udt` groups mixed-type fields into a reusable structure. `@udt()` defaults to `count=1`;
-set `count` higher for multiple instances:
+A `@udt` groups mixed-type fields into a reusable structure. `@udt()` defaults to `count=1` for a single named instance; set `count` higher for multiple instances:
 
 ```python
-from pyrung import Bool, Field, Int, Real, auto, udt
+from pyrung import Bool, Field, Int, Real, Rung, auto, latch, udt
 
 @udt()
 class Config:
@@ -117,10 +96,10 @@ class Alarm:
     level: Real = Field(retentive=True)
 ```
 
-Field access depends on `count`:
+Field names for `count=1` use compact `Struct_field` format; multi-count instances are numbered:
 
 ```python
-Config.enable     # → LiveTag "Config_enable" (count=1)
+Config.enable     # → LiveTag "Config_enable"
 
 Alarm.id          # → Block (all 3 id tags, array mode)
 Alarm[1].id       # → LiveTag "Alarm1_id"
@@ -131,9 +110,20 @@ Alarm1, Alarm2, Alarm3 = Alarm[1], Alarm[2], Alarm[3]
 Alarm1.id         # → LiveTag "Alarm1_id"
 ```
 
+Pass `numbered=True` to force the numbered format (`Struct1_field`) even when `count=1`, which is useful when the struct may later be cloned under a different name or when you want naming to stay consistent with multi-count structs:
+
+```python
+@udt(numbered=True)
+class Status:
+    ready: Bool
+    fault: Bool
+
+Status[1].ready   # → LiveTag "Status1_ready"
+```
+
 Type annotations resolve Python primitives (`bool`, `int`, `float`, `str`) and IEC constructors (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) to the corresponding `TagType`.
 
-Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), and `Field(retentive=True)` to mark fields as retentive. Use `.clone(name)` to create a copy of the structure with a different base name.
+Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), `Field(retentive=True)` to mark fields as retentive, and `.clone(name)` to create a copy of the structure with a different base name.
 
 ### named_array
 
