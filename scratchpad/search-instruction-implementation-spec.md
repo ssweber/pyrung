@@ -28,7 +28,7 @@ Rules:
   - `DS.select(1, 100).reverse()` scans high-to-low.
 
 Return value:
-- Return `result` tag (same style as `copy`/`math` convenience returns).
+- Return `result` tag (same style as `copy`/`calc` convenience returns).
 
 ## 3. Runtime Semantics
 Implement `SearchInstruction(OneShotMixin, Instruction)` in `src/pyrung/core/instruction.py`.

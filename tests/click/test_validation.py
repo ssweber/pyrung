@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pyrung.click import TagMap, dd, ds
 from pyrung.click.validation import (
-    CLK_EXPR_ONLY_IN_MATH,
+    CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
@@ -17,7 +17,7 @@ from pyrung.click.validation import (
     validate_click_program,
 )
 from pyrung.core import Bool, Tag, TagType, as_value
-from pyrung.core.program import Program, Rung, copy, math, out, run_enabled_function, run_function
+from pyrung.core.program import Program, Rung, calc, copy, out, run_enabled_function, run_function
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,7 +74,7 @@ class TestAllowedCopyWithDSPointer:
                 CLK_PTR_CONTEXT_ONLY_COPY,
                 CLK_PTR_POINTER_MUST_BE_DS,
                 CLK_PTR_EXPR_NOT_ALLOWED,
-                CLK_EXPR_ONLY_IN_MATH,
+                CLK_EXPR_ONLY_IN_CALC,
                 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
                 CLK_PTR_DS_UNVERIFIED,
             }
@@ -190,7 +190,7 @@ class TestExpressionInCondition:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.hints)
+        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.hints)
 
 
 class TestIntTruthinessInCondition:
@@ -273,11 +273,11 @@ class TestExpressionInCopy:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.hints)
+        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.hints)
 
 
 # ---------------------------------------------------------------------------
-# Test 7: Expression in math() â€” no violation
+# Test 7: Expression in calc() â€” no violation
 # ---------------------------------------------------------------------------
 
 
@@ -288,7 +288,7 @@ class TestExpressionInMath:
 
         def logic():
             with Rung():
-                math(A * 2, Dest)
+                calc(A * 2, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap(include_system=False)
@@ -297,7 +297,7 @@ class TestExpressionInMath:
         expr_findings = [
             f
             for f in (*report.errors, *report.warnings, *report.hints)
-            if f.code == CLK_EXPR_ONLY_IN_MATH
+            if f.code == CLK_EXPR_ONLY_IN_CALC
         ]
         assert expr_findings == []
 
@@ -309,7 +309,7 @@ class TestTildeExpressionPortability:
 
         def logic():
             with Rung():
-                math(~A, Dest)
+                calc(~A, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
@@ -323,7 +323,7 @@ class TestTildeExpressionPortability:
 
         def logic():
             with Rung():
-                math(~A, Dest)
+                calc(~A, Dest)
 
         prog = _build_program(logic)
         tag_map = TagMap([Dest.map_to(ds[1])], include_system=False)
@@ -431,7 +431,7 @@ class TestExprCompareInCondition:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        expr_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_MATH]
+        expr_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_CALC]
         # Both condition.left (AddExpr) and condition.right (LiteralExpr) are expressions
         assert len(expr_findings) >= 2
 
@@ -519,7 +519,7 @@ class TestTagMapValidate:
         tag_map = TagMap(include_system=False)
 
         report = tag_map.validate(prog, mode="strict")
-        assert any(f.code == CLK_EXPR_ONLY_IN_MATH for f in report.errors)
+        assert any(f.code == CLK_EXPR_ONLY_IN_CALC for f in report.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -694,7 +694,7 @@ class TestSuggestionContent:
         tag_map = TagMap(include_system=False)
 
         report = validate_click_program(prog, tag_map, mode="warn")
-        r4_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_MATH]
+        r4_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_CALC]
         assert r4_findings
         # At least one finding should mention the expression content
         suggestions = [f.suggestion for f in r4_findings if f.suggestion is not None]

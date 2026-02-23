@@ -41,7 +41,7 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     **Clamping semantics:** Out-of-range values are clamped to the
     destination type's min/max (e.g. copying 40 000 into an INT tag produces
-    32 767). This differs from `MathInstruction`, which wraps.
+    32 767). This differs from `CalcInstruction`, which wraps.
 
     **Pointer errors:** If the pointer resolves to an out-of-range address,
     the address-error fault flag is set and the copy is skipped.

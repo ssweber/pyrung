@@ -42,11 +42,11 @@ from .context import (
 from .decorators import program
 from .instructions import (
     blockcopy,
+    calc,
     call,
     copy,
     fill,
     latch,
-    math,
     out,
     pack_bits,
     pack_text,
@@ -93,7 +93,7 @@ __all__ = [
     # Advanced Instructions
     "blockcopy",
     "fill",
-    "math",
+    "calc",
     "pack_bits",
     "pack_text",
     "pack_words",

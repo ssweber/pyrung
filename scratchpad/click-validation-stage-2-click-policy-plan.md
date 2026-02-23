@@ -7,7 +7,7 @@ Implement Click portability validation by consuming Stage 1 walker facts and app
 - mode support: `warn` and `strict`,
 - allow pointer (`IndirectRef`) only in `copy` source/target,
 - pointer tag must be DS for allowed copy-pointer usage,
-- allow math `Expression` only in `math(expression, dest)`,
+- allow math `Expression` only in `calc(expression, dest)`,
 - disallow `IndirectBlockRange` (Click has no indirect block copy).
 
 Stage 2 produces a report. It does not modify runtime execution semantics.
@@ -28,7 +28,7 @@ Stage 2 produces a report. It does not modify runtime execution semantics.
 5. Arithmetic pointer:
    - `IndirectExprRef` is disallowed everywhere (including copy).
 6. Mathematics:
-   - `Expression` allowed only in `MathInstruction.expression`.
+   - `Expression` allowed only in `CalcInstruction.expression`.
    - `Expression` disallowed in rung conditions and all other instruction args.
 7. Indirect block range:
    - `IndirectBlockRange` is disallowed everywhere.
@@ -111,7 +111,7 @@ Use stable code constants:
 - `CLK_PTR_CONTEXT_ONLY_COPY`
 - `CLK_PTR_POINTER_MUST_BE_DS`
 - `CLK_PTR_EXPR_NOT_ALLOWED`
-- `CLK_EXPR_ONLY_IN_MATH`
+- `CLK_EXPR_ONLY_IN_CALC`
 - `CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED`
 
 Optional extra precision code if needed:
@@ -155,10 +155,10 @@ If `value_kind == "indirect_expr_ref"`:
 If `value_kind == "expression"`:
 
 - allowed only when:
-  - `instruction_type == "MathInstruction"`
+  - `instruction_type == "CalcInstruction"`
   - `arg_path == "instruction.expression"`
 
-Else emit `CLK_EXPR_ONLY_IN_MATH`.
+Else emit `CLK_EXPR_ONLY_IN_CALC`.
 
 ### R4 end-to-end example: ExprCompare in rung condition
 
@@ -174,7 +174,7 @@ The DSL creates an `ExprCompareGt` condition with `left=AddExpr(TagExpr(A), TagE
 - `arg_path="condition.left"`, `value_kind="expression"` (the `AddExpr`)
 - `arg_path="condition.right"`, `value_kind="expression"` (the `LiteralExpr`)
 
-R4 evaluates both facts. Neither has `instruction_type == "MathInstruction"` (they are condition-level, `instruction_type` is `None`), so both emit `CLK_EXPR_ONLY_IN_MATH`. The suggestion directs the user to pre-compute into a temp tag via `math()`.
+R4 evaluates both facts. Neither has `instruction_type == "CalcInstruction"` (they are condition-level, `instruction_type` is `None`), so both emit `CLK_EXPR_ONLY_IN_CALC`. The suggestion directs the user to pre-compute into a temp tag via `calc()`.
 
 ## Rule R5: Indirect block range
 
@@ -251,8 +251,8 @@ Deterministic formatting is required for stable test snapshots.
 
 Each finding should include concise actionable suggestion:
 
-- `CLK_EXPR_ONLY_IN_MATH`:
-  - `"Move expression into math(expr, temp) and use temp in this context."`
+- `CLK_EXPR_ONLY_IN_CALC`:
+  - `"Move expression into calc(expr, temp) and use temp in this context."`
 - `CLK_PTR_CONTEXT_ONLY_COPY`:
   - `"Use direct tag addressing in this context; keep pointer usage in copy() only."`
 - `CLK_PTR_POINTER_MUST_BE_DS`:
@@ -283,12 +283,12 @@ Add `tests/click/test_validation.py`:
    - violation `CLK_PTR_EXPR_NOT_ALLOWED`.
 5. Inline expression in condition:
    - `with Rung((A + B) > 10): ...`
-   - violation `CLK_EXPR_ONLY_IN_MATH`.
+   - violation `CLK_EXPR_ONLY_IN_CALC`.
 6. Inline expression in copy:
    - `copy(A * 2, Dest)`.
-   - violation `CLK_EXPR_ONLY_IN_MATH`.
-7. Expression in `math()`:
-   - `math(A * 2, Dest)`.
+   - violation `CLK_EXPR_ONLY_IN_CALC`.
+7. Expression in `calc()`:
+   - `calc(A * 2, Dest)`.
    - no expression-context violation.
 8. Unresolved pointer bank:
    - pointer name cannot be mapped/proven DS.
@@ -299,7 +299,7 @@ Add `tests/click/test_validation.py`:
 10. ExprCompare in condition (R4 end-to-end):
     - `with Rung((A + B) > 100): out(Light)`.
     - walker extracts `condition.left` and `condition.right` as `expression` facts.
-    - both emit `CLK_EXPR_ONLY_IN_MATH` because they are not in `MathInstruction.expression`.
+    - both emit `CLK_EXPR_ONLY_IN_CALC` because they are not in `CalcInstruction.expression`.
 11. Location formatting deterministic.
 12. `TagMap.validate(program, mode)` delegates and returns `ClickValidationReport`.
 
@@ -332,4 +332,5 @@ See `scratchpad/click-validation-stage-3-facade-and-profile-plan.md` for:
 - `ClickProfile` hardware bank capability model (writable, roles, copy compatibility)
 - Extended rules R6–R8 (bank writability, instruction role constraints, copy compatibility)
 - Separation from DSL strict mode (`Program(strict=True)` vs `validate(mode=...)`)
+
 

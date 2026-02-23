@@ -196,7 +196,7 @@ Target fields:
 - `CopyInstruction.target`
 - `BlockCopyInstruction.dest`
 - `FillInstruction.dest`
-- `MathInstruction.dest`
+- `CalcInstruction.dest`
 - `SearchInstruction.result`
 - `SearchInstruction.found`
 - `ShiftInstruction.bit_range`
@@ -374,4 +374,5 @@ Best pattern is code + title (+ legacy R# alias) and keep code as the canonical 
 
 
 I'd rather not have 'legacy'. We are still planning!
+
 

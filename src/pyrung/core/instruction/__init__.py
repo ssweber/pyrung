@@ -6,6 +6,7 @@ All state modifications are collected and committed at scan end.
 
 from .advanced import SearchInstruction, ShiftInstruction
 from .base import DebugInstructionSubStep, Instruction, OneShotMixin, SubroutineReturnSignal
+from .calc import CalcInstruction
 from .coils import LatchInstruction, OutInstruction, ResetInstruction
 from .control import (
     CallInstruction,
@@ -16,7 +17,6 @@ from .control import (
 )
 from .counters import CountDownInstruction, CountUpInstruction
 from .data_transfer import BlockCopyInstruction, CopyInstruction, FillInstruction
-from .math import MathInstruction
 from .packing import (
     PackBitsInstruction,
     PackTextInstruction,
@@ -58,7 +58,7 @@ __all__ = [
     "ForLoopInstruction",
     "FunctionCallInstruction",
     "LatchInstruction",
-    "MathInstruction",
+    "CalcInstruction",
     "OffDelayInstruction",
     "OnDelayInstruction",
     "OutInstruction",

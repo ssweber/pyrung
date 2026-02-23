@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, run_function
 from examples.custom_math import weighted_average
+from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, run_function
 
 
 def test_weighted_average_end_to_end():

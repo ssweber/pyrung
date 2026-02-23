@@ -7,7 +7,7 @@ This guide walks through a complete pyrung program in five steps: define tags, w
 Tags are named, typed references to values. They hold no runtime state — values live in `SystemState`.
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, math, reset
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, calc, reset
 
 # Boolean (1 bit, not retentive by default)
 StartButton = Bool("StartButton")
@@ -33,7 +33,7 @@ with Program() as logic:
 
     # Rung 3: Increment step while motor is running
     with Rung(MotorRunning):
-        math(Step + 1, Step)
+        calc(Step + 1, Step)
 ```
 
 ## 3. Create a runner
@@ -98,7 +98,7 @@ with runner.active():
 ## Complete example
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, math, reset
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, calc, reset
 
 StartButton  = Bool("StartButton")
 MotorRunning = Bool("MotorRunning")
@@ -110,7 +110,7 @@ with Program() as logic:
     with Rung(Step >= 10):
         reset(MotorRunning)
     with Rung(MotorRunning):
-        math(Step + 1, Step)
+        calc(Step + 1, Step)
 
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
@@ -129,3 +129,5 @@ print(state.tags["Step"])          # 10
 - [Core Concepts](concepts.md) — understand the Redux mental model and scan cycle
 - [Writing Ladder Logic](../guides/ladder-logic.md) — full DSL reference: conditions, branches, timers, counters
 - [Running and Stepping](../guides/runner.md) — `scan_steps()`, `run_until()`, time modes
+
+

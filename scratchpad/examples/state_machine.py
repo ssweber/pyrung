@@ -8,7 +8,7 @@ x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, td, ctd, sd, txt = Addresses.get()
 nc, rise, fall = Conditions.get()
 
 # Get action functions
-out, latch, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, math, math_hex, call, for_loop, next_loop, end = Actions.get()
+out, latch, reset, ton, tof, rton, rtof, ctu, ctd, ctud, copy, copy_block, copy_fill, copy_pack, copy_unpack, shift, search, calc, math_hex, call, for_loop, next_loop, end = Actions.get()
 # fmt: on
 
 
@@ -92,13 +92,13 @@ def main():
 
 def PLCDateTime():
     with Rung(sc._1st_SCAN):
-        math(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_FirstScap_YYMMDD ) # dd[19]
+        calc(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_FirstScap_YYMMDD ) # dd[19]
     with Rung(sc._1st_SCAN):
-        math(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_FirstScap_hhmmss) # dd[20]
+        calc(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_FirstScap_hhmmss) # dd[20]
     with Rung():
-        math(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_PLCDT_YYMMDD) # dd[17]
+        calc(sd.get("_RTC_Year(4 digits)") * 10000 + sd.get("_RTC_Month") * 100 + sd.get("_RTC_Day"), dd.A_PLCDT_YYMMDD) # dd[17]
     with Rung():
-        math(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_PLCDT_hhmmss) # dd[18]
+        calc(sd.get("_RTC_Hour") * 10000 + sd.get("_RTC_Minute") * 100 + sd.get("_RTC_Second>"), dd.A_PLCDT_hhmmss) # dd[18]
     with Rung():
         copy(ds[19], dd.A_PLCDT_Year) # dd[11]
         copy(ds[21], dd.A_PLCDT_Month) # dd[12]
@@ -178,7 +178,7 @@ def Copy2AlmHis():
 
     # Example Alm1_Id (then 2, 3, etc)
     with Rung():
-        math(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
+        calc(lambda: (ds.almhis__idx * 10) + 91, ds.almhis__start_idx)
     with Rung():
         copy(dd[ds.almhis__start_idx], dd.almhis__is_alm)
 
@@ -212,7 +212,7 @@ def Copy2AlmHis():
         copy(dd.now_HHMMSS, dd.AlmHist1_Time)  # dd[509]
 
     with Rung():
-        math(lambda: ds.almhis__idx + 1, ds.almhis__idx)
+        calc(lambda: ds.almhis__idx + 1, ds.almhis__idx)
         
     with Rung(ds.almhis__idx > 10):
         copy(0, ds.C_AckAlarms)
@@ -242,7 +242,7 @@ def ModeChange():
     # Get the current mode's disabled states configuration
     # Mode configs are stored in DF101-DF104
     with Rung():
-        math(lambda: 200 + ds.S_UnitModeCurrent, ds.IsStateEnbl__modecfg_idx)
+        calc(lambda: 200 + ds.S_UnitModeCurrent, ds.IsStateEnbl__modecfg_idx)
     with Rung():
         copy(df[ds.IsStateEnbl__modecfg_idx], dh.A_CurDisabledStates)
     with Rung():
@@ -293,7 +293,7 @@ def ModeChange():
 def sm_IsCmdValid():
     # set base to use as pointer
     with Rung():
-        math(lambda: 100 + ds.C_CntrlCmd, ds.IsCmdValid__dh_base)
+        calc(lambda: 100 + ds.C_CntrlCmd, ds.IsCmdValid__dh_base)
     with Rung():
         copy(dh[ds.IsCmdValid__dh_base], dh.IsCmdValid__cmd)
     with Rung():
@@ -481,7 +481,7 @@ def sm_CopyOrJumpReqState():
     # State has been requested
     # Now we look at currently disabled states and see if we need to jump
     with Rung():
-        math(lambda: ds.sm__loopindex + 1, ds.sm__loopindex)
+        calc(lambda: ds.sm__loopindex + 1, ds.sm__loopindex)
 
     with Rung(ds.sm__loopindex > 10):
         copy(9, ds.S_StateRequested)  # goto Aborted state
@@ -499,7 +499,7 @@ def sm_CopyOrJumpReqState():
     # Calculate the bit mask for the requested state
     # We'll store state bit masks in DH301-DH317 (where DH300 is reserved)
     with Rung():
-        math(lambda: 300 + ds.S_StateRequested, ds.IsStateEnbl__mask_idx)
+        calc(lambda: 300 + ds.S_StateRequested, ds.IsStateEnbl__mask_idx)
     with Rung():
         copy(dh[ds.IsStateEnbl__mask_idx], dh.IsStateEnbl__statemask)
 
@@ -526,7 +526,7 @@ def sm_CopyOrJumpReqState():
 
     # if not
     with Rung():
-        math(lambda: ds.S_StateRequested + 120, ds.sm__jump_target_ds_idx)
+        calc(lambda: ds.S_StateRequested + 120, ds.sm__jump_target_ds_idx)
     with Rung():
         copy(ds[ds.sm__jump_target_ds_idx], ds.sm__where2jump)
     with Rung(ds.sm__where2jump != 0):
@@ -575,3 +575,4 @@ def sm_MapVal2State():
         out(c.S_Completed)
     with Rung():
         return
+

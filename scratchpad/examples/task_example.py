@@ -1,5 +1,5 @@
 from pyrung.core import (
-    Program, subroutine, Rung, out, on_delay, copy, math, reset, return_, 
+    Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_, 
     call, TimeUnit, TagType, PackedStruct, Field, Bool, PLCRunner, TimeMode
 )
 from pyrung.click import c, ds, t, td
@@ -94,10 +94,10 @@ def task_logic():
 
     # 4. BOTTOM BOILERPLATE
     with Rung(task.CurStep % 2 == 0):
-         math(task.CurStep + 1, task.CurStep)
+         calc(task.CurStep + 1, task.CurStep)
 
     with Rung(task.Trans == 1):
-        math(task.CurStep + 1, task.CurStep)
+        calc(task.CurStep + 1, task.CurStep)
         copy(0, task.Trans)
         
         copy(0, task.Step_Th)

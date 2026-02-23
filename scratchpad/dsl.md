@@ -144,7 +144,7 @@ Searches for values meeting specified conditions within an address range, storin
 
 ### Decimal Math
 ```python
-math(formula=lambda : expression, result_destination, oneshot=False)
+calc(formula=lambda : expression, result_destination, oneshot=False)
 ```
 Solves decimal formulas and stores results in the specified destination. 
 **Supported operators:**

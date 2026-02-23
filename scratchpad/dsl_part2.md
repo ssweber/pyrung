@@ -104,12 +104,12 @@ def main():
 
         # will loop ds.MaxAlarms times
         with Rung():
-            math(lambda: ds.AlarmBase + ds.AlarmIndex, ds.CurrentAlarmAddr)
-            math(lambda: ds.AlarmHistoryBase + ds.AlarmIndex, ds.HistoryAddr)
+            calc(lambda: ds.AlarmBase + ds.AlarmIndex, ds.CurrentAlarmAddr)
+            calc(lambda: ds.AlarmHistoryBase + ds.AlarmIndex, ds.HistoryAddr)
             copy(ds[ds.CurrentAlarmAddr], ds[ds.HistoryAddr])
             # Todo, replace this example below. Pointers not allowed in math
-#             math(lambda: ds.AlarmExtent + ds[ds.CurrentAlarmAddr], ds.AlarmExtent)
-            math(lambda: ds.AlarmIndex + 1, ds.AlarmIndex)
+#             calc(lambda: ds.AlarmExtent + ds[ds.CurrentAlarmAddr], ds.AlarmExtent)
+            calc(lambda: ds.AlarmIndex + 1, ds.AlarmIndex)
 
         with Rung():
             next_loop()  # Next instruction indicates the end of a For Next loop

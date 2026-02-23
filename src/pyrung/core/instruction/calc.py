@@ -24,8 +24,8 @@ if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
 
 
-class MathInstruction(OneShotMixin, Instruction):
-    """Evaluate an arithmetic expression and store the result (MATH).
+class CalcInstruction(OneShotMixin, Instruction):
+    """Evaluate an arithmetic expression and store the result (CALC).
 
     Evaluates `expression` (which may reference any `Tag` or arithmetic
     combination thereof) and stores the result into `dest`, truncating

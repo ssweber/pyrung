@@ -241,7 +241,8 @@ See [DAP Debugger in VS Code](dap-vscode.md) for details.
 | Operation | Behavior on out-of-range |
 |-----------|--------------------------|
 | `copy()` | Clamps to destination min/max |
-| `math()` | Wraps (modular arithmetic) |
+| `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32 767 |
 | Counter accumulator | Clamps at DINT min/max |
 | Division by zero | Result = 0, fault flag set |
+

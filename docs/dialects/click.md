@@ -69,6 +69,21 @@ Click-style constructor aliases are available as convenience alternatives to IEC
 | `Hex` | `Word` |
 | `Txt` | `Char` |
 
+## Naming differences (Click -> pyrung)
+
+`pyrung` keeps Click semantics but uses Pythonic function names in the DSL.
+
+| Click instruction | pyrung DSL |
+|-------------------|------------|
+| `SET` | `latch` |
+| `MATH` | `calc` |
+| `FOR` / `NEXT` | `forloop` |
+| `COPY (Single)` | `copy` |
+| `COPY (Block)` | `blockcopy` |
+| `COPY (Fill)` | `fill` |
+| `COPY (Pack)` | `pack_bits`, `pack_words`, `pack_text` |
+| `COPY (Unpack)` | `unpack_to_bits`, `unpack_to_words` |
+
 ## Writing a Click program
 
 ```python
@@ -181,7 +196,7 @@ Common findings:
 | Issue | pyrung allows | Click requires |
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
-| Inline expression in condition | `(A + B) > 100` | Must use `math()` first |
+| Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
@@ -246,3 +261,4 @@ See the [API Reference](../reference/index.md) for full parameter documentation:
 - [`ClickDataProvider`](../reference/api/click/data_provider.md)
 - [`send` / `receive`](../reference/api/click/send_receive.md)
 - [`validate_click_program`](../reference/api/click/validation.md)
+

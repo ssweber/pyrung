@@ -121,7 +121,7 @@ with Rung((PressureA + PressureB) > 100):
 
 !!! note "Hardware compatibility"
     Inline expressions in conditions run fine in simulation. The Click dialect
-    validator will suggest rewriting them as `math()` instructions if targeting
+    validator will suggest rewriting them as `calc()` instructions if targeting
     Click hardware.
 
 ---
@@ -173,7 +173,7 @@ copy(DS[1], DS[DS[0]])              # Indirect addressing: DS[pointer]
 copy(DS[1], DS[1], oneshot=True)    # Execute only on rung rising edge
 ```
 
-Out-of-range values are **clamped** to the destination type's min/max. This is different from `math()`, which wraps.
+Out-of-range values are **clamped** to the destination type's min/max. This is different from `calc()`, which wraps.
 
 ### `blockcopy` — copy a range
 
@@ -215,9 +215,9 @@ unpack_to_words(DD[1], DS.select(1, 2))    # Unpack DINT into two INTs
 ## Math
 
 ```python
-math(DS[1] + DS[2], DS[3])              # DS3 = DS1 + DS2 (wraps to INT range)
-math(DS[1] * 2, DS[3], oneshot=True)    # One-shot: execute once per rung rising edge
-math(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
+calc(DS[1] + DS[2], DS[3])              # DS3 = DS1 + DS2 (wraps to INT range)
+calc(DS[1] * 2, DS[3], oneshot=True)    # One-shot: execute once per rung rising edge
+calc(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
 ```
 
 **Math wraps** — overflow truncates to the destination type's bit width (modular arithmetic). This differs from `copy()` which clamps.
@@ -441,5 +441,6 @@ See the [API Reference](../reference/index.md) for full parameter documentation:
 
 - [`Tag`](../reference/api/core/tag.md)
 - [`Block` / `InputBlock` / `OutputBlock`](../reference/api/core/memory_block.md)
-- Instructions: [`out`, `latch`, `reset`, `copy`, `math`, `on_delay`, `count_up`, ...](../reference/api/core/instruction.md)
+- Instructions: [`out`, `latch`, `reset`, `copy`, `calc`, `on_delay`, `count_up`, ...](../reference/api/core/instruction.md)
+
 

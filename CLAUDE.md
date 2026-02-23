@@ -28,7 +28,7 @@ A Pythonic ladder logic framework with an immutable, pure-functional architectur
 - `docs/dialects/circuitpy.md` — CircuitPython dialect (planned, not implemented)
 - `docs/internal/debug-spec.md` — Debug architecture specification
 - `docs/internal/circuitpy-spec.md` — CircuitPython architecture decisions and open questions
-- `docs/click_reference/` — Click PLC instruction reference (42 files: contacts, coils, timers, counters, copy, math, shift, search, memory banks, system memory, data types)
+- `docs/click_reference/` — Click PLC instruction reference (42 files: contacts, coils, timers, counters, copy, calc, shift, search, memory banks, system memory, data types)
 
 ## Build & Development Commands
 
@@ -61,7 +61,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 - **patch()** — one-shot input, consumed after one scan
 - **add_force()** — persistent override, re-applied pre- and post-logic every scan until removed
 - **`with runner.force({...}):`** — scoped force context manager (restores on exit)
-- **copy()** clamps out-of-range; **math()** wraps (modular arithmetic)
+- **copy()** clamps out-of-range; **calc()** wraps (modular arithmetic)
 - **Timers/counters** use two-tag model: done-bit + accumulator
 - **Counters** count every scan while condition True — use `rise()` for edge-triggered counting
 - **Division by zero** → result = 0, fault flag set
@@ -88,3 +88,4 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~19k lines of source and 1,100+ tests covering core, click, dap, and examples.
 
 **Not yet done:** CircuitPy dialect (architecture decided, implementation deferred), PyPI publishing, stable public API guarantee.
+

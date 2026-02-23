@@ -39,7 +39,7 @@ with runner.active():
 
 **Core engine** — Immutable state machine with a context-manager DSL. All logic is pure `f(state) -> new_state`.
 
-- Instructions: `out`, `latch`/`reset`, `copy`, `math`, `run_function`/`run_enabled_function`
+- Instructions: `out`, `latch`/`reset`, `copy`, `calc`, `run_function`/`run_enabled_function`
 - Timers (`on_delay`, `off_delay`) and counters (`count_up`, `count_down`)
 - Shift registers, search, bit/word packing, blockcopy, copy/fill
 - Branching (`branch`, `any_of`, `all_of`), subroutines, for-loops

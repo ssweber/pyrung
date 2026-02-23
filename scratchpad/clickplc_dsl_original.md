@@ -129,7 +129,7 @@ Searches for values meeting specified conditions within an address range, storin
 ## Math Instructions
 ### Decimal Math
 ```python
-math(formula, result_destination, one_shot=False)
+calc(formula, result_destination, one_shot=False)
 ```
 Solves decimal formulas and stores results in the specified destination. 
 **Supported operators:**
@@ -211,7 +211,7 @@ def main():
 
     # Math operations
     if True:
-        math("ds.RawValue * 100 / 4095", df.ScaledValue)
+        calc("ds.RawValue * 100 / 4095", df.ScaledValue)
         math_hex("dh.InputStatus AND 0x00FF", dh.FilteredStatus)
 
     # Search instruction
@@ -234,11 +234,11 @@ def main():
 
     # will loop ds.MaxAlarms
     if True:
-        math("ds.AlarmBase + ds.AlarmIndex", ds.CurrentAlarmAddr)
-        math("ds.AlarmHistoryBase + ds.AlarmIndex", ds.HistoryAddr)
+        calc("ds.AlarmBase + ds.AlarmIndex", ds.CurrentAlarmAddr)
+        calc("ds.AlarmHistoryBase + ds.AlarmIndex", ds.HistoryAddr)
         copy(ds[ds.CurrentAlarmAddr], ds[ds.HistoryAddr])
-        math("ds.AlarmExtent + ds[ds.CurrentAlarmAddr]", ds.AlarmExtent)
-        math("ds.AlarmIndex + 1", ds.AlarmIndex)
+        calc("ds.AlarmExtent + ds[ds.CurrentAlarmAddr]", ds.AlarmExtent)
+        calc("ds.AlarmIndex + 1", ds.AlarmIndex)
 
     if True:
         next_loop()  # Next instruction indicates the end of a For Next loop

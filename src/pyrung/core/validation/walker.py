@@ -112,7 +112,7 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     "ResetInstruction": ("target",),
     "CopyInstruction": ("source", "target"),
     "BlockCopyInstruction": ("source", "dest"),
-    "MathInstruction": ("expression", "dest", "mode"),
+    "CalcInstruction": ("expression", "dest", "mode"),
     "FillInstruction": ("value", "dest"),
     "SearchInstruction": ("value", "search_range", "condition", "result", "found", "continuous"),
     "ShiftInstruction": (

@@ -21,7 +21,7 @@ from pyrung.core import (
     call,
     copy,
     latch,
-    math,
+    calc,
     on_delay,
     reset,
     return_,
@@ -320,7 +320,7 @@ def subRoutine1() -> None:
 
     # Check if current step is odd.
     with Rung():
-        math(sub.SubName_CurStep % 2, sub.SubName__ValStepIsOdd)
+        calc(sub.SubName_CurStep % 2, sub.SubName__ValStepIsOdd)
 
     # EVEN STEP HANDLING - SAFETY MECHANISM FOR MANUAL INTERVENTION.
     # This stays ABOVE incrementing CurStep.
@@ -328,7 +328,7 @@ def subRoutine1() -> None:
     # we immediately increment to the next odd step without executing any step logic.
     # This provides a safe "neutral zone" when manually changing step numbers.
     with Rung(sub.SubName__ValStepIsOdd != 1):
-        math(sub.SubName_CurStep + 1, sub.SubName_CurStep)
+        calc(sub.SubName_CurStep + 1, sub.SubName_CurStep)
         # The brief pass through the even step number causes:
         # 1. All one-shot timers to reset
         # 2. All rising/falling edge detections to reset
@@ -337,7 +337,7 @@ def subRoutine1() -> None:
     # Step advancement when transition is triggered.
     with Rung(sub.SubName_Trans == 1):
         # Add 1 to current step to get next step (which will be even, triggering resets)
-        math(sub.SubName_CurStep + 1, sub.SubName_CurStep)
+        calc(sub.SubName_CurStep + 1, sub.SubName_CurStep)
         copy(0, sub.SubName_Trans)  # Reset transition flag
 
     # Built-in timer for step duration tracking.
@@ -434,3 +434,5 @@ def entrypoint() -> None:
 
 if __name__ == "__main__":
     entrypoint()
+
+

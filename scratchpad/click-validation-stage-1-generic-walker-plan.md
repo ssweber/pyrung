@@ -156,7 +156,7 @@ Use an explicit map in walker (single source of truth):
 - `ResetInstruction`: `target`
 - `CopyInstruction`: `source`, `target`
 - `BlockCopyInstruction`: `source`, `dest`
-- `MathInstruction`: `expression`, `dest`
+- `CalcInstruction`: `expression`, `dest`
 - `FillInstruction`: `value`, `dest`
 - `SearchInstruction`: `value`, `search_range`, `operator`, `result`, `found`
 - `ShiftInstruction`: `bit_range`, `data_condition`, `clock_condition`, `reset_condition`
@@ -177,7 +177,7 @@ If a class is not listed, emit one `unknown` operand fact at `instruction` level
 
 The following fields exist on instruction classes but are **not** extracted as operands:
 
-- `oneshot` (bool on `OutInstruction`, `CopyInstruction`, `MathInstruction`, `FillInstruction`,
+- `oneshot` (bool on `OutInstruction`, `CopyInstruction`, `CalcInstruction`, `FillInstruction`,
   `BlockCopyInstruction`, `SearchInstruction`, `PackBitsInstruction`, `PackWordsInstruction`,
   `UnpackToBitsInstruction`, `UnpackToWordsInstruction`): execution modifier, not a data operand.
 - `CallInstruction._program` (back-reference to parent `Program`): internal wiring, not user-facing.
@@ -297,4 +297,5 @@ Add `tests/core/test_validation_walker.py` with these cases:
 - Do not couple to TagMap or hardware addresses.
 - Do not perform any remediation suggestions in Stage 1.
 - Do not alter `Program`, `Rung`, or instruction semantics.
+
 

@@ -367,7 +367,7 @@ Everything else in `system.*` is read-only.
 
 ## Enforcement
 
-- Logic writes (`out/latch/reset/copy/math/fill/blockcopy/...`) fail on protected target names at execution via `ScanContext.set_tag` guard.
+- Logic writes (`out/latch/reset/copy/calc/fill/blockcopy/...`) fail on protected target names at execution via `ScanContext.set_tag` guard.
 - `runner.patch` writes fail on protected names.
 - Click provider writes fail on protected mapped addresses.
 

@@ -17,8 +17,8 @@ from pyrung.core import (
     TimeMode,
     as_binary,
     as_value,
+    calc,
     copy,
-    math,
     out,
     system,
 )
@@ -193,7 +193,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
 
     with Program() as program:
         with Rung(Enable):
-            math(A / B, Result, oneshot=True)
+            calc(A / B, Result, oneshot=True)
 
     runner = PLCRunner(logic=program)
     runner.patch({"Enable": True, "A": 100, "B": 0})
@@ -213,7 +213,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
 
     with Program() as program:
         with Rung(Enable):
-            math(A + B, Result, oneshot=True)
+            calc(A + B, Result, oneshot=True)
 
     runner = PLCRunner(logic=program)
     runner.patch({"Enable": True, "A": 30000, "B": 30000})

@@ -9,7 +9,7 @@ from pyrung.click.validation import (
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
-    CLK_EXPR_ONLY_IN_MATH,
+    CLK_EXPR_ONLY_IN_CALC,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
@@ -175,7 +175,7 @@ def test_profile_unavailable_still_runs_stage2(monkeypatch):
     report = validate_click_program(prog, tag_map, mode="warn")
 
     assert CLK_PROFILE_UNAVAILABLE in _codes(report)
-    assert CLK_EXPR_ONLY_IN_MATH in _codes(report)
+    assert CLK_EXPR_ONLY_IN_CALC in _codes(report)
 
 
 def test_program_and_tagmap_validation_facades_match_direct():

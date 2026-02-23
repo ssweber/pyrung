@@ -9,13 +9,13 @@ from pyrung.core._source import (
 )
 from pyrung.core.instruction import (
     BlockCopyInstruction,
+    CalcInstruction,
     CallInstruction,
     CopyInstruction,
     EnabledFunctionCallInstruction,
     FillInstruction,
     FunctionCallInstruction,
     LatchInstruction,
-    MathInstruction,
     OutInstruction,
     PackBitsInstruction,
     PackTextInstruction,
@@ -314,8 +314,8 @@ def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None
     )
 
 
-def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
-    """Math instruction.
+def calc(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
+    """Calc instruction.
 
     Evaluates an expression and stores the result in dest, with
     truncation to the destination tag's bit width (modular wrapping).
@@ -327,8 +327,8 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
 
     Example:
         with Rung(Enable):
-            math(DS1 * DS2 + DS3, Result)
-            math(MaskA & MaskB, MaskResult, mode="hex")
+            calc(DS1 * DS2 + DS3, Result)
+            calc(MaskA & MaskB, MaskResult, mode="hex")
 
     Args:
         expression: Expression, Tag, or literal to evaluate.
@@ -339,7 +339,7 @@ def math(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
     Returns:
         The dest tag.
     """
-    _add_instruction("math", MathInstruction, expression, dest, oneshot, mode)
+    _add_instruction("calc", CalcInstruction, expression, dest, oneshot, mode)
     return dest
 
 

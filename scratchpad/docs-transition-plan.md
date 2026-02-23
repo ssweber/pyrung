@@ -97,7 +97,7 @@ markdown_extensions:
 
 ### P2 — Instruction implementation classes (sparse, but auto-rendered by mkdocstrings)
 
-In `src/pyrung/core/instruction/`: `CopyInstruction`, `MathInstruction`, `OnDelayInstruction`, `OffDelayInstruction`, `CountUpInstruction`, `CountDownInstruction`, `ShiftInstruction`, `SearchInstruction`. One-paragraph class docstring + key parameter/behavioral notes (overflow semantics, clamping, has_reset, etc.).
+In `src/pyrung/core/instruction/`: `CopyInstruction`, `CalcInstruction`, `OnDelayInstruction`, `OffDelayInstruction`, `CountUpInstruction`, `CountDownInstruction`, `ShiftInstruction`, `SearchInstruction`. One-paragraph class docstring + key parameter/behavioral notes (overflow semantics, clamping, has_reset, etc.).
 
 ### P3 — PLCRunner debug/force API
 
@@ -122,7 +122,7 @@ In `src/pyrung/core/instruction/`: `CopyInstruction`, `MathInstruction`, `OnDela
 | `spec/overview.md` | `quickstart.md`, `concepts.md`, `ladder-logic.md` | "Layer Architecture" diagram and "Dependency Graph" → drop entirely (internal). |
 | `spec/core/types.md` | `ladder-logic.md` + Tag/Block docstrings | "Needs Specification" sections → delete. |
 | `spec/core/dsl.md` | `ladder-logic.md` | Code examples translate directly. "Needs Specification" → delete. |
-| `spec/core/instructions.md` | `ladder-logic.md` + instruction class docstrings | Instruction Index table → guide. Math overflow tables → `MathInstruction` docstring. "Needs Specification" → delete. |
+| `spec/core/instructions.md` | `ladder-logic.md` + instruction class docstrings | Instruction Index table → guide. Math overflow tables → `CalcInstruction` docstring. "Needs Specification" → delete. |
 | `spec/core/engine.md` | `runner.md` + PLCRunner/SystemState docstrings | Scan Cycle Phases 0-8 → `runner.md` and `SystemState` class docstring. "Needs Specification" → delete. |
 | `spec/core/debug.md` | `forces-debug.md` + `dap-vscode.md` | Phase 1+2 fully guide-ready. For Phase 3, `history`, `seek/rewind/playhead`, `diff`, and `fork_from` are implemented; keep `inspect`, monitors, breakpoints, and labels in planned sections until shipped. (Track in `scratchpad/debug-api-next-steps.md`.) |
 | `spec/dialects/click.md` | `dialects/click.md` + click module docstrings | "Needs Specification" → delete. |
@@ -191,3 +191,4 @@ In `src/pyrung/core/instruction/`: `CopyInstruction`, `MathInstruction`, `OnDela
 - `mkdocs serve` — visual inspection of each guide page and API reference
 - All code examples in guides should be copy-paste runnable (extract to `docs/examples/` or `src/pyrung/examples/` and test with `make test`)
 - `make` (lint + test) must stay green after any docstring or source changes
+

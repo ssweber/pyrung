@@ -8,7 +8,7 @@ from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
     Bool, Int, PLCRunner, Program, Rung,
     branch, TimeMode, TimeUnit, any_of, call, copy,
-    latch, math, on_delay, reset, return_, subroutine,
+    latch, calc, on_delay, reset, return_, subroutine,
     named_array,
 )
 
@@ -52,7 +52,7 @@ def main() -> Program:
             # --- PRE-CALCULATIONS ---
             # We must calculate Modulo here, because we can't do % inside a branch contact
             with Rung():
-                math(sub.Batch_Counter % 2, BatchIsOdd)
+                calc(sub.Batch_Counter % 2, BatchIsOdd)
 
             # --- INIT ---
             with Rung(any_of(sub.xInit == 1, sub.xReset == 1)):
@@ -96,7 +96,7 @@ def main() -> Program:
             with Rung(sub.CurStep == 9, Comp_T):
                 reset(Complete)
                 # FIX: Loop to 1, not 0
-                math(1, sub.CurStep) 
+                calc(1, sub.CurStep) 
 
             with Rung(sub.CurStep == 11):
                 latch(Reject)
@@ -104,15 +104,15 @@ def main() -> Program:
                 copy(sub.Batch_Counter + 1, sub.Batch_Counter, oneshot=True)
                 on_delay(Rej_T, Rej_Acc, setpoint=1000, time_unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 11, Rej_T):
-                reset(Reject); math(2, sub.CurStep)
+                reset(Reject); calc(2, sub.CurStep)
 
             # --- ENGINE ---
-            with Rung(): math(sub.CurStep % 2, sub._ValStepIsOdd)
+            with Rung(): calc(sub.CurStep % 2, sub._ValStepIsOdd)
             with Rung(sub._ValStepIsOdd == 0, sub.CurStep > 0):
-                math(sub.CurStep + 1, sub.CurStep)
+                calc(sub.CurStep + 1, sub.CurStep)
             with Rung(sub.Trans > 0):
                 copy(0, Fill_Acc); copy(0, Heat_Acc); copy(0, Check_Acc); copy(0, Comp_Acc); copy(0, Rej_Acc)
-                math(sub.CurStep + sub.Trans, sub.CurStep)
+                calc(sub.CurStep + sub.Trans, sub.CurStep)
                 copy(0, sub.Trans)
             
             with Rung(sub.xCall == 0): copy(0, sub.CurStep); return_()
@@ -178,3 +178,4 @@ async def run_server():
 
 if __name__ == "__main__":
     asyncio.run(run_server())
+

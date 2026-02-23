@@ -36,7 +36,7 @@ FindingSeverity = Literal["error", "warning", "hint"]
 CLK_PTR_CONTEXT_ONLY_COPY = "CLK_PTR_CONTEXT_ONLY_COPY"
 CLK_PTR_POINTER_MUST_BE_DS = "CLK_PTR_POINTER_MUST_BE_DS"
 CLK_PTR_EXPR_NOT_ALLOWED = "CLK_PTR_EXPR_NOT_ALLOWED"
-CLK_EXPR_ONLY_IN_MATH = "CLK_EXPR_ONLY_IN_MATH"
+CLK_EXPR_ONLY_IN_CALC = "CLK_EXPR_ONLY_IN_CALC"
 CLK_TILDE_BOOL_CONTACT_ONLY = "CLK_TILDE_BOOL_CONTACT_ONLY"
 CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED"
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
@@ -91,7 +91,7 @@ _R6_WRITE_TARGETS: frozenset[tuple[str, str]] = frozenset(
         ("CopyInstruction", "target"),
         ("BlockCopyInstruction", "dest"),
         ("FillInstruction", "dest"),
-        ("MathInstruction", "dest"),
+        ("CalcInstruction", "dest"),
         ("SearchInstruction", "result"),
         ("SearchInstruction", "found"),
         ("ShiftInstruction", "bit_range"),
@@ -264,25 +264,25 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
                     return (
                         f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
                         f"Store the index in a DS tag and use copy(): "
-                        f"math({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
+                        f"calc({expr_dsl} + {offset}, Ptr); copy({block_name}[Ptr], dest)"
                     )
                 except (KeyError, ValueError):
                     pass
             return (
                 f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
-                "Pre-compute the index with math() into a DS pointer tag, "
+                "Pre-compute the index with calc() into a DS pointer tag, "
                 "then use block[Ptr]."
             )
         return "Replace computed pointer arithmetic with DS pointer tag updated separately."
 
-    if code == CLK_EXPR_ONLY_IN_MATH:
+    if code == CLK_EXPR_ONLY_IN_CALC:
         expr_dsl = str(meta.get("expr_dsl", ""))
         if expr_dsl:
             return (
                 f"Expression '{expr_dsl}' cannot be used directly here. "
-                f"Move it into math({expr_dsl}, temp) and use temp in this context."
+                f"Move it into calc({expr_dsl}, temp) and use temp in this context."
             )
-        return "Move expression into math(expr, temp) and use temp in this context."
+        return "Move expression into calc(expr, temp) and use temp in this context."
 
     if code == CLK_TILDE_BOOL_CONTACT_ONLY:
         expr_dsl = str(meta.get("expr_dsl", ""))
@@ -314,7 +314,7 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
     if code == CLK_FUNCTION_CALL_NOT_PORTABLE:
         return (
             "Replace run_function/run_enabled_function with Click-portable instructions "
-            "(copy/math/timer/counter/send/receive)."
+            "(copy/calc/timer/counter/send/receive)."
         )
 
     return ""
@@ -396,16 +396,16 @@ def _evaluate_fact(
 
     if fact.value_kind == "expression":
         allowed = (
-            loc.instruction_type == "MathInstruction" and loc.arg_path == "instruction.expression"
+            loc.instruction_type == "CalcInstruction" and loc.arg_path == "instruction.expression"
         )
         if not allowed:
             findings.append(
                 ClickFinding(
-                    code=CLK_EXPR_ONLY_IN_MATH,
-                    severity=_route_severity(CLK_EXPR_ONLY_IN_MATH, mode),
-                    message=f"Expression used outside math instruction at {location_str}.",
+                    code=CLK_EXPR_ONLY_IN_CALC,
+                    severity=_route_severity(CLK_EXPR_ONLY_IN_CALC, mode),
+                    message=f"Expression used outside calc instruction at {location_str}.",
                     location=location_str,
-                    suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_MATH, fact, tag_map),
+                    suggestion=_build_suggestion(CLK_EXPR_ONLY_IN_CALC, fact, tag_map),
                 )
             )
         expr_dsl = str(fact.metadata.get("expr_dsl", ""))
@@ -480,7 +480,7 @@ def _evaluate_instruction_portability(
             location=location_text,
             suggestion=(
                 "Replace run_function/run_enabled_function with Click-portable instructions "
-                "(copy/math/timer/counter/send/receive)."
+                "(copy/calc/timer/counter/send/receive)."
             ),
         )
     ]

@@ -84,7 +84,7 @@ Produces a `ValidationReport` (same core structure as Click).
 This dialect is at the idea stage. Big questions:
 
 - **Module catalog:** Where does the knowledge of "P1-08SIM has 8 discrete inputs" live? A dict in `pyrung.circuitpy`? A separate package (`pyp1am`)? A JSON/YAML data file?
-- **Analog scaling:** Analog modules read raw ADC counts. Does CircuitPython handle scaling (engineering units), or is that the user's problem via `math()`?
+- **Analog scaling:** Analog modules read raw ADC counts. Does CircuitPython handle scaling (engineering units), or is that the user's problem via `calc()`?
 - **Timer implementation:** Arduino has `millis()`. How do pyrung timers translate? `on_delay` becomes a millis-comparison pattern in generated code?
 - **Counter persistence:** Arduino has no persistent storage by default. What does `retentive=True` mean? EEPROM? SD card? Just a warning?
 - **Subroutine codegen:** Do pyrung subroutines become C++ functions? Arduino functions? Inline code?
@@ -105,3 +105,4 @@ Key architectural test: **can CircuitPython use the core DSL, engine, and debug 
 - `PLCRunner` — simulates CircuitPython programs identically to Click
 - `force`, `when().pause()`, history, `fork_from` — all work on CircuitPython programs
 - Only the export path differs: `TagMap` + nickname CSV vs `generate_arduino()`
+

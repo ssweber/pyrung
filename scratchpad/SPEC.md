@@ -466,14 +466,14 @@ with Rung((BatchCount % 10) == 0):
 copy(Speed * 2 + Offset, Result)
 ```
 
-The `math()` instruction stores a result in a destination register. This is also the form that Click hardware supports natively — the validator will flag inline expressions and suggest `math()` rewrites.
+The `calc()` instruction stores a result in a destination register. This is also the form that Click hardware supports natively — the validator will flag inline expressions and suggest `calc()` rewrites.
 
 ```python
-math(PressureA + PressureB * 10, TotalPressure, oneshot=False)
+calc(PressureA + PressureB * 10, TotalPressure, oneshot=False)
 
 # Click hardware also distinguishes decimal vs hex mode
-math(PressureA + PressureB * 10, TotalPressure, mode="decimal")
-math(MaskA & MaskB, MaskResult, mode="hex")
+calc(PressureA + PressureB * 10, TotalPressure, mode="decimal")
+calc(MaskA & MaskB, MaskResult, mode="hex")
 ```
 
 `math_obj.to_formula()` converts the expression to Click Formula Pad format.
@@ -484,7 +484,7 @@ Rung 12: with Rung((PressureA + PressureB) > 100):
   → Inline expression in condition. Click hardware requires
     arithmetic as a separate instruction step.
   Hint:
-    math(PressureA + PressureB, temp)
+    calc(PressureA + PressureB, temp)
     with Rung(temp > 100):
 ```
 
@@ -546,7 +546,7 @@ pyrung allows computed slice bounds at runtime — the engine resolves them each
 
 ```python
 # Load recipe N (5 params starting at (N-1)*5 + 1)
-math((RecipeNumber - 1) * 5 + 1, StartIdx)
+calc((RecipeNumber - 1) * 5 + 1, StartIdx)
 blockcopy(Recipes[StartIdx : StartIdx + 5], ActiveParams[1])
 ```
 
@@ -557,7 +557,7 @@ Validator hint:
     Recipes maps to ds[301:350], offset +300.
     Hint: Use a loop with single copy:
       with loop(count=5):
-          math(StartIdx + 300 + loop.idx, ptr)
+          calc(StartIdx + 300 + loop.idx, ptr)
           copy(ds[ptr], ActiveParams[loop.idx + 1])
 ```
 
@@ -869,13 +869,13 @@ Hardware Hints:
   Rung 7, line 34: copy(Alarms[idx + 1], dest)
     → Pointer arithmetic not allowed in copy() on Click hardware.
     Your idx (logical 1–99) maps to C[101:199], offset +100.
-    Hint: math(idx + 101, ptr)
+    Hint: calc(idx + 101, ptr)
           copy(C[ptr], dest)
 
   Rung 12, line 58: with Rung((PressureA + PressureB) > 100):
     → Inline expression in condition. Click hardware requires
       arithmetic as a separate instruction step.
-    Hint: math(PressureA + PressureB, temp)
+    Hint: calc(PressureA + PressureB, temp)
           with Rung(temp > 100):
 
   Rung 15, line 72: with Rung(BigValue[ptr] > 100):
@@ -911,9 +911,9 @@ The validator checks these restrictions. Your program runs fine without satisfyi
 
 | Context | Allowed | Hardware restriction |
 |---------|---------|---------------------|
-| Inline in condition | `(A + B) > 100` | Must use `math()` first |
-| Inline in copy source | `copy(A * 2, dest)` | Must use `math()` first |
-| math() with dest | `math(A + B, dest)` | `math(A + B, dest)` (same) |
+| Inline in condition | `(A + B) > 100` | Must use `calc()` first |
+| Inline in copy source | `copy(A * 2, dest)` | Must use `calc()` first |
+| calc() with dest | `calc(A + B, dest)` | `calc(A + B, dest)` (same) |
 
 **Bank compatibility:** The validator checks which memory banks can be used together — both in comparisons (which banks can be compared to each other) and in instruction arguments (valid source/dest combinations for `blockcopy`, `pack`, `fill`, etc.).
 
@@ -1075,7 +1075,7 @@ print(report)
 # Hints:
 #   Rung 2: Alarms[idx + 1] → pointer arithmetic
 #   Alarms maps to C[101:199], offset +100
-#   Hint: math(idx + 101, ptr); copy(C[ptr], ...)
+#   Hint: calc(idx + 101, ptr); copy(C[ptr], ...)
 
 # Fix the hint, validate again, done.
 
@@ -1097,7 +1097,7 @@ mapping.to_nickname_file("my_project.csv")
 | 4: Counters | ✅ | count_up, count_down, bidirectional (two-bank model) |
 | 5: Timers | ✅ | on_delay (TON/RTON), off_delay (TOF), TimeUnit (two-bank model) |
 | 6: MemoryBank | ✅ | Typed banks, pointer addressing, blocks |
-| 7: Copy & Math | 🔲 | copy, blockcopy (static + dynamic bounds), fill, pack_bits, pack_words, unpack_to_bits, unpack_to_words, math, .immediate |
+| 7: Copy & Math | 🔲 | copy, blockcopy (static + dynamic bounds), fill, pack_bits, pack_words, unpack_to_bits, unpack_to_words, calc, .immediate |
 | 8: Loop, Search, Shift | 🔲 | loop (for-next), search, shift_register |
 | 9: pyclickplc | 🔲 | Extract shared hardware model from ClickNick (see transition plan) |
 | 10: Tag Mapping | 🔲 | TagMap, map_to(), from_nickname_file(), to_nickname_file(), ValidationReport |
@@ -1110,3 +1110,4 @@ mapping.to_nickname_file("my_project.csv")
 - `delta()` instruction for any-value-change detection
 - Array types (FIFO, LIFO, circular buffer, shift register)
 - Auto-mapping suggestions (assign unmapped tags to available hardware ranges)
+
