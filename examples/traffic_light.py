@@ -1,7 +1,7 @@
-"""Traffic light example using AutoTag for auto naming.
+"""Traffic light example using @udt for structured tags.
 
 Demonstrates:
-  1. Auto naming with class Devices(AutoTag) + class-qualified usage
+  1. Structured tags with @udt() and class-qualified usage
   2. Timer-driven state machine (green -> yellow -> red -> green)
   3. Edge-triggered car counter with rise()
   4. Speed history log using blockcopy to shift a window
@@ -11,7 +11,7 @@ Demonstrates:
 import os
 
 from pyrung import (
-    AutoTag,
+    udt,
     Block,
     Bool,
     Char,
@@ -37,29 +37,31 @@ from pyrung import (
 # Traffic light state: "g"reen, "y"ellow, "r"ed
 State = Char("State")
 
-class Tmr(AutoTag):
+@udt()
+class Tmr:
     # One timer per transition (done bit + accumulator)
-    GreenDone = Bool()
-    GreenAcc = Int()
+    GreenDone: Bool
+    GreenAcc: Int
 
-    YellowDone = Bool()
-    YellowAcc = Int()
+    YellowDone: Bool
+    YellowAcc: Int
 
-    RedDone = Bool()
-    RedAcc = Int()
+    RedDone: Bool
+    RedAcc: Int
 
-class Car(AutoTag):
+@udt()
+class Car:
     # Car counter: rising-edge sensor
-    Sensor = Bool()
-    CountDone = Bool()
-    CountAcc = Dint()
-    CountReset = Bool()
+    Sensor: Bool
+    CountDone: Bool
+    CountAcc: Dint
+    CountReset: Bool
 
     # Speed history log (5 slots, newest at DS1)
-    SpeedIn = Int()
-    LogEnable = Bool()
+    SpeedIn: Int
+    LogEnable: Bool
 
-# Memory blocks are declared outside AutoTag classes.
+# Memory blocks for speed history log.
 DS = Block("DS", TagType.INT, 1, 5)
 
 
