@@ -43,6 +43,7 @@ ParsedArgs = TypeVar("ParsedArgs")
 
 class DAPAdapter:
     """DAP orchestrator that routes protocol commands to internal handler modules."""
+
     DAPAdapterError = DAPAdapterError
 
     TRACE_VERSION = 1

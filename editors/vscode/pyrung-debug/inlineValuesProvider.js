@@ -75,7 +75,8 @@ class PyrungInlineValuesProvider {
       const code = this._stripCommentsAndStrings(sourceLine);
       const references = this._extractReferences(code);
       for (const reference of references) {
-        const key = `${lineIdx}:${reference.startCol}:${reference.name}`;
+        const lookupName = this._lookupName(reference.name);
+        const key = `${lineIdx}:${reference.startCol}:${reference.name}:${lookupName}`;
         if (
           !seen.has(key) &&
           this._isLookupCandidate(code, reference.name, reference.startCol, reference.endCol)
@@ -83,7 +84,7 @@ class PyrungInlineValuesProvider {
           values.push(
             new vscode.InlineValueVariableLookup(
               new vscode.Range(lineIdx, reference.startCol, lineIdx, reference.endCol),
-              reference.name,
+              lookupName,
               true
             )
           );
@@ -123,6 +124,37 @@ class PyrungInlineValuesProvider {
   _rootIdentifier(name) {
     const match = /^[A-Za-z_][A-Za-z0-9_]*/.exec(name);
     return match ? match[0] : name;
+  }
+
+  _lookupName(name) {
+    const simpleMember = /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(name);
+    if (simpleMember) {
+      const root = simpleMember[1];
+      const leaf = simpleMember[2];
+      // Class-qualified (including singleton-udt) references resolve to class-prefixed names.
+      if (root && root[0] && root[0] === root[0].toUpperCase()) {
+        return `${root}_${leaf}`;
+      }
+    }
+
+    const indexed = /^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$/.exec(name);
+    if (indexed) {
+      return `${indexed[1]}${indexed[2]}`;
+    }
+
+    const instanceField =
+      /^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(name);
+    if (instanceField) {
+      return `${instanceField[1]}${instanceField[2]}_${instanceField[3]}`;
+    }
+
+    const fieldIndexed =
+      /^([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$/.exec(name);
+    if (fieldIndexed) {
+      return `${fieldIndexed[1]}${fieldIndexed[3]}_${fieldIndexed[2]}`;
+    }
+
+    return name;
   }
 
   _isLookupCandidate(line, name, startCol, endCol) {

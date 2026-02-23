@@ -13,6 +13,7 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from pyrung.core import Bool, Field, Int, TagType, auto, udt
+from pyrung.core.tag import LiveTag
 
 
 def test_udt_builds_blocks_with_correct_types():
@@ -154,3 +155,60 @@ def test_udt_skips_classvar_fields():
     assert alarms.field_names == ("val",)
     with pytest.raises(AttributeError):
         _ = alarms._meta
+
+
+def test_udt_singleton_returns_livetag_from_getattr():
+    @udt()
+    class Alarm:
+        id: Int
+
+    alarm = cast(Any, Alarm)
+    assert isinstance(alarm.id, LiveTag)
+    assert alarm.id.name == "Alarm_id"
+    assert alarm.id.type == TagType.INT
+
+
+def test_udt_singleton_naming_has_no_number():
+    @udt()
+    class Alarm:
+        id: Int
+        On: Bool
+
+    alarm = cast(Any, Alarm)
+    assert alarm.id.name == "Alarm_id"
+    assert alarm.On.name == "Alarm_On"
+
+
+def test_udt_singleton_getitem_raises():
+    @udt()
+    class Alarm:
+        id: Int
+
+    alarm = cast(Any, Alarm)
+    with pytest.raises(TypeError, match="singleton struct, no indexing"):
+        _ = alarm[1]
+
+
+def test_udt_singleton_clone_preserves_singleton():
+    @udt()
+    class Device:
+        total: Int
+
+    Pump = cast(Any, Device).clone("Pump")
+    assert Pump.total.name == "Pump_total"
+    with pytest.raises(TypeError, match="singleton struct, no indexing"):
+        _ = Pump[1]
+
+
+def test_udt_singleton_fields_and_field_names():
+    @udt()
+    class Alarm:
+        id: Int = 1  # type: ignore[invalid-assignment]
+        On: Bool = Field(retentive=True)  # type: ignore[invalid-assignment]
+
+    alarm = cast(Any, Alarm)
+    assert alarm.field_names == ("id", "On")
+    assert set(alarm.fields.keys()) == {"id", "On"}
+    assert alarm.fields["id"].type == TagType.INT
+    assert alarm.fields["id"].default == 1
+    assert alarm.fields["On"].retentive is True

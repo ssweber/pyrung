@@ -135,7 +135,9 @@ def on_set_data_breakpoints(adapter: Any, args: dict[str, Any]) -> HandlerResult
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
         requested_data_ids = {requested_bp["dataId"] for _, requested_bp in parsed_requests}
-        stale = [data_id for data_id in adapter._data_bp_handles if data_id not in requested_data_ids]
+        stale = [
+            data_id for data_id in adapter._data_bp_handles if data_id not in requested_data_ids
+        ]
         for data_id in stale:
             handle = adapter._data_bp_handles.pop(data_id, None)
             if handle is not None:

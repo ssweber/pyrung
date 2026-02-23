@@ -135,31 +135,31 @@ assert state.tags["Step"] == 3
 assert state.tags.get("Fault", False) is False  # tag absent → use default
 ```
 
-## Testing with AutoTag
+## Testing with singleton udt
 
-For larger programs, `AutoTag` reduces boilerplate:
+For larger programs, singleton `@udt()` keeps class-qualified names without string duplication:
 
 ```python
-from pyrung import AutoTag, Bool, Int, PLCRunner, Program, Rung, TimeMode, latch
+from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, latch, udt
 
-class Tags(AutoTag):
-    Start        = Bool()
-    Stop         = Bool()
-    MotorRunning = Bool()
-    Step         = Int()
-
-Start, Stop, MotorRunning, Step = Tags.Start, Tags.Stop, Tags.MotorRunning, Tags.Step
+@udt()
+class Tags:
+    Start: Bool
+    Stop: Bool
+    MotorRunning: Bool
+    Step: Int
 
 with Program() as logic:
-    with Rung(Start):
-        latch(MotorRunning)
+    with Rung(Tags.Start):
+        latch(Tags.MotorRunning)
 
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 
-runner.patch({"Start": True})
+with runner.active():
+    Tags.Start.value = True
 runner.step()
-assert runner.current_state.tags["MotorRunning"] is True
+assert runner.current_state.tags["Tags_MotorRunning"] is True
 ```
 
 ## run_until() in tests

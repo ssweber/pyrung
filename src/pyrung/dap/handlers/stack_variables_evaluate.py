@@ -297,6 +297,7 @@ def _reference_alias_candidates(adapter: Any, state: SystemState, reference: str
         root_name = simple_attr.group(1)
         leaf_name = simple_attr.group(2)
         if root_name and root_name[0].isupper():
+            _append_candidate(candidates, f"{root_name}_{leaf_name}")
             _append_candidate(candidates, leaf_name)
 
     indexed_tag = _INDEXED_TAG_RE.match(reference)

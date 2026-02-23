@@ -64,7 +64,26 @@ def test_click_send_receive_are_exported():
 
 
 def test_click_prebuilt_block_classes_and_identity_names():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xd0u, y, yd, yd0u
+    from pyrung.click import (
+        c,
+        ct,
+        ctd,
+        dd,
+        df,
+        dh,
+        ds,
+        sc,
+        sd,
+        t,
+        td,
+        txt,
+        x,
+        xd,
+        xd0u,
+        y,
+        yd,
+        yd0u,
+    )
 
     assert isinstance(x, InputBlock)
     assert isinstance(xd, InputBlock)
@@ -128,7 +147,26 @@ def test_click_xd_yd_display_indexed_select():
 
 
 def test_click_prebuilt_type_and_retentive_defaults():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xd0u, y, yd, yd0u
+    from pyrung.click import (
+        c,
+        ct,
+        ctd,
+        dd,
+        df,
+        dh,
+        ds,
+        sc,
+        sd,
+        t,
+        td,
+        txt,
+        x,
+        xd,
+        xd0u,
+        y,
+        yd,
+        yd0u,
+    )
 
     expected: dict[str, tuple[TagType, bool]] = {
         "x": (TagType.BOOL, False),

@@ -248,9 +248,7 @@ class DAPFormatter:
             for cond in region.conditions:
                 cond_source = None
                 cond_path = (
-                    canonical_path(cond.source_file)
-                    if isinstance(cond.source_file, str)
-                    else None
+                    canonical_path(cond.source_file) if isinstance(cond.source_file, str) else None
                 )
                 if cond_path:
                     cond_source = {"name": Path(cond_path).name, "path": cond_path}

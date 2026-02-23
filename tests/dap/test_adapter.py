@@ -1711,20 +1711,21 @@ def test_evaluate_watch_bare_tag_returns_raw_value(tmp_path: Path):
     assert response["body"]["result"] == "7"
 
 
-def test_evaluate_watch_autotag_qualified_reference_resolves(tmp_path: Path):
+def test_evaluate_watch_udt_singleton_qualified_reference_resolves(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(
         tmp_path,
-        "autotag_state.py",
+        "udt_state.py",
         (
-            "from pyrung.core import AutoTag, Bool, PLCRunner\n"
+            "from pyrung.core import Bool, PLCRunner, udt\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "class Tmr(AutoTag):\n"
-            "    GreenDone = Bool()\n"
+            "@udt()\n"
+            "class Tmr:\n"
+            "    GreenDone: Bool\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'GreenDone': True}))\n"
+            "runner = PLCRunner(initial_state=SystemState().with_tags({'Tmr_GreenDone': True}))\n"
         ),
     )
 

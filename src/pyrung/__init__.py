@@ -6,7 +6,6 @@ Import user-facing DSL symbols from this module:
 """
 
 from pyrung.core import (
-    AutoTag,
     Block,
     Bool,
     Char,
@@ -82,7 +81,6 @@ __all__ = [
     "auto",
     "udt",
     "named_array",
-    "AutoTag",
     "TagType",
     "Bool",
     "Int",

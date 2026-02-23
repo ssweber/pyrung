@@ -13,7 +13,7 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from pyrung.core import Block, BlockRange, Field, Int, Tag, TagType, auto, named_array
-from pyrung.core.tag import MappingEntry
+from pyrung.core.tag import LiveTag, MappingEntry
 
 
 def test_named_array_stride_creates_unmapped_gaps():
@@ -156,3 +156,26 @@ def test_named_array_skips_classvar_fields():
     assert alarms.field_names == ("val",)
     with pytest.raises(AttributeError):
         _ = alarms._meta
+
+
+def test_named_array_singleton_returns_livetag_from_getattr():
+    @named_array(Int)
+    class Alarm:
+        id = auto()
+
+    alarm = cast(Any, Alarm)
+    assert isinstance(alarm.id, LiveTag)
+    assert alarm.id.name == "Alarm_id"
+    assert alarm.id.default == 1
+
+
+def test_named_array_singleton_map_to_raises():
+    @named_array(Int, stride=2)
+    class Alarm:
+        id = 0
+        val = 0
+
+    alarm = cast(Any, Alarm)
+    hardware = Block("HW", TagType.INT, 1, 20)
+    with pytest.raises(TypeError, match="singleton named_array, no hardware mapping"):
+        alarm.map_to(hardware.select(1, 2))

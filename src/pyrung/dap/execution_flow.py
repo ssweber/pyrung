@@ -29,8 +29,7 @@ def on_step_in(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     with adapter._state_lock:
         adapter._assert_can_step_locked()
         adapter._step_until(
-            lambda step: step is None
-            or step.kind not in {"branch", "rung", "subroutine"},
+            lambda step: step is None or step.kind not in {"branch", "rung", "subroutine"},
         )
     return {}, [("stopped", adapter._stopped_body("step"))]
 

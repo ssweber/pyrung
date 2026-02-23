@@ -121,32 +121,35 @@ Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Ch
 Click-style aliases moved from the base API to `pyrung.click`:
 `Bit`, `Int2`, `Float`, `Hex`, `Txt`.
 
-## Auto Naming (Optional)
+## Singleton Structured Tags
 
-`AutoTag` provides opt-in class-based auto naming:
+Use singleton `@udt()` for class-qualified auto naming without repeating strings:
 
 ```python
-from pyrung import AutoTag, Bool, Int
+from pyrung import Bool, Int, udt
 
 
-class Tags(AutoTag):
-    Step1_Event = Bool()
-    Count = Int(retentive=True)
+@udt()
+class Tags:
+    Step1_Event: Bool
+    Count: Int
 ```
 
-This binds names from attribute identifiers (`"Step1_Event"`, `"Count"`).
-Explicit naming remains supported and unchanged: `Bool("Step1_Event")`.
-Prefer class-qualified access (`Tags.Step1_Event`) for lint/type-check friendly code.
-`AutoTag` is for tags only; declare `Block`/`InputBlock`/`OutputBlock` outside the class.
-
-Limitation: `Step1_Event = Bool()` as a plain module/local assignment is intentionally unsupported.
+Generated tag names use `Struct_field` (for example, `Tags_Step1_Event`).
+Explicit naming remains supported: `Bool("Step1_Event")`.
 
 ## Structured Tags
 
-`@udt` creates mixed-type structures, `@named_array` creates single-type instance-interleaved arrays:
+`@udt` creates mixed-type structures, `@named_array` creates single-type instance-interleaved arrays.
+Both default to singleton mode (`count=None`):
 
 ```python
 from pyrung import Bool, Field, Int, Real, auto, named_array, udt
+
+@udt()
+class Config:
+    enabled: Bool
+    setpoint: Real
 
 @udt(count=3)
 class Alarm:
@@ -154,6 +157,7 @@ class Alarm:
     active: Bool
     level: Real = Field(retentive=True)
 
+Config.enabled   # → LiveTag "Config_enabled"
 Alarm[1].id       # → LiveTag "Alarm1_id"
 Alarm.id          # → Block (all 3 id tags)
 

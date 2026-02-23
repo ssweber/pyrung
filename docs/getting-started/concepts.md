@@ -77,38 +77,38 @@ A **retentive** tag is intended to preserve value across power-cycle workflows.
 A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
 `PLCRunner` does not currently expose a built-in `reset()`/power-cycle API.
 
-### AutoTag
+### Singleton UDT
 
-For larger programs, use `AutoTag` to auto-name tags from class attributes:
+For class-qualified auto naming without string duplication, use singleton `@udt()`:
 
 ```python
-from pyrung import AutoTag, Block, Bool, Int, Real, Rung, TagType, latch
+from pyrung import Bool, Int, Real, Rung, latch, udt
 
-class Tags(AutoTag):
-    Start     = Bool()
-    Stop      = Bool()
-    Step      = Int(retentive=True)
-    Setpoint  = Real()
-
-# Access via the class, or unpack:
-Start, Stop = Tags.Start, Tags.Stop
+@udt()
+class Tags:
+    Start: Bool
+    Stop: Bool
+    Step: Int
+    Setpoint: Real
 
 with Rung(Tags.Start):
     latch(Tags.Stop)
-
-# Prefer class-qualified access in examples:
-# Tags.Start, Tags.Stop, Tags.Step
-
-# Blocks are declared separately (not inside AutoTag):
-DS = Block("DS", TagType.INT, 1, 100)
 ```
+
+Singleton UDT field names are generated as `Struct_field` (for example, `Tags_Start`).
 
 ### UDT (User Defined Type)
 
-A `@udt` groups mixed-type fields into a reusable structure with multiple instances:
+A `@udt` groups mixed-type fields into a reusable structure. Use `@udt()` for a singleton,
+or set `count` for multiple instances:
 
 ```python
 from pyrung import Bool, Field, Int, Real, auto, udt
+
+@udt()
+class Config:
+    enable: Bool
+    setpoint: Real
 
 @udt(count=3)
 class Alarm:
@@ -117,10 +117,12 @@ class Alarm:
     level: Real = Field(retentive=True)
 ```
 
-Field access uses two patterns:
+Field access depends on mode:
 
 ```python
-Alarm.id          # → Block (all 3 id tags)
+Config.enable     # → LiveTag "Config_enable" (singleton)
+
+Alarm.id          # → Block (all 3 id tags, array mode)
 Alarm[1].id       # → LiveTag "Alarm1_id"
 Alarm[2].active   # → LiveTag "Alarm2_active"
 
@@ -146,10 +148,10 @@ class Sensor:
     offset = auto()
 ```
 
-Access patterns are the same as UDT:
+Access patterns mirror UDT:
 
 ```python
-Sensor.reading    # → Block (all 4 reading tags)
+Sensor.reading    # → Block (array mode)
 Sensor[1].reading # → LiveTag "Sensor1_reading"
 ```
 

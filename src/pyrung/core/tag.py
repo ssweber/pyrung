@@ -6,12 +6,9 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
 from pyrung.core.live_binding import get_active_runner
@@ -575,233 +572,22 @@ class LiveOutputTag(LiveTag, OutputTag):
     """OutputTag with runner-bound staged value access via .value."""
 
 
-class _AutoTagDecl:
-    """Descriptor used for class-based auto tag naming declarations."""
-
-    def __init__(self, tag_type: TagType, retentive: bool):
-        self._tag_type = tag_type
-        self._retentive = retentive
-        self._bound_tag: LiveTag | None = None
-
-    @property
-    def bound_tag(self) -> LiveTag | None:
-        return self._bound_tag
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not getattr(owner, "_PYRUNG_IS_TAG_NAMESPACE", False):
-            raise TypeError(
-                f"Auto tag declaration '{name}' must be defined on an AutoTag subclass. "
-                f"Use explicit naming instead: Bool('{name}')."
-            )
-        self._bound_tag = LiveTag(name, self._tag_type, self._retentive)
-
-    def __get__(self, instance: object, owner: type | None = None) -> LiveTag:
-        if self._bound_tag is None:
-            raise TypeError("Auto tag declaration is not bound to a class attribute.")
-        return self._bound_tag
-
-
-class AutoTag:
-    """Base class for class-body auto-naming of tags.
-
-    Subclass `AutoTag` and declare tags using the type constructors
-    without a name argument. The attribute name is used as the tag name
-    automatically. This is equivalent to ``Bool("Start")`` but removes
-    the string duplication.
-
-    Note:
-        ``AutoTag`` is available from both ``pyrung`` and ``pyrung.core``::
-
-            from pyrung import AutoTag
-
-    Example:
-        ```python
-        from pyrung import AutoTag, Bool, Int, Real
-
-        class Tags(AutoTag):
-            Start    = Bool()
-            Stop     = Bool()
-            Step     = Int(retentive=True)
-            preset = Real()
-
-        # Access tags via the class:
-        with Rung(Tags.Start):
-            latch(Tags.Stop)
-
-        # Or unpack for convenience:
-        Start, Stop, Step = Tags.Start, Tags.Stop, Tags.Step
-        ```
-
-    Tag constructors called *outside* an `AutoTag` class body without a
-    name raise `TypeError`. Explicit naming (``Bool("Start")``) is always
-    valid and is the canonical cross-context form.
-
-    `AutoTag` class bodies accept tag declarations only. Memory blocks
-    (``Block``, ``InputBlock``, ``OutputBlock``) must be declared outside
-    the `AutoTag` class.
-
-    Duplicate tag names across the class hierarchy are detected at class
-    definition time and raise `ValueError`.
-    """
-
-    _PYRUNG_IS_TAG_NAMESPACE = True
-    __pyrung_tags__: dict[str, LiveTag] = cast(dict[str, LiveTag], MappingProxyType({}))
-
-    def __init_subclass__(cls, **kwargs: object) -> None:
-        super().__init_subclass__(**kwargs)
-
-        from pyrung.core.memory_block import Block, InputBlock, OutputBlock
-
-        inherited_tags: dict[str, LiveTag] = {}
-        inherited_origins: list[tuple[str, LiveTag]] = []
-        for base in reversed(cls.__mro__[1:-1]):
-            if not getattr(base, "_PYRUNG_IS_TAG_NAMESPACE", False):
-                continue
-            base_tags = getattr(base, "__pyrung_tags__", None)
-            if not isinstance(base_tags, Mapping):
-                continue
-            for attr_name, tag in base_tags.items():
-                inherited_tags[attr_name] = tag
-                inherited_origins.append((f"{base.__name__}.{attr_name}", tag))
-
-        local_tags: dict[str, LiveTag] = {}
-        local_origins: list[tuple[str, LiveTag]] = []
-        for attr_name, value in cls.__dict__.items():
-            if isinstance(value, _AutoTagDecl):
-                bound = value.bound_tag
-                if bound is None:
-                    raise RuntimeError(
-                        f"Auto tag declaration '{attr_name}' on {cls.__name__} was not bound."
-                    )
-                setattr(cls, attr_name, bound)
-                local_tags[attr_name] = bound
-                local_origins.append((f"{cls.__name__}.{attr_name}", bound))
-            elif isinstance(value, Tag):
-                live_tag = _coerce_live_tag(value)
-                if live_tag is not value:
-                    setattr(cls, attr_name, live_tag)
-                local_tags[attr_name] = live_tag
-                local_origins.append((f"{cls.__name__}.{attr_name}", live_tag))
-            elif isinstance(value, (Block, InputBlock, OutputBlock)):
-                raise TypeError(
-                    f"{cls.__name__}.{attr_name} is {type(value).__name__}. "
-                    "Block declarations are not allowed on AutoTag subclasses; "
-                    "declare Block/InputBlock/OutputBlock at module scope."
-                )
-
-        _validate_duplicate_names(cls.__name__, inherited_origins + local_origins)
-
-        merged = dict(inherited_tags)
-        merged.update(local_tags)
-        cls.__pyrung_tags__ = cast(dict[str, LiveTag], MappingProxyType(merged))
-
-    @classmethod
-    def tags(cls) -> dict[str, LiveTag]:
-        """Return a copy of this class' declared tag registry."""
-        return dict(cls.__pyrung_tags__)
-
-    @classmethod
-    def export(cls, namespace: dict[str, Any], *, overwrite: bool = False) -> dict[str, LiveTag]:
-        """Export declared tags into a target namespace mapping.
-
-        Typical usage is flattening class-declared tags into module scope:
-
-            class Devices(AutoTag):
-                Start = Bool()
-                Count = Int()
-
-            Devices.export(globals())
-
-        Args:
-            namespace: Mapping to receive exported names (for example, ``globals()``).
-            overwrite: If ``False`` (default), raising ``ValueError`` on conflicting
-                existing names. If ``True``, existing names are replaced.
-
-        Returns:
-            Copy of tags exported to ``namespace``.
-        """
-        conflicts = [
-            name
-            for name, tag in cls.__pyrung_tags__.items()
-            if name in namespace and namespace[name] is not tag and not overwrite
-        ]
-        if conflicts:
-            joined = ", ".join(sorted(conflicts))
-            raise ValueError(
-                f"{cls.__name__}.export() conflicts with existing names: {joined}. "
-                "Pass overwrite=True to replace them."
-            )
-
-        namespace.update(cls.__pyrung_tags__)
-        return dict(cls.__pyrung_tags__)
-
-
-def _coerce_live_tag(tag: Tag) -> LiveTag:
-    if isinstance(tag, LiveTag):
-        return tag
-    return LiveTag(tag.name, tag.type, tag.retentive, tag.default)
-
-
-def _validate_duplicate_names(class_name: str, origins: list[tuple[str, LiveTag]]) -> None:
-    names_to_origins: dict[str, list[str]] = {}
-    for origin, tag in origins:
-        names_to_origins.setdefault(tag.name, []).append(origin)
-
-    duplicates = {name: refs for name, refs in names_to_origins.items() if len(refs) > 1}
-    if not duplicates:
-        return
-
-    details = "; ".join(
-        f"{tag_name!r} declared by {', '.join(refs)}"
-        for tag_name, refs in sorted(duplicates.items())
-    )
-    raise ValueError(f"Duplicate tag names in {class_name}: {details}")
-
-
-def _is_class_declaration_context(stack_depth: int) -> bool:
-    frame = inspect.currentframe()
-    try:
-        for _ in range(stack_depth):
-            if frame is None:
-                return False
-            frame = frame.f_back
-        if frame is None:
-            return False
-        return "__module__" in frame.f_locals and "__qualname__" in frame.f_locals
-    finally:
-        del frame
-
-
 class _TagTypeBase(LiveTag):
     """Base class for tag type marker constructors."""
 
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
 
-    def __init__(self, name: str | None = None, retentive: bool | None = None) -> None:
-        # __new__ returns LiveTag/_AutoTagDecl and bypasses this initializer.
+    def __init__(self, name: str, retentive: bool | None = None) -> None:
+        # __new__ returns LiveTag and bypasses this initializer.
         return None
 
-    @overload
-    def __new__(cls, name: str, retentive: bool | None = None) -> LiveTag: ...
-
-    @overload
-    def __new__(cls, name: None = None, retentive: bool | None = None) -> _AutoTagDecl: ...
-
-    def __new__(
-        cls, name: str | None = None, retentive: bool | None = None
-    ) -> LiveTag | _AutoTagDecl:
+    def __new__(cls, name: str, retentive: bool | None = None) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
-        if name is not None:
-            return LiveTag(name, cls._tag_type, retentive)
-        if not _is_class_declaration_context(stack_depth=2):
-            raise TypeError(
-                f"{cls.__name__}() without a name is only valid in an AutoTag class body. "
-                f"Use {cls.__name__}('TagName') or declare inside "
-                f"`class Tags(AutoTag): ...`."
-            )
-        return _AutoTagDecl(cls._tag_type, retentive)
+        if not isinstance(name, str):
+            raise TypeError(f"{cls.__name__}() name must be a string.")
+        return LiveTag(name, cls._tag_type, retentive)
 
 
 class Bool(_TagTypeBase):
@@ -813,10 +599,6 @@ class Bool(_TagTypeBase):
         ```python
         Button = Bool("Button")
         Light  = Bool("Light", retentive=True)
-
-        # In an AutoTag class body (auto-named):
-        class Tags(AutoTag):
-            Start = Bool()
         ```
     """
 
