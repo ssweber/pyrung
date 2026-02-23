@@ -47,8 +47,8 @@ def test_click_prebuilt_blocks_are_exported():
         "df",
         "xd",
         "yd",
-        "xdu",
-        "ydu",
+        "xd0u",
+        "yd0u",
         "td",
         "ctd",
         "sd",
@@ -64,14 +64,14 @@ def test_click_send_receive_are_exported():
 
 
 def test_click_prebuilt_block_classes_and_identity_names():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xdu, y, yd, ydu
+    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xd0u, y, yd, yd0u
 
     assert isinstance(x, InputBlock)
     assert isinstance(xd, InputBlock)
     assert isinstance(y, OutputBlock)
     assert isinstance(yd, OutputBlock)
-    assert isinstance(xdu, InputTag)
-    assert isinstance(ydu, OutputTag)
+    assert isinstance(xd0u, InputTag)
+    assert isinstance(yd0u, OutputTag)
     for block in (c, t, ct, sc, ds, dd, dh, df, td, ctd, sd, txt):
         assert isinstance(block, Block)
 
@@ -84,7 +84,7 @@ def test_click_prebuilt_block_classes_and_identity_names():
 
 
 def test_click_prebuilt_canonical_tag_names():
-    from pyrung.click import c, ds, x, xd, xdu, y, yd, ydu
+    from pyrung.click import c, ds, x, xd, xd0u, y, yd, yd0u
 
     assert x[1].name == "X001"
     assert y[1].name == "Y001"
@@ -93,11 +93,11 @@ def test_click_prebuilt_canonical_tag_names():
     assert xd[0].name == "XD0"
     assert xd[1].name == "XD1"
     assert xd[3].name == "XD3"
-    assert xdu.name == "XD0u"
+    assert xd0u.name == "XD0u"
     assert yd[0].name == "YD0"
     assert yd[1].name == "YD1"
     assert yd[3].name == "YD3"
-    assert ydu.name == "YD0u"
+    assert yd0u.name == "YD0u"
 
 
 def test_click_sparse_x_select_and_gap_rejection():
@@ -128,7 +128,7 @@ def test_click_xd_yd_display_indexed_select():
 
 
 def test_click_prebuilt_type_and_retentive_defaults():
-    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xdu, y, yd, ydu
+    from pyrung.click import c, ct, ctd, dd, df, dh, ds, sc, sd, t, td, txt, x, xd, xd0u, y, yd, yd0u
 
     expected: dict[str, tuple[TagType, bool]] = {
         "x": (TagType.BOOL, False),
@@ -172,19 +172,19 @@ def test_click_prebuilt_type_and_retentive_defaults():
         assert block.type == expected_type
         assert block.retentive is expected_retentive
 
-    assert xdu.type == TagType.WORD
-    assert ydu.type == TagType.WORD
-    assert xdu.retentive is False
-    assert ydu.retentive is False
+    assert xd0u.type == TagType.WORD
+    assert yd0u.type == TagType.WORD
+    assert xd0u.retentive is False
+    assert yd0u.retentive is False
 
 
 def test_click_prebuilt_tag_classes():
-    from pyrung.click import ds, x, xd, xdu, y, yd, ydu
+    from pyrung.click import ds, x, xd, xd0u, y, yd, yd0u
 
     assert isinstance(x[1], InputTag)
     assert isinstance(xd[0], InputTag)
-    assert isinstance(xdu, InputTag)
+    assert isinstance(xd0u, InputTag)
     assert isinstance(y[1], OutputTag)
     assert isinstance(yd[0], OutputTag)
-    assert isinstance(ydu, OutputTag)
+    assert isinstance(yd0u, OutputTag)
     assert isinstance(ds[1], Tag)

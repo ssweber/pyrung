@@ -176,8 +176,8 @@ dh = _block_from_bank_config(BANKS["DH"])
 df = _block_from_bank_config(BANKS["DF"])
 xd = _block_from_bank_config(BANKS["XD"])
 yd = _block_from_bank_config(BANKS["YD"])
-xdu = InputTag("XD0u", TagType.WORD, retentive=False)
-ydu = OutputTag("YD0u", TagType.WORD, retentive=False)
+xd0u = InputTag("XD0u", TagType.WORD, retentive=False)
+yd0u = OutputTag("YD0u", TagType.WORD, retentive=False)
 td = _block_from_bank_config(BANKS["TD"])
 ctd = _block_from_bank_config(BANKS["CTD"])
 sd = _block_from_bank_config(BANKS["SD"])
@@ -224,8 +224,8 @@ __all__ = [
     "df",
     "xd",
     "yd",
-    "xdu",
-    "ydu",
+    "xd0u",
+    "yd0u",
     "td",
     "ctd",
     "sd",
