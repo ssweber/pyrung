@@ -1,21 +1,25 @@
-﻿# Pyrung
+# Pyrung
 
-A Python DSL (Domain Specific Language) for representing and simulating Ladder Logic. Pyrung provides a Pythonic way to write PLC programs for simulation, testing, and documentation purposes.
+A Pythonic ladder logic framework — simulate, test, and debug PLC programs in pure Python.
 
-## Status
+## Why Pyrung?
 
-**Proof of Concept** - The core execution engine works, but the library is under active development.
+**Offline PLC development** — Controls engineers working with Click PLCs can develop, test, and debug ladder logic without physical hardware.
 
-## Goals
+**PLC logic as testable code** — Express PLC logic as pure Python so you can use git, pytest, and CI workflows.
 
-- Provide a readable, Pythonic syntax for ladder logic
-- Enable simulation and testing of PLC programs without physical hardware
-- Support documentation and validation of PLC logic
+| Feature | pyrung | Traditional simulation |
+|---------|--------|------------------------|
+| Logic syntax | Pure Python | Proprietary GUI / IEC text |
+| State | Immutable snapshots | Mutable in-place |
+| Time control | `FIXED_STEP` for exact determinism | Wall-clock only |
+| Testing | Standard pytest | Custom tooling |
+| Debugging | DAP + VS Code inline decorations | Separate runtime tool |
 
 ## Quick Example
 
 ```python
-from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, out
+from pyrung import Bool, PLCRunner, Program, Rung, out
 
 Button = Bool("Button")
 Light = Bool("Light")
@@ -25,152 +29,61 @@ with Program() as logic:
         out(Light)
 
 runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 with runner.active():
     Button.value = True
-runner.step()
+    runner.step()
+    assert Light.value is True
 ```
 
-## INT Truthiness in Conditions
+## What's Included
 
-Direct `INT` tags can be used as rung conditions and are treated as nonzero truthiness:
+**Core engine** — Immutable state machine with a context-manager DSL. All logic is pure `f(state) -> new_state`.
 
-```python
-from pyrung import Bool, Int, Program, Rung, out
+- Instructions: `out`, `latch`/`reset`, `copy`, `math`, `run_function`/`run_enabled_function`
+- Timers (`on_delay`, `off_delay`) and counters (`count_up`, `count_down`)
+- Shift registers, search, bit/word packing, blockcopy, copy/fill
+- Branching (`branch`, `any_of`, `all_of`), subroutines, for-loops
+- Structured tags (`@udt`, `@named_array`) with auto-naming and field options
+- Edge detection (`rise`, `fall`), one-shot support
+- Program validation and scan-cycle introspection
 
-Step = Int("Step")
-with Program() as logic:
-    with Rung(Step):  # equivalent to: with Rung(Step != 0)
-        out(Bool("Light"))
-```
+**Click dialect** (`pyrung.click`) — Click PLC-specific layer on top of the core engine.
 
-This applies to rung/branch condition composition (`Rung`, `branch`, `any_of`, `all_of`).
-It does not change helper-specific condition parameters (`count_*`, `on_delay().reset(...)`,
-`shift().clock(...).reset(...)`), which still require BOOL tags or explicit comparisons.
+- Memory bank types and address ranges (`X`, `Y`, `C`, `DS`, `DD`, `DF`, etc.)
+- `TagMap` for mapping tags to hardware addresses and nickname file I/O
+- Modbus send/receive instructions
+- Soft-PLC adapter via `ClickDataProvider`
+- Profile-based capabilities and validation
 
-For Click portability, `Program.validate("click", mode="strict", ...)` flags implicit INT
-truthiness and requires explicit comparisons.
+**Debugging** (`pyrung.dap`) — VS Code Debug Adapter Protocol integration.
 
-## Function Call Instructions (`run_function` / `run_enabled_function`)
-
-For logic that does not map cleanly to built-in ladder instructions, pyrung provides
-function-call instructions in `pyrung`:
-
-- `run_function(fn, ins=None, outs=None, oneshot=False)`:
-  - Runs only when rung power is true.
-  - Calls `fn(**resolved_inputs)` and maps returned dict keys to output tags.
-  - Optional `oneshot=True` uses standard one-shot behavior.
-- `run_enabled_function(fn, ins=None, outs=None)`:
-  - Runs every scan (including rung-false scans) and passes rung state as `enabled`.
-  - Calls `fn(enabled, **resolved_inputs)` and maps returned dict keys to output tags.
-  - Useful for async/stateful polling workflows.
-
-Both APIs validate signatures and reject `async def` callables.
-
-### `run_function()` Example
-
-```python
-from pyrung import Bool, Int, Program, Rung, run_function
-
-Enable = Bool("Enable")
-Raw = Int("Raw")
-Scaled = Int("Scaled")
-
-def scale(raw):
-    return {"scaled": raw * 2 + 5}
-
-with Program() as logic:
-    with Rung(Enable):
-        run_function(scale, ins={"raw": Raw}, outs={"scaled": Scaled})
-```
-
-### `run_enabled_function()` Example
-
-```python
-from pyrung import Bool, Int, Program, Rung, run_enabled_function
-
-Enable = Bool("Enable")
-Busy = Bool("Busy")
-Count = Int("Count")
-
-class Worker:
-    def __init__(self):
-        self.pending = False
-
-    def __call__(self, enabled):
-        if not enabled:
-            self.pending = False
-            return {"busy": False, "count": 0}
-        if not self.pending:
-            self.pending = True
-            return {"busy": True, "count": 0}
-        return {"busy": True, "count": 1}
-
-with Program() as logic:
-    with Rung(Enable):
-        run_enabled_function(Worker(), outs={"busy": Busy, "count": Count})
-```
-
-Reference examples:
-- `src/pyrung/examples/custom_math.py`
-- `src/pyrung/examples/click_email.py`
-
-## Migration Note
-
-Core constructors use IEC names only: `Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`.
-Click-style aliases moved from the base API to `pyrung.click`:
-`Bit`, `Int2`, `Float`, `Hex`, `Txt`.
-
-## Singleton Structured Tags
-
-Use singleton `@udt()` for class-qualified auto naming without repeating strings:
-
-```python
-from pyrung import Bool, Int, udt
-
-
-@udt()
-class Tags:
-    Step1_Event: Bool
-    Count: Int
-```
-
-Generated tag names use `Struct_field` (for example, `Tags_Step1_Event`).
-Explicit naming remains supported: `Bool("Step1_Event")`.
-
-## Structured Tags
-
-`@udt` creates mixed-type structures, `@named_array` creates single-type instance-interleaved arrays.
-Both default to singleton mode (`count=None`):
-
-```python
-from pyrung import Bool, Field, Int, Real, auto, named_array, udt
-
-@udt()
-class Config:
-    enabled: Bool
-    setpoint: Real
-
-@udt(count=3)
-class Alarm:
-    id: Int = auto()
-    active: Bool
-    level: Real = Field(retentive=True)
-
-Config.enabled   # → LiveTag "Config_enabled"
-Alarm[1].id       # → LiveTag "Alarm1_id"
-Alarm.id          # → Block (all 3 id tags)
-
-@named_array(Int, count=4, stride=2)
-class Sensor:
-    reading = 0
-    offset = auto()
-
-Sensor[1].reading # → LiveTag "Sensor1_reading"
-Sensor.map_to(DS.select(1, 8))  # hardware mapping
-```
+- Force tag values, set breakpoints on rungs, monitor expressions
+- Scan history, time-travel playhead, diff, fork
+- Conditional and hit-count breakpoints, logpoints, snapshot labels
+- Full DAP adapter for step-through debugging in VS Code
 
 ## Documentation
 
-See [CLAUDE.md](CLAUDE.md) for detailed architecture and development information.
+- [Core Concepts](docs/getting-started/concepts.md) — Redux model, scan cycle, SystemState, tags, blocks
+- [Quickstart](docs/getting-started/quickstart.md) — End-to-end example in 5 minutes
+- [Ladder Logic Guide](docs/guides/ladder-logic.md) — Full DSL reference
+- [Runner Guide](docs/guides/runner.md) — Execution, time modes, history, fork
+- [Testing Guide](docs/guides/testing.md) — Unit testing with FIXED_STEP and forces
+- [Forces & Debug](docs/guides/forces-debug.md) — Force vs patch, breakpoints, monitors, time travel
+- [VS Code DAP](docs/guides/dap-vscode.md) — Debugging in VS Code
+- [Click Dialect](docs/dialects/click.md) — Memory banks, TagMap, validation, soft-PLC
+- [Click Reference](docs/click_reference/README.md) — Click PLC instruction reference (42 pages)
 
+## Getting Started
+
+```bash
+# Install (requires Python 3.11+)
+pip install -e .
+
+# Run tests
+make test
+```
+
+## Status
+
+Core engine, Click dialect, and DAP debugger are implemented and tested (~19k lines, 1,100+ tests). Not yet published to PyPI. API may still change.
