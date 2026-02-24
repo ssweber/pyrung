@@ -14,7 +14,7 @@ from pyrung.core import (
     copy,
     count_up,
     out,
-    return_,
+    return_early,
     rise,
     subroutine,
     all_of,

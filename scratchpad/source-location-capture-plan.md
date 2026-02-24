@@ -100,7 +100,7 @@ Note: `_capture_source` is defined in program.py. To avoid circular imports, eit
 
 Same pattern for all instruction-emitting functions:
 
-`out()`, `latch()`, `reset()`, `copy()`, `calc()`, `blockcopy()`, `fill()`, `search()`, `shift()`, `pack_bits()`, `pack_words()`, `pack_text()`, `unpack_to_bits()`, `unpack_to_words()`, `run_function()`, `run_enabled_function()`, `call()`, `return_()`
+`out()`, `latch()`, `reset()`, `copy()`, `calc()`, `blockcopy()`, `fill()`, `search()`, `shift()`, `pack_bits()`, `pack_words()`, `pack_text()`, `unpack_to_bits()`, `unpack_to_words()`, `run_function()`, `run_enabled_function()`, `call()`, `return_early()`
 
 Pattern:
 ```python

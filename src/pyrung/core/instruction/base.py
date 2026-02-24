@@ -55,7 +55,7 @@ class Instruction(ABC):
 
 
 class SubroutineReturnSignal(Exception):
-    """Internal control-flow signal used by return_() inside subroutines."""
+    """Internal control-flow signal used by return_early() inside subroutines."""
 
 
 class OneShotMixin:

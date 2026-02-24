@@ -426,16 +426,16 @@ def call(target: str | SubroutineFunc) -> None:
     _attach_instruction(ctx, CallInstruction(name, prog), source_file, source_line)
 
 
-def return_() -> None:
+def return_early() -> None:
     """Return from the current subroutine.
 
     Example:
         with subroutine("my_sub"):
             with Rung(Abort):
-                return_()
+                return_early()
     """
-    ctx, source_file, source_line = _capture_instruction_context("return_", source_depth=3)
+    ctx, source_file, source_line = _capture_instruction_context("return_early", source_depth=3)
     prog = Program.current()
     if prog is None or prog._current_subroutine is None:
-        raise RuntimeError("return_() must be used inside a subroutine")
+        raise RuntimeError("return_early() must be used inside a subroutine")
     _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)

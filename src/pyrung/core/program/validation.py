@@ -39,7 +39,7 @@ _COMPREHENSION_HINT = (
 _SCOPE_HINT = "DSL scope should not mutate external Python state"
 
 
-_RETURN_HINT = "Use `return_()` for early subroutine exit; no Python control flow in DSL scope"
+_RETURN_HINT = "Use `return_early()` for early subroutine exit; no Python control flow in DSL scope"
 
 
 _IMPORT_HINT = "Move imports outside the Program/subroutine scope"

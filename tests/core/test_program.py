@@ -1433,9 +1433,9 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is False
 
-    def test_return_exits_subroutine_early(self):
-        """return_() exits subroutine immediately and skips remaining rungs."""
-        from pyrung.core.program import Program, Rung, call, out, return_, subroutine
+    def test_return_early_exits_subroutine_early(self):
+        """return_early() exits subroutine immediately and skips remaining rungs."""
+        from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
 
         Run = Bool("Run")
         First = Bool("First")
@@ -1449,7 +1449,7 @@ class TestSubroutineAndCall:
             with subroutine("my_sub"):
                 with Rung():
                     out(First)
-                    return_()
+                    return_early()
                     out(Second)
 
                 with Rung():
@@ -1463,9 +1463,9 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["Second"] is False
         assert runner.current_state.tags["Third"] is False
 
-    def test_return_only_exits_current_subroutine(self):
-        """return_() in a nested call should not abort the caller subroutine."""
-        from pyrung.core.program import Program, Rung, call, out, return_, subroutine
+    def test_return_early_only_exits_current_subroutine(self):
+        """return_early() in a nested call should not abort the caller subroutine."""
+        from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
 
         Run = Bool("Run")
         CallerDone = Bool("CallerDone")
@@ -1484,7 +1484,7 @@ class TestSubroutineAndCall:
             with subroutine("callee"):
                 with Rung():
                     out(CalleeBefore)
-                    return_()
+                    return_early()
                     out(CalleeAfter)
 
         runner = PLCRunner(logic)
@@ -1502,18 +1502,18 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["CalleeBefore"] is True
         assert runner.current_state.tags["CalleeAfter"] is False
 
-    def test_return_outside_subroutine_raises(self):
-        """return_() is only valid while defining a subroutine."""
+    def test_return_early_outside_subroutine_raises(self):
+        """return_early() is only valid while defining a subroutine."""
         import pytest
 
-        from pyrung.core.program import Program, Rung, return_
+        from pyrung.core.program import Program, Rung, return_early
 
         Run = Bool("Run")
 
         with pytest.raises(RuntimeError, match="inside a subroutine"):
             with Program():
                 with Rung(Run):
-                    return_()
+                    return_early()
 
 
 class TestSubroutineDecorator:

@@ -37,7 +37,7 @@ DSL-specific hint pointing the user to the correct alternative:
 | `try`/`except` | "Errors in DSL scope are programming mistakes; no recovery logic in ladder logic" |
 | Comprehensions/generators | "Build tag collections outside the Program scope, then reference them in rungs" |
 | `global`/`nonlocal` | "DSL scope should not mutate external Python state" |
-| `yield`/`await`/`return` | "Use `return_()` for early subroutine exit; no Python control flow in DSL scope" |
+| `yield`/`await`/`return` | "Use `return_early()` for early subroutine exit; no Python control flow in DSL scope" |
 | `import` | "Move imports outside the Program/subroutine scope" |
 | `assert`/`raise`/`del` | "Not valid in ladder logic; handle validation outside DSL scope" |
 | `FunctionDef`/`ClassDef` | "Define functions and classes outside the Program/subroutine scope" |

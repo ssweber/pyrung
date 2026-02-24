@@ -24,7 +24,7 @@ from pyrung.core import (
     calc,
     on_delay,
     reset,
-    return_,
+    return_early,
     subroutine,
     named_array,
 )
@@ -308,7 +308,7 @@ def subRoutine1() -> None:
         copy(0, sub.SubName__ValStepIsOdd)
         copy(0, sub.SubName__x)  # Maintains explicit template intent.
         reset(SubName_x)
-        return_()
+        return_early()
 
     # ==============================================================================
     # SECTION 4: SFC EXECUTION CONTROL BOILERPLATE - DO NOT MODIFY
@@ -355,7 +355,7 @@ def subRoutine1() -> None:
 
     # Return from subroutine.
     with Rung():
-        return_()
+        return_early()
 
 
 def build_mapping() -> TagMap:

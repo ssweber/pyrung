@@ -52,7 +52,7 @@ from .instructions import (
     pack_text,
     pack_words,
     reset,
-    return_,
+    return_early,
     run_enabled_function,
     run_function,
     search,
@@ -89,7 +89,7 @@ __all__ = [
     "latch",
     "out",
     "reset",
-    "return_",
+    "return_early",
     # Advanced Instructions
     "blockcopy",
     "fill",

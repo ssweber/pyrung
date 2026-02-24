@@ -1,5 +1,5 @@
 from pyrung.core import (
-    Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_, 
+    Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_early, 
     call, TimeUnit, TagType, PackedStruct, Field, Bool, PLCRunner, TimeMode
 )
 from pyrung.click import c, ds, t, td
@@ -72,7 +72,7 @@ def task_logic():
     # 3. STOP & PAUSE RESETS
     with Rung(task.Pause == 1):
         reset(Valve1)
-        return_()
+        return_early()
         
     with Rung(task.Call == 0):
         copy(0, task.Active)
@@ -87,7 +87,7 @@ def task_logic():
         
         reset(Valve1)
         reset(Step1_Event)
-        return_()
+        return_early()
 
     with Rung(task.Call == 1):
         out(task.Active)

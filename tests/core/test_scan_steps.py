@@ -19,7 +19,7 @@ from pyrung.core import (
     count_up,
     on_delay,
     out,
-    return_,
+    return_early,
     shift,
     subroutine,
 )
@@ -181,7 +181,7 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
     assert runner.current_state.tags["TopLight"] is True
 
 
-def test_scan_steps_debug_handles_return_signal_and_still_yields_return_rung():
+def test_scan_steps_debug_handles_return_early_signal_and_still_yields_return_earlyrung():
     first = Bool("First")
     skipped = Bool("Skipped")
     done = Bool("Done")
@@ -191,7 +191,7 @@ def test_scan_steps_debug_handles_return_signal_and_still_yields_return_rung():
             with Rung():
                 out(first)
             with Rung():
-                return_()
+                return_early()
             with Rung():
                 out(skipped)
 

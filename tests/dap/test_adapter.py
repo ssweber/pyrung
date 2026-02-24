@@ -412,7 +412,7 @@ def _chained_builder_debug_script() -> str:
 def _nested_debug_autorun_script() -> str:
     return (
         "import os\n"
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, call, copy, out, return_, subroutine\n"
+        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, call, copy, out, return_early, subroutine\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
@@ -432,7 +432,7 @@ def _nested_debug_autorun_script() -> str:
         "    with subroutine('init_sub'):\n"
         "        with Rung():\n"
         "            out(SubLight)\n"
-        "            return_()\n"
+        "            return_early()\n"
         "            out(SkippedAfterReturn)\n"
         "\n"
         "runner = PLCRunner(logic)\n"

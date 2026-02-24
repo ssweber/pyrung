@@ -8,7 +8,7 @@ from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
     Bool, Int, PLCRunner, Program, Rung,
     branch, TimeMode, TimeUnit, any_of, call, copy,
-    latch, calc, on_delay, reset, return_, subroutine,
+    latch, calc, on_delay, reset, return_early, subroutine,
     named_array,
 )
 
@@ -115,8 +115,8 @@ def main() -> Program:
                 calc(sub.CurStep + sub.Trans, sub.CurStep)
                 copy(0, sub.Trans)
             
-            with Rung(sub.xCall == 0): copy(0, sub.CurStep); return_()
-            with Rung(): return_()
+            with Rung(sub.xCall == 0): copy(0, sub.CurStep); return_early()
+            with Rung(): return_early()
     return logic
 
 def build_mapping() -> TagMap:
