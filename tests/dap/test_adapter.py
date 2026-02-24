@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import os
-import time
+import queue
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,26 @@ def _events(messages: list[dict[str, Any]], event_name: str) -> list[dict[str, A
     ]
 
 
+def _drain_internal_events_with_wait(adapter: DAPAdapter, *, timeout: float = 0.1) -> int:
+    processed = adapter._drain_internal_events()
+    if processed:
+        return processed
+
+    try:
+        item = adapter._queue.get(timeout=timeout)
+    except queue.Empty:
+        return 0
+
+    if item.get("kind") != "internal_event":
+        adapter._queue.put(item)
+        return 0
+
+    adapter._send_event(item["event"], item.get("body"))
+    if item.get("event") == "stopped":
+        adapter._emit_trace_event()
+    return 1 + adapter._drain_internal_events()
+
+
 def _wait_for_stop_reason(
     adapter: DAPAdapter,
     out_stream: io.BytesIO,
@@ -91,12 +111,11 @@ def _wait_for_stop_reason(
     attempts: int = 100,
 ) -> bool:
     for _ in range(attempts):
-        adapter._drain_internal_events()
         flushed = _drain_messages(out_stream)
         stops = _stopped_events(flushed)
         if stops and stops[0]["body"]["reason"] == reason:
             return True
-        time.sleep(0.01)
+        _drain_internal_events_with_wait(adapter)
     return False
 
 
@@ -109,13 +128,12 @@ def _wait_for_event(
     attempts: int = 100,
 ) -> dict[str, Any] | None:
     for _ in range(attempts):
-        adapter._drain_internal_events()
         flushed = _drain_messages(out_stream)
         matches = _events(flushed, event_name)
         for match in matches:
             if predicate is None or predicate(match):
                 return match
-        time.sleep(0.01)
+        _drain_internal_events_with_wait(adapter)
     return None
 
 
@@ -1373,16 +1391,7 @@ def test_continue_hits_subroutine_breakpoint(tmp_path: Path):
     response = _single_response(messages)
     assert response["success"] is True
 
-    found = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "breakpoint":
-            found = True
-            break
-        time.sleep(0.01)
-    assert found is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
     assert adapter._current_step is not None
     assert adapter._current_step.kind == "instruction"
     assert adapter._current_step.subroutine_name == "init_sub"
@@ -1480,16 +1489,7 @@ def test_continue_hits_breakpoint_and_emits_stopped_event(tmp_path: Path):
     assert response["success"] is True
     assert response["body"]["allThreadsContinued"] is True
 
-    found = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "breakpoint":
-            found = True
-            break
-        time.sleep(0.01)
-    assert found is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
 
 
 def test_pause_stops_running_continue_loop(tmp_path: Path):
@@ -1505,16 +1505,7 @@ def test_pause_stops_running_continue_loop(tmp_path: Path):
     _send_request(adapter, out_stream, seq=3, command="pause")
     _drain_messages(out_stream)
 
-    found = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "pause":
-            found = True
-            break
-        time.sleep(0.01)
-    assert found is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
 
 def test_continue_pause_cycles_emit_single_pause_stop_per_cycle(tmp_path: Path):
@@ -1536,14 +1527,13 @@ def test_continue_pause_cycles_emit_single_pause_stop_per_cycle(tmp_path: Path):
 
         pause_stops = 0
         for _ in range(100):
-            adapter._drain_internal_events()
             flushed = _drain_messages(out_stream)
             for stopped in _stopped_events(flushed):
                 if stopped["body"]["reason"] == "pause":
                     pause_stops += 1
             if pause_stops:
                 break
-            time.sleep(0.01)
+            _drain_internal_events_with_wait(adapter)
         assert pause_stops == 1
 
         # After a pause transition, additional drains should not emit duplicate stops.
@@ -1575,7 +1565,6 @@ def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
     breakpoint_stops = 0
     traces = 0
     for _ in range(100):
-        adapter._drain_internal_events()
         flushed = _drain_messages(out_stream)
         for stopped in _stopped_events(flushed):
             if stopped["body"]["reason"] == "breakpoint":
@@ -1583,7 +1572,7 @@ def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
         traces += len(_trace_events(flushed))
         if breakpoint_stops and traces:
             break
-        time.sleep(0.01)
+        _drain_internal_events_with_wait(adapter)
 
     assert breakpoint_stops == 1
     assert traces >= 1
@@ -1980,16 +1969,7 @@ def test_conditional_breakpoint_stops_when_condition_is_true(tmp_path: Path):
     _send_request(adapter, out_stream, seq=3, command="continue")
     _drain_messages(out_stream)
 
-    found = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "breakpoint":
-            found = True
-            break
-        time.sleep(0.01)
-    assert found is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
 
 
 def test_set_breakpoints_with_bad_condition_returns_unverified(tmp_path: Path):
@@ -2044,7 +2024,6 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
     saw_snapshot = False
     saw_output = False
     for _ in range(100):
-        adapter._drain_internal_events()
         flushed = _drain_messages(out_stream)
         snapshots = _events(flushed, "pyrungSnapshot")
         if snapshots:
@@ -2057,19 +2036,13 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
             saw_output = True
         if saw_snapshot and saw_output:
             break
-        time.sleep(0.01)
+        _drain_internal_events_with_wait(adapter)
     assert saw_snapshot is True
     assert saw_output is True
 
     _send_request(adapter, out_stream, seq=4, command="pause")
     _drain_messages(out_stream)
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "pause":
-            break
-        time.sleep(0.01)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
@@ -2114,26 +2087,15 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     _send_request(adapter, out_stream, seq=3, command="continue")
     _drain_messages(out_stream)
 
-    snapshot_scan_id: int | None = None
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        snapshots = _events(flushed, "pyrungSnapshot")
-        if snapshots:
-            snapshot_scan_id = int(snapshots[0]["body"]["scanId"])
-            break
-        time.sleep(0.01)
+    snapshot_event = _wait_for_event(adapter, out_stream, event_name="pyrungSnapshot")
+    snapshot_scan_id = (
+        int(snapshot_event["body"]["scanId"]) if snapshot_event is not None else None
+    )
     assert snapshot_scan_id is not None
 
     _send_request(adapter, out_stream, seq=4, command="pause")
     _drain_messages(out_stream)
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "pause":
-            break
-        time.sleep(0.01)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
@@ -2173,31 +2135,17 @@ def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
     _send_request(adapter, out_stream, seq=3, command="continue")
     _drain_messages(out_stream)
 
-    saw_output = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        outputs = _events(flushed, "output")
-        if any(
-            "Tick executed" in str(event.get("body", {}).get("output", "")) for event in outputs
-        ):
-            saw_output = True
-            break
-        time.sleep(0.01)
-    assert saw_output is True
+    output_event = _wait_for_event(
+        adapter,
+        out_stream,
+        event_name="output",
+        predicate=lambda event: "Tick executed" in str(event.get("body", {}).get("output", "")),
+    )
+    assert output_event is not None
 
     _send_request(adapter, out_stream, seq=4, command="pause")
     _drain_messages(out_stream)
-    paused = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "pause":
-            paused = True
-            break
-        time.sleep(0.01)
-    assert paused is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
 
 def test_source_breakpoint_hit_condition_triggers_on_every_nth_hit(tmp_path: Path):
@@ -2432,16 +2380,7 @@ def test_data_breakpoint_info_and_stop_on_change(tmp_path: Path):
     _send_request(adapter, out_stream, seq=5, command="continue")
     _drain_messages(out_stream)
 
-    found = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        stops = _stopped_events(flushed)
-        if stops and stops[0]["body"]["reason"] == "data breakpoint":
-            found = True
-            break
-        time.sleep(0.01)
-    assert found is True
+    assert _wait_for_stop_reason(adapter, out_stream, reason="data breakpoint") is True
 
 
 def test_set_data_breakpoints_preserves_response_order(tmp_path: Path):
@@ -2541,26 +2480,14 @@ def test_monitor_callback_emits_custom_event(tmp_path: Path):
     _send_request(adapter, out_stream, seq=3, command="continue")
     _drain_messages(out_stream)
 
-    saw_monitor_event = False
-    for _ in range(100):
-        adapter._drain_internal_events()
-        flushed = _drain_messages(out_stream)
-        monitor_events = _events(flushed, "pyrungMonitor")
-        if monitor_events:
-            event_body = monitor_events[0]["body"]
-            assert event_body["tag"] == "Tick"
-            saw_monitor_event = True
-            break
-        time.sleep(0.01)
-    assert saw_monitor_event is True
+    monitor_event = _wait_for_event(adapter, out_stream, event_name="pyrungMonitor")
+    assert monitor_event is not None
+    event_body = monitor_event["body"]
+    assert event_body["tag"] == "Tick"
 
     _send_request(adapter, out_stream, seq=4, command="pause")
     _drain_messages(out_stream)
-    for _ in range(100):
-        adapter._drain_internal_events()
-        if _stopped_events(_drain_messages(out_stream)):
-            break
-        time.sleep(0.01)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
 
 def test_shutdown_clears_monitor_and_data_breakpoint_registrations(tmp_path: Path):

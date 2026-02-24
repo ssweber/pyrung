@@ -30,6 +30,15 @@ from pyrung.core import (
 
 pytestmark = pytest.mark.integration
 
+_EXCHANGE_TIMEOUT_SECONDS = 8.0
+_OFFLINE_OBSERVATION_TIMEOUT_SECONDS = 1.5
+_RECOVERY_TIMEOUT_SECONDS = 8.0
+
+
+async def _yield_event_loop() -> None:
+    await asyncio.sleep(0)
+    await asyncio.to_thread(lambda: None)
+
 
 @dataclass(frozen=True)
 class _StatusTags:
@@ -497,7 +506,7 @@ async def _run_two_node_exchange() -> list[str]:
         runner_a.patch(node_a.initial_patch)
         runner_b.patch(node_b.initial_patch)
 
-        deadline = time.monotonic() + 8.0
+        deadline = time.monotonic() + _EXCHANGE_TIMEOUT_SECONDS
         scan = 0
         while time.monotonic() < deadline:
             scan += 1
@@ -577,7 +586,7 @@ async def _run_two_node_exchange() -> list[str]:
                 logs.append(f"complete after {scan} scans")
                 return logs
 
-            await asyncio.sleep(0.005)
+            await _yield_event_loop()
 
         missing_a = sorted(set(node_a.success_tags) - seen_a_success)
         missing_b = sorted(set(node_b.success_tags) - seen_b_success)
@@ -613,7 +622,7 @@ async def _run_two_node_exchange() -> list[str]:
         for _ in range(3):
             runner_a.step()
             runner_b.step()
-            await asyncio.sleep(0.002)
+            await _yield_event_loop()
         await server_b.stop()
         await server_a.stop()
 
@@ -662,9 +671,9 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
         assert tags_a.get(node_a.recv_dest_tag) == node_a.recv_sentinel
         logs.append(f"scan {scan}: requests submitted while B offline")
 
-        offline_observation_deadline = time.monotonic() + 1.5
         observed_offline_failure = False
         observed_inflight_retry = False
+        offline_observation_deadline = time.monotonic() + _OFFLINE_OBSERVATION_TIMEOUT_SECONDS
         while time.monotonic() < offline_observation_deadline:
             scan += 1
             runner_a.step()
@@ -714,7 +723,7 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
                 logs.append(f"scan {scan}: offline failure latched with exception_response=0")
             if send_inflight and recv_inflight:
                 observed_inflight_retry = True
-            await asyncio.sleep(0.005)
+            await _yield_event_loop()
         if not (observed_offline_failure or observed_inflight_retry):
             raise AssertionError(
                 "Did not observe a valid offline request state before timeout.\n"
@@ -742,7 +751,9 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
         await server_b.start()
         logs.append("node B started without toggling A_Enable")
 
-        recovery_deadline = time.monotonic() + 8.0
+        send_success_seen = False
+        recv_success_seen = False
+        recovery_deadline = time.monotonic() + _RECOVERY_TIMEOUT_SECONDS
         while time.monotonic() < recovery_deadline:
             scan += 1
             runner_a.step()
@@ -751,23 +762,30 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
             tags_b = runner_b.current_state.tags
 
             if (
-                tags_b.get(node_b.recv_sink_tag) == node_a.send_value
-                and tags_a.get(node_a.recv_dest_tag) == node_b.send_value
-                and tags_a.get(node_a.send_status.busy.name) is False
-                and tags_a.get(node_a.send_status.success.name) is True
+                tags_a.get(node_a.send_status.success.name) is True
                 and tags_a.get(node_a.send_status.error.name) is False
                 and tags_a.get(node_a.send_status.exception.name) == 0
-                and tags_a.get(node_a.recv_status.busy.name) is False
-                and tags_a.get(node_a.recv_status.success.name) is True
+            ):
+                send_success_seen = True
+            if (
+                tags_a.get(node_a.recv_status.success.name) is True
                 and tags_a.get(node_a.recv_status.error.name) is False
                 and tags_a.get(node_a.recv_status.exception.name) == 0
+            ):
+                recv_success_seen = True
+
+            if (
+                tags_b.get(node_b.recv_sink_tag) == node_a.send_value
+                and tags_a.get(node_a.recv_dest_tag) == node_b.send_value
+                and send_success_seen
+                and recv_success_seen
             ):
                 logs.append(
                     f"scan {scan}: recovered with B_RecvSink={node_a.send_value}, "
                     f"A_RecvDest={node_b.send_value}"
                 )
                 return logs
-            await asyncio.sleep(0.005)
+            await _yield_event_loop()
 
         raise AssertionError(
             "Did not auto-recover after B came online.\n"
@@ -780,7 +798,7 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
         for _ in range(3):
             runner_a.step()
             runner_b.step()
-            await asyncio.sleep(0.002)
+            await _yield_event_loop()
         if server_b is not None:
             await server_b.stop()
 

@@ -184,3 +184,42 @@ class TestPLCRunnerSimulationTime:
         runner.step()
 
         assert runner.simulation_time == runner.current_state.timestamp
+
+
+class TestPLCRunnerEdgeHistory:
+    """Regression coverage for _prev:* memory capture behavior."""
+
+    def test_prev_memory_captures_existing_tags(self):
+        """Existing tags should be mirrored into _prev:* each scan."""
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic=[], initial_state=SystemState().with_tags({"Existing": 42}))
+
+        runner.step()
+
+        assert runner.current_state.memory.get("_prev:Existing") == 42
+
+    def test_prev_memory_captures_newly_pending_tags(self):
+        """New tags introduced via patch() should get _prev:* entries."""
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic=[])
+
+        runner.patch({"LateBound": 7})
+        runner.step()
+
+        assert runner.current_state.tags.get("LateBound") == 7
+        assert runner.current_state.memory.get("_prev:LateBound") == 7
+
+    def test_prev_memory_preserves_missing_and_default_value_behavior(self):
+        """Missing tags stay absent; explicit default-valued tags are captured."""
+        from pyrung.core import PLCRunner
+
+        runner = PLCRunner(logic=[])
+
+        runner.step()
+        assert "_prev:NeverSeen" not in runner.current_state.memory
+
+        runner.patch({"DefaultBool": False})
+        runner.step()
+        assert runner.current_state.memory.get("_prev:DefaultBool") is False
