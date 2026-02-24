@@ -69,6 +69,45 @@ state = runner.run_until(
 
 If `max_cycles` is reached before the predicate returns True, execution stops and the final state is returned.
 
+## Mode control and reboot
+
+### `stop()` - enter STOP mode
+
+```python
+runner.stop()
+```
+
+- Sets PLC mode to STOP (`sys.mode_run == False`).
+- Does not clear tags by itself.
+- Idempotent: calling `stop()` again is a no-op.
+
+### Auto restart from STOP
+
+When stopped, any execution method (`step`, `run`, `run_for`, `run_until`, `scan_steps`) performs a STOP->RUN transition before executing scans.
+
+STOP->RUN transition behavior:
+
+- Non-retentive known tags reset to defaults.
+- Retentive known tags preserve values.
+- Runtime scope resets (`scan_id=0`, `timestamp=0.0`, memory/history/patches/forces/debug-trace caches cleared).
+
+### `reboot()` - power-cycle simulation
+
+```python
+runner.reboot()
+```
+
+- Battery present (`sys.battery_present=True`, default): all known tags preserve.
+- Battery absent (`sys.battery_present=False`): all known tags reset to defaults.
+- Runtime scope resets like STOP->RUN.
+- Runner returns in RUN mode.
+
+Battery status is simulation-controlled:
+
+```python
+runner.set_battery_present(False)
+```
+
 ## Inspecting state
 
 ```python
@@ -85,6 +124,8 @@ state.timestamp  # float — simulation clock in seconds
 state.tags       # PMap[str, value] — all tag values
 state.memory     # PMap[str, value] - internal engine state
 ```
+
+`scan_id` and `timestamp` reset to `0` when STOP->RUN transition or `reboot()` rebuilds runtime scope.
 
 ## History, diff, and fork
 

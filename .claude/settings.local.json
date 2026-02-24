@@ -9,7 +9,11 @@
       "Bash(uv run ruff:*)",
       "Bash(uv run pytest:*)",
       "WebFetch(domain:pyrsistent.readthedocs.io)",
-      "WebSearch"
+      "WebSearch",
+      "WebFetch(domain:cdn.automationdirect.com)",
+      "WebFetch(domain:accautomation.ca)",
+      "WebFetch(domain:community.automationdirect.com)",
+      "WebFetch(domain:www.automationdirect.com)"
     ]
   }
 }

@@ -12,6 +12,7 @@ from pyclickplc.validation import assert_runtime_value
 
 from pyrung.click.tag_map import TagMap
 from pyrung.core.runner import PLCRunner
+from pyrung.core.system_points import system
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,10 @@ class ClickDataProvider:
             raise ValueError(
                 f"Tag '{mapped.logical_name}' is read-only system point and cannot be written"
             )
+        if mapped.logical_name == system.sys.cmd_mode_stop.name:
+            if bool(value):
+                self._runner.stop()
+            return
         self._runner.patch({mapped.logical_name: value})
 
     def _read_mirrored_word(self, word_bank: str, word_index: int) -> int:

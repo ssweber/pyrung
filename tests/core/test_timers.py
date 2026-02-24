@@ -22,6 +22,8 @@ from pyrung.core import (
     PLCRunner,
     Program,
     Rung,
+    Tag,
+    TagType,
     TimeMode,
     copy,
     off_delay,
@@ -270,6 +272,68 @@ class TestOnDelayRTON:
         runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 0
         assert runner.current_state.tags["t.Timer"] is False
+
+    def test_rton_retentive_accumulator_survives_stop_to_run_transition(self):
+        """RTON accumulator preserves value across STOP->RUN when retentive."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
+        Timer_acc = Int("td.Timer_acc", retentive=True)
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+
+        runner = PLCRunner(logic)
+        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner.patch({"Enable": False, "ResetBtn": False})
+        runner.step()
+
+        runner.patch({"Enable": True})
+        for _ in range(3):
+            runner.step()
+        assert runner.current_state.tags["td.Timer_acc"] == 30
+
+        runner.patch({"Enable": False})
+        runner.step()
+        assert runner.current_state.tags["td.Timer_acc"] == 30
+
+        runner.stop()
+        runner.step()  # auto STOP->RUN transition + first scan
+
+        assert runner.current_state.tags["td.Timer_acc"] == 30
+
+    def test_rton_non_retentive_accumulator_uses_default_after_batteryless_reboot(self):
+        """Batteryless reboot resets non-retentive RTON acc to tag default."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+        Timer_done = Bool("t.Timer")
+        Timer_acc = Tag("td.Timer_acc", TagType.INT, retentive=False, default=10)
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+
+        runner = PLCRunner(logic)
+        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner.patch({"Enable": False, "ResetBtn": False})
+        runner.step()
+
+        runner.patch({"Enable": True})
+        for _ in range(3):
+            runner.step()
+        assert runner.current_state.tags["td.Timer_acc"] == 30
+
+        runner.set_battery_present(False)
+        runner.reboot()
+
+        # After SRAM loss, tag value is rebuilt from its default.
+        assert runner.current_state.tags["td.Timer_acc"] == 10
+
+        # First enabled scan continues counting from default seed.
+        runner.patch({"Enable": True, "ResetBtn": False})
+        runner.step()
+        assert runner.current_state.tags["td.Timer_acc"] == 20
 
 
 class TestOffDelayTOF:

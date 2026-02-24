@@ -20,7 +20,7 @@ This makes pyrung programs:
 
 ```python
 class SystemState(PRecord):
-    scan_id   : int    # monotonically increasing scan counter
+    scan_id   : int    # scan counter (resets to 0 on STOP→RUN/reboot)
     timestamp : float  # simulation clock (seconds)
     tags      : PMap   # tag values, keyed by name string
     memory    : PMap   # engine-internal state (edge detection, timer fractionals)
@@ -73,9 +73,13 @@ Tags are plain Python objects. You can pass them around, store them in lists, us
 
 ### Retentive vs non-retentive
 
-A **retentive** tag is intended to preserve value across power-cycle workflows.
-A **non-retentive** tag should reset to its type default (False, 0, 0.0, "").
-`PLCRunner` does not currently expose a built-in `reset()`/power-cycle API.
+A **retentive** tag preserves value across **STOP→RUN** transitions.
+A **non-retentive** tag resets to its default on **STOP→RUN**.
+
+For **power cycles** (`runner.reboot()`), battery state controls SRAM survival:
+
+- Battery present (`sys.battery_present=True`): all known tags preserve.
+- Battery absent (`sys.battery_present=False`): all known tags reset to defaults.
 
 ### UDT (User Defined Type)
 
@@ -200,6 +204,11 @@ The engine never runs unsolicited. You call:
 - `runner.run_for(seconds)` — run until simulation time advances by N seconds
 - `runner.run_until(predicate)` — run until a condition is met
 - `runner.scan_steps()` — rung-by-rung generator for DAP debugging
+- `runner.stop()` — transition to STOP mode
+- `runner.reboot()` — power-cycle simulation (battery-aware)
+
+If the runner is in STOP mode, calling any execution method (`step`, `run`, `run_for`,
+`run_until`, `scan_steps`) automatically performs STOP→RUN transition first.
 
 This inversion of control is what makes pyrung suitable for testing, GUIs, and debuggers — any consumer can drive execution at whatever granularity it needs.
 

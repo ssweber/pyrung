@@ -25,7 +25,12 @@ from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.state import SystemState
-from pyrung.core.system_points import SystemPointRuntime
+from pyrung.core.system_points import (
+    _BATTERY_PRESENT_KEY,
+    _MODE_RUN_KEY,
+    SYSTEM_TAGS_BY_NAME,
+    SystemPointRuntime,
+)
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.trace_formatter import TraceFormatter
 
@@ -130,6 +135,50 @@ class _BreakpointBuilder:
         )
 
 
+def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
+    """Collect Tag objects reachable from a logic object graph."""
+    from pyrung.core.tag import Tag as TagClass
+
+    found_by_name: dict[str, TagClass] = {}
+    visited: set[int] = set()
+    queue: list[Any] = [root]
+
+    while queue:
+        current = queue.pop()
+        if current is None:
+            continue
+        if isinstance(current, TagClass):
+            found_by_name[current.name] = current
+            continue
+        if isinstance(current, (str, bytes, bytearray, int, float, bool)):
+            continue
+
+        current_id = id(current)
+        if current_id in visited:
+            continue
+        visited.add(current_id)
+
+        if isinstance(current, Mapping):
+            queue.extend(current.keys())
+            queue.extend(current.values())
+            continue
+        if isinstance(current, tuple | list | set | frozenset):
+            queue.extend(current)
+            continue
+
+        if hasattr(current, "__dict__"):
+            queue.extend(vars(current).values())
+            continue
+        if hasattr(current, "__slots__"):
+            for slot in current.__slots__:
+                if slot in {"__weakref__", "__dict__"}:
+                    continue
+                if hasattr(current, slot):
+                    queue.append(getattr(current, slot))
+
+    return tuple(found_by_name.values())
+
+
 class PLCRunner:
     """Generator-driven PLC execution engine.
 
@@ -180,6 +229,13 @@ class PLCRunner:
 
         self._state = initial_state if initial_state is not None else SystemState()
         self._history_limit = history_limit
+        self._running = True
+        self._battery_present = True
+        self._state = self._apply_runtime_memory_flags(
+            self._state,
+            mode_run=self._running,
+            battery_present=self._battery_present,
+        )
         self._history = History(self._state, limit=history_limit)
         self._rung_traces_by_scan: dict[int, dict[int, RungTrace]] = {}
         self._inflight_scan_id: int | None = None
@@ -204,6 +260,8 @@ class PLCRunner:
         self._monitors_by_id: dict[int, _MonitorRegistration] = {}
         self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
         self._pause_requested_this_scan = False
+        self._known_tags_by_name: dict[str, Tag] = {}
+        self._refresh_known_tags_from_logic()
 
     @property
     def current_state(self) -> SystemState:
@@ -335,6 +393,36 @@ class PLCRunner:
         """System point runtime component."""
         return self._system_runtime
 
+    def stop(self) -> None:
+        """Transition PLC to STOP mode."""
+        if not self._running:
+            return
+        self._running = False
+        self._state = self._apply_runtime_memory_flags(
+            self._state,
+            mode_run=False,
+            battery_present=self._battery_present,
+        )
+
+    def set_battery_present(self, value: bool) -> None:
+        """Configure simulated backup battery presence."""
+        self._battery_present = bool(value)
+        self._state = self._apply_runtime_memory_flags(
+            self._state,
+            mode_run=self._running,
+            battery_present=self._battery_present,
+        )
+
+    def reboot(self) -> SystemState:
+        """Power-cycle the runner and return the reset state."""
+        tag_values = self._rebuild_tags_for_reset(
+            preserve_all=self._battery_present,
+            preserve_retentive=False,
+        )
+        self._reset_runtime_scope(tag_values=tag_values, mode_run=True)
+        self._running = True
+        return self._state
+
     def set_time_mode(self, mode: TimeMode, *, dt: float = 0.1) -> None:
         """Set the time mode for simulation.
 
@@ -346,6 +434,104 @@ class PLCRunner:
         self._dt = dt
         if mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
+
+    @staticmethod
+    def _apply_runtime_memory_flags(
+        state: SystemState,
+        *,
+        mode_run: bool,
+        battery_present: bool,
+    ) -> SystemState:
+        memory = state.memory.set(_MODE_RUN_KEY, bool(mode_run)).set(
+            _BATTERY_PRESENT_KEY, bool(battery_present)
+        )
+        return state.set(memory=memory)
+
+    def _refresh_known_tags_from_logic(self) -> None:
+        for rung in self._logic:
+            for tag in _iter_referenced_tags(rung):
+                self._register_known_tag(tag)
+
+    def _register_known_tag(self, tag: Tag) -> None:
+        if tag.name in SYSTEM_TAGS_BY_NAME:
+            return
+        if tag.name not in self._known_tags_by_name:
+            self._known_tags_by_name[tag.name] = tag
+
+    def _register_known_tags_from_mapping_keys(
+        self,
+        tags: Mapping[str, bool | int | float | str]
+        | Mapping[Tag, bool | int | float | str]
+        | Mapping[str | Tag, bool | int | float | str],
+    ) -> None:
+        from pyrung.core.tag import Tag as TagClass
+
+        for key in tags:
+            if isinstance(key, TagClass):
+                self._register_known_tag(key)
+
+    def _rebuild_tags_for_reset(
+        self,
+        *,
+        preserve_all: bool,
+        preserve_retentive: bool,
+    ) -> dict[str, Any]:
+        current_tags = self._state.tags
+        rebuilt: dict[str, Any] = {}
+        for tag in self._known_tags_by_name.values():
+            if preserve_all:
+                rebuilt[tag.name] = current_tags.get(tag.name, tag.default)
+                continue
+            if preserve_retentive and tag.retentive and tag.name in current_tags:
+                rebuilt[tag.name] = current_tags[tag.name]
+                continue
+            rebuilt[tag.name] = tag.default
+        return rebuilt
+
+    def _clear_retained_debug_trace_caches(self) -> None:
+        self._rung_traces_by_scan.clear()
+        self._clear_inflight_debug_scan()
+        self._latest_committed_trace_event = None
+
+    def _reset_runtime_scope(self, *, tag_values: Mapping[str, Any], mode_run: bool) -> None:
+        next_state = SystemState().with_tags(dict(tag_values))
+        self._state = self._apply_runtime_memory_flags(
+            next_state,
+            mode_run=mode_run,
+            battery_present=self._battery_present,
+        )
+        self._history = History(self._state, limit=self._history_limit)
+        self._playhead = self._state.scan_id
+
+        self._pending_patches.clear()
+        self._forces.clear()
+        self._pause_requested_this_scan = False
+        self._clear_retained_debug_trace_caches()
+
+        if self._time_mode == TimeMode.REALTIME:
+            self._last_step_time = time.perf_counter()
+        else:
+            self._last_step_time = None
+
+    def _stop_to_run_transition(self) -> None:
+        if self._running:
+            return
+        tag_values = self._rebuild_tags_for_reset(
+            preserve_all=False,
+            preserve_retentive=True,
+        )
+        self._reset_runtime_scope(tag_values=tag_values, mode_run=True)
+        self._running = True
+
+    def _ensure_running(self) -> None:
+        if not self._running:
+            self._stop_to_run_transition()
+
+    def _sync_runtime_flags_from_state(self) -> None:
+        self._running = bool(self._state.memory.get(_MODE_RUN_KEY, True))
+        self._battery_present = bool(
+            self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
+        )
 
     @contextmanager
     def active(self) -> Iterator[PLCRunner]:
@@ -370,6 +556,7 @@ class PLCRunner:
         Args:
             tags: Dict of tag names or Tag objects to values.
         """
+        self._register_known_tags_from_mapping_keys(tags)
         self._input_overrides.patch(tags)
 
     def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
@@ -393,6 +580,10 @@ class PLCRunner:
         Raises:
             ValueError: If the tag is a read-only system point.
         """
+        from pyrung.core.tag import Tag as TagClass
+
+        if isinstance(tag, TagClass):
+            self._register_known_tag(tag)
         self._input_overrides.add_force(tag, value)
 
     def remove_force(self, tag: str | Tag) -> None:
@@ -441,6 +632,7 @@ class PLCRunner:
             # AutoMode and Fault forces released here
             ```
         """
+        self._register_known_tags_from_mapping_keys(overrides)
         with self._input_overrides.force(overrides):
             yield self
 
@@ -620,6 +812,7 @@ class PLCRunner:
 
         self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
         self._evaluate_breakpoints(state=self._state)
+        self._sync_runtime_flags_from_state()
 
     def _evaluate_monitors(
         self, *, previous_state: SystemState, current_state: SystemState
@@ -680,6 +873,7 @@ class PLCRunner:
 
         The commit in phase 8 only happens when the generator is exhausted.
         """
+        self._ensure_running()
         ctx, dt = self._prepare_scan()
 
         # Evaluate logic rung-by-rung, yielding at rung boundaries.
@@ -710,6 +904,7 @@ class PLCRunner:
             Like `scan_steps()`, the scan is committed only when the generator
             is **fully exhausted**.
         """
+        self._ensure_running()
         pending_scan_id = self._state.scan_id + 1
         events_by_rung: dict[int, list[RungTraceEvent]] = {}
         self._start_inflight_debug_scan(scan_id=pending_scan_id, events_by_rung=events_by_rung)
@@ -819,6 +1014,7 @@ class PLCRunner:
 
     def step(self) -> SystemState:
         """Execute one full scan cycle and return the committed state."""
+        self._ensure_running()
         return self._run_single_scan(consume_pause_request=True)
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
@@ -838,6 +1034,7 @@ class PLCRunner:
         Returns:
             The final SystemState after all cycles.
         """
+        self._ensure_running()
         for _ in range(cycles):
             self._consume_pause_request()
             self._run_single_scan(consume_pause_request=False)
@@ -854,6 +1051,7 @@ class PLCRunner:
         Returns:
             The final SystemState after reaching the target time.
         """
+        self._ensure_running()
         target_time = self._state.timestamp + seconds
         while self._state.timestamp < target_time:
             self._consume_pause_request()
@@ -877,6 +1075,7 @@ class PLCRunner:
         Returns:
             The state that matched the predicate, or final state if max reached.
         """
+        self._ensure_running()
         for _ in range(max_cycles):
             self._consume_pause_request()
             self._run_single_scan(consume_pause_request=False)

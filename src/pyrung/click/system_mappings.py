@@ -45,6 +45,7 @@ SYSTEM_CLICK_SLOTS = (
         system.sys.cmd_watchdog_reset, _hardware_tag("SC51"), "_Watchdog_Timer_Reset", False
     ),
     SystemClickSlot(system.sys.fixed_scan_mode, _hardware_tag("SC202"), "_Fixed_Scan_Mode", True),
+    SystemClickSlot(system.sys.battery_present, _hardware_tag("SC203"), "_Battery_Installed", True),
     SystemClickSlot(system.sys.scan_counter, _hardware_tag("SD9"), "_Scan_Counter", True),
     SystemClickSlot(
         system.sys.scan_time_current_ms, _hardware_tag("SD10"), "_Current_Scan_Time", True

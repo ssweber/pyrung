@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from pyrung.click import ClickDataProvider, TagMap, sc
-from pyrung.core import Bool, PLCRunner
+from pyrung.core import Bool, PLCRunner, system
 
 
 class _FrozenDateTime(datetime):
@@ -22,6 +22,7 @@ def test_tag_map_includes_system_points_by_default():
     mapping = TagMap()
 
     assert mapping.resolve("sys.first_scan") == "SC2"
+    assert mapping.resolve("sys.battery_present") == "SC203"
     assert mapping.resolve("fault.code") == "SD1"
     assert mapping.resolve("rtc.year4") == "SD19"
 
@@ -40,6 +41,7 @@ def test_system_mapped_slots_include_read_only_and_source_metadata():
     }
 
     assert system_slots["sys.first_scan"].read_only is True
+    assert system_slots["sys.battery_present"].read_only is True
     assert system_slots["rtc.new_year4"].read_only is False
     assert system_slots["rtc.apply_date"].read_only is False
 
@@ -102,3 +104,12 @@ def test_provider_write_to_writable_command_bits_routes_through_patch():
     assert runner.current_state.tags.get("rtc.apply_time", False) is False
     runner.step()
     assert runner.current_state.tags["rtc.apply_time"] is True
+
+
+def test_provider_write_sc50_stops_runner_immediately():
+    runner = PLCRunner(logic=[])
+    provider = ClickDataProvider(runner, TagMap())
+
+    provider.write("SC50", True)
+
+    assert runner.system_runtime.resolve(system.sys.mode_run.name, runner.current_state) == (True, False)

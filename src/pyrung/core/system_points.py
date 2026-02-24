@@ -31,6 +31,7 @@ class SysNamespace:
     cmd_mode_stop: Tag
     cmd_watchdog_reset: Tag
     fixed_scan_mode: Tag
+    battery_present: Tag
     scan_counter: Tag
     scan_time_current_ms: Tag
     scan_time_min_ms: Tag
@@ -107,6 +108,7 @@ system = SystemNamespaces(
         cmd_mode_stop=Bool("sys.cmd_mode_stop"),
         cmd_watchdog_reset=Bool("sys.cmd_watchdog_reset"),
         fixed_scan_mode=Bool("sys.fixed_scan_mode"),
+        battery_present=Bool("sys.battery_present"),
         scan_counter=Int("sys.scan_counter", retentive=False),
         scan_time_current_ms=Int("sys.scan_time_current_ms", retentive=False),
         scan_time_min_ms=Int("sys.scan_time_min_ms", retentive=False),
@@ -190,6 +192,7 @@ _DERIVED_TAG_NAMES = frozenset(
         system.sys.mode_switch_run.name,
         system.sys.mode_run.name,
         system.sys.fixed_scan_mode.name,
+        system.sys.battery_present.name,
         system.sys.scan_time_current_ms.name,
         system.sys.scan_time_fixed_setup_ms.name,
         system.sys.interrupt_scan_time_ms.name,
@@ -218,6 +221,7 @@ _CLOCK_HALF_PERIODS = {
 }
 _RTC_OFFSET_KEY = "_sys.rtc.offset"
 _MODE_RUN_KEY = "_sys.mode.run"
+_BATTERY_PRESENT_KEY = "_sys.battery_present"
 
 
 def _click_weekday(value: datetime) -> int:
@@ -306,6 +310,8 @@ class SystemPointRuntime:
             from pyrung.core.time_mode import TimeMode
 
             return True, self._time_mode_getter() == TimeMode.FIXED_STEP
+        if name == system.sys.battery_present.name:
+            return True, bool(_raw_get_memory(ctx_or_state, _BATTERY_PRESENT_KEY, True))
         if name == system.sys.scan_time_current_ms.name:
             return True, self._scan_time_current_ms(ctx_or_state)
         if name == system.sys.scan_time_fixed_setup_ms.name:
@@ -372,6 +378,8 @@ class SystemPointRuntime:
             ctx.set_memory(_RTC_OFFSET_KEY, timedelta())
         if not _raw_has_memory(ctx, _MODE_RUN_KEY):
             ctx.set_memory(_MODE_RUN_KEY, True)
+        if not _raw_has_memory(ctx, _BATTERY_PRESENT_KEY):
+            ctx.set_memory(_BATTERY_PRESENT_KEY, True)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
         ctx._set_tags_internal(

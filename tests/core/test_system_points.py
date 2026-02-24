@@ -40,10 +40,30 @@ def _resolved(runner: PLCRunner, tag_name: str):
 
 def test_system_namespace_shape_and_names():
     assert system.sys.first_scan.name == "sys.first_scan"
+    assert system.sys.battery_present.name == "sys.battery_present"
     assert system.sys.scan_counter.name == "sys.scan_counter"
     assert system.fault.division_error.name == "fault.division_error"
     assert system.rtc.apply_time.name == "rtc.apply_time"
     assert system.firmware.main_ver_low.name == "firmware.main_ver_low"
+
+
+def test_battery_present_is_read_only_and_defaults_true():
+    runner = PLCRunner(logic=[])
+
+    assert _resolved(runner, system.sys.battery_present.name) is True
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.patch({system.sys.battery_present.name: False})
+
+
+def test_set_battery_present_updates_resolved_value():
+    runner = PLCRunner(logic=[])
+
+    runner.set_battery_present(False)
+    assert _resolved(runner, system.sys.battery_present.name) is False
+
+    runner.set_battery_present(True)
+    assert _resolved(runner, system.sys.battery_present.name) is True
 
 
 def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode():
