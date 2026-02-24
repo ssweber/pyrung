@@ -501,6 +501,16 @@ class TestIndirectConditions:
         state = SystemState().with_tags({"Index": 50, "DS50": 99})
         assert evaluate_condition(cond, state) is False
 
+    def test_indirect_eq_rhs_missing_tag_uses_default(self):
+        """IndirectRef == Tag uses tag defaults when rhs tag is missing."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        Index = Int("Index")
+        Step = Int("Step")
+        cond = DS[Index] == Step
+
+        state = SystemState().with_tags({"Index": 1, "DS1": 0})
+        assert evaluate_condition(cond, state) is True
+
     def test_indirect_ne(self):
         """IndirectRef != value creates condition."""
         DS = Block("DS", TagType.INT, 1, 4500)
@@ -510,6 +520,16 @@ class TestIndirectConditions:
         cond = indirect != 100
         state = SystemState().with_tags({"Index": 50, "DS50": 99})
         assert evaluate_condition(cond, state) is True
+
+    def test_indirect_ne_rhs_missing_tag_uses_default(self):
+        """IndirectRef != Tag uses tag defaults when rhs tag is missing."""
+        DS = Block("DS", TagType.INT, 1, 4500)
+        Index = Int("Index")
+        Step = Int("Step")
+        cond = DS[Index] != Step
+
+        state = SystemState().with_tags({"Index": 1, "DS1": 0})
+        assert evaluate_condition(cond, state) is False
 
     def test_indirect_lt(self):
         """IndirectRef < value creates condition."""

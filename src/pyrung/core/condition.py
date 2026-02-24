@@ -300,7 +300,7 @@ class IndirectCompareEq(Condition):
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         if isinstance(self.value, Tag):
-            other_value = ctx.get_tag(self.value.name)
+            other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
             other_value = self.value
         return resolved_value == other_value
@@ -319,7 +319,7 @@ class IndirectCompareNe(Condition):
         resolved_tag = self.indirect_ref.resolve_ctx(ctx)
         resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
         if isinstance(self.value, Tag):
-            other_value = ctx.get_tag(self.value.name)
+            other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
             other_value = self.value
         return resolved_value != other_value
