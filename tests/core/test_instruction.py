@@ -1900,7 +1900,7 @@ class TestPackTextInstruction:
         new_state = execute(instr, state)
         assert new_state.tags["Dest"] == 0xABCD
 
-    def test_pack_text_whitespace_rejected_without_option(self):
+    def test_pack_text_rejects_whitespace_when_option_disabled(self):
         from pyrung.core.instruction import PackTextInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
@@ -1911,7 +1911,7 @@ class TestPackTextInstruction:
         assert new_state.tags["fault.out_of_range"] is True
         assert new_state.tags["Dest"] == 77
 
-    def test_pack_text_allow_whitespace_trims_without_fault(self):
+    def test_pack_text_trims_whitespace_when_enabled_and_sets_no_fault(self):
         from pyrung.core.instruction import PackTextInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)

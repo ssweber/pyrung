@@ -785,6 +785,6 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
             await server_b.stop()
 
 
-def test_transient_peer_outage_then_auto_recovery_without_reenable():
+def test_transient_peer_outage_auto_recovers_without_manual_reenable():
     logs = asyncio.run(_run_transient_peer_outage_auto_recovery())
     assert logs

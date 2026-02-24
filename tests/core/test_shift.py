@@ -266,7 +266,7 @@ class TestShiftBuilder:
                 with Rung(Data):
                     shift(C.select(1, 3)).reset(Reset)
 
-    def test_clock_without_final_reset_raises(self):
+    def test_shift_builder_requires_clock_then_reset_chain_completion(self):
         Data = Bool("Data")
         Clock = Bool("Clock")
         C = Block("C", TagType.BOOL, 1, 100)

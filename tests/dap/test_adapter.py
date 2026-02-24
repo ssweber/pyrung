@@ -543,7 +543,7 @@ def test_launch_with_runner_emits_entry_stop(tmp_path: Path):
     assert adapter._runner is not None
 
 
-def test_launch_wraps_single_program_when_runner_missing(tmp_path: Path):
+def test_launch_wraps_single_program_when_runner_is_omitted(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "program_only.py", _program_only_script())
@@ -1402,7 +1402,7 @@ def test_launch_sets_dap_env_flag_to_skip_script_autorun(tmp_path: Path):
     assert adapter._current_step.kind == "instruction"
 
 
-def test_stepin_after_branch_becomes_unpowered_stays_on_top_rung(tmp_path: Path):
+def test_stepin_with_unpowered_branch_stays_on_top_rung(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(
@@ -1913,7 +1913,7 @@ def test_evaluate_watch_uses_pending_values_mid_scan(tmp_path: Path):
     assert response["body"]["result"] == "True"
 
 
-def test_evaluate_watch_missing_reference_returns_error(tmp_path: Path):
+def test_evaluate_watch_unknown_reference_returns_error(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -1953,7 +1953,7 @@ def test_evaluate_repl_non_command_points_to_watch(tmp_path: Path):
     assert "Use Watch for predicate expressions." in response["message"]
 
 
-def test_set_breakpoints_with_condition_stops_only_when_true(tmp_path: Path):
+def test_conditional_breakpoint_stops_when_condition_is_true(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(
@@ -2149,7 +2149,7 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     assert snapshot_scan_id == 1
 
 
-def test_plain_logpoint_emits_output_without_stopping(tmp_path: Path):
+def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())
@@ -2317,7 +2317,7 @@ def test_step_next_emits_snapshot_event_and_labels_history(tmp_path: Path):
     assert int(matches[0]["scanId"]) == snapshot_scan_id
 
 
-def test_step_next_with_source_breakpoint_still_reports_step_reason(tmp_path: Path):
+def test_next_with_source_breakpoint_reports_step_reason(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "monitor_change.py", _monitor_change_script())

@@ -12,7 +12,7 @@ def _scan_ids(states: list[SystemState]) -> list[int]:
     return [state.scan_id for state in states]
 
 
-def test_pause_breakpoint_halts_run_after_triggering_commit() -> None:
+def test_pause_breakpoint_stops_run_on_trigger_scan() -> None:
     runner = PLCRunner(logic=[])
     runner.when(lambda state: state.scan_id >= 3).pause()
 
@@ -41,7 +41,7 @@ def test_pause_breakpoint_halts_run_until_even_when_predicate_is_false() -> None
     assert runner.current_state.scan_id == 2
 
 
-def test_snapshot_breakpoint_labels_history_without_halting() -> None:
+def test_snapshot_breakpoint_labels_history_and_run_continues() -> None:
     runner = PLCRunner(logic=[])
     runner.when(lambda state: state.scan_id > 0 and state.scan_id % 2 == 0).snapshot("even")
 
@@ -121,7 +121,7 @@ def test_breakpoint_predicate_exceptions_propagate() -> None:
         runner.step()
 
 
-def test_step_consumes_pause_request_without_persisting_it() -> None:
+def test_pause_request_is_consumed_by_single_step() -> None:
     runner = PLCRunner(logic=[])
     runner.when(lambda state: state.scan_id == 1).pause()
 

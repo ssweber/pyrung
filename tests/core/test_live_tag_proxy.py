@@ -29,7 +29,7 @@ def test_live_value_requires_active_runner_scope() -> None:
         flag.value = True  # type: ignore[invalid-assignment]
 
 
-def test_live_value_stages_write_and_reads_pending_before_step() -> None:
+def test_live_value_reads_pending_write_until_next_step() -> None:
     count = Int("Count")
     runner = PLCRunner(logic=[], initial_state=SystemState().with_tags({"Count": 7}))
 
@@ -44,7 +44,7 @@ def test_live_value_stages_write_and_reads_pending_before_step() -> None:
     assert runner._pending_patches == {}
 
 
-def test_live_value_reads_default_when_tag_absent() -> None:
+def test_live_value_uses_tag_default_when_absent() -> None:
     count = Int("Count")
     runner = PLCRunner(logic=[])
 

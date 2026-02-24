@@ -56,7 +56,7 @@ def test_write_mapped_tag_is_deferred_until_next_scan():
     assert runner.current_state.tags["Valve"] is True
 
 
-def test_multiple_mapped_writes_before_scan_last_write_wins():
+def test_pending_mapped_writes_last_value_wins_on_commit():
     valve = Tag("Valve", TagType.BOOL)
     mapping = TagMap({valve: c[1]})
     runner = PLCRunner(logic=[])
@@ -117,7 +117,7 @@ def test_yd0_reflects_y001_to_y016_bit_image():
     assert provider.read("YD0") == 0x55AA
 
 
-def test_write_yd0_fans_out_to_y001_to_y016_after_next_scan():
+def test_write_yd0_updates_y001_to_y016_on_next_scan():
     outputs = Block("Out", TagType.BOOL, 1, 16)
     mapping = TagMap({outputs: y.select(1, 16)})
     runner = PLCRunner(logic=[])
@@ -131,7 +131,7 @@ def test_write_yd0_fans_out_to_y001_to_y016_after_next_scan():
     assert provider.read("YD0") == 0xA55A
 
 
-def test_write_yd0u_fans_out_to_y021_to_y036_after_next_scan():
+def test_write_yd0u_updates_y021_to_y036_on_next_scan():
     outputs = Block("UpperOut", TagType.BOOL, 1, 16)
     mapping = TagMap({outputs: y.select(21, 36)})
     runner = PLCRunner(logic=[])
@@ -201,7 +201,7 @@ def test_non_xy_banks_preserve_existing_runtime_behavior():
     assert provider.read("TXT1") == "A"
 
 
-def test_mapped_txt_write_accepts_string_and_becomes_visible_after_next_scan():
+def test_mapped_txt_write_is_visible_after_next_scan():
     letter = Tag("Letter", TagType.CHAR)
     mapping = TagMap({letter: txt[1]})
     runner = PLCRunner(logic=[])
@@ -230,7 +230,7 @@ def test_address_normalization_supports_case_and_zero_padding():
     assert provider.read("X001") is True
 
 
-def test_mapped_read_default_precedence_uses_override_then_slot_default():
+def test_mapped_read_uses_override_default_then_tag_default_precedence():
     count = Tag("Count", TagType.INT, default=5)
     total = Tag("Total", TagType.INT, default=4)
     mapping = TagMap({count: ds[1], total: ds[2]})

@@ -32,7 +32,7 @@ def test_history_appends_one_snapshot_per_step() -> None:
     assert runner.history.at(2) is runner.current_state
 
 
-def test_history_at_returns_state_and_raises_for_missing_scan() -> None:
+def test_history_at_returns_state_and_raises_for_unknown_scan() -> None:
     runner = PLCRunner(logic=[])
     runner.run(cycles=3)
 
@@ -52,7 +52,7 @@ def test_history_range_is_start_inclusive_end_exclusive() -> None:
     assert runner.history.range(9, 12) == []
 
 
-def test_history_latest_orders_oldest_to_newest_and_handles_bounds() -> None:
+def test_history_latest_returns_chronological_window_with_bounds() -> None:
     runner = PLCRunner(logic=[])
     runner.run(cycles=4)
 
@@ -69,7 +69,7 @@ def test_unbounded_history_retains_all_scans() -> None:
     assert _scan_ids(runner) == [0, 1, 2, 3, 4, 5, 6]
 
 
-def test_bounded_history_evicts_oldest_first() -> None:
+def test_bounded_history_evicts_oldest_scans() -> None:
     runner = PLCRunner(logic=[], history_limit=3)
 
     runner.step()  # [0, 1]
@@ -98,7 +98,7 @@ def test_history_enforces_monotonic_scan_order_when_appending() -> None:
         history._append(SystemState())
 
 
-def test_playhead_defaults_to_current_scan_and_follows_tip() -> None:
+def test_playhead_starts_at_tip_and_tracks_new_scans() -> None:
     runner = PLCRunner(logic=[])
 
     assert runner.playhead == 0
@@ -108,7 +108,7 @@ def test_playhead_defaults_to_current_scan_and_follows_tip() -> None:
     assert runner.playhead == 2
 
 
-def test_seek_moves_playhead_without_changing_execution_tip() -> None:
+def test_seek_repositions_playhead_without_advancing_tip() -> None:
     runner = PLCRunner(logic=[])
     runner.run(cycles=3)
 
@@ -118,14 +118,14 @@ def test_seek_moves_playhead_without_changing_execution_tip() -> None:
     assert runner.current_state.scan_id == 3
 
 
-def test_seek_raises_for_missing_scan() -> None:
+def test_seek_raises_for_unknown_scan() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(KeyError):
         runner.seek(99)
 
 
-def test_rewind_moves_to_nearest_scan_at_or_before_target_timestamp() -> None:
+def test_rewind_selects_latest_scan_not_after_target_time() -> None:
     runner = PLCRunner(logic=[])
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.5)
     runner.run(cycles=5)  # scan 5 @ 2.5s
@@ -137,7 +137,7 @@ def test_rewind_moves_to_nearest_scan_at_or_before_target_timestamp() -> None:
     assert runner.playhead == 3
 
 
-def test_rewind_clamps_to_oldest_retained_scan_when_target_is_before_history() -> None:
+def test_rewind_clamps_to_oldest_retained_scan_for_early_target_time() -> None:
     runner = PLCRunner(logic=[], history_limit=3)
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=1.0)
     runner.run(cycles=5)  # retained scans are [3, 4, 5]
@@ -179,7 +179,7 @@ def test_playhead_moves_to_oldest_retained_scan_when_evicted() -> None:
     assert runner.playhead == 3
 
 
-def test_diff_returns_only_changed_tags_sorted_and_treats_missing_as_none() -> None:
+def test_diff_sorts_keys_and_represents_absent_tags_as_none() -> None:
     initial = SystemState().with_tags({"B": 0, "A": 0})
     runner = PLCRunner(logic=[], initial_state=initial)
 
@@ -213,7 +213,7 @@ def test_diff_reflects_system_tag_changes_between_scans() -> None:
     assert runner.diff(1, 2) == {"sys.scan_counter": (1, 2)}
 
 
-def test_diff_raises_for_missing_scan() -> None:
+def test_diff_raises_for_unknown_scan() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(KeyError):
@@ -283,14 +283,14 @@ def test_fork_from_starts_clean_and_parent_fork_evolve_independently() -> None:
     assert _scan_ids(fork) == [1, 2]
 
 
-def test_fork_from_raises_for_missing_scan() -> None:
+def test_fork_from_raises_for_unknown_scan() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(KeyError):
         runner.fork_from(999)
 
 
-def test_history_find_and_find_all_return_missing_results_for_unknown_label() -> None:
+def test_history_find_apis_return_empty_results_for_unknown_label() -> None:
     history = History(SystemState())
 
     assert history.find("missing") is None
@@ -313,7 +313,7 @@ def test_history_label_scan_supports_find_find_all_and_dedup_per_scan() -> None:
     assert [state.scan_id for state in history.find_all("fault")] == [1, 2]
 
 
-def test_history_label_scan_raises_for_missing_scan() -> None:
+def test_history_label_scan_raises_for_unknown_scan() -> None:
     history = History(SystemState())
 
     with pytest.raises(KeyError):

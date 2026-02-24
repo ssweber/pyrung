@@ -181,7 +181,7 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
     assert runner.current_state.tags["TopLight"] is True
 
 
-def test_scan_steps_debug_handles_return_early_signal_and_still_yields_return_earlyrung():
+def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs():
     first = Bool("First")
     skipped = Bool("Skipped")
     done = Bool("Done")
@@ -230,7 +230,7 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
     assert runner.current_state.tags["BranchOut"] is False
 
 
-def test_scan_steps_debug_respects_source_order_branch_before_call():
+def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
     step = Int("Step")
     auto = Bool("Auto")
     branch_done = Bool("BranchDone")

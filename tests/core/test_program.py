@@ -1278,7 +1278,7 @@ class TestBranch:
             evaluate_condition(captured_condition, state(Step=1, Mode=False)) is False
         )  # Both false
 
-    def test_branch_source_order_before_later_instruction(self):
+    def test_branch_effects_apply_before_later_call_in_same_rung(self):
         """Branch side effects apply before later same-rung instructions in source order."""
         from pyrung.core.program import Program, Rung, branch, call, copy, out, subroutine
 
@@ -1697,7 +1697,7 @@ class TestSubroutineDecorator:
         assert runner.current_state.tags["Light1"] is True
         assert runner.current_state.tags["Light2"] is True
 
-    def test_call_still_accepts_string(self):
+    def test_call_accepts_string_subroutine_name(self):
         """Existing string-based call() API is unchanged."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 

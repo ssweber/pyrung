@@ -31,7 +31,9 @@ def test_call_activates_task_and_enters_step_1(task_example: ModuleType) -> None
         assert task_example.Task.Step.value == 1
 
 
-def test_step_timer_runs_and_transitions_after_5_seconds(task_example: ModuleType) -> None:
+def test_step_timer_reaches_5s_then_transitions_to_steps_2_and_3(
+    task_example: ModuleType,
+) -> None:
     runner = task_example.runner
 
     with runner.active():

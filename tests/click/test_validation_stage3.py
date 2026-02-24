@@ -160,7 +160,7 @@ def test_unmapped_target_emits_bank_unresolved():
     assert CLK_BANK_UNRESOLVED in _codes(report)
 
 
-def test_profile_unavailable_still_runs_stage2(monkeypatch):
+def test_profile_unavailable_still_reports_stage2_findings(monkeypatch):
     a = Int("A")
     dest = Int("Dest")
 

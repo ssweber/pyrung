@@ -30,7 +30,7 @@ def test_parse_args_parses_required_field() -> None:
     assert parsed.program == "x.py"
 
 
-def test_parse_args_rejects_missing_required_field() -> None:
+def test_parse_args_rejects_omitted_required_field() -> None:
     with pytest.raises(_ParseError, match="Missing required field: program"):
         parse_args(_LaunchArgs, {}, error=_ParseError)
 
@@ -60,7 +60,7 @@ def test_parse_args_rejects_failed_coercion() -> None:
         )
 
 
-def test_parse_args_allows_optional_field_none() -> None:
+def test_parse_args_accepts_none_for_optional_field() -> None:
     parsed = parse_args(
         _VariablesArgs,
         {"variablesReference": 1, "optionalName": None},

@@ -228,7 +228,7 @@ def test_udt_numbered_forces_numbered_names_for_count_one():
     assert alarm[1].id.name == "Alarm1_id"
 
 
-def test_udt_numbered_is_noop_for_count_greater_than_one():
+def test_udt_numbered_has_no_effect_when_count_greater_than_one():
     @udt(count=3, numbered=True)
     class Alarm:
         id: Int
