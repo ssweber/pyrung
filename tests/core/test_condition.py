@@ -28,14 +28,14 @@ class TestCompareEq:
 
         assert evaluate_condition(cond, state) is False
 
-    def test_eq_with_missing_tag_is_none(self):
-        """Missing tag returns None, which != most values."""
+    def test_eq_with_missing_tag_uses_default(self):
+        """Missing tag uses tag default, so Int('Step') == 0 is True."""
         Step = Int("Step")
         cond = Step == 0
 
         state = SystemState()  # No "Step" tag
 
-        assert evaluate_condition(cond, state) is False  # None != 0
+        assert evaluate_condition(cond, state) is True  # default 0 == 0
 
 
 class TestCompareNe:

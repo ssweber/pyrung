@@ -126,9 +126,9 @@ class CompareEq(Condition):
     def evaluate(self, ctx: ScanContext) -> bool:
         from pyrung.core.tag import Tag
 
-        tag_value = ctx.get_tag(self.tag.name)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         if isinstance(self.value, Tag):
-            other_value = ctx.get_tag(self.value.name)
+            other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
             other_value = self.value
         return tag_value == other_value
@@ -144,9 +144,9 @@ class CompareNe(Condition):
     def evaluate(self, ctx: ScanContext) -> bool:
         from pyrung.core.tag import Tag
 
-        tag_value = ctx.get_tag(self.tag.name)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         if isinstance(self.value, Tag):
-            other_value = ctx.get_tag(self.value.name)
+            other_value = ctx.get_tag(self.value.name, self.value.default)
         else:
             other_value = self.value
         return tag_value != other_value
@@ -172,7 +172,7 @@ class CompareLt(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        tag_value = ctx.get_tag(self.tag.name, 0)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         other_value = _resolve_value(self.value, ctx)
         return tag_value < other_value
 
@@ -185,7 +185,7 @@ class CompareLe(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        tag_value = ctx.get_tag(self.tag.name, 0)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         other_value = _resolve_value(self.value, ctx)
         return tag_value <= other_value
 
@@ -198,7 +198,7 @@ class CompareGt(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        tag_value = ctx.get_tag(self.tag.name, 0)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         other_value = _resolve_value(self.value, ctx)
         return tag_value > other_value
 
@@ -211,7 +211,7 @@ class CompareGe(Condition):
         self.value = value
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        tag_value = ctx.get_tag(self.tag.name, 0)
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
         other_value = _resolve_value(self.value, ctx)
         return tag_value >= other_value
 
