@@ -68,7 +68,7 @@ Tags are plain Python objects. You can pass them around, store them in lists, us
 | `Int(name)` | `INT` | 16-bit signed | True |
 | `Dint(name)` | `DINT` | 32-bit signed | True |
 | `Real(name)` | `REAL` | 32-bit float | True |
-| `Word(name)` | `WORD` | 16-bit unsigned | False |
+| `Word(name)` | `WORD` | 16-bit unsigned | True |
 | `Char(name)` | `CHAR` | 8-bit ASCII | True |
 
 ### Retentive vs non-retentive

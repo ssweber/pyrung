@@ -163,12 +163,12 @@ class TestWordHelper:
         assert tag.type == TagType.WORD
         assert tag.default == 0
 
-    def test_word_default_not_retentive(self):
-        """Word() defaults to non-retentive."""
+    def test_word_default_retentive(self):
+        """Word() defaults to retentive."""
         from pyrung.core.tag import Word
 
         tag = Word("Flags")
-        assert tag.retentive is False
+        assert tag.retentive is True
 
     def test_word_retentive(self):
         """Word() can be made retentive."""

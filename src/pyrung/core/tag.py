@@ -656,7 +656,7 @@ class Real(_TagTypeBase):
 class Word(_TagTypeBase):
     """Create a WORD (16-bit unsigned integer, 0x0000–0xFFFF) tag.
 
-    Not retentive by default. Use for bit-packed status registers or hex values.
+    Retentive by default. Use for bit-packed status registers or hex values.
     In the Click dialect, `Hex` is an alias for `Word`.
 
     Example:
@@ -666,7 +666,7 @@ class Word(_TagTypeBase):
     """
 
     _tag_type = TagType.WORD
-    _default_retentive = False
+    _default_retentive = True
 
 
 class Char(_TagTypeBase):

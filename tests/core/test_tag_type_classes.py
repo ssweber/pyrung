@@ -17,7 +17,7 @@ from pyrung.core.tag import LiveTag
         (Int, TagType.INT, True, 0),
         (Dint, TagType.DINT, True, 0),
         (Real, TagType.REAL, True, 0.0),
-        (Word, TagType.WORD, False, 0),
+        (Word, TagType.WORD, True, 0),
         (Char, TagType.CHAR, True, ""),
     ],
 )
