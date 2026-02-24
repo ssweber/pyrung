@@ -36,6 +36,7 @@ def _capture_rung_condition_and_source(
 ) -> tuple[Any, str | None, int | None]:
     """Capture current rung combined condition and source location."""
     ctx = _require_rung_context(func_name)
+    ctx._assert_no_pending_required_builder(func_name)
     source_file, source_line = _capture_source(depth=source_depth)
     return ctx._rung._get_combined_condition(), source_file, source_line
 
@@ -83,6 +84,15 @@ class _BuilderBase:
         instruction.source_file, instruction.source_line = self._source_file, self._source_line
         self._rung._rung.add_instruction(instruction)
 
+    def _register_required_builder(self, descriptor: str) -> None:
+        self._rung._set_pending_required_builder(self, descriptor)
+
+    def _assert_required_builder_owner(self, method_name: str) -> None:
+        self._rung._assert_pending_required_builder_owner(self, method_name)
+
+    def _resolve_required_builder(self) -> None:
+        self._rung._clear_pending_required_builder(self)
+
 
 class _AutoFinalizeBuilderBase(_BuilderBase):
     """Base for builders that can finalize once via explicit call or __del__."""
@@ -109,6 +119,7 @@ class ShiftBuilder(_BuilderBase):
         source_line: int | None = None,
     ):
         super().__init__(func_name="shift", source_file=source_file, source_line=source_line)
+        self._register_required_builder("shift(...).clock(...).reset(...)")
         self._bit_range = bit_range
         self._data_condition = data_condition
         self._clock_condition: Condition | Tag | None = None
@@ -119,46 +130,53 @@ class ShiftBuilder(_BuilderBase):
 
     def clock(self, condition: Condition | Tag) -> ShiftBuilder:
         """Set the shift clock trigger condition."""
+        self._assert_required_builder_owner("clock")
         self._clock_source_file, self._clock_source_line = _capture_chained_method_source()
         self._clock_condition = condition
         return self
 
     def reset(self, condition: Condition | Tag) -> BlockRange | IndirectBlockRange:
         """Finalize the shift instruction with required reset condition."""
+        self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         if self._clock_condition is None:
             raise RuntimeError("shift().clock(...) must be called before shift().reset(...)")
 
-        instr = ShiftInstruction(
-            bit_range=self._bit_range,
-            data_condition=self._data_condition,
-            clock_condition=self._clock_condition,
-            reset_condition=condition,
-        )
-        instr.debug_substeps = (
-            DebugInstructionSubStep(
-                instruction_kind="Data",
-                source_file=self._source_file,
-                source_line=self._source_line,
-                eval_mode="enabled",
-                expression="Data",
-            ),
-            DebugInstructionSubStep(
-                instruction_kind="Clock",
-                source_file=self._clock_source_file or self._source_file,
-                source_line=self._clock_source_line or self._source_line,
-                eval_mode="condition",
-                condition=instr.clock_condition,
-            ),
-            DebugInstructionSubStep(
-                instruction_kind="Reset",
-                source_file=self._reset_source_file or self._source_file,
-                source_line=self._reset_source_line or self._source_line,
-                eval_mode="condition",
-                condition=instr.reset_condition,
-            ),
-        )
-        self._append_instruction(instr)
+        try:
+            instr = ShiftInstruction(
+                bit_range=self._bit_range,
+                data_condition=self._data_condition,
+                clock_condition=self._clock_condition,
+                reset_condition=condition,
+            )
+            instr.debug_substeps = (
+                DebugInstructionSubStep(
+                    instruction_kind="Data",
+                    source_file=self._source_file,
+                    source_line=self._source_line,
+                    eval_mode="enabled",
+                    expression="Data",
+                ),
+                DebugInstructionSubStep(
+                    instruction_kind="Clock",
+                    source_file=self._clock_source_file or self._source_file,
+                    source_line=self._clock_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=instr.clock_condition,
+                ),
+                DebugInstructionSubStep(
+                    instruction_kind="Reset",
+                    source_file=self._reset_source_file or self._source_file,
+                    source_line=self._reset_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=instr.reset_condition,
+                ),
+            )
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
         return self._bit_range
 
 
@@ -202,6 +220,7 @@ class CountUpBuilder(_BuilderBase):
         source_line: int | None = None,
     ):
         super().__init__(func_name="count_up", source_file=source_file, source_line=source_line)
+        self._register_required_builder("count_up(...).reset(...)")
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._preset = preset
@@ -225,6 +244,7 @@ class CountUpBuilder(_BuilderBase):
         Returns:
             Self for chaining.
         """
+        self._assert_required_builder_owner("down")
         self._down_source_file, self._down_source_line = _capture_chained_method_source()
         self._down_condition = condition
         return self
@@ -240,47 +260,53 @@ class CountUpBuilder(_BuilderBase):
         Returns:
             The done bit tag.
         """
+        self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         self._reset_condition = condition
-        # Now build and add the instruction
-        instr = CountUpInstruction(
-            self._done_bit,
-            self._accumulator,
-            self._preset,
-            self._up_condition,
-            self._reset_condition,
-            self._down_condition,
-        )
-        substeps: list[DebugInstructionSubStep] = [
-            DebugInstructionSubStep(
-                instruction_kind="Count Up",
-                source_file=self._source_file,
-                source_line=self._source_line,
-                eval_mode="enabled",
-                expression="Count Up",
+        try:
+            # Now build and add the instruction
+            instr = CountUpInstruction(
+                self._done_bit,
+                self._accumulator,
+                self._preset,
+                self._up_condition,
+                self._reset_condition,
+                self._down_condition,
             )
-        ]
-        if instr.down_condition is not None:
+            substeps: list[DebugInstructionSubStep] = [
+                DebugInstructionSubStep(
+                    instruction_kind="Count Up",
+                    source_file=self._source_file,
+                    source_line=self._source_line,
+                    eval_mode="enabled",
+                    expression="Count Up",
+                )
+            ]
+            if instr.down_condition is not None:
+                substeps.append(
+                    DebugInstructionSubStep(
+                        instruction_kind="Count Down",
+                        source_file=self._down_source_file or self._source_file,
+                        source_line=self._down_source_line or self._source_line,
+                        eval_mode="condition",
+                        condition=instr.down_condition,
+                    )
+                )
             substeps.append(
                 DebugInstructionSubStep(
-                    instruction_kind="Count Down",
-                    source_file=self._down_source_file or self._source_file,
-                    source_line=self._down_source_line or self._source_line,
+                    instruction_kind="Reset",
+                    source_file=self._reset_source_file or self._source_file,
+                    source_line=self._reset_source_line or self._source_line,
                     eval_mode="condition",
-                    condition=instr.down_condition,
+                    condition=instr.reset_condition,
                 )
             )
-        substeps.append(
-            DebugInstructionSubStep(
-                instruction_kind="Reset",
-                source_file=self._reset_source_file or self._source_file,
-                source_line=self._reset_source_line or self._source_line,
-                eval_mode="condition",
-                condition=instr.reset_condition,
-            )
-        )
-        instr.debug_substeps = tuple(substeps)
-        self._append_instruction(instr)
+            instr.debug_substeps = tuple(substeps)
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
         return self._done_bit
 
 
@@ -301,6 +327,7 @@ class CountDownBuilder(_BuilderBase):
         source_line: int | None = None,
     ):
         super().__init__(func_name="count_down", source_file=source_file, source_line=source_line)
+        self._register_required_builder("count_down(...).reset(...)")
         self._done_bit = done_bit
         self._accumulator = accumulator
         self._preset = preset
@@ -321,33 +348,39 @@ class CountDownBuilder(_BuilderBase):
         Returns:
             The done bit tag.
         """
+        self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         self._reset_condition = condition
-        # Now build and add the instruction
-        instr = CountDownInstruction(
-            self._done_bit,
-            self._accumulator,
-            self._preset,
-            self._down_condition,
-            self._reset_condition,
-        )
-        instr.debug_substeps = (
-            DebugInstructionSubStep(
-                instruction_kind="Count Down",
-                source_file=self._source_file,
-                source_line=self._source_line,
-                eval_mode="enabled",
-                expression="Count Down",
-            ),
-            DebugInstructionSubStep(
-                instruction_kind="Reset",
-                source_file=self._reset_source_file or self._source_file,
-                source_line=self._reset_source_line or self._source_line,
-                eval_mode="condition",
-                condition=instr.reset_condition,
-            ),
-        )
-        self._append_instruction(instr)
+        try:
+            # Now build and add the instruction
+            instr = CountDownInstruction(
+                self._done_bit,
+                self._accumulator,
+                self._preset,
+                self._down_condition,
+                self._reset_condition,
+            )
+            instr.debug_substeps = (
+                DebugInstructionSubStep(
+                    instruction_kind="Count Down",
+                    source_file=self._source_file,
+                    source_line=self._source_line,
+                    eval_mode="enabled",
+                    expression="Count Down",
+                ),
+                DebugInstructionSubStep(
+                    instruction_kind="Reset",
+                    source_file=self._reset_source_file or self._source_file,
+                    source_line=self._reset_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=instr.reset_condition,
+                ),
+            )
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
         return self._done_bit
 
 
@@ -426,8 +459,8 @@ def count_down(
 class OnDelayBuilder(_AutoFinalizeBuilderBase):
     """Builder for on_delay instruction with optional .reset() chaining (Click-style).
 
-    Without .reset(): TON behavior (auto-reset on rung false)
-    With .reset(): RTON behavior (manual reset required)
+    Without .reset(): TON behavior (auto-reset on rung false, non-terminal)
+    With .reset(): RTON behavior (manual reset required, terminal)
     """
 
     def __init__(
@@ -561,8 +594,8 @@ def on_delay(
             on_delay(done_bit, acc, preset=5000)                 # TON
             on_delay(done_bit, acc, preset=5000).reset(ResetBtn) # RTON
 
-    This is a terminal instruction (must be last in rung).
-    Optional .reset() chaining for retentive behavior.
+    Without .reset(), this is TON and remains composable in-rung.
+    With .reset(), this is RTON and becomes terminal in the current flow.
 
     Args:
         done_bit: Tag to set when accumulator >= preset.
@@ -601,7 +634,7 @@ def off_delay(
         with Rung(MotorCommand):
             off_delay(done_bit, acc, preset=10000)
 
-    This is a terminal instruction (must be last in rung).
+    Off-delay timers are composable in-rung (not terminal).
 
     Args:
         done_bit: Tag that stays True for preset time after rung goes false.

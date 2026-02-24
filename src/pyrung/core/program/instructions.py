@@ -59,6 +59,7 @@ def _capture_instruction_context(
 ) -> tuple[Any, str | None, int | None]:
     """Capture required rung context and source location for a DSL instruction call."""
     ctx = _require_rung_context(func_name)
+    ctx._assert_no_pending_required_builder(func_name)
     source_file, source_line = _capture_source(depth=source_depth)
     return ctx, source_file, source_line
 

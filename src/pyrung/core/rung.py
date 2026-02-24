@@ -46,6 +46,7 @@ class Rung:
         self._instructions: list[Instruction] = []
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
+        self._terminal_instruction: Instruction | None = None
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
@@ -58,6 +59,13 @@ class Rung:
 
     def add_instruction(self, instruction: Instruction) -> None:
         """Add an instruction to execute when conditions are true."""
+        if self._terminal_instruction is not None:
+            terminal_name = type(self._terminal_instruction).__name__
+            current_name = type(instruction).__name__
+            raise RuntimeError(
+                f"{terminal_name} is terminal in this flow and must be last; "
+                f"cannot add instruction {current_name}."
+            )
         if getattr(instruction, "end_line", None) is None:
             end_line = _capture_call_end_line(
                 getattr(instruction, "source_file", None),
@@ -67,9 +75,17 @@ class Rung:
                 instruction.end_line = end_line
         self._instructions.append(instruction)
         self._execution_items.append(instruction)
+        if instruction.is_terminal():
+            self._terminal_instruction = instruction
 
     def add_branch(self, branch: Rung) -> None:
         """Add a nested branch (parallel path) to this rung."""
+        if self._terminal_instruction is not None:
+            terminal_name = type(self._terminal_instruction).__name__
+            raise RuntimeError(
+                f"{terminal_name} is terminal in this flow and must be last; "
+                "cannot add branch(...)."
+            )
         self._branches.append(branch)
         self._execution_items.append(branch)
 

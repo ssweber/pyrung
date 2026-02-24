@@ -53,6 +53,10 @@ class Instruction(ABC):
         """Whether this instruction is a no-op when `enabled` is False."""
         return self.INERT_WHEN_DISABLED
 
+    def is_terminal(self) -> bool:
+        """Whether this instruction must be the last execution item in its flow."""
+        return False
+
 
 class SubroutineReturnSignal(Exception):
     """Internal control-flow signal used by return_early() inside subroutines."""

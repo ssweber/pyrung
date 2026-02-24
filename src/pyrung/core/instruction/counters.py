@@ -97,6 +97,9 @@ class CountUpInstruction(Instruction):
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
 
+    def is_terminal(self) -> bool:
+        return True
+
 
 class CountDownInstruction(Instruction):
     """Count-Down (CTD) counter.
@@ -164,3 +167,6 @@ class CountDownInstruction(Instruction):
 
         # Update tags
         ctx.set_tags({self.done_bit.name: done, self.accumulator.name: acc_value})
+
+    def is_terminal(self) -> bool:
+        return True

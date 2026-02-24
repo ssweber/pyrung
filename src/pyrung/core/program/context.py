@@ -60,6 +60,7 @@ def _new_capture_context(rung: RungLogic) -> Rung:
     """Create a lightweight Rung wrapper for temporary capture scopes."""
     ctx = Rung.__new__(Rung)
     ctx._rung = rung
+    ctx._pending_required_builder = None
     return ctx
 
 
@@ -207,6 +208,7 @@ class Rung:
     def __init__(self, *conditions: Condition | Tag) -> None:
         source_file, source_line = _capture_source(depth=2)
         self._rung = RungLogic(*conditions, source_file=source_file, source_line=source_line)
+        self._pending_required_builder: tuple[int, str] | None = None
         condition_arg_lines = _capture_with_call_arg_lines(
             source_file,
             source_line,
@@ -224,12 +226,54 @@ class Rung:
                 else:
                     condition.source_line = source_line
 
+    def _set_pending_required_builder(self, builder: object, descriptor: str) -> None:
+        pending = self._pending_required_builder
+        if pending is not None:
+            _, existing = pending
+            raise RuntimeError(f"{existing} must be completed before starting {descriptor}.")
+        self._pending_required_builder = (id(builder), descriptor)
+
+    def _assert_pending_required_builder_owner(self, builder: object, method_name: str) -> None:
+        pending = self._pending_required_builder
+        if pending is None:
+            raise RuntimeError(
+                f"{method_name}() called on a builder that is not pending in this flow."
+            )
+        pending_id, descriptor = pending
+        if pending_id != id(builder):
+            raise RuntimeError(
+                f"{descriptor} must be completed before calling {method_name}() "
+                "on a different builder."
+            )
+
+    def _clear_pending_required_builder(self, builder: object) -> None:
+        self._assert_pending_required_builder_owner(builder, "finalize")
+        self._pending_required_builder = None
+
+    def _assert_no_pending_required_builder(self, next_action: str) -> None:
+        pending = self._pending_required_builder
+        if pending is None:
+            return
+        _, descriptor = pending
+        raise RuntimeError(f"{descriptor} must be completed before calling {next_action}().")
+
+    def _assert_required_builders_resolved(self, scope_name: str) -> None:
+        pending = self._pending_required_builder
+        if pending is None:
+            return
+        _, descriptor = pending
+        raise RuntimeError(f"{descriptor} must be completed before exiting {scope_name} flow.")
+
     def __enter__(self) -> Rung:
         _push_rung_context(self)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        _pop_rung_context()
+        try:
+            if exc_type is None:
+                self._assert_required_builders_resolved("Rung")
+        finally:
+            _pop_rung_context()
         _set_scope_end_line(
             self._rung,
             source_file=self._rung.source_file,
@@ -364,6 +408,7 @@ class ForLoop:
             raise RuntimeError("Nested forloop is not permitted")
 
         self._parent_ctx = _require_rung_context("forloop")
+        self._parent_ctx._assert_no_pending_required_builder("forloop")
         _forloop_active = True
 
         # Capture body instructions to a temporary rung (like Branch capture).
@@ -381,6 +426,9 @@ class ForLoop:
 
         _pop_rung_context()
         _forloop_active = False
+
+        if exc_type is None and self._capture_ctx is not None:
+            self._capture_ctx._assert_required_builders_resolved("forloop")
 
         if self._parent_ctx is None or self._capture_rung is None:
             return
@@ -455,6 +503,7 @@ class Branch:
         self._parent_ctx = _current_rung()
         if self._parent_ctx is None:
             raise RuntimeError("branch() must be called inside a Rung context")
+        self._parent_ctx._assert_no_pending_required_builder("branch")
 
         # Create a nested rung for the branch that includes BOTH parent and branch conditions
         # This ensures terminal instructions (counters, timers) see the full condition chain
@@ -497,6 +546,9 @@ class Branch:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Pop our branch context
         _pop_rung_context()
+
+        if exc_type is None and self._branch_ctx is not None:
+            self._branch_ctx._assert_required_builders_resolved("branch")
 
         # Add the branch as a nested rung to the parent
         if self._parent_ctx is not None and self._branch_rung is not None:

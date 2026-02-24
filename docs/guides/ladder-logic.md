@@ -267,6 +267,9 @@ on_delay(TimerDone, accumulator=TimerAcc, preset=100).reset(ResetButton)
 - Rung False → holds acc and done (does not reset)
 - `reset(tag)` → resets acc and done regardless of rung state
 
+`on_delay(...).reset(...)` (RTON) is terminal in its flow: once added, no later instruction
+or branch can be added in that same flow.
+
 ### Off-Delay Timer (TOF)
 
 ```python
@@ -276,6 +279,8 @@ off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
 **TOF behavior:**
 - Rung True → done = True, acc = 0
 - Rung False → accumulator counts up; done = False when acc ≥ preset
+
+TOF remains composable in-rung (non-terminal).
 
 ### Time units
 
@@ -308,6 +313,8 @@ count_up(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 - Rung True → accumulator increments each scan; done = True when acc ≥ preset
 - `reset(tag)` → resets acc and done when that tag is True
 
+`count_up(...).reset(...)` is terminal in its flow.
+
 ### Count Down (CTD)
 
 ```python
@@ -316,6 +323,8 @@ count_down(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 
 - Accumulator starts at 0 and goes negative each scan
 - done = True when acc ≤ −preset
+
+`count_down(...).reset(...)` is terminal in its flow.
 
 ### Bidirectional counter
 
@@ -326,6 +335,9 @@ count_up(CountDone, accumulator=CountAcc, preset=100) \
 ```
 
 Both up and down conditions are evaluated every scan; the net delta is applied once.
+
+For counters and shift builders, chained contacts like `.down(...)`, `.clock(...)`, and
+`.reset(...)` are required pseudo-inputs: complete the chain before any later DSL statement.
 
 ---
 
@@ -386,6 +398,7 @@ shift(C.select(1, 8)).clock(ClockBit).reset(ResetBit)
 - **Rung condition** (combined) is the data bit inserted at position 1
 - **Clock** — shift occurs on OFF→ON edge of the clock condition
 - **Reset** — level-sensitive: clears all bits in range while True
+- Shift is terminal in its flow after `.clock(...).reset(...)` finalization.
 
 Direction is determined by the range order:
 - `C.select(1, 8)` → shifts low-to-high (data enters at C1, exits at C8)

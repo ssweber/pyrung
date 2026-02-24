@@ -1,7 +1,7 @@
 """Tests for Timer instructions (TON, TOF, RTON).
 
-Timers are terminal instructions that accumulate elapsed time.
-They manipulate both a done bit and an accumulator.
+Timers manipulate both a done bit and an accumulator.
+Only RTON (`on_delay(...).reset(...)`) is terminal in-flow.
 
 Timer Types:
 - TON (on_delay without reset): Counts while enabled, resets when disabled

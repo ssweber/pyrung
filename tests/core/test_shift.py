@@ -266,24 +266,15 @@ class TestShiftBuilder:
                 with Rung(Data):
                     shift(C.select(1, 3)).reset(Reset)
 
-    def test_clock_without_final_reset_adds_nothing(self):
+    def test_clock_without_final_reset_raises(self):
         Data = Bool("Data")
         Clock = Bool("Clock")
         C = Block("C", TagType.BOOL, 1, 100)
 
-        with Program() as logic:
-            with Rung(Data):
-                shift(C.select(1, 3)).clock(Clock)
-
-        runner = PLCRunner(logic)
-        runner.patch({"Data": True, "Clock": False, "C1": True, "C2": False, "C3": False})
-        runner.step()
-        runner.patch({"Clock": True})
-        runner.step()
-
-        assert runner.current_state.tags["C1"] is True
-        assert runner.current_state.tags["C2"] is False
-        assert runner.current_state.tags["C3"] is False
+        with pytest.raises(RuntimeError, match="shift\\(\\.\\.\\.\\)\\.clock\\(\\.\\.\\.\\)\\.reset"):
+            with Program():
+                with Rung(Data):
+                    shift(C.select(1, 3)).clock(Clock)
 
     def test_clock_rejects_int_tag_condition(self):
         Data = Bool("Data")

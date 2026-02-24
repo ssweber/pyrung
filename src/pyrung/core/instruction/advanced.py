@@ -313,3 +313,6 @@ class ShiftInstruction(Instruction):
             ctx.set_tags({tag.name: False for tag in tags})
 
         ctx.set_memory(self._prev_clock_key, clock_curr)
+
+    def is_terminal(self) -> bool:
+        return True

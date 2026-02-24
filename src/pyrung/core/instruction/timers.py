@@ -109,6 +109,9 @@ class OnDelayInstruction(Instruction):
                 ctx.set_memory(frac_key, 0.0)
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
 
+    def is_terminal(self) -> bool:
+        return self.has_reset
+
 
 class OffDelayInstruction(Instruction):
     """Off-Delay Timer (TOF).
