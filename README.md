@@ -16,6 +16,8 @@ A Pythonic ladder logic framework — simulate, test, and debug PLC programs in 
 | Testing | Standard pytest | Custom tooling |
 | Debugging | DAP + VS Code inline decorations | Separate runtime tool |
 
+`REALTIME` mode is wall-clock-coupled and intentionally non-deterministic.
+
 ## Quick Example
 
 ```python

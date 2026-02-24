@@ -216,6 +216,7 @@ runner.set_time_mode(TimeMode.REALTIME)               # wall-clock
 | `REALTIME` | Integration tests, live hardware | `timestamp` = actual elapsed time |
 
 `FIXED_STEP` is the default and the right choice for most situations. Timer and counter instructions use `timestamp` to measure elapsed time, so `FIXED_STEP` gives perfectly reproducible results regardless of machine speed.
+`REALTIME` is intentionally non-deterministic; scan timing depends on the host scheduler and wall-clock behavior.
 
 ## Inputs: patch vs force
 

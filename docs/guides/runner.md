@@ -32,6 +32,7 @@ runner.set_time_mode(TimeMode.REALTIME)              # wall-clock
 | `REALTIME` | Live hardware, integration tests | `timestamp` = actual elapsed time |
 
 `FIXED_STEP` is the default and the right choice for most work. Timer and counter instructions use `timestamp`, so `FIXED_STEP` gives perfectly reproducible results.
+`REALTIME` is intentionally non-deterministic because scan `dt` follows host elapsed wall-clock time.
 
 Note: RTC system points (`rtc.year4`, `rtc.month`, `rtc.hour`, etc.) are wall-clock-derived (`datetime.now()` + RTC offset). `FIXED_STEP` does not freeze RTC by itself.
 

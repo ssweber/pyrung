@@ -2023,11 +2023,13 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
 
     saw_snapshot = False
     saw_output = False
+    snapshot_event_body: dict[str, Any] | None = None
     for _ in range(100):
         flushed = _drain_messages(out_stream)
         snapshots = _events(flushed, "pyrungSnapshot")
         if snapshots:
             saw_snapshot = True
+            snapshot_event_body = snapshots[-1].get("body", {})
         outputs = _events(flushed, "output")
         if any(
             "Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", ""))
@@ -2039,6 +2041,9 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
         _drain_internal_events_with_wait(adapter)
     assert saw_snapshot is True
     assert saw_output is True
+    assert snapshot_event_body is not None
+    assert isinstance(snapshot_event_body.get("rtcIso"), str)
+    assert isinstance(snapshot_event_body.get("rtcOffsetSeconds"), (int, float))
 
     _send_request(adapter, out_stream, seq=4, command="pause")
     _drain_messages(out_stream)
@@ -2055,6 +2060,8 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
     matches = response["body"]["matches"]
     assert matches
     assert matches[0]["scanId"] >= 1
+    assert isinstance(matches[0]["rtcIso"], str)
+    assert isinstance(matches[0]["rtcOffsetSeconds"], (int, float))
 
 
 def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
@@ -2109,6 +2116,8 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     assert len(matches) == 1
     assert matches[0]["scanId"] == snapshot_scan_id
     assert snapshot_scan_id == 1
+    assert isinstance(matches[0]["rtcIso"], str)
+    assert isinstance(matches[0]["rtcOffsetSeconds"], (int, float))
 
 
 def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
@@ -2251,6 +2260,8 @@ def test_step_next_emits_snapshot_event_and_labels_history(tmp_path: Path):
     )
     assert snapshot_event is not None
     snapshot_scan_id = int(snapshot_event["body"]["scanId"])
+    assert isinstance(snapshot_event["body"]["rtcIso"], str)
+    assert isinstance(snapshot_event["body"]["rtcOffsetSeconds"], (int, float))
 
     messages = _send_request(
         adapter,
@@ -2263,6 +2274,8 @@ def test_step_next_emits_snapshot_event_and_labels_history(tmp_path: Path):
     matches = response["body"]["matches"]
     assert matches
     assert int(matches[0]["scanId"]) == snapshot_scan_id
+    assert isinstance(matches[0]["rtcIso"], str)
+    assert isinstance(matches[0]["rtcOffsetSeconds"], (int, float))
 
 
 def test_next_with_source_breakpoint_reports_step_reason(tmp_path: Path):

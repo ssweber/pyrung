@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from pyrung.core import PLCRunner, TimeMode
@@ -88,6 +90,26 @@ def test_snapshot_labels_are_evicted_with_history() -> None:
     latest_milestone = runner.history.find("milestone")
     assert latest_milestone is not None
     assert latest_milestone.scan_id == 3
+
+
+def test_snapshot_breakpoint_captures_rtc_metadata(monkeypatch) -> None:
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ARG003
+            return cls(2026, 2, 24, 12, 34, 56)
+
+    monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
+
+    runner = PLCRunner(logic=[])
+    runner.when(lambda state: state.scan_id == 1).snapshot("tick")
+
+    runner.run(cycles=1)
+
+    labeled = runner.history.find_labeled("tick")
+    assert labeled is not None
+    assert labeled.scan_id == 1
+    assert labeled.rtc_iso == "2026-02-24T12:34:56"
+    assert labeled.rtc_offset_seconds == pytest.approx(0.0)
 
 
 def test_breakpoint_handle_disable_enable_and_remove() -> None:

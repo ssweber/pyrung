@@ -111,7 +111,9 @@ Use `Watch` for predicate evaluation.
 - Continue: adapter continue loop over `scan_steps_debug()`
 - Conditional source breakpoints: adapter expression parser + compiled predicates
 - Monitor callbacks: `runner.monitor(tag, callback)`
-- Snapshot labels: `runner.history.find(label)` / `runner.history.find_all(label)`
+- Snapshot labels: `runner.history.find(label)` / `runner.history.find_all(label)` for states,
+  and `runner.history.find_labeled(label)` / `runner.history.find_all_labeled(label)` for metadata
+  (`scanId`, `timestamp`, `rtcIso`, `rtcOffsetSeconds`)
 - Data breakpoints: monitor-backed change listeners
 
 ## Trace event

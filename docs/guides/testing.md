@@ -57,6 +57,7 @@ def test_stop_resets_motor():
 
 `FIXED_STEP` controls simulation-time behavior (`state.timestamp`, timers/counters, and scan clocks).
 RTC system points (`rtc.year4`, `rtc.hour`, etc.) are derived from wall clock (`datetime.now()`) plus internal RTC offset, so they are not deterministic unless you freeze or monkeypatch time.
+`TimeMode.REALTIME` is not appropriate for deterministic tests because `dt` is derived from host elapsed wall-clock time.
 
 ## Testing RTC deterministically
 
@@ -78,7 +79,27 @@ def test_rtc_fields_with_frozen_wall_clock():
         assert found2 is True and second == 8
 ```
 
-If you need "what RTC was at each scan" in retained history, copy the `rtc.*` value into a normal tag during the scan. That tag is then stored in `state.tags` and can be inspected later from history snapshots.
+For labeled history snapshots, RTC metadata is captured at snapshot time:
+
+```python
+from freezegun import freeze_time
+from pyrung import PLCRunner
+
+def test_snapshot_captures_frozen_rtc():
+    runner = PLCRunner(logic=[])
+    runner.when(lambda s: s.scan_id == 1).snapshot("boot")
+
+    with freeze_time("2026-03-05 06:07:08"):
+        runner.run(cycles=1)
+
+    snap = runner.history.find_labeled("boot")
+    assert snap is not None
+    assert snap.scan_id == 1
+    assert snap.rtc_iso == "2026-03-05T06:07:08"
+    assert snap.rtc_offset_seconds == 0.0
+```
+
+Use `runner.history.find_all_labeled(label)` when you want all matches with metadata.
 
 ## Testing timers
 

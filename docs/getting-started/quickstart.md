@@ -46,6 +46,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)  # 100ms per scan
 ```
 
 `FIXED_STEP` advances simulation time by a fixed `dt` each scan, giving deterministic timing regardless of wall-clock speed. Use it for tests and offline simulation.
+Use `TimeMode.REALTIME` only when you want wall-clock coupling (integration/hardware scenarios); it is not deterministic.
 
 ## 4. Inject inputs and step
 

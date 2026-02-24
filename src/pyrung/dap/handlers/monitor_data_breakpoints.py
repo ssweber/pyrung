@@ -267,13 +267,21 @@ def on_pyrung_find_label(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
         if find_all:
-            states = runner.history.find_all(label)
+            matches = runner.history.find_all_labeled(label)
         else:
-            latest = runner.history.find(label)
-            states = [] if latest is None else [latest]
+            latest = runner.history.find_labeled(label)
+            matches = [] if latest is None else [latest]
 
-    matches = [{"scanId": state.scan_id, "timestamp": state.timestamp} for state in states]
-    return {"matches": matches}, []
+    matches_payload = [
+        {
+            "scanId": match.scan_id,
+            "timestamp": match.timestamp,
+            "rtcIso": match.rtc_iso,
+            "rtcOffsetSeconds": match.rtc_offset_seconds,
+        }
+        for match in matches
+    ]
+    return {"matches": matches_payload}, []
 
 
 def monitor_variables(adapter: Any) -> list[dict[str, Any]]:

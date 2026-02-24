@@ -295,6 +295,8 @@ def test_history_find_apis_return_empty_results_for_unknown_label() -> None:
 
     assert history.find("missing") is None
     assert history.find_all("missing") == []
+    assert history.find_labeled("missing") is None
+    assert history.find_all_labeled("missing") == []
 
 
 def test_history_label_scan_supports_find_find_all_and_dedup_per_scan() -> None:
@@ -313,6 +315,26 @@ def test_history_label_scan_supports_find_find_all_and_dedup_per_scan() -> None:
     assert [state.scan_id for state in history.find_all("fault")] == [1, 2]
 
 
+def test_history_labeled_snapshot_includes_metadata_when_provided() -> None:
+    initial = SystemState()
+    history = History(initial)
+    scan_1 = initial.next_scan(dt=0.1)
+    history._append(scan_1)
+    history._label_scan(
+        "fault",
+        1,
+        metadata={"rtc_iso": "2026-02-24T12:34:56", "rtc_offset_seconds": 30.0},
+    )
+
+    labeled = history.find_labeled("fault")
+    assert labeled is not None
+    assert labeled.label == "fault"
+    assert labeled.scan_id == 1
+    assert labeled.timestamp == pytest.approx(0.1)
+    assert labeled.rtc_iso == "2026-02-24T12:34:56"
+    assert labeled.rtc_offset_seconds == pytest.approx(30.0)
+
+
 def test_history_label_scan_raises_for_unknown_scan() -> None:
     history = History(SystemState())
 
@@ -323,7 +345,11 @@ def test_history_label_scan_raises_for_unknown_scan() -> None:
 def test_history_label_entries_are_pruned_when_scan_is_evicted() -> None:
     initial = SystemState()
     history = History(initial, limit=2)
-    history._label_scan("boot", 0)
+    history._label_scan(
+        "boot",
+        0,
+        metadata={"rtc_iso": "2026-02-24T12:00:00", "rtc_offset_seconds": 0.0},
+    )
 
     scan_1 = initial.next_scan(dt=0.1)
     history._append(scan_1)
@@ -332,3 +358,5 @@ def test_history_label_entries_are_pruned_when_scan_is_evicted() -> None:
 
     assert history.find("boot") is None
     assert history.find_all("boot") == []
+    assert history.find_labeled("boot") is None
+    assert history.find_all_labeled("boot") == []

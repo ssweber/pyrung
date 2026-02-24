@@ -172,7 +172,9 @@ snapshot_handle = runner.when(lambda s: s.tags.get("Fault")).snapshot("fault_tri
 `snapshot(label)` behavior:
 
 - Tags the triggering scan in history and does not halt execution.
-- Query labels via `runner.history.find(label)` and `runner.history.find_all(label)`.
+- Query scan states via `runner.history.find(label)` and `runner.history.find_all(label)`.
+- Query snapshot metadata (including RTC capture) via
+  `runner.history.find_labeled(label)` and `runner.history.find_all_labeled(label)`.
 
 Both methods return a handle with:
 

@@ -433,13 +433,16 @@ class DAPAdapter:
         runner = self._runner
         if runner is None:
             return
-        runner.history._label_scan(label, state.scan_id)
+        metadata = runner._snapshot_metadata_for_state(state)
+        runner.history._label_scan(label, state.scan_id, metadata=metadata)
         self._enqueue_internal_event(
             "pyrungSnapshot",
             {
                 "label": label,
                 "scanId": state.scan_id,
                 "timestamp": state.timestamp,
+                "rtcIso": metadata["rtc_iso"],
+                "rtcOffsetSeconds": metadata["rtc_offset_seconds"],
             },
         )
         self._enqueue_internal_event(

@@ -33,6 +33,8 @@ print(runner.current_state.tags["Light"])  # True
 | Testing | Standard pytest | Custom tooling |
 | Debugging | DAP + VS Code inline decorations | Separate runtime tool |
 
+`REALTIME` mode is wall-clock-coupled and intentionally non-deterministic.
+
 ## Key concepts
 
 - **Immutable state** — every scan produces a new `SystemState`; nothing is mutated in place.

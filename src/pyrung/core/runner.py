@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition_trace import ConditionTraceEngine
@@ -645,10 +646,24 @@ class PLCRunner:
 
             if registration.action == "snapshot":
                 assert registration.label is not None
-                self._history._label_scan(registration.label, state.scan_id)
+                self._history._label_scan(
+                    registration.label,
+                    state.scan_id,
+                    metadata=self._snapshot_metadata_for_state(state),
+                )
                 continue
 
             self._pause_requested_this_scan = True
+
+    def _snapshot_metadata_for_state(self, state: SystemState) -> dict[str, Any]:
+        rtc_now = self._system_runtime._rtc_now(state)
+        offset = state.memory.get("_sys.rtc.offset", timedelta())
+        if not isinstance(offset, timedelta):
+            offset = timedelta()
+        return {
+            "rtc_iso": rtc_now.isoformat(),
+            "rtc_offset_seconds": float(offset.total_seconds()),
+        }
 
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
