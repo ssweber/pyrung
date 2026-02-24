@@ -146,6 +146,28 @@ def test_named_array_clone_produces_independent_copy_with_new_name():
     assert task[1].call.name == "Task1_call"
 
 
+def test_named_array_clone_allows_count_and_stride_override():
+    @named_array(Int, count=2, stride=3)
+    class Task:
+        call = auto()
+        init = 0
+
+    Pump = cast(Any, Task).clone("Pump", count=3, stride=2)
+
+    assert Pump.count == 3
+    assert Pump.stride == 2
+    assert Pump[1].call.name == "Pump1_call"
+    assert Pump[3].init.name == "Pump3_init"
+
+    hardware = Block("HW", TagType.INT, 1, 20)
+    entries = Pump.map_to(hardware.select(1, 6))
+    assert len(entries) == 6
+
+    original = cast(Any, Task)
+    assert original.count == 2
+    assert original.stride == 3
+
+
 def test_named_array_skips_classvar_fields():
     @named_array(Int, count=1, stride=1)
     class Alarm:

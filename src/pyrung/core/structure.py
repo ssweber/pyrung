@@ -157,11 +157,11 @@ class _StructRuntime:
                 default_factory=_make_default_factory(field_spec.default),
             )
 
-    def clone(self, name: str) -> _StructRuntime:
+    def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
         return _StructRuntime(
             name=name,
-            count=self.count,
+            count=self.count if count is None else count,
             field_specs=self._original_field_specs,
             numbered=self.numbered,
         )
@@ -218,13 +218,19 @@ class _NamedArrayRuntime(_StructRuntime):
         self.stride = stride
         super().__init__(name=name, count=count, field_specs=field_specs)
 
-    def clone(self, name: str) -> _NamedArrayRuntime:
+    def clone(
+        self,
+        name: str,
+        *,
+        count: int | None = None,
+        stride: int | None = None,
+    ) -> _NamedArrayRuntime:
         """Create a copy of this named array with a different base name."""
         return _NamedArrayRuntime(
             name=name,
             type=self.type,
-            count=self.count,
-            stride=self.stride,
+            count=self.count if count is None else count,
+            stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
         )
 

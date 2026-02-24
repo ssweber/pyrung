@@ -202,6 +202,21 @@ def test_udt_count_one_clone_preserves_count():
     assert Pump[1].total is Pump.total
 
 
+def test_udt_clone_allows_count_override():
+    @udt()
+    class Device:
+        total: Int
+
+    Pump = cast(Any, Device).clone("Pump", count=3)
+    assert Pump.count == 3
+    assert Pump[1].total.name == "Pump1_total"
+    assert Pump[3].total.name == "Pump3_total"
+
+    original = cast(Any, Device)
+    assert original.count == 1
+    assert original.total.name == "Device_total"
+
+
 def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:

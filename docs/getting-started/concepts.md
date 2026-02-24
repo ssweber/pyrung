@@ -127,7 +127,7 @@ Status[1].ready   # → LiveTag "Status1_ready"
 
 Type annotations resolve Python primitives (`bool`, `int`, `float`, `str`) and IEC constructors (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) to the corresponding `TagType`.
 
-Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), `Field(retentive=True)` to mark fields as retentive, and `.clone(name)` to create a copy of the structure with a different base name.
+Use `auto()` for per-instance numeric sequences (INT/DINT/WORD only), `Field(retentive=True)` to mark fields as retentive, and `.clone(name, ...)` to create a copy with a different base name (optionally overriding `count`, and for `@named_array`, `stride`).
 
 ### named_array
 
