@@ -181,8 +181,6 @@ class History:
             timestamp=state.timestamp,
             rtc_iso=rtc_iso if isinstance(rtc_iso, str) else None,
             rtc_offset_seconds=(
-                float(rtc_offset_seconds)
-                if isinstance(rtc_offset_seconds, int | float)
-                else None
+                float(rtc_offset_seconds) if isinstance(rtc_offset_seconds, int | float) else None
             ),
         )

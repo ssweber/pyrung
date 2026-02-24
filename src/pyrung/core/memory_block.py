@@ -175,7 +175,9 @@ class Block:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
             retentive, default = self._effective_slot_policy(addr)
-            self._tag_cache[addr] = self._new_tag_for_slot(addr, retentive=retentive, default=default)
+            self._tag_cache[addr] = self._new_tag_for_slot(
+                addr, retentive=retentive, default=default
+            )
         return cast(LiveTag, self._tag_cache[addr])
 
     def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveTag:

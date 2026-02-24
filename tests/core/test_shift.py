@@ -271,7 +271,9 @@ class TestShiftBuilder:
         Clock = Bool("Clock")
         C = Block("C", TagType.BOOL, 1, 100)
 
-        with pytest.raises(RuntimeError, match="shift\\(\\.\\.\\.\\)\\.clock\\(\\.\\.\\.\\)\\.reset"):
+        with pytest.raises(
+            RuntimeError, match="shift\\(\\.\\.\\.\\)\\.clock\\(\\.\\.\\.\\)\\.reset"
+        ):
             with Program():
                 with Rung(Data):
                     shift(C.select(1, 3)).clock(Clock)

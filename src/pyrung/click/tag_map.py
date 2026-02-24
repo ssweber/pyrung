@@ -450,7 +450,9 @@ class TagMap:
         seen_names: dict[str, tuple[str, int]] = {}
         covered_rows: set[int] = set()
 
-        def require_representable_block_nickname(*, memory_type: str, address: int, name: str) -> None:
+        def require_representable_block_nickname(
+            *, memory_type: str, address: int, name: str
+        ) -> None:
             display = format_address_display(memory_type, address)
             if name == "":
                 raise ValueError(
@@ -459,9 +461,7 @@ class TagMap:
                 )
             is_valid, error = validate_nickname(name)
             if not is_valid:
-                raise ValueError(
-                    f"Block row nickname at {display} is not representable: {error}."
-                )
+                raise ValueError(f"Block row nickname at {display} is not representable: {error}.")
             existing = seen_names.get(name)
             if existing is not None and existing != (memory_type, address):
                 existing_display = format_address_display(existing[0], existing[1])

@@ -2095,9 +2095,7 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     _drain_messages(out_stream)
 
     snapshot_event = _wait_for_event(adapter, out_stream, event_name="pyrungSnapshot")
-    snapshot_scan_id = (
-        int(snapshot_event["body"]["scanId"]) if snapshot_event is not None else None
-    )
+    snapshot_scan_id = int(snapshot_event["body"]["scanId"]) if snapshot_event is not None else None
     assert snapshot_scan_id is not None
 
     _send_request(adapter, out_stream, seq=4, command="pause")

@@ -231,7 +231,9 @@ def test_click_prebuilt_tag_classes():
 def test_click_prebuilt_block_allows_in_place_slot_policy_before_materialization():
     from pyrung.click import ds
 
-    candidate = next((addr for addr in range(ds.end, ds.start - 1, -1) if addr not in ds._tag_cache), None)
+    candidate = next(
+        (addr for addr in range(ds.end, ds.start - 1, -1) if addr not in ds._tag_cache), None
+    )
     if candidate is None:
         pytest.skip("No unmaterialized DS slot available for in-place policy test.")
 
