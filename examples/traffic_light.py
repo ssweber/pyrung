@@ -125,11 +125,10 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
             Car.Sensor.value = True
             Car.LogEnable.value = True
             Car.SpeedIn.value = speed
-        runner.step()
-        with runner.active():
+            runner.step()
             Car.Sensor.value = False
             Car.LogEnable.value = False
-        runner.step()
+            runner.step()
 
     # Let the light cycle run for 10 seconds (1 000 scans x 10 ms)
     runner.run(cycles=1000)

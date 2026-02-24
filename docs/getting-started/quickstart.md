@@ -93,6 +93,7 @@ Tags support live value access inside a `runner.active()` scope:
 with runner.active():
     print(MotorRunning.value)  # reads from runner's pending state
     Step.value = 5             # queues a patch (one-shot)
+    runner.step()              # valid here; consumes pending patches on scan start
 ```
 
 ## Complete example

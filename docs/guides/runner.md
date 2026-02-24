@@ -208,6 +208,7 @@ Inside `with runner.active():`, tag `.value` reads and writes go through the run
 with runner.active():
     Button.value = True      # equivalent to runner.patch({"Button": True})
     print(Step.value)        # reads pending value before next step
+    runner.step()            # valid inside active(); applies pending patch
 ```
 
 ## scan_steps() — rung-boundary stepping

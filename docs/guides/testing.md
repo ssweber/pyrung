@@ -158,7 +158,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 
 with runner.active():
     Tags.Start.value = True
-runner.step()
+    runner.step()
 assert runner.current_state.tags["Tags_MotorRunning"] is True
 ```
 
