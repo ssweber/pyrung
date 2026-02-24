@@ -8,7 +8,6 @@ from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
 from pyrung.click import TagMap, c, ds, x
-from pyrung.click.tag_map import UNSET
 from pyrung.core import Block, Bool, Tag, TagType
 
 
@@ -112,14 +111,13 @@ def test_mapped_slots_include_standalone_and_block_slots():
     assert slots[2].logical_name == "Alarm2"
 
 
-def test_mapped_slots_use_override_default():
+def test_mapped_slots_use_canonical_default_metadata():
     value = Tag("Value", TagType.INT, default=5)
     mapping = TagMap({value: ds[1]}, include_system=False)
-    mapping.override(value, default=7)
 
     slots = mapping.mapped_slots()
     assert len(slots) == 1
-    assert slots[0].default == 7
+    assert slots[0].default == 5
 
 
 def test_contains_block():
@@ -186,69 +184,35 @@ def test_name_conflict_standalone_tags_raises():
     first = Bool("Valve")
     second = Bool("Valve")
 
-    with pytest.raises(ValueError, match="Duplicate standalone logical tag name"):
+    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
         TagMap([first.map_to(c[1]), second.map_to(c[2])])
 
 
-def test_override_block_slot_name():
+def test_name_conflict_standalone_and_block_slot_raises():
+    valve = Bool("Alarm1")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({alarms: c.select(101, 102)})
-    slot = alarms[1]
-    mapping.override(slot, name="Alarm_1")
-
-    override = mapping.get_override(slot)
-    assert override is not None
-    assert override.name == "Alarm_1"
+    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
+        TagMap({valve: c[1], alarms: c.select(101, 102)})
 
 
-def test_override_block_slot_default():
+def test_name_conflict_across_blocks_raises():
+    alarm_a = Block("AlarmA", TagType.BOOL, 1, 1)
+    alarm_b = Block("AlarmB", TagType.BOOL, 1, 1)
+    alarm_a.rename_slot(1, "Shared")
+    alarm_b.rename_slot(1, "Shared")
+
+    with pytest.raises(ValueError, match="Duplicate user logical tag name"):
+        TagMap({alarm_a: c.select(101, 101), alarm_b: c.select(201, 201)})
+
+
+def test_block_slot_name_rename_exported_to_csv(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
+    alarms.rename_slot(1, "Alarm_1")
     mapping = TagMap({alarms: c.select(101, 102)})
-    slot = alarms[1]
-    mapping.override(slot, default=1)
-
-    override = mapping.get_override(slot)
-    assert override is not None
-    assert override.default == 1
-
-
-def test_override_block_slot_retentive():
-    alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({alarms: c.select(101, 102)})
-    slot = alarms[1]
-    mapping.override(slot, retentive=True)
-
-    override = mapping.get_override(slot)
-    assert override is not None
-    assert override.retentive is True
-
-
-def test_override_requires_mapped_slot():
-    alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({alarms: c.select(101, 102)})
-
-    with pytest.raises(KeyError):
-        mapping.override(Bool("NotMapped"), name="X")
-
-
-def test_override_standalone_by_name_key():
-    valve = Bool("Valve")
-    mapping = TagMap({valve: c[1]})
-    mapping.override(Bool("Valve"), name="ValveAlias")
-
-    override = mapping.get_override(valve)
-    assert override is not None
-    assert override.name == "ValveAlias"
-
-
-def test_clear_override():
-    alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({alarms: c.select(101, 102)})
-    slot = alarms[1]
-    mapping.override(slot, name="Alarm_1")
-    mapping.clear_override(slot)
-
-    assert mapping.get_override(slot) is None
+    path = tmp_path / "renamed.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    assert rows[get_addr_key("C", 101)].nickname == "Alarm_1"
 
 
 def test_nickname_validation_warnings_standalone():
@@ -273,17 +237,6 @@ def test_nickname_validation_warns_leading_underscore():
     assert "Cannot start with _" in mapping.warnings[0]
 
 
-def test_effective_nickname_collision_raises():
-    valve = Bool("Valve")
-    pump = Bool("Pump")
-    mapping = TagMap({valve: c[1], pump: c[2]})
-
-    with pytest.raises(ValueError, match="collision"):
-        mapping.override(pump, name="Valve")
-
-    assert mapping.get_override(pump) is None
-
-
 def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
     valve = Bool("Valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
@@ -300,13 +253,13 @@ def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
     assert get_addr_key("C", 102) in rows
 
 
-def test_to_nickname_file_uses_override_metadata(tmp_path):
-    alarms = Block("Alarm", TagType.BOOL, 1, 1)
+def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path):
+    alarms = Block("Alarm", TagType.BOOL, 1, 1, retentive=False)
+    alarms.rename_slot(1, "Alarm_1")
+    alarms.configure_slot(1, retentive=True, default=True)
     mapping = TagMap({alarms: c.select(101, 101)})
-    slot = alarms[1]
-    mapping.override(slot, name="Alarm_1", retentive=True, default=1)
 
-    path = tmp_path / "override.csv"
+    path = tmp_path / "slot_metadata.csv"
     mapping.to_nickname_file(path)
     rows = pyclickplc.read_csv(path)
     record = rows[get_addr_key("C", 101)]
@@ -333,8 +286,9 @@ def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
 def test_from_nickname_file_round_trip(tmp_path):
     valve = Bool("Valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
+    alarms.rename_slot(1, "Alarm_1")
+    alarms.configure_slot(1, default=True)
     mapping = TagMap({valve: c[1], alarms: c.select(101, 102)})
-    mapping.override(alarms[1], name="Alarm_1", default=1)
 
     path = tmp_path / "round_trip.csv"
     mapping.to_nickname_file(path)
@@ -343,9 +297,7 @@ def test_from_nickname_file_round_trip(tmp_path):
     assert restored.resolve("Valve") == "C1"
     restored_block = next(block_entry.logical for block_entry in restored.blocks())
     assert restored.resolve(restored_block, 1) == "C101"
-    override = restored.get_override(restored_block[1])
-    assert override is not None
-    assert override.name == "Alarm_1"
+    assert restored_block[1].name == "Alarm_1"
     assert restored_block[1].default is True
 
 
@@ -387,7 +339,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
         get_addr_key("C", 101): AddressRecord(
             memory_type="C",
             address=101,
-            nickname="",
+            nickname="Alarm1",
             comment="<Alarm>",
             initial_value="0",
             retentive=False,
@@ -396,7 +348,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
         get_addr_key("C", 200): AddressRecord(
             memory_type="C",
             address=200,
-            nickname="",
+            nickname="Alarm100",
             comment="</Alarm>",
             initial_value="0",
             retentive=False,
@@ -415,19 +367,88 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
     assert restored.resolve(block, 100) == "C200"
 
 
-def test_override_clear_returns_to_unset_default():
-    alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    mapping = TagMap({alarms: c.select(101, 102)})
-    slot = alarms[1]
-    mapping.override(slot, default=1)
-    mapping.clear_override(slot)
+def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
+    path = tmp_path / "blank_block_name.csv"
+    records = {
+        get_addr_key("C", 401): AddressRecord(
+            memory_type="C",
+            address=401,
+            nickname="",
+            comment="<AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 402): AddressRecord(
+            memory_type="C",
+            address=402,
+            nickname="AlarmCfg2",
+            comment="</AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
 
-    override = mapping.get_override(slot)
-    assert override is None
-    mapping.override(slot, default=UNSET)
-    override = mapping.get_override(slot)
-    assert override is not None
-    assert override.default is UNSET
+    with pytest.raises(ValueError, match="C401"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
+    path = tmp_path / "invalid_block_name.csv"
+    records = {
+        get_addr_key("C", 501): AddressRecord(
+            memory_type="C",
+            address=501,
+            nickname="Bad-Name",
+            comment="<AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 502): AddressRecord(
+            memory_type="C",
+            address=502,
+            nickname="AlarmCfg2",
+            comment="</AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="C501"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_duplicate_block_nickname(tmp_path):
+    path = tmp_path / "duplicate_block_name.csv"
+    records = {
+        get_addr_key("C", 601): AddressRecord(
+            memory_type="C",
+            address=601,
+            nickname="AlarmCfg",
+            comment="<AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 602): AddressRecord(
+            memory_type="C",
+            address=602,
+            nickname="AlarmCfg",
+            comment="</AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="C602"):
+        TagMap.from_nickname_file(path)
 
 
 def test_block_entry_by_name_found():

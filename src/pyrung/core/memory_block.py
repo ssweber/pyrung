@@ -40,8 +40,10 @@ UNSET: Final = object()
 class SlotConfig:
     """Effective runtime policy for one block slot."""
 
+    name: str
     retentive: bool
     default: Any
+    name_overridden: bool
     retentive_overridden: bool
     default_overridden: bool
 
@@ -103,6 +105,7 @@ class Block:
     address_formatter: Callable[[str, int], str] | None = None
     default_factory: Callable[[int], Any] | None = None
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
+    _slot_name_overrides: dict[int, str] = field(default_factory=dict, repr=False)
     _slot_retentive_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_default_overrides: dict[int, Any] = field(default_factory=dict, repr=False)
 
@@ -177,7 +180,7 @@ class Block:
 
     def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveTag:
         return LiveTag(
-            name=self._format_tag_name(addr),
+            name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
@@ -208,8 +211,20 @@ class Block:
         if addr in self._tag_cache:
             raise ValueError(
                 f"Cannot {action} {self.name}[{addr}] after tag materialization. "
-                "Configure slot policy before reading/indexing that slot."
+                "Configure slot metadata before reading/indexing that slot."
             )
+
+    def rename_slot(self, addr: int, name: str) -> None:
+        """Set the first-class logical name for one slot before materialization."""
+        self._validate_address(addr)
+        self._assert_not_materialized(addr, action="rename")
+        self._slot_name_overrides[addr] = name
+
+    def clear_slot_name(self, addr: int) -> None:
+        """Clear a first-class slot name override for one address."""
+        self._validate_address(addr)
+        self._assert_not_materialized(addr, action="clear slot name for")
+        self._slot_name_overrides.pop(addr, None)
 
     def configure_slot(
         self,
@@ -282,11 +297,16 @@ class Block:
         self._validate_address(addr)
         retentive, default = self._effective_slot_policy(addr)
         return SlotConfig(
+            name=self._effective_slot_name(addr),
             retentive=retentive,
             default=default,
+            name_overridden=addr in self._slot_name_overrides,
             retentive_overridden=addr in self._slot_retentive_overrides,
             default_overridden=addr in self._slot_default_overrides,
         )
+
+    def _effective_slot_name(self, addr: int) -> str:
+        return self._slot_name_overrides.get(addr, self._format_tag_name(addr))
 
     def _format_tag_name(self, addr: int) -> str:
         if self.address_formatter is None:
@@ -472,7 +492,7 @@ class InputBlock(Block):
 
     def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveInputTag:
         return LiveInputTag(
-            name=self._format_tag_name(addr),
+            name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
@@ -547,7 +567,7 @@ class OutputBlock(Block):
 
     def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveOutputTag:
         return LiveOutputTag(
-            name=self._format_tag_name(addr),
+            name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,

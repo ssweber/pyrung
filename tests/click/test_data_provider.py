@@ -240,11 +240,11 @@ def test_address_normalization_supports_case_and_zero_padding():
     assert provider.read("X001") is True
 
 
-def test_mapped_read_uses_override_default_then_tag_default_precedence():
-    count = Tag("Count", TagType.INT, default=5)
+def test_mapped_read_uses_slot_or_tag_default_when_absent():
+    counts = Block("Count", TagType.INT, 1, 1)
+    counts.configure_slot(1, default=9)
     total = Tag("Total", TagType.INT, default=4)
-    mapping = TagMap({count: ds[1], total: ds[2]})
-    mapping.override(count, default=9)
+    mapping = TagMap({counts: ds.select(1, 1), total: ds[2]})
     provider = ClickDataProvider(PLCRunner(logic=[]), mapping)
 
     assert provider.read("DS1") == 9

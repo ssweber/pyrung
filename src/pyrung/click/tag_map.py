@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
@@ -22,17 +22,6 @@ from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
-
-UNSET: Final = object()
-
-
-@dataclass(frozen=True)
-class SlotOverride:
-    """Override metadata for a mapped logical slot."""
-
-    name: str | None = None
-    retentive: bool | None = None
-    default: object = UNSET
 
 
 @dataclass(frozen=True)
@@ -323,13 +312,9 @@ class TagMap:
         self._system_read_only: dict[str, bool] = {}
         self._block_lookup: dict[int, _BlockEntry] = {}
         self._block_by_name: dict[str, _BlockEntry] = {}
-        self._slot_ids: set[int] = set()
-        self._standalone_names: set[str] = set()
+        self._user_logical_names: set[str] = set()
         self._block_slot_forward_by_id: dict[int, Tag] = {}
         self._block_slot_forward_by_name: dict[str, Tag] = {}
-        self._ambiguous_block_slot_names: set[str] = set()
-        self._overrides_by_name: dict[str, SlotOverride] = {}
-        self._overrides_by_slot_id: dict[int, SlotOverride] = {}
         self._warnings: tuple[str, ...] = ()
 
         used_hardware: dict[int, str] = {}
@@ -342,8 +327,9 @@ class TagMap:
             if isinstance(source, Tag) and isinstance(target, Tag):
                 self._reject_reserved_system_name(source.name)
                 self._validate_tag_mapping(source, target)
-                if source.name in self._standalone_names:
-                    raise ValueError(f"Duplicate standalone logical tag name: {source.name!r}")
+                self._register_user_logical_name(
+                    source.name, owner=f"standalone logical tag {source.name!r}"
+                )
 
                 memory_type, address = self._parse_hardware_tag(target)
                 self._claim_hardware_address(
@@ -358,7 +344,6 @@ class TagMap:
                 self._tag_entries.append(entry)
                 self._entries.append(entry)
                 self._tag_forward[source.name] = entry
-                self._standalone_names.add(source.name)
                 continue
 
             if isinstance(source, Block) and isinstance(target, BlockRange):
@@ -379,6 +364,10 @@ class TagMap:
                 for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
                     logical_slot = source[logical_addr]
                     self._reject_reserved_system_name(logical_slot.name)
+                    self._register_user_logical_name(
+                        logical_slot.name,
+                        owner=f"block slot {source.name}[{logical_addr}]",
+                    )
                     memory_type, _ = self._parse_hardware_tag(
                         block_entry.hardware.block[hardware_addr]
                     )
@@ -397,13 +386,8 @@ class TagMap:
                 for logical_addr, hardware_addr in block_entry.logical_to_hardware.items():
                     logical_slot = source[logical_addr]
                     hardware_slot = block_entry.hardware.block[hardware_addr]
-                    self._slot_ids.add(id(logical_slot))
                     self._block_slot_forward_by_id[id(logical_slot)] = hardware_slot
-                    existing = self._block_slot_forward_by_name.get(logical_slot.name)
-                    if existing is not None and existing.name != hardware_slot.name:
-                        self._ambiguous_block_slot_names.add(logical_slot.name)
-                    else:
-                        self._block_slot_forward_by_name[logical_slot.name] = hardware_slot
+                    self._block_slot_forward_by_name[logical_slot.name] = hardware_slot
                 continue
 
             raise ValueError(
@@ -463,8 +447,29 @@ class TagMap:
         ranges = compute_all_block_ranges(cast(list, rows))
 
         mappings: list[MappingEntry] = []
-        pending_name_overrides: list[tuple[Block, int, str]] = []
+        seen_names: dict[str, tuple[str, int]] = {}
         covered_rows: set[int] = set()
+
+        def require_representable_block_nickname(*, memory_type: str, address: int, name: str) -> None:
+            display = format_address_display(memory_type, address)
+            if name == "":
+                raise ValueError(
+                    f"Block row nickname at {display} cannot be blank; a representable slot "
+                    "name must be non-empty."
+                )
+            is_valid, error = validate_nickname(name)
+            if not is_valid:
+                raise ValueError(
+                    f"Block row nickname at {display} is not representable: {error}."
+                )
+            existing = seen_names.get(name)
+            if existing is not None and existing != (memory_type, address):
+                existing_display = format_address_display(existing[0], existing[1])
+                raise ValueError(
+                    f"Block row nickname at {display} is not representable: duplicate logical "
+                    f"name {name!r} already used at {existing_display}."
+                )
+            seen_names[name] = (memory_type, address)
 
         for block_range in ranges:
             covered_rows.update(range(block_range.start_idx, block_range.end_idx + 1))
@@ -504,8 +509,14 @@ class TagMap:
                 if logical_addr is None:
                     continue
 
-                slot_name = logical_block._format_tag_name(logical_addr)
-                name = row.nickname if row.nickname != slot_name else None
+                require_representable_block_nickname(
+                    memory_type=row.memory_type,
+                    address=row.address,
+                    name=row.nickname,
+                )
+                slot_name = logical_block.slot_config(logical_addr).name
+                if row.nickname != slot_name:
+                    logical_block.rename_slot(logical_addr, row.nickname)
                 slot_config = logical_block.slot_config(logical_addr)
                 default = _parse_default(row.initial_value, logical_block.type)
 
@@ -517,15 +528,21 @@ class TagMap:
                 if configure_kwargs:
                     logical_block.configure_slot(logical_addr, **configure_kwargs)
 
-                if name is None:
-                    continue
-                pending_name_overrides.append((logical_block, logical_addr, name))
-
         for idx, row in enumerate(rows):
             if idx in covered_rows:
                 continue
             if row.nickname == "":
                 continue
+
+            existing = seen_names.get(row.nickname)
+            if existing is not None and existing != (row.memory_type, row.address):
+                existing_display = format_address_display(existing[0], existing[1])
+                display = format_address_display(row.memory_type, row.address)
+                raise ValueError(
+                    f"Duplicate logical name {row.nickname!r} at {display}; already used at "
+                    f"{existing_display}."
+                )
+            seen_names[row.nickname] = (row.memory_type, row.address)
 
             memory_type = row.memory_type
             logical_type = _tag_type_for_memory_type(memory_type)
@@ -538,10 +555,7 @@ class TagMap:
             hardware = _hardware_block_for(memory_type)[row.address]
             mappings.append(logical.map_to(hardware))
 
-        tag_map = cls(mappings)
-        for block, addr, name in pending_name_overrides:
-            tag_map.override(block[addr], name=name)
-        return tag_map
+        return cls(mappings)
 
     def to_nickname_file(self, path: str | Path) -> int:
         """Write mapped addresses to a Click nickname CSV file.
@@ -561,14 +575,13 @@ class TagMap:
 
         for entry in self._tag_entries_tuple:
             memory_type, address = self._parse_hardware_tag(entry.hardware)
-            name, retentive, default = self._effective_metadata(entry.logical)
             records[get_addr_key(memory_type, address)] = AddressRecord(
                 memory_type=memory_type,
                 address=address,
-                nickname=name,
+                nickname=entry.logical.name,
                 comment="",
-                initial_value=_format_default(default, entry.logical.type),
-                retentive=retentive,
+                initial_value=_format_default(entry.logical.default, entry.logical.type),
+                retentive=entry.logical.retentive,
                 data_type=BANKS[memory_type].data_type,
             )
 
@@ -584,7 +597,6 @@ class TagMap:
                 zip(entry.logical_addresses, entry.hardware_addresses, strict=True)
             ):
                 slot = entry.logical[logical_addr]
-                name, retentive, default = self._effective_metadata(slot)
                 comment = ""
                 if block_len == 1:
                     comment = format_block_tag(entry.logical.name, "self-closing")
@@ -596,10 +608,10 @@ class TagMap:
                 records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                     memory_type=memory_type,
                     address=hardware_addr,
-                    nickname=name,
+                    nickname=slot.name,
                     comment=comment,
-                    initial_value=_format_default(default, slot.type),
-                    retentive=retentive,
+                    initial_value=_format_default(slot.default, slot.type),
+                    retentive=slot.retentive,
                     data_type=BANKS[memory_type].data_type,
                 )
 
@@ -629,11 +641,6 @@ class TagMap:
                 hardware = self._block_slot_forward_by_id.get(id(source))
                 if hardware is not None:
                     return hardware.name
-                if source.name in self._ambiguous_block_slot_names:
-                    raise KeyError(
-                        f"Tag name {source.name!r} is ambiguous across mapped block slots. "
-                        "Resolve by block and index instead."
-                    )
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is None:
                     raise KeyError(f"No mapping for standalone tag {source.name!r}.")
@@ -741,65 +748,6 @@ class TagMap:
     @property
     def warnings(self) -> tuple[str, ...]:
         return self._warnings
-
-    def override(
-        self,
-        slot: Tag,
-        *,
-        name: str | None = None,
-        retentive: bool | None = None,
-        default: object = UNSET,
-    ) -> None:
-        """Attach export metadata override to a mapped slot."""
-        new_override = SlotOverride(name=name, retentive=retentive, default=default)
-        slot_id = id(slot)
-
-        if slot_id in self._slot_ids:
-            previous = self._overrides_by_slot_id.get(slot_id)
-            self._overrides_by_slot_id[slot_id] = new_override
-            key_kind = "slot_id"
-        elif slot.name in self._standalone_names:
-            previous = self._overrides_by_name.get(slot.name)
-            self._overrides_by_name[slot.name] = new_override
-            key_kind = "name"
-        else:
-            raise KeyError(f"Slot {slot.name!r} is not mapped in this TagMap.")
-
-        try:
-            self._refresh_nickname_validation()
-        except ValueError:
-            if key_kind == "name":
-                if previous is None:
-                    self._overrides_by_name.pop(slot.name, None)
-                else:
-                    self._overrides_by_name[slot.name] = previous
-            else:
-                if previous is None:
-                    self._overrides_by_slot_id.pop(slot_id, None)
-                else:
-                    self._overrides_by_slot_id[slot_id] = previous
-            self._refresh_nickname_validation()
-            raise
-
-    def clear_override(self, slot: Tag) -> None:
-        """Clear override metadata for a mapped slot."""
-        slot_id = id(slot)
-        if slot_id in self._slot_ids:
-            self._overrides_by_slot_id.pop(slot_id, None)
-        elif slot.name in self._standalone_names:
-            self._overrides_by_name.pop(slot.name, None)
-        else:
-            raise KeyError(f"Slot {slot.name!r} is not mapped in this TagMap.")
-        self._refresh_nickname_validation()
-
-    def get_override(self, slot: Tag) -> SlotOverride | None:
-        """Return override metadata for a mapped slot."""
-        slot_id = id(slot)
-        if slot_id in self._slot_ids:
-            return self._overrides_by_slot_id.get(slot_id)
-        if slot.name in self._standalone_names:
-            return self._overrides_by_name.get(slot.name)
-        return None
 
     def __contains__(self, item: Tag | Block | str) -> bool:
         if isinstance(item, str):
@@ -935,16 +883,6 @@ class TagMap:
         del self._entries
         del self._system_tag_entries
 
-    def _effective_metadata(self, slot: Tag) -> tuple[str, bool, object]:
-        override = self.get_override(slot)
-        if override is None:
-            return slot.name, slot.retentive, slot.default
-
-        name = slot.name if override.name is None else override.name
-        retentive = slot.retentive if override.retentive is None else override.retentive
-        default = slot.default if override.default is UNSET else override.default
-        return name, retentive, default
-
     def _mapped_slot(
         self,
         logical_slot: Tag,
@@ -954,14 +892,10 @@ class TagMap:
         source: Literal["user", "system"],
     ) -> MappedSlot:
         memory_type, address = self._parse_hardware_tag(hardware_slot)
-        if source == "user":
-            _, _, default = self._effective_metadata(logical_slot)
-        else:
-            default = logical_slot.default
         return MappedSlot(
             hardware_address=format_address_display(memory_type, address),
             logical_name=logical_slot.name,
-            default=default,
+            default=logical_slot.default,
             memory_type=memory_type,
             address=address,
             read_only=read_only,
@@ -971,6 +905,11 @@ class TagMap:
     def _reject_reserved_system_name(self, name: str) -> None:
         if name in SYSTEM_TAGS_BY_NAME:
             raise ValueError(f"Logical tag name {name!r} is reserved for system points.")
+
+    def _register_user_logical_name(self, name: str, *, owner: str) -> None:
+        if name in self._user_logical_names:
+            raise ValueError(f"Duplicate user logical tag name {name!r} (from {owner}).")
+        self._user_logical_names.add(name)
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:
@@ -984,7 +923,7 @@ class TagMap:
         seen: dict[str, Tag] = {}
 
         for slot in self._iter_export_slots():
-            nickname, _, _ = self._effective_metadata(slot)
+            nickname = slot.name
             if nickname != "":
                 existing = seen.get(nickname)
                 if existing is not None and existing is not slot:

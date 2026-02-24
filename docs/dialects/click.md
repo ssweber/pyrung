@@ -57,26 +57,29 @@ X and Y are sparse banks with non-contiguous valid addresses. `.select()` filter
 x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 ```
 
-### Per-slot runtime policy
+### Per-slot runtime policy and naming
 
 Pre-built Click blocks can be configured in place with per-slot runtime policy
-for retention/default seed values.
+for retention/default seed values and canonical slot names.
 
 ```python
 from pyrung.click import ds, td
 
 # Configure before first access to the same slot.
+ds.rename_slot(10, "RecipeStep")
+ds.clear_slot_name(10)
 ds.configure_slot(200, retentive=True, default=123)
 td.configure_range(1, 5, retentive=False, default=0)
 ```
 
 Effective policy precedence:
 
+- `name`: slot rename > generated block name
 - `retentive`: slot override > block default
 - `default`: slot override > block `default_factory(addr)` > type default
 
-If a slot is already materialized (`block[n]` accessed), later `configure_*`/`clear_*`
-for that slot raise `ValueError`.
+If a slot is already materialized (`block[n]` accessed), later `rename_slot`,
+`clear_slot_name`, `configure_*`, or `clear_*` for that slot raise `ValueError`.
 
 ## Type aliases
 
@@ -197,6 +200,9 @@ mapping = TagMap.from_nickname_file("project.csv")
 - Block tag pairs (`<Name>` / `</Name>` comments) are reconstructed as `Block` objects.
 - Standalone nicknames become individual `Tag` objects.
 - Timer/counter `_D` suffix pairs are linked automatically.
+- For block rows, nickname import is strict: each nickname must be non-empty,
+  valid, and unique in the resulting map. Non-representable nicknames fail fast
+  with a `ValueError` that includes memory type/address.
 
 ### To nickname file
 
@@ -206,7 +212,8 @@ Export to Click nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-- Mapped tags/blocks emit rows with nickname, initial value, and retentive flag.
+- Mapped tags/blocks emit rows with canonical logical names (`Tag.name`), initial
+  value, and retentive flag.
 - Unmapped tags are omitted.
 
 ## Validation

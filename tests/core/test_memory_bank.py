@@ -139,21 +139,38 @@ class TestBlock:
         )
 
         inherited = DS.slot_config(3)
+        assert inherited.name == "DS3"
         assert inherited.retentive is False
         assert inherited.default == 30
+        assert inherited.name_overridden is False
         assert inherited.retentive_overridden is False
         assert inherited.default_overridden is False
 
+        DS.rename_slot(3, "Speed_Command")
         DS.configure_slot(3, retentive=True, default=999)
         configured = DS.slot_config(3)
+        assert configured.name == "Speed_Command"
         assert configured.retentive is True
         assert configured.default == 999
+        assert configured.name_overridden is True
         assert configured.retentive_overridden is True
         assert configured.default_overridden is True
 
         tag = DS[3]
+        assert tag.name == "Speed_Command"
         assert tag.retentive is True
         assert tag.default == 999
+
+    def test_slot_name_clear_restores_generated_name(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.rename_slot(4, "ManualName")
+        assert DS.slot_config(4).name == "ManualName"
+        assert DS.slot_config(4).name_overridden is True
+
+        DS.clear_slot_name(4)
+        restored = DS.slot_config(4)
+        assert restored.name == "DS4"
+        assert restored.name_overridden is False
 
     def test_configure_range_applies_to_sparse_addresses_only(self):
         sparse = Block("X", TagType.BOOL, 1, 6, valid_ranges=((1, 2), (5, 6)))
@@ -191,6 +208,12 @@ class TestBlock:
     def test_slot_policy_mutation_after_materialization_raises(self):
         DS = Block("DS", TagType.INT, 1, 10)
         _ = DS[2]
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.rename_slot(2, "Renamed")
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.clear_slot_name(2)
 
         with pytest.raises(ValueError, match="materialization"):
             DS.configure_slot(2, default=99)

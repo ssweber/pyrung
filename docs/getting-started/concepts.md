@@ -185,28 +185,33 @@ Y[1]    # → LiveOutputTag("Y1", TagType.BOOL)  — has .immediate
 
 ### Per-slot runtime policy
 
-Blocks support first-class per-slot runtime policy for retention and defaults:
+Blocks support first-class per-slot policy for names, retention, and defaults:
 
 ```python
 DS = Block("DS", TagType.INT, 1, 10, retentive=False, default_factory=lambda a: a)
 
+DS.rename_slot(2, "Speed_Setpoint")
 DS.configure_slot(2, retentive=True, default=500)
 DS.configure_range(5, 8, default=42)
 
 cfg = DS.slot_config(2)
+cfg.name                 # "Speed_Setpoint"
 cfg.retentive            # True
 cfg.default              # 500
+cfg.name_overridden      # True
 cfg.retentive_overridden # True
 cfg.default_overridden   # True
 ```
 
 Precedence for effective slot policy:
 
+- `name`: slot rename > generated block name
 - `retentive`: slot override > block `retentive`
 - `default`: slot override > `default_factory(addr)` > type default
 
 Configuration must happen **before** the slot is materialized (`DS[n]`).
-If a slot was already indexed, `configure_*` and `clear_*` for that slot raise `ValueError`.
+If a slot was already indexed, `rename_slot`, `clear_slot_name`, `configure_*`,
+and `clear_*` for that slot raise `ValueError`.
 
 !!! note "1-indexed"
     Block addresses start at 1, matching PLC conventions. `Block[0]` raises `IndexError`.
