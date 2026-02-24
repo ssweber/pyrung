@@ -55,6 +55,31 @@ def test_stop_resets_motor():
 - Tests don't depend on wall-clock timing.
 - You can choose any `dt` that makes sense for your test (e.g. `dt=0.001` for 1ms steps).
 
+`FIXED_STEP` controls simulation-time behavior (`state.timestamp`, timers/counters, and scan clocks).
+RTC system points (`rtc.year4`, `rtc.hour`, etc.) are derived from wall clock (`datetime.now()`) plus internal RTC offset, so they are not deterministic unless you freeze or monkeypatch time.
+
+## Testing RTC deterministically
+
+Use a frozen clock for tests that read or write `rtc.*` values:
+
+```python
+from freezegun import freeze_time
+from pyrung import PLCRunner, system
+
+def test_rtc_fields_with_frozen_wall_clock():
+    with freeze_time("2026-03-05 06:07:08"):
+        runner = PLCRunner(logic=[])
+        runner.step()
+
+        found, year = runner.system_runtime.resolve(system.rtc.year4.name, runner.current_state)
+        found2, second = runner.system_runtime.resolve(system.rtc.second.name, runner.current_state)
+
+        assert found is True and year == 2026
+        assert found2 is True and second == 8
+```
+
+If you need "what RTC was at each scan" in retained history, copy the `rtc.*` value into a normal tag during the scan. That tag is then stored in `state.tags` and can be inspected later from history snapshots.
+
 ## Testing timers
 
 ```python
