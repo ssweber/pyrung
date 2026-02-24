@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Never, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Never, cast, overload
 
 from pyrung.core.tag import (
     LiveInputTag,
@@ -31,6 +31,19 @@ if TYPE_CHECKING:
     from pyrung.core.expression import Expression
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
+
+
+UNSET: Final = object()
+
+
+@dataclass(frozen=True)
+class SlotConfig:
+    """Effective runtime policy for one block slot."""
+
+    retentive: bool
+    default: Any
+    retentive_overridden: bool
+    default_overridden: bool
 
 
 @dataclass(eq=False)
@@ -90,6 +103,8 @@ class Block:
     address_formatter: Callable[[str, int], str] | None = None
     default_factory: Callable[[int], Any] | None = None
     _tag_cache: dict[int, Tag] = field(default_factory=dict, repr=False)
+    _slot_retentive_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_default_overrides: dict[int, Any] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -156,16 +171,122 @@ class Block:
     def _get_tag(self, addr: int) -> LiveTag:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
-            default = None
-            if self.default_factory is not None:
-                default = self.default_factory(addr)
-            self._tag_cache[addr] = LiveTag(
-                name=self._format_tag_name(addr),
-                type=self.type,
-                retentive=self.retentive,
-                default=default,
-            )
+            retentive, default = self._effective_slot_policy(addr)
+            self._tag_cache[addr] = self._new_tag_for_slot(addr, retentive=retentive, default=default)
         return cast(LiveTag, self._tag_cache[addr])
+
+    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveTag:
+        return LiveTag(
+            name=self._format_tag_name(addr),
+            type=self.type,
+            retentive=retentive,
+            default=default,
+        )
+
+    def _type_default(self) -> Any:
+        defaults = {
+            TagType.BOOL: False,
+            TagType.INT: 0,
+            TagType.DINT: 0,
+            TagType.REAL: 0.0,
+            TagType.WORD: 0,
+            TagType.CHAR: "",
+        }
+        return defaults.get(self.type, 0)
+
+    def _effective_slot_policy(self, addr: int) -> tuple[bool, Any]:
+        retentive = self._slot_retentive_overrides.get(addr, self.retentive)
+        if addr in self._slot_default_overrides:
+            default = self._slot_default_overrides[addr]
+        elif self.default_factory is not None:
+            default = self.default_factory(addr)
+        else:
+            default = self._type_default()
+        return retentive, default
+
+    def _assert_not_materialized(self, addr: int, *, action: str) -> None:
+        if addr in self._tag_cache:
+            raise ValueError(
+                f"Cannot {action} {self.name}[{addr}] after tag materialization. "
+                "Configure slot policy before reading/indexing that slot."
+            )
+
+    def configure_slot(
+        self,
+        addr: int,
+        *,
+        retentive: bool | None = None,
+        default: object = UNSET,
+    ) -> None:
+        """Set per-slot runtime policy before this slot is materialized."""
+        self._validate_address(addr)
+        self._assert_not_materialized(addr, action="configure slot policy for")
+
+        if retentive is not None:
+            self._slot_retentive_overrides[addr] = bool(retentive)
+        if default is not UNSET:
+            self._slot_default_overrides[addr] = default
+
+    def configure_range(
+        self,
+        start: int,
+        end: int,
+        *,
+        retentive: bool | None = None,
+        default: object = UNSET,
+    ) -> None:
+        """Set per-slot policy for all valid addresses in the inclusive window."""
+        if start > end:
+            raise ValueError(
+                f"configure_range start ({start}) must be <= end ({end}) for {self.name} block"
+            )
+        self._validate_window_bound(start, "Start")
+        self._validate_window_bound(end, "End")
+
+        addresses = self._window_addresses(start, end)
+        for addr in addresses:
+            self._assert_not_materialized(addr, action="configure slot policy for")
+
+        for addr in addresses:
+            if retentive is not None:
+                self._slot_retentive_overrides[addr] = bool(retentive)
+            if default is not UNSET:
+                self._slot_default_overrides[addr] = default
+
+    def clear_slot_config(self, addr: int) -> None:
+        """Clear per-slot policy overrides for one address."""
+        self._validate_address(addr)
+        self._assert_not_materialized(addr, action="clear slot policy for")
+        self._slot_retentive_overrides.pop(addr, None)
+        self._slot_default_overrides.pop(addr, None)
+
+    def clear_range_config(self, start: int, end: int) -> None:
+        """Clear per-slot policy overrides for all valid addresses in a window."""
+        if start > end:
+            raise ValueError(
+                f"clear_range_config start ({start}) must be <= end ({end}) for {self.name} block"
+            )
+        self._validate_window_bound(start, "Start")
+        self._validate_window_bound(end, "End")
+
+        addresses = self._window_addresses(start, end)
+        for addr in addresses:
+            self._assert_not_materialized(addr, action="clear slot policy for")
+
+        for addr in addresses:
+            self._slot_retentive_overrides.pop(addr, None)
+            self._slot_default_overrides.pop(addr, None)
+
+    def slot_config(self, addr: int) -> SlotConfig:
+        """Return the effective runtime slot policy without materializing a Tag."""
+        self._validate_address(addr)
+        retentive, default = self._effective_slot_policy(addr)
+        return SlotConfig(
+            retentive=retentive,
+            default=default,
+            retentive_overridden=addr in self._slot_retentive_overrides,
+            default_overridden=addr in self._slot_default_overrides,
+        )
 
     def _format_tag_name(self, addr: int) -> str:
         if self.address_formatter is None:
@@ -349,19 +470,16 @@ class InputBlock(Block):
     ) -> LiveInputTag | IndirectRef | IndirectExprRef:
         return cast(LiveInputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
+    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveInputTag:
+        return LiveInputTag(
+            name=self._format_tag_name(addr),
+            type=self.type,
+            retentive=retentive,
+            default=default,
+        )
+
     def _get_tag(self, addr: int) -> LiveInputTag:
-        """Get or create an InputTag for the given address."""
-        if addr not in self._tag_cache:
-            default = None
-            if self.default_factory is not None:
-                default = self.default_factory(addr)
-            self._tag_cache[addr] = LiveInputTag(
-                name=self._format_tag_name(addr),
-                type=self.type,
-                retentive=False,
-                default=default,
-            )
-        return cast(LiveInputTag, self._tag_cache[addr])
+        return cast(LiveInputTag, super()._get_tag(addr))
 
 
 @dataclass(eq=False)
@@ -427,19 +545,16 @@ class OutputBlock(Block):
     ) -> LiveOutputTag | IndirectRef | IndirectExprRef:
         return cast(LiveOutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
+    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveOutputTag:
+        return LiveOutputTag(
+            name=self._format_tag_name(addr),
+            type=self.type,
+            retentive=retentive,
+            default=default,
+        )
+
     def _get_tag(self, addr: int) -> LiveOutputTag:
-        """Get or create an OutputTag for the given address."""
-        if addr not in self._tag_cache:
-            default = None
-            if self.default_factory is not None:
-                default = self.default_factory(addr)
-            self._tag_cache[addr] = LiveOutputTag(
-                name=self._format_tag_name(addr),
-                type=self.type,
-                retentive=False,
-                default=default,
-            )
-        return cast(LiveOutputTag, self._tag_cache[addr])
+        return cast(LiveOutputTag, super()._get_tag(addr))
 
 
 @dataclass(frozen=True)

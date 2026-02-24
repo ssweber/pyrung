@@ -128,6 +128,94 @@ class TestBlock:
         DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
         assert DS[1].retentive is True
 
+    def test_slot_config_effective_policy_and_overrides(self):
+        DS = Block(
+            "DS",
+            TagType.INT,
+            1,
+            10,
+            retentive=False,
+            default_factory=lambda addr: addr * 10,
+        )
+
+        inherited = DS.slot_config(3)
+        assert inherited.retentive is False
+        assert inherited.default == 30
+        assert inherited.retentive_overridden is False
+        assert inherited.default_overridden is False
+
+        DS.configure_slot(3, retentive=True, default=999)
+        configured = DS.slot_config(3)
+        assert configured.retentive is True
+        assert configured.default == 999
+        assert configured.retentive_overridden is True
+        assert configured.default_overridden is True
+
+        tag = DS[3]
+        assert tag.retentive is True
+        assert tag.default == 999
+
+    def test_configure_range_applies_to_sparse_addresses_only(self):
+        sparse = Block("X", TagType.BOOL, 1, 6, valid_ranges=((1, 2), (5, 6)))
+        sparse.configure_range(1, 6, retentive=True, default=True)
+
+        assert sparse.slot_config(1).default is True
+        assert sparse.slot_config(2).default is True
+        assert sparse.slot_config(5).default is True
+        assert sparse.slot_config(6).default is True
+        with pytest.raises(IndexError):
+            sparse.slot_config(3)
+
+    def test_clear_slot_and_range_config_restore_inherited_policy(self):
+        DS = Block(
+            "DS",
+            TagType.INT,
+            1,
+            6,
+            retentive=False,
+            default_factory=lambda addr: addr,
+        )
+        DS.configure_slot(2, retentive=True, default=200)
+        DS.clear_slot_config(2)
+        after_clear_slot = DS.slot_config(2)
+        assert after_clear_slot.retentive is False
+        assert after_clear_slot.default == 2
+
+        DS.configure_range(1, 6, retentive=True, default=100)
+        DS.clear_range_config(1, 6)
+        assert DS.slot_config(1).retentive is False
+        assert DS.slot_config(1).default == 1
+        assert DS.slot_config(6).retentive is False
+        assert DS.slot_config(6).default == 6
+
+    def test_slot_policy_mutation_after_materialization_raises(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        _ = DS[2]
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.configure_slot(2, default=99)
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.configure_range(1, 3, retentive=True)
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.clear_slot_config(2)
+
+        with pytest.raises(ValueError, match="materialization"):
+            DS.clear_range_config(1, 3)
+
+    def test_input_output_block_slot_overrides_support_retentive_and_default(self):
+        X = InputBlock("X", TagType.BOOL, 1, 2)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 2)
+
+        X.configure_slot(1, retentive=True, default=True)
+        Y.configure_slot(2, retentive=True, default=True)
+
+        assert X[1].retentive is True
+        assert X[1].default is True
+        assert Y[2].retentive is True
+        assert Y[2].default is True
+
     def test_start_must_be_at_least_0(self):
         """start < 0 raises ValueError."""
         with pytest.raises(ValueError, match="start must be >= 0"):

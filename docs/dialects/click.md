@@ -57,6 +57,27 @@ X and Y are sparse banks with non-contiguous valid addresses. `.select()` filter
 x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 ```
 
+### Per-slot runtime policy
+
+Pre-built Click blocks can be configured in place with per-slot runtime policy
+for retention/default seed values.
+
+```python
+from pyrung.click import ds, td
+
+# Configure before first access to the same slot.
+ds.configure_slot(200, retentive=True, default=123)
+td.configure_range(1, 5, retentive=False, default=0)
+```
+
+Effective policy precedence:
+
+- `retentive`: slot override > block default
+- `default`: slot override > block `default_factory(addr)` > type default
+
+If a slot is already materialized (`block[n]` accessed), later `configure_*`/`clear_*`
+for that slot raise `ValueError`.
+
 ## Type aliases
 
 Click-style constructor aliases are available as convenience alternatives to IEC names:

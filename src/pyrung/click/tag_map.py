@@ -463,7 +463,7 @@ class TagMap:
         ranges = compute_all_block_ranges(cast(list, rows))
 
         mappings: list[MappingEntry] = []
-        pending_overrides: list[tuple[Tag, SlotOverride]] = []
+        pending_name_overrides: list[tuple[Block, int, str]] = []
         covered_rows: set[int] = set()
 
         for block_range in ranges:
@@ -504,20 +504,22 @@ class TagMap:
                 if logical_addr is None:
                     continue
 
-                slot = logical_block[logical_addr]
-                name = row.nickname if row.nickname != slot.name else None
-                default = _parse_default(row.initial_value, slot.type)
-                override_default = default if default != slot.default else UNSET
-                retentive = row.retentive if row.retentive != slot.retentive else None
+                slot_name = logical_block._format_tag_name(logical_addr)
+                name = row.nickname if row.nickname != slot_name else None
+                slot_config = logical_block.slot_config(logical_addr)
+                default = _parse_default(row.initial_value, logical_block.type)
 
-                if name is None and retentive is None and override_default is UNSET:
+                configure_kwargs: dict[str, object] = {}
+                if row.retentive != slot_config.retentive:
+                    configure_kwargs["retentive"] = row.retentive
+                if default != slot_config.default:
+                    configure_kwargs["default"] = default
+                if configure_kwargs:
+                    logical_block.configure_slot(logical_addr, **configure_kwargs)
+
+                if name is None:
                     continue
-                pending_overrides.append(
-                    (
-                        slot,
-                        SlotOverride(name=name, retentive=retentive, default=override_default),
-                    )
-                )
+                pending_name_overrides.append((logical_block, logical_addr, name))
 
         for idx, row in enumerate(rows):
             if idx in covered_rows:
@@ -537,13 +539,8 @@ class TagMap:
             mappings.append(logical.map_to(hardware))
 
         tag_map = cls(mappings)
-        for slot, override in pending_overrides:
-            tag_map.override(
-                slot,
-                name=override.name,
-                retentive=override.retentive,
-                default=override.default,
-            )
+        for block, addr, name in pending_name_overrides:
+            tag_map.override(block[addr], name=name)
         return tag_map
 
     def to_nickname_file(self, path: str | Path) -> int:

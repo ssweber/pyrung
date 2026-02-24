@@ -43,6 +43,16 @@ def test_read_mapped_block_slot_falls_back_to_logical_default_when_absent():
     assert provider.read("C101") is False
 
 
+def test_read_mapped_block_slot_uses_first_class_slot_default_when_absent():
+    alarms = Block("AlarmCfg", TagType.BOOL, 1, 2)
+    alarms.configure_slot(1, default=True)
+    mapping = TagMap({alarms: c.select(111, 112)})
+    runner = PLCRunner(logic=[])
+    provider = ClickDataProvider(runner, mapping)
+
+    assert provider.read("C111") is True
+
+
 def test_write_mapped_tag_is_deferred_until_next_scan():
     valve = Tag("Valve", TagType.BOOL)
     mapping = TagMap({valve: c[1]})

@@ -455,8 +455,21 @@ class PLCRunner:
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
             return
-        if tag.name not in self._known_tags_by_name:
+        existing = self._known_tags_by_name.get(tag.name)
+        if existing is None:
             self._known_tags_by_name[tag.name] = tag
+            return
+        if (
+            existing.type != tag.type
+            or existing.retentive != tag.retentive
+            or existing.default != tag.default
+        ):
+            raise ValueError(
+                f"Conflicting tag metadata for {tag.name!r}: existing "
+                f"(type={existing.type.name}, retentive={existing.retentive}, "
+                f"default={existing.default!r}) vs new "
+                f"(type={tag.type.name}, retentive={tag.retentive}, default={tag.default!r})."
+            )
 
     def _register_known_tags_from_mapping_keys(
         self,

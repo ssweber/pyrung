@@ -4,7 +4,20 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, out, system
+from pyrung.core import (
+    Block,
+    Bool,
+    Int,
+    PLCRunner,
+    Program,
+    Rung,
+    Tag,
+    TagType,
+    TimeMode,
+    copy,
+    out,
+    system,
+)
 
 
 def _resolved(runner: PLCRunner, tag_name: str):
@@ -117,9 +130,34 @@ def test_cmd_mode_stop_written_in_scan_transitions_runner_to_stop():
 
     runner.step()
     assert _resolved(runner, system.sys.mode_run.name) is True
-
     runner.step()
     assert _resolved(runner, system.sys.mode_run.name) is False
-
     runner.step()
     assert _resolved(runner, system.sys.mode_run.name) is True
+
+
+def test_stop_restart_mixed_block_slot_retentive_and_default_policy():
+    regs = Block("Reg", TagType.INT, 1, 2, retentive=False)
+    regs.configure_slot(1, retentive=False, default=111)
+    regs.configure_slot(2, retentive=True, default=222)
+
+    runner = PLCRunner(logic=[])
+    runner.patch({regs[1]: 5, regs[2]: 6})
+    runner.step()
+
+    runner.stop()
+    runner.step()
+
+    assert runner.current_state.tags["Reg1"] == 111
+    assert runner.current_state.tags["Reg2"] == 6
+
+
+def test_register_known_tag_conflict_on_same_name_raises():
+    runner = PLCRunner(logic=[])
+    first = Tag("DupMeta", TagType.INT, retentive=True, default=0)
+    second = Tag("DupMeta", TagType.INT, retentive=False, default=0)
+
+    runner.patch({first: 1})
+
+    with pytest.raises(ValueError, match="Conflicting tag metadata"):
+        runner.patch({second: 2})

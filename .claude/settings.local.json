@@ -13,7 +13,10 @@
       "WebFetch(domain:cdn.automationdirect.com)",
       "WebFetch(domain:accautomation.ca)",
       "WebFetch(domain:community.automationdirect.com)",
-      "WebFetch(domain:www.automationdirect.com)"
+      "WebFetch(domain:www.automationdirect.com)",
+      "WebFetch(domain:facts-engineering.github.io)",
+      "WebFetch(domain:circuitpython.org)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

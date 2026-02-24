@@ -316,6 +316,20 @@ def test_to_nickname_file_uses_override_metadata(tmp_path):
     assert record.initial_value == "1"
 
 
+def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
+    alarms = Block("AlarmCfg", TagType.BOOL, 1, 1, retentive=False)
+    alarms.configure_slot(1, retentive=True, default=True)
+    mapping = TagMap({alarms: c.select(301, 301)})
+
+    path = tmp_path / "slot_runtime.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    record = rows[get_addr_key("C", 301)]
+
+    assert record.retentive is True
+    assert record.initial_value == "1"
+
+
 def test_from_nickname_file_round_trip(tmp_path):
     valve = Bool("Valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
@@ -332,7 +346,39 @@ def test_from_nickname_file_round_trip(tmp_path):
     override = restored.get_override(restored_block[1])
     assert override is not None
     assert override.name == "Alarm_1"
-    assert override.default == 1
+    assert restored_block[1].default is True
+
+
+def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
+    path = tmp_path / "slot_runtime_import.csv"
+    records = {
+        get_addr_key("C", 401): AddressRecord(
+            memory_type="C",
+            address=401,
+            nickname="AlarmCfg1",
+            comment="<AlarmCfg>",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 402): AddressRecord(
+            memory_type="C",
+            address=402,
+            nickname="AlarmCfg2",
+            comment="</AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+    assert block[1].retentive is True
+    assert block[1].default is True
+    assert block[2].retentive is False
+    assert block[2].default is False
 
 
 def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):

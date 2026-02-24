@@ -226,3 +226,22 @@ def test_click_prebuilt_tag_classes():
     assert isinstance(yd[0], OutputTag)
     assert isinstance(yd0u, OutputTag)
     assert isinstance(ds[1], Tag)
+
+
+def test_click_prebuilt_block_allows_in_place_slot_policy_before_materialization():
+    from pyrung.click import ds
+
+    candidate = next((addr for addr in range(ds.end, ds.start - 1, -1) if addr not in ds._tag_cache), None)
+    if candidate is None:
+        pytest.skip("No unmaterialized DS slot available for in-place policy test.")
+
+    baseline = ds.slot_config(candidate)
+    ds.configure_slot(candidate, retentive=not baseline.retentive, default=1234)
+    configured = ds.slot_config(candidate)
+    assert configured.retentive is (not baseline.retentive)
+    assert configured.default == 1234
+
+    ds.clear_slot_config(candidate)
+    restored = ds.slot_config(candidate)
+    assert restored.retentive == baseline.retentive
+    assert restored.default == baseline.default

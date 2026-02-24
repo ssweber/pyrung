@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, copy, system
+from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, copy, system
 
 
 def _resolved(runner: PLCRunner, tag_name: str):
@@ -76,3 +76,19 @@ def test_reboot_keeps_runner_in_run_mode_and_first_scan_is_true_on_next_scan():
 def test_battery_default_is_present():
     runner = PLCRunner(logic=[])
     assert _resolved(runner, system.sys.battery_present.name) is True
+
+
+def test_reboot_without_battery_uses_per_slot_defaults_regardless_of_retentive():
+    regs = Block("RebootSlot", TagType.INT, 1, 2, retentive=False)
+    regs.configure_slot(1, retentive=False, default=10)
+    regs.configure_slot(2, retentive=True, default=20)
+
+    runner = PLCRunner(logic=[])
+    runner.patch({regs[1]: 101, regs[2]: 202})
+    runner.step()
+
+    runner.set_battery_present(False)
+    runner.reboot()
+
+    assert runner.current_state.tags["RebootSlot1"] == 10
+    assert runner.current_state.tags["RebootSlot2"] == 20
