@@ -34,6 +34,9 @@ def main():
     # 3. Ruff Formatter
     errcount += run(["ruff", "format", *SRC_PATHS])
 
+    # 4. Semantic guards for default/fallback-sensitive logic.
+    errcount += run(["python", "devtools/semantic_lint.py"])
+
     errcount += run(
         [
             "ty",
