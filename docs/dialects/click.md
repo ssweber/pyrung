@@ -69,20 +69,29 @@ Click-style constructor aliases are available as convenience alternatives to IEC
 | `Hex` | `Word` |
 | `Txt` | `Char` |
 
-## Naming differences (Click -> pyrung)
+## DSL naming philosophy
 
-`pyrung` keeps Click semantics but uses Pythonic function names in the DSL.
+This DSL follows Click PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context. Every rename has a reason, and the reason is always "the new name is clearer here," never just "Python forced our hand."
 
-| Click instruction | pyrung DSL |
-|-------------------|------------|
-| `SET` | `latch` |
-| `MATH` | `calc` |
-| `FOR` / `NEXT` | `forloop` |
-| `COPY (Single)` | `copy` |
-| `COPY (Block)` | `blockcopy` |
-| `COPY (Fill)` | `fill` |
-| `COPY (Pack)` | `pack_bits`, `pack_words`, `pack_text` |
-| `COPY (Unpack)` | `unpack_to_bits`, `unpack_to_words` |
+### Principles
+
+1. **Keep the Click name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
+
+2. **Use a domain synonym** when Click's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both replacements are well-understood PLC terminology and arguably more descriptive of what the instruction does.
+
+3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In Click, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit via `with Subfunction("name"):`, so the only use of a return instruction is early exit — and the name should say so.
+
+### Why not trailing underscores?
+
+Names like `math_` or `return_` signal "I wanted the real name but couldn't have it." A DSL should feel like a first-class domain language, not a workaround. Each of our renames stands on its own merits.
+
+### Rename table
+
+| Click instruction | pyrung DSL | Reason |
+|-------------------|------------|--------|
+| `SET` | `latch` | Shadows Python builtin `set` |
+| `MATH` | `calc` | Shadows Python stdlib `math` |
+| `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
 ## Writing a Click program
 
