@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pyclickplc import DataviewFile, DataviewRow, run_server_tui, write_cdv
+from pyclickplc import DataviewFile, DataViewRecord, run_server_tui, write_cdv
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
@@ -65,19 +65,19 @@ def main() -> Program:
 
             with Rung(sub.CurStep == 3):
                 latch(FillValve)
-                on_delay(Fill_T, Fill_Acc, setpoint=2000, time_unit=TimeUnit.Tms)
+                on_delay(Fill_T, Fill_Acc, preset=2000, unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 3, Fill_T):
                 reset(FillValve); copy(1, sub.Trans)
 
             with Rung(sub.CurStep == 5):
                 latch(Heater)
-                on_delay(Heat_T, Heat_Acc, setpoint=3000, time_unit=TimeUnit.Tms)
+                on_delay(Heat_T, Heat_Acc, preset=3000, unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 5):
                 with branch(Heat_T): reset(Heater); copy(1, sub.Trans)
                 with branch(sub.FastProcess == 1): reset(Heater); copy(0, sub.FastProcess); copy(1, sub.Trans)
 
             with Rung(sub.CurStep == 7):
-                on_delay(Check_T, Check_Acc, setpoint=500, time_unit=TimeUnit.Tms)
+                on_delay(Check_T, Check_Acc, preset=500, unit=TimeUnit.Tms)
             
             # --- CRITICAL FIX IN STEP 7 ---
             with Rung(sub.CurStep == 7, Check_T):
@@ -92,7 +92,7 @@ def main() -> Program:
             with Rung(sub.CurStep == 9):
                 latch(Complete)
                 copy(sub.Batch_Counter + 1, sub.Batch_Counter, oneshot=True)
-                on_delay(Comp_T, Comp_Acc, setpoint=500, time_unit=TimeUnit.Tms)
+                on_delay(Comp_T, Comp_Acc, preset=500, unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 9, Comp_T):
                 reset(Complete)
                 # FIX: Loop to 1, not 0
@@ -102,7 +102,7 @@ def main() -> Program:
                 latch(Reject)
                 copy(sub.Reject_Counter + 1, sub.Reject_Counter, oneshot=True)
                 copy(sub.Batch_Counter + 1, sub.Batch_Counter, oneshot=True)
-                on_delay(Rej_T, Rej_Acc, setpoint=1000, time_unit=TimeUnit.Tms)
+                on_delay(Rej_T, Rej_Acc, preset=1000, unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 11, Rej_T):
                 reset(Reject); calc(2, sub.CurStep)
 
@@ -139,7 +139,7 @@ def export_click_addresses(tag_map: TagMap) -> tuple[Path, Path]:
     tag_map.to_nickname_file(csv_path)
 
     rows = [
-        DataviewRow(address=slot.hardware_address)
+        DataViewRecord(address=slot.hardware_address)
         for slot in tag_map.mapped_slots()
         if slot.source == "user"
     ]
