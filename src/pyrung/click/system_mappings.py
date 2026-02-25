@@ -91,6 +91,21 @@ SYSTEM_CLICK_SLOTS = (
     SystemClickSlot(
         system.rtc.apply_time_error, _hardware_tag("SC56"), "_RTC_Time_Change_Error", True
     ),
+    SystemClickSlot(system.storage.sd.eject_cmd, _hardware_tag("SC65"), "_SD_Eject", False),
+    SystemClickSlot(
+        system.storage.sd.delete_all_cmd, _hardware_tag("SC66"), "_SD_Delete_All", False
+    ),
+    SystemClickSlot(
+        system.storage.sd.copy_system_cmd, _hardware_tag("SC67"), "_SD_Copy_System", False
+    ),
+    SystemClickSlot(system.storage.sd.ready, _hardware_tag("SC68"), "_SD_Ready_To_Use", True),
+    SystemClickSlot(
+        system.storage.sd.write_status, _hardware_tag("SC69"), "_SD_Write_Status", True
+    ),
+    SystemClickSlot(system.storage.sd.error, _hardware_tag("SC70"), "_SD_Error", True),
+    SystemClickSlot(
+        system.storage.sd.error_code, _hardware_tag("SD69"), "_SD_Error_Information", True
+    ),
     SystemClickSlot(
         system.firmware.main_ver_low, _hardware_tag("SD5"), "_Firmware_Version_L", True
     ),

@@ -72,6 +72,20 @@ Instruction classes outside this list must fail generation with a deterministic 
   - set `microcontroller.nvm[0] = 1` immediately before save write
   - clear to `0` only after rename succeeds
   - on boot, if flag is `1`, treat last save as interrupted, warn, skip restore, keep defaults
+- Generated runtime must define core-equivalent SD system-point semantics:
+  - `storage.sd.ready` mirrors `_sd_available`
+  - `storage.sd.write_status` pulses `True` while processing SD command acknowledgements
+  - `storage.sd.error` is `True` when the latest SD operation failed
+  - `storage.sd.error_code` uses dialect-neutral codes:
+    - `0`: no error
+    - `1`: mount failure
+    - `2`: load failure
+    - `3`: save failure
+- SD command bits `storage.sd.eject_cmd`, `storage.sd.delete_all_cmd`, and
+  `storage.sd.copy_system_cmd` are ack-only no-op in this phase:
+  - when observed `True`, set `storage.sd.write_status` for that processing cycle
+  - auto-clear the command bits after processing
+  - do not unmount or mutate card contents for these command bits in v1
 
 ### 2.4 Output format
 
@@ -187,6 +201,10 @@ Generated file must include:
 - `_mem: dict[str, object]` for runtime memory keys
 - `_prev: dict[str, object]` for edge-condition previous scan values
 - retentive persistence globals (`_sd_available`, schema hash, retentive defaults/type maps)
+- SD status/command globals for core parity:
+  - `storage.sd.ready` mirror (`_sd_available`)
+  - `storage.sd.write_status`, `storage.sd.error`, `storage.sd.error_code`
+  - command bits: `storage.sd.eject_cmd`, `storage.sd.delete_all_cmd`, `storage.sd.copy_system_cmd`
 - optional NVM dirty-flag globals when enabled
 - watchdog method bindings + optional watchdog config/petting
 - scan pacing diagnostics (`_scan_overrun_count`, optional print toggle)
@@ -213,7 +231,7 @@ Sections must appear in this exact order:
 3. hardware bootstrap + roll-call
 4. watchdog API binding + startup config
 5. tag and block declarations
-6. runtime memory declarations
+6. runtime memory declarations (including SD status/command state)
 7. SD mount + `load_memory()` startup call
 8. helper definitions (`save_memory` + only used math/edge helpers)
 9. embedded user function sources
@@ -290,34 +308,56 @@ _sd_spi = None
 _sd = None
 _sd_vfs = None
 
+# Core-parity SD system-point mirror state (storage.sd.*).
+_sd_write_status = False
+_sd_error = False
+_sd_error_code = 0  # 0=none, 1=mount_failure, 2=load_failure, 3=save_failure
+_sd_eject_cmd = False
+_sd_delete_all_cmd = False
+_sd_copy_system_cmd = False
+
 def _mount_sd():
-    global _sd_available, _sd_spi, _sd, _sd_vfs
+    global _sd_available, _sd_spi, _sd, _sd_vfs, _sd_error, _sd_error_code
     try:
         _sd_spi = busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)
         _sd = sdcardio.SDCard(_sd_spi, board.SD_CS)
         _sd_vfs = storage.VfsFat(_sd)
         storage.mount(_sd_vfs, "/sd")
         _sd_available = True
+        _sd_error = False
+        _sd_error_code = 0
     except Exception as exc:
         _sd_available = False
+        _sd_error = True
+        _sd_error_code = 1
         print(f"Retentive storage unavailable: {exc}")
 
 def load_memory():
-    global Step  # trimmed to referenced retentive symbols only
+    global Step, _sd_write_status, _sd_error, _sd_error_code  # trimmed retentive + SD status
     if not _sd_available:
         print("Retentive load skipped: SD unavailable")
         return
+    _sd_write_status = True
     if microcontroller is not None and len(microcontroller.nvm) > 0 and microcontroller.nvm[0] == 1:
+        _sd_error = True
+        _sd_error_code = 2
+        _sd_write_status = False
         print("Retentive load skipped: interrupted previous save detected")
         return
     try:
         with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
             payload = json.load(f)
     except Exception as exc:
+        _sd_error = True
+        _sd_error_code = 2
+        _sd_write_status = False
         print(f"Retentive load skipped: {exc}")
         return
 
     if payload.get("schema") != _RET_SCHEMA:
+        _sd_error = True
+        _sd_error_code = 2
+        _sd_write_status = False
         print("Retentive load skipped: schema mismatch")
         return
 
@@ -325,16 +365,30 @@ def load_memory():
     entry = values.get("Step")
     if isinstance(entry, dict) and entry.get("type") == "INT":
         Step = int(entry.get("value", Step))
+    _sd_error = False
+    _sd_error_code = 0
+    _sd_write_status = False
 
 _mount_sd()
 load_memory()
 
 # Optional helpers are emitted only when referenced by generated code.
+def _service_sd_commands():
+    global _sd_write_status, _sd_eject_cmd, _sd_delete_all_cmd, _sd_copy_system_cmd
+    # v1 behavior: acknowledge commands and auto-clear, without eject/delete/copy side effects.
+    if not (_sd_eject_cmd or _sd_delete_all_cmd or _sd_copy_system_cmd):
+        return
+    _sd_write_status = True
+    _sd_eject_cmd = False
+    _sd_delete_all_cmd = False
+    _sd_copy_system_cmd = False
+
 def save_memory():
-    global Step  # trimmed to referenced retentive symbols only
+    global Step, _sd_write_status, _sd_error, _sd_error_code  # trimmed retentive + SD status
     if not _sd_available:
         return
 
+    _sd_write_status = True
     values = {}
     if Step != _RET_DEFAULTS["Step"]:
         values["Step"] = {"type": "INT", "value": Step}
@@ -353,11 +407,17 @@ def save_memory():
             pass
         os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)
     except Exception as exc:
+        _sd_error = True
+        _sd_error_code = 3
+        _sd_write_status = False
         print(f"Retentive save failed: {exc}")
         return
 
     if dirty_armed:
         microcontroller.nvm[0] = 0
+    _sd_error = False
+    _sd_error_code = 0
+    _sd_write_status = False
 
 def _clamp_int(value):
     if value < -32768:
@@ -417,12 +477,14 @@ def _write_outputs():
 
 while True:
     scan_start = time.monotonic()
+    _sd_write_status = False
     dt = scan_start - _last_scan_ts
     if dt < 0:
         dt = 0.0
     _last_scan_ts = scan_start
     _mem["_dt"] = dt
 
+    _service_sd_commands()
     _read_inputs()
     _run_main_rungs()
     _write_outputs()
@@ -467,6 +529,10 @@ storage.mount(_sd_vfs, "/sd")
 - Scan loop includes dt capture, I/O read, logic execution, I/O write, prev update, watchdog pet, pacing, and overrun diagnostics.
 - Startup includes SD mount attempt and synchronous `load_memory()` before scan loop.
 - `save_memory()` is emitted with helper section and uses temp-write + rename persistence.
+- SD status mirrors are explicit:
+  - `storage.sd.ready` from `_sd_available`
+  - `storage.sd.error`/`storage.sd.error_code` updated on mount/load/save outcomes
+  - command bits (`storage.sd.eject_cmd/delete_all_cmd/copy_system_cmd`) are ack-only no-op with auto-clear
 - Watchdog calls use snake_case runtime methods (`config_watchdog`, `start_watchdog`, `pet_watchdog`).
 - `global` statements are trimmed per function to only referenced mutable symbols.
 
@@ -1361,6 +1427,13 @@ Test style should follow existing `tests/circuitpy/` class-based layout.
 
 - `TestRetentivePersistence`
   - SD mount success/failure path (`_sd_available` true/false)
+  - `storage.sd.ready` mirrors `_sd_available`
+  - mount/load/save failures set `storage.sd.error=True` and expected enum `storage.sd.error_code` (`1/2/3`)
+  - successful mount/save path clears `storage.sd.error` and resets `storage.sd.error_code` to `0`
+  - `storage.sd.eject_cmd/delete_all_cmd/copy_system_cmd` ack-only behavior:
+    - command observed -> `storage.sd.write_status` pulse
+    - command bits auto-clear
+    - no eject/delete/copy side effects in v1
   - `load_memory()` applies only matching name+type retentive entries
   - missing file/corrupt JSON/schema mismatch paths keep defaults and do not fault
   - `save_memory()` writes only values changed from defaults

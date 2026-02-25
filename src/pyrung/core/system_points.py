@@ -81,11 +81,28 @@ class FirmwareNamespace:
 
 
 @dataclass(frozen=True)
+class StorageSdNamespace:
+    eject_cmd: Tag
+    delete_all_cmd: Tag
+    copy_system_cmd: Tag
+    ready: Tag
+    write_status: Tag
+    error: Tag
+    error_code: Tag
+
+
+@dataclass(frozen=True)
+class StorageNamespace:
+    sd: StorageSdNamespace
+
+
+@dataclass(frozen=True)
 class SystemNamespaces:
     sys: SysNamespace
     rtc: RtcNamespace
     fault: FaultNamespace
     firmware: FirmwareNamespace
+    storage: StorageNamespace
 
 
 def _iter_namespace_tags(namespace: Any) -> tuple[Tag, ...]:
@@ -150,6 +167,17 @@ system = SystemNamespaces(
         sub_ver_low=Int("firmware.sub_ver_low", retentive=False),
         sub_ver_high=Int("firmware.sub_ver_high", retentive=False),
     ),
+    storage=StorageNamespace(
+        sd=StorageSdNamespace(
+            eject_cmd=Bool("storage.sd.eject_cmd"),
+            delete_all_cmd=Bool("storage.sd.delete_all_cmd"),
+            copy_system_cmd=Bool("storage.sd.copy_system_cmd"),
+            ready=Bool("storage.sd.ready"),
+            write_status=Bool("storage.sd.write_status"),
+            error=Bool("storage.sd.error"),
+            error_code=Int("storage.sd.error_code", retentive=False),
+        )
+    ),
 )
 
 _ALL_SYSTEM_TAGS = (
@@ -157,6 +185,7 @@ _ALL_SYSTEM_TAGS = (
     *_iter_namespace_tags(system.rtc),
     *_iter_namespace_tags(system.fault),
     *_iter_namespace_tags(system.firmware),
+    *_iter_namespace_tags(system.storage.sd),
 )
 SYSTEM_TAGS_BY_NAME = {tag.name: tag for tag in _ALL_SYSTEM_TAGS}
 
@@ -172,6 +201,9 @@ WRITABLE_SYSTEM_TAG_NAMES = frozenset(
         system.rtc.apply_time.name,
         system.sys.cmd_mode_stop.name,
         system.sys.cmd_watchdog_reset.name,
+        system.storage.sd.eject_cmd.name,
+        system.storage.sd.delete_all_cmd.name,
+        system.storage.sd.copy_system_cmd.name,
     }
 )
 READ_ONLY_SYSTEM_TAG_NAMES = frozenset(
@@ -208,6 +240,10 @@ _DERIVED_TAG_NAMES = frozenset(
         system.firmware.main_ver_high.name,
         system.firmware.sub_ver_low.name,
         system.firmware.sub_ver_high.name,
+        system.storage.sd.ready.name,
+        system.storage.sd.write_status.name,
+        system.storage.sd.error.name,
+        system.storage.sd.error_code.name,
     }
 )
 
@@ -222,6 +258,15 @@ _CLOCK_HALF_PERIODS = {
 _RTC_OFFSET_KEY = "_sys.rtc.offset"
 _MODE_RUN_KEY = "_sys.mode.run"
 _BATTERY_PRESENT_KEY = "_sys.battery_present"
+_SD_READY_KEY = "_sys.storage.sd.ready"
+_SD_WRITE_STATUS_KEY = "_sys.storage.sd.write_status"
+_SD_ERROR_KEY = "_sys.storage.sd.error"
+_SD_ERROR_CODE_KEY = "_sys.storage.sd.error_code"
+
+_SD_ERROR_NONE = 0
+_SD_ERROR_MOUNT_FAILURE = 1
+_SD_ERROR_LOAD_FAILURE = 2
+_SD_ERROR_SAVE_FAILURE = 3
 
 
 def _click_weekday(value: datetime) -> int:
@@ -323,6 +368,15 @@ class SystemPointRuntime:
         if name == system.sys.interrupt_scan_time_ms.name:
             return True, 0
 
+        if name == system.storage.sd.ready.name:
+            return True, bool(_raw_get_memory(ctx_or_state, _SD_READY_KEY, True))
+        if name == system.storage.sd.write_status.name:
+            return True, bool(_raw_get_memory(ctx_or_state, _SD_WRITE_STATUS_KEY, False))
+        if name == system.storage.sd.error.name:
+            return True, bool(_raw_get_memory(ctx_or_state, _SD_ERROR_KEY, False))
+        if name == system.storage.sd.error_code.name:
+            return True, int(_raw_get_memory(ctx_or_state, _SD_ERROR_CODE_KEY, _SD_ERROR_NONE))
+
         rtc_now = self._rtc_now(ctx_or_state)
         if name == system.rtc.year4.name:
             return True, rtc_now.year
@@ -347,6 +401,7 @@ class SystemPointRuntime:
         self._ensure_memory_defaults(ctx)
         self._clear_transient_status(ctx)
         self._process_rtc_apply(ctx)
+        self._process_storage_sd_commands(ctx)
         self._process_mode_commands(ctx)
 
     def on_scan_end(self, ctx: ScanContext) -> None:
@@ -380,6 +435,14 @@ class SystemPointRuntime:
             ctx.set_memory(_MODE_RUN_KEY, True)
         if not _raw_has_memory(ctx, _BATTERY_PRESENT_KEY):
             ctx.set_memory(_BATTERY_PRESENT_KEY, True)
+        if not _raw_has_memory(ctx, _SD_READY_KEY):
+            ctx.set_memory(_SD_READY_KEY, True)
+        if not _raw_has_memory(ctx, _SD_WRITE_STATUS_KEY):
+            ctx.set_memory(_SD_WRITE_STATUS_KEY, False)
+        if not _raw_has_memory(ctx, _SD_ERROR_KEY):
+            ctx.set_memory(_SD_ERROR_KEY, False)
+        if not _raw_has_memory(ctx, _SD_ERROR_CODE_KEY):
+            ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
         ctx._set_tags_internal(
@@ -391,6 +454,7 @@ class SystemPointRuntime:
                 system.rtc.apply_time_error.name: False,
             }
         )
+        ctx.set_memory(_SD_WRITE_STATUS_KEY, False)
 
     def _process_rtc_apply(self, ctx: ScanContext) -> None:
         if bool(_raw_get_tag(ctx, system.rtc.apply_date.name, False)):
@@ -404,6 +468,22 @@ class SystemPointRuntime:
                 system.rtc.apply_time.name: False,
             }
         )
+
+    def _process_storage_sd_commands(self, ctx: ScanContext) -> None:
+        command_names = (
+            system.storage.sd.eject_cmd.name,
+            system.storage.sd.delete_all_cmd.name,
+            system.storage.sd.copy_system_cmd.name,
+        )
+        has_command = any(bool(_raw_get_tag(ctx, name, False)) for name in command_names)
+        if not has_command:
+            return
+
+        # Core runtime acknowledges SD commands without vendor-specific side effects.
+        ctx.set_memory(_SD_WRITE_STATUS_KEY, True)
+        ctx.set_memory(_SD_ERROR_KEY, False)
+        ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
+        ctx._set_tags_internal({name: False for name in command_names})
 
     def _apply_rtc_date(self, ctx: ScanContext) -> None:
         now = datetime.now()

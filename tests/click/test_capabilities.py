@@ -53,6 +53,12 @@ def test_is_writable_sc_subset():
     assert CLICK_HARDWARE_PROFILE.is_writable("SC", None) is False
 
 
+def test_sd_control_sc_addresses_remain_writable():
+    for address in (65, 66, 67):
+        assert address in LADDER_WRITABLE_SC
+        assert CLICK_HARDWARE_PROFILE.is_writable("SC", address) is True
+
+
 def test_is_writable_sd_subset():
     for address in LADDER_WRITABLE_SD:
         assert CLICK_HARDWARE_PROFILE.is_writable("SD", address) is True

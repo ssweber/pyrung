@@ -45,6 +45,28 @@ def test_system_namespace_shape_and_names():
     assert system.fault.division_error.name == "fault.division_error"
     assert system.rtc.apply_time.name == "rtc.apply_time"
     assert system.firmware.main_ver_low.name == "firmware.main_ver_low"
+    assert system.storage.sd.eject_cmd.name == "storage.sd.eject_cmd"
+    assert system.storage.sd.delete_all_cmd.name == "storage.sd.delete_all_cmd"
+    assert system.storage.sd.copy_system_cmd.name == "storage.sd.copy_system_cmd"
+    assert system.storage.sd.ready.name == "storage.sd.ready"
+    assert system.storage.sd.write_status.name == "storage.sd.write_status"
+    assert system.storage.sd.error.name == "storage.sd.error"
+    assert system.storage.sd.error_code.name == "storage.sd.error_code"
+
+
+def test_storage_sd_status_defaults():
+    runner = PLCRunner(logic=[])
+
+    assert _resolved(runner, system.storage.sd.ready.name) is True
+    assert _resolved(runner, system.storage.sd.write_status.name) is False
+    assert _resolved(runner, system.storage.sd.error.name) is False
+    assert _resolved(runner, system.storage.sd.error_code.name) == 0
+
+    runner.step()
+    assert _resolved(runner, system.storage.sd.ready.name) is True
+    assert _resolved(runner, system.storage.sd.write_status.name) is False
+    assert _resolved(runner, system.storage.sd.error.name) is False
+    assert _resolved(runner, system.storage.sd.error_code.name) == 0
 
 
 def test_battery_present_is_read_only_and_defaults_true():
@@ -203,6 +225,57 @@ def test_read_only_system_points_reject_logic_and_patch_writes():
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.patch({system.sys.always_on.name: False})
+
+
+def test_storage_sd_read_only_status_points_reject_logic_patch_and_force():
+    with Program() as program:
+        with Rung():
+            out(system.storage.sd.ready)
+    runner = PLCRunner(logic=program)
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.step()
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.patch({system.storage.sd.ready.name: False})
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.patch({system.storage.sd.write_status.name: True})
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.patch({system.storage.sd.error.name: True})
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.patch({system.storage.sd.error_code.name: 1})
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        runner.add_force(system.storage.sd.error, True)
+
+
+def test_storage_sd_commands_auto_clear_and_pulse_write_status():
+    runner = PLCRunner(logic=[])
+    runner.patch(
+        {
+            system.storage.sd.eject_cmd.name: True,
+            system.storage.sd.delete_all_cmd.name: True,
+            system.storage.sd.copy_system_cmd.name: True,
+        }
+    )
+
+    runner.step()
+    assert runner.current_state.tags[system.storage.sd.eject_cmd.name] is True
+    assert runner.current_state.tags[system.storage.sd.delete_all_cmd.name] is True
+    assert runner.current_state.tags[system.storage.sd.copy_system_cmd.name] is True
+    assert _resolved(runner, system.storage.sd.write_status.name) is False
+
+    runner.step()
+    assert runner.current_state.tags[system.storage.sd.eject_cmd.name] is False
+    assert runner.current_state.tags[system.storage.sd.delete_all_cmd.name] is False
+    assert runner.current_state.tags[system.storage.sd.copy_system_cmd.name] is False
+    assert _resolved(runner, system.storage.sd.write_status.name) is True
+
+    runner.step()
+    assert _resolved(runner, system.storage.sd.write_status.name) is False
 
 
 def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():

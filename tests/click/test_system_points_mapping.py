@@ -25,6 +25,13 @@ def test_tag_map_includes_system_points_by_default():
     assert mapping.resolve("sys.battery_present") == "SC203"
     assert mapping.resolve("fault.code") == "SD1"
     assert mapping.resolve("rtc.year4") == "SD19"
+    assert mapping.resolve("storage.sd.eject_cmd") == "SC65"
+    assert mapping.resolve("storage.sd.delete_all_cmd") == "SC66"
+    assert mapping.resolve("storage.sd.copy_system_cmd") == "SC67"
+    assert mapping.resolve("storage.sd.ready") == "SC68"
+    assert mapping.resolve("storage.sd.write_status") == "SC69"
+    assert mapping.resolve("storage.sd.error") == "SC70"
+    assert mapping.resolve("storage.sd.error_code") == "SD69"
 
 
 def test_tag_map_can_disable_system_points():
@@ -44,6 +51,13 @@ def test_system_mapped_slots_include_read_only_and_source_metadata():
     assert system_slots["sys.battery_present"].read_only is True
     assert system_slots["rtc.new_year4"].read_only is False
     assert system_slots["rtc.apply_date"].read_only is False
+    assert system_slots["storage.sd.eject_cmd"].read_only is False
+    assert system_slots["storage.sd.delete_all_cmd"].read_only is False
+    assert system_slots["storage.sd.copy_system_cmd"].read_only is False
+    assert system_slots["storage.sd.ready"].read_only is True
+    assert system_slots["storage.sd.write_status"].read_only is True
+    assert system_slots["storage.sd.error"].read_only is True
+    assert system_slots["storage.sd.error_code"].read_only is True
 
 
 def test_same_address_alias_is_allowed_but_conflicting_name_is_rejected():
@@ -65,11 +79,27 @@ def test_provider_reads_system_slots_from_runtime_and_blocks_read_only_writes():
     provider = ClickDataProvider(runner, TagMap())
 
     assert provider.read("SC2") is True
+    assert provider.read("SC68") is True
+    assert provider.read("SC69") is False
+    assert provider.read("SC70") is False
+    assert provider.read("SD69") == 0
     runner.step()
     assert provider.read("SC2") is False
 
     with pytest.raises(ValueError, match="read-only system point"):
         provider.write("SC1", False)
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        provider.write("SC68", False)
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        provider.write("SC69", True)
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        provider.write("SC70", True)
+
+    with pytest.raises(ValueError, match="read-only system point"):
+        provider.write("SD69", 1)
 
 
 def test_provider_write_to_writable_system_slots_succeeds(monkeypatch):
@@ -101,9 +131,15 @@ def test_provider_write_to_writable_command_bits_routes_through_patch():
     provider = ClickDataProvider(runner, TagMap())
 
     provider.write("SC55", True)
+    provider.write("SC65", True)
+    provider.write("SC66", True)
+    provider.write("SC67", True)
     assert runner.current_state.tags.get("rtc.apply_time", False) is False
     runner.step()
     assert runner.current_state.tags["rtc.apply_time"] is True
+    assert runner.current_state.tags["storage.sd.eject_cmd"] is True
+    assert runner.current_state.tags["storage.sd.delete_all_cmd"] is True
+    assert runner.current_state.tags["storage.sd.copy_system_cmd"] is True
 
 
 def test_provider_write_sc50_stops_runner_immediately():
