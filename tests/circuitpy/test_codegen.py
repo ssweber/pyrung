@@ -407,6 +407,17 @@ class TestInstructionCoverage:
         assert "_float_to_int_bits(" in source_code
         assert "_parse_pack_text_value(" in source_code
         assert "_for_i" in source_code
+        assert "import hashlib" not in source_code
+        assert "if True:" not in source_code
+        assert "if False:" not in source_code
+        key_lines = [
+            line
+            for line in source_code.splitlines()
+            if ("_oneshot:" in line) or ("_shift_prev_clock:" in line)
+        ]
+        assert key_lines
+        for line in key_lines:
+            assert ":\\\\" not in line
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()

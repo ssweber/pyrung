@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math as _math
+import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -757,7 +758,7 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
         cond_expr = _compile_condition_group(rung._conditions, ctx)
-        lines = [f"{' ' * indent}{enabled_var} = bool({cond_expr})"]
+        lines = [f"{' ' * indent}{enabled_var} = {cond_expr}"]
         lines.extend(
             _compile_rung_items(
                 rung=rung,
@@ -843,7 +844,6 @@ def _render_code(ctx: CodegenContext) -> str:
     # 1) imports
     lines.extend(
         [
-            "import hashlib",
             "import json",
             "import math",
             "import os",
@@ -1612,7 +1612,7 @@ def _compile_rung_items(
         branch_var = f"_{scope_key}_branch_{branch_idx}"
         branch_idx += 1
         branch_vars[id(item)] = branch_var
-        lines.append(f"{' ' * indent}{branch_var} = bool({enabled_expr} and ({local_expr}))")
+        lines.append(f"{' ' * indent}{branch_var} = ({enabled_expr} and ({local_expr}))")
 
     branch_scope_idx = 0
     for item in rung._execution_items:
@@ -1637,7 +1637,7 @@ def _compile_rung_items(
 def _compile_condition_group(conditions: list[Condition], ctx: CodegenContext) -> str:
     if not conditions:
         return "True"
-    parts = [f"({compile_condition(cond, ctx)})" for cond in conditions]
+    parts = [compile_condition(cond, ctx) for cond in conditions]
     return " and ".join(parts)
 
 
@@ -1649,10 +1649,20 @@ def _compile_out_instruction(
 ) -> list[str]:
     lines: list[str] = []
     sp = " " * indent
+    enabled_literal = _bool_literal(enabled_expr)
     if instr.oneshot:
-        key = f"_oneshot:{_source_location(instr)}"
+        key = f"_oneshot:{_source_key(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
+        if enabled_literal is False:
+            lines.append(f"{sp}_mem[{key!r}] = False")
+            lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent))
+            return lines
+        if enabled_literal is True:
+            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
+            lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
+            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
         lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
@@ -1660,6 +1670,11 @@ def _compile_out_instruction(
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
         return lines
+
+    if enabled_literal is True:
+        return _compile_target_write_lines(instr.target, "True", ctx, indent)
+    if enabled_literal is False:
+        return _compile_target_write_lines(instr.target, "False", ctx, indent)
 
     lines.append(f"{sp}if {enabled_expr}:")
     lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
@@ -1679,10 +1694,21 @@ def _compile_guarded_instruction(
 ) -> list[str]:
     sp = " " * indent
     lines: list[str] = []
+    enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
-        key = f"_oneshot:{_source_location(instr)}:{type(instr).__name__}"
+        key = f"_oneshot:{_source_key(instr)}:{type(instr).__name__}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
+        if enabled_literal is False:
+            lines.append(f"{sp}_mem[{key!r}] = False")
+            if disabled_body:
+                lines.extend(f"{sp}{line}" for line in disabled_body)
+            return lines
+        if enabled_literal is True:
+            lines.append(f"{sp}if not bool(_mem.get({key!r}, False)):")
+            lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
+            lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+            return lines
         lines.append(f"{sp}if not ({enabled_expr}):")
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
         if disabled_body:
@@ -1690,6 +1716,14 @@ def _compile_guarded_instruction(
         lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
         lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
         lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
+        return lines
+
+    if enabled_literal is True:
+        lines.extend(f"{sp}{line}" for line in enabled_body)
+        return lines
+    if enabled_literal is False:
+        if disabled_body is not None:
+            lines.extend(f"{sp}{line}" for line in disabled_body)
         return lines
 
     lines.append(f"{sp}if {enabled_expr}:")
@@ -1708,11 +1742,21 @@ def _compile_call_instruction(
 ) -> list[str]:
     sp = " " * indent
     fn = _subroutine_symbol(instr.subroutine_name)
+    enabled_literal = _bool_literal(enabled_expr)
+    if enabled_literal is False:
+        return []
+    if enabled_literal is True:
+        return [f"{sp}{fn}()"]
     return [f"{sp}if {enabled_expr}:", f"{sp}    {fn}()"]
 
 
 def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
     sp = " " * indent
+    enabled_literal = _bool_literal(enabled_expr)
+    if enabled_literal is False:
+        return []
+    if enabled_literal is True:
+        return [f"{sp}return"]
     return [f"{sp}if {enabled_expr}:", f"{sp}    return"]
 
 
@@ -1761,14 +1805,12 @@ def _compile_on_delay_instruction(
             f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
             f"{' ' * (inner + 4)}{done} = (_acc >= _preset)",
             f"{' ' * (inner + 4)}{acc} = _acc",
-            f"{isp}else:",
         ]
     )
-    if instr.has_reset:
-        lines.append(f"{' ' * (inner + 4)}pass")
-    else:
+    if not instr.has_reset:
         lines.extend(
             [
+                f"{isp}else:",
                 f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
                 f"{' ' * (inner + 4)}{done} = False",
                 f"{' ' * (inner + 4)}{acc} = 0",
@@ -2384,7 +2426,7 @@ def _compile_shift_instruction(
         raise TypeError("shift bit_range must contain BOOL tags")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
-    key = f"_shift_prev_clock:{_source_location(instr)}"
+    key = f"_shift_prev_clock:{_source_key(instr)}"
     stem = ctx.next_name("shift")
     range_setup, range_symbol, range_indices, _ = _compile_range_setup(
         instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
@@ -2395,7 +2437,7 @@ def _compile_shift_instruction(
         *range_setup,
         f"if not {range_indices}:",
         '    raise ValueError("shift bit_range resolved to an empty range")',
-        f"_clock_curr = bool({clock_expr})",
+        f"_clock_curr = {clock_expr}",
         f"_clock_prev = bool(_mem.get({key!r}, False))",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
@@ -2656,7 +2698,7 @@ def _compile_enabled_function_call_instruction(
     kwargs = ", ".join(
         f"{name}={_compile_value(value, ctx)}" for name, value in sorted(instr._ins.items())
     )
-    call_args = f"bool({enabled_expr})"
+    call_args = enabled_expr
     if kwargs:
         call_args += f", {kwargs}"
     lines = [f"{' ' * indent}{result_var} = {fn_symbol}({call_args})"]
@@ -2713,6 +2755,15 @@ def _compile_for_loop_instruction(
 def _indent_body(lines: list[str], spaces: int) -> list[str]:
     prefix = " " * spaces
     return [f"{prefix}{line}" if line else line for line in lines]
+
+
+def _bool_literal(expr: str) -> bool | None:
+    stripped = expr.strip()
+    if stripped == "True":
+        return True
+    if stripped == "False":
+        return False
+    return None
 
 
 def _compile_instruction_list(
@@ -3148,6 +3199,25 @@ def _source_location(obj: Any) -> str:
     if src_file is None or src_line is None:
         return "unknown"
     return f"{src_file}:{src_line}"
+
+
+def _source_key(obj: Any) -> str:
+    src_file = getattr(obj, "source_file", None)
+    src_line = getattr(obj, "source_line", None)
+    if src_file is None or src_line is None:
+        return "unknown"
+
+    source_path = str(src_file)
+    try:
+        relpath = os.path.relpath(source_path, os.getcwd())
+    except (TypeError, ValueError):
+        relpath = source_path
+    relpath = relpath.replace("\\", "/")
+    if relpath == "." or relpath.startswith("../"):
+        relpath = source_path.replace("\\", "/").rsplit("/", 1)[-1]
+
+    digest = hashlib.sha1(relpath.encode("utf-8")).hexdigest()[:10]
+    return f"{relpath}:{int(src_line)}:{digest}"
 
 
 def _mangle_symbol(logical_name: str, prefix: str, used: set[str]) -> str:
