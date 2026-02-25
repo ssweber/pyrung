@@ -47,14 +47,14 @@ class Tag:
     Attributes:
         name: Unique identifier for this tag.
         type: Data type (BOOL, INT, DINT, REAL, WORD, CHAR).
-        retentive: Whether value survives power cycles.
         default: Default value (None means use type default).
+        retentive: Whether value survives power cycles.
     """
 
     name: str
     type: TagType = TagType.BOOL
-    retentive: bool = False
     default: Any = field(default=None)
+    retentive: bool = False
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -578,20 +578,16 @@ class _TagTypeBase(LiveTag):
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
 
-    def __init__(
-        self, name: str, retentive: bool | None = None, default: Any = None
-    ) -> None:
+    def __init__(self, name: str, *, default: Any = None, retentive: bool | None = None) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
 
-    def __new__(
-        cls, name: str, retentive: bool | None = None, default: Any = None
-    ) -> LiveTag:
+    def __new__(cls, name: str, *, default: Any = None, retentive: bool | None = None) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
         if not isinstance(name, str):
             raise TypeError(f"{cls.__name__}() name must be a string.")
-        return LiveTag(name, cls._tag_type, retentive, default)
+        return LiveTag(name, cls._tag_type, default, retentive)
 
 
 class Bool(_TagTypeBase):
