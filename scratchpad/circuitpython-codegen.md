@@ -89,15 +89,21 @@ Generation is deterministic for identical `(program, hw, target_scan_ms, watchdo
 ### 2.6 Watchdog API compatibility
 
 - Generated code must bind watchdog methods from the runtime `P1AM.Base()` instance by capability, not assumption.
-- Preferred names are `config_watchdog`, `start_watchdog`, `pet_watchdog` when present.
-- CamelCase fallbacks `configWD`, `startWD`, `petWD` are allowed for compatibility with alternate library revisions.
-- If `WATCHDOG_MS` is enabled and neither method set is available, generated code raises a deterministic runtime error.
+- Required names are `config_watchdog`, `start_watchdog`, and `pet_watchdog`.
+- If `WATCHDOG_MS` is enabled and any required watchdog method is missing, generated code raises a deterministic runtime error.
+
+### 2.7 Hardware metadata notes
+
+- Temperature input modules (`P1-04RTD`, `P1-04THM`, `P1-04NTC`) are modeled as `TagType.REAL` and read via `base.readTemperature(slot, channel)`.
+- `P1-04TRS` remains modeled as a 4-point relay output module in local metadata.
 
 ### Acceptance criteria
 
 - Full v1 instruction scope is explicit and enforced by generation errors.
 - Retentive SD persistence behavior is explicitly specified (mount, load, save, failure handling, schema hash, optional dirty flag).
-- Watchdog API binding strategy is explicit for both snake_case and camelCase library variants.
+- Watchdog API binding strategy is explicit for snake_case runtime methods.
+- Temperature input handling (`TagType.REAL` + `readTemperature`) is explicitly specified.
+- `P1-04TRS` local 4-point modeling decision is explicitly documented.
 - Representation choice (scalars + lists) is fully specified.
 - Output contract is a single standalone `code.py` string.
 - Deterministic output constraints are explicit and testable.
@@ -252,12 +258,12 @@ _RET_SCHEMA = hashlib.sha256(
 base = P1AM.Base()
 base.rollCall(_SLOT_MODULES)
 
-_wd_config = getattr(base, "config_watchdog", None) or getattr(base, "configWD", None)
-_wd_start = getattr(base, "start_watchdog", None) or getattr(base, "startWD", None)
-_wd_pet = getattr(base, "pet_watchdog", None) or getattr(base, "petWD", None)
+_wd_config = getattr(base, "config_watchdog", None)
+_wd_start = getattr(base, "start_watchdog", None)
+_wd_pet = getattr(base, "pet_watchdog", None)
 if WATCHDOG_MS is not None:
     if _wd_config is None or _wd_start is None or _wd_pet is None:
-        raise RuntimeError("P1AM watchdog API not found on Base() instance")
+        raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")
     _wd_config(WATCHDOG_MS)
     _wd_start()
 
@@ -392,8 +398,10 @@ def _read_inputs():
     # Discrete input slot example:
     # mask = int(base.readDiscrete(1))
     # Start = bool((mask >> 0) & 1)
-    # Analog input slot example:
+    # Analog count input slot example:
     # DS[0] = int(base.readAnalog(3, 1))
+    # Temperature input slot example:
+    # Temp[0] = float(base.readTemperature(4, 1))
     pass
 
 def _write_outputs():
@@ -458,7 +466,7 @@ storage.mount(_sd_vfs, "/sd")
 - Scan loop includes dt capture, I/O read, logic execution, I/O write, prev update, watchdog pet, pacing, and overrun diagnostics.
 - Startup includes SD mount attempt and synchronous `load_memory()` before scan loop.
 - `save_memory()` is emitted with helper section and uses temp-write + rename persistence.
-- Watchdog calls use resolved API methods present on the runtime library (snake_case or camelCase fallback).
+- Watchdog calls use snake_case runtime methods (`config_watchdog`, `start_watchdog`, `pet_watchdog`).
 - `global` statements are trimmed per function to only referenced mutable symbols.
 
 ---
@@ -1002,6 +1010,10 @@ Each slot binding captures:
 - output group metadata (if present)
 - linked block binding(s)
 
+Module metadata compatibility note:
+
+- `P1-04TRS` is treated as a 4-channel discrete output module by the local catalog and codegen mapping.
+
 ### 10.2 Roll-call emission
 
 Emit roll-call list from contiguous slot sequence `1..max_slot`.
@@ -1018,11 +1030,18 @@ for ch in 1..count:
     block[ch] = bool((mask >> (ch - 1)) & 1)
 ```
 
-Analog inputs (`TagType.INT`):
+Analog count inputs (`TagType.INT`):
 
 ```python
 for ch in 1..count:
     block[ch] = int(base.readAnalog(slot, ch))
+```
+
+Temperature inputs (`TagType.REAL`):
+
+```python
+for ch in 1..count:
+    block[ch] = float(base.readTemperature(slot, ch))
 ```
 
 Combo modules:
@@ -1060,9 +1079,9 @@ Actual generated Python list access uses `block[ch - start_addr]`.
 
 ### Acceptance criteria
 
-- Read/write mapping is explicit for discrete, analog, and combo modules.
+- Read/write mapping is explicit for discrete, analog-count, temperature, and combo modules.
 - Roll-call behavior and contiguous-slot requirement are explicit.
-- Channel-to-bit and channel-to-analog mapping are testable.
+- Channel-to-bit, channel-to-analog-count, and channel-to-temperature mapping are testable.
 
 ---
 
@@ -1346,8 +1365,7 @@ Test style should follow existing `tests/circuitpy/` class-based layout.
 
 - `TestWatchdogBinding`
   - snake_case API path (`config_watchdog`, `start_watchdog`, `pet_watchdog`)
-  - camelCase fallback path (`configWD`, `startWD`, `petWD`)
-  - missing methods with `WATCHDOG_MS` set raises deterministic runtime error
+  - missing snake_case methods with `WATCHDOG_MS` set raises deterministic runtime error
 - `TestScanOverrunDiagnostics`
   - `sleep_ms <= 0` increments `_scan_overrun_count`
   - optional warning print path
@@ -1398,10 +1416,10 @@ Must include explicit tests for:
 14. function source embedding, inspectability rejection, and output mapping
 15. SD retentive load/save success and failure paths
 16. scan-overrun counter + optional warning behavior
-17. watchdog method binding for both snake_case and camelCase APIs
+17. watchdog method binding for snake_case API
 18. per-function `global` statement trimming
 19. discrete bitmask channel correctness
-20. analog channel mapping correctness for input/output/combo
+20. analog and temperature channel mapping correctness for input/output/combo
 21. deterministic generation snapshots
 
 ### Acceptance criteria

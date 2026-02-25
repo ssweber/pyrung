@@ -45,13 +45,16 @@ EXPECTED_ANALOG_INPUT = {
     "P1-04AD",
     "P1-04AD-1",
     "P1-04AD-2",
-    "P1-04RTD",
-    "P1-04THM",
-    "P1-04NTC",
     "P1-04ADL-1",
     "P1-04ADL-2",
     "P1-08ADL-1",
     "P1-08ADL-2",
+}
+
+EXPECTED_TEMPERATURE_INPUT = {
+    "P1-04RTD",
+    "P1-04THM",
+    "P1-04NTC",
 }
 
 EXPECTED_ANALOG_OUTPUT = {
@@ -71,6 +74,7 @@ ALL_EXPECTED = (
     | EXPECTED_DISCRETE_OUTPUT
     | EXPECTED_COMBO_DISCRETE
     | EXPECTED_ANALOG_INPUT
+    | EXPECTED_TEMPERATURE_INPUT
     | EXPECTED_ANALOG_OUTPUT
     | EXPECTED_COMBO_ANALOG
 )
@@ -133,6 +137,14 @@ def test_analog_input_modules(part: str):
     assert spec.direction is ModuleDirection.INPUT
     assert not spec.is_combo
     assert spec.groups[0].tag_type is TagType.INT
+
+
+@pytest.mark.parametrize("part", sorted(EXPECTED_TEMPERATURE_INPUT))
+def test_temperature_input_modules(part: str):
+    spec = MODULE_CATALOG[part]
+    assert spec.direction is ModuleDirection.INPUT
+    assert not spec.is_combo
+    assert spec.groups[0].tag_type is TagType.REAL
 
 
 @pytest.mark.parametrize("part", sorted(EXPECTED_ANALOG_OUTPUT))

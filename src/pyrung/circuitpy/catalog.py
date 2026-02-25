@@ -106,6 +106,10 @@ def _ai(count: int) -> tuple[ChannelGroup, ...]:
     return (ChannelGroup(ModuleDirection.INPUT, count, TagType.INT),)
 
 
+def _temp_ai(count: int) -> tuple[ChannelGroup, ...]:
+    return (ChannelGroup(ModuleDirection.INPUT, count, TagType.REAL),)
+
+
 def _ao(count: int) -> tuple[ChannelGroup, ...]:
     return (ChannelGroup(ModuleDirection.OUTPUT, count, TagType.INT),)
 
@@ -141,6 +145,8 @@ MODULE_CATALOG: Final[dict[str, ModuleSpec]] = {
     "P1-16ND3": ModuleSpec("P1-16ND3", "16-ch discrete input (24V sink)", _di(16)),
     "P1-16NE3": ModuleSpec("P1-16NE3", "16-ch discrete input (24V source)", _di(16)),
     # --- Discrete Output (Bool) -----------------------------------------------
+    # Keep P1-04TRS as 4-point in local model; upstream mdb byte-count metadata is
+    # inconsistent with vendor-facing module docs for this part.
     "P1-04TRS": ModuleSpec("P1-04TRS", "4-ch relay output", _do(4)),
     "P1-08TA": ModuleSpec("P1-08TA", "8-ch AC output", _do(8)),
     "P1-08TRS": ModuleSpec("P1-08TRS", "8-ch relay output", _do(8)),
@@ -158,9 +164,9 @@ MODULE_CATALOG: Final[dict[str, ModuleSpec]] = {
     "P1-04AD": ModuleSpec("P1-04AD", "4-ch analog input (voltage/current)", _ai(4)),
     "P1-04AD-1": ModuleSpec("P1-04AD-1", "4-ch analog input (voltage)", _ai(4)),
     "P1-04AD-2": ModuleSpec("P1-04AD-2", "4-ch analog input (current)", _ai(4)),
-    "P1-04RTD": ModuleSpec("P1-04RTD", "4-ch RTD temperature input", _ai(4)),
-    "P1-04THM": ModuleSpec("P1-04THM", "4-ch thermocouple input", _ai(4)),
-    "P1-04NTC": ModuleSpec("P1-04NTC", "4-ch NTC temperature input", _ai(4)),
+    "P1-04RTD": ModuleSpec("P1-04RTD", "4-ch RTD temperature input", _temp_ai(4)),
+    "P1-04THM": ModuleSpec("P1-04THM", "4-ch thermocouple input", _temp_ai(4)),
+    "P1-04NTC": ModuleSpec("P1-04NTC", "4-ch NTC temperature input", _temp_ai(4)),
     "P1-04ADL-1": ModuleSpec("P1-04ADL-1", "4-ch analog input (voltage, low-cost)", _ai(4)),
     "P1-04ADL-2": ModuleSpec("P1-04ADL-2", "4-ch analog input (current, low-cost)", _ai(4)),
     "P1-08ADL-1": ModuleSpec("P1-08ADL-1", "8-ch analog input (voltage, low-cost)", _ai(8)),
