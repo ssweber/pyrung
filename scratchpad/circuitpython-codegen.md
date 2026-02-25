@@ -46,6 +46,7 @@ Instruction classes outside this list must fail generation with a deterministic 
 - Block-backed tags compile to Python lists.
 - Indirect addressing is list-based (`addr -> index`) with explicit bounds checks.
 - I/O blocks are also represented as lists so direct and indirect references use one model.
+- **Addressing convention**: PLC addresses are 1-based everywhere (matching core `Block(start=1)` and hardware conventions). Generated Python lists are 0-based. The single translation point is `index = addr - block_start`. List length is `end - start + 1` (inclusive bounds).
 
 ### 2.3 Retentive persistence
 
@@ -1077,6 +1078,10 @@ Combo modules:
 In formulas above, `block[ch]` is conceptual 1-based PLC channel naming.
 Actual generated Python list access uses `block[ch - start_addr]`.
 
+Codegen must use `Base()` with default `zero_indexing=False` (1-based P1AM API). This keeps slot/channel arguments identical to PLC addresses — no translation at the I/O boundary. The only index translation is the list access above.
+
+List sizing: a block with `start=s, end=e` emits `[default] * (e - s + 1)`. Implementer must test last-address access (`block[end - start]`) to guard against off-by-one in sizing.
+
 ### Acceptance criteria
 
 - Read/write mapping is explicit for discrete, analog-count, temperature, and combo modules.
@@ -1138,7 +1143,9 @@ Convert PLC address to list index using block metadata:
 index = addr - block_start
 ```
 
-General form supports blocks not starting at 1.
+General form supports blocks not starting at 1 (e.g., XD with `start=0` yields `index = addr - 0 = addr`).
+
+Bounds check must happen *before* index conversion — validate in PLC address space (`start <= addr <= end`), then convert. This avoids negative indices silently wrapping in Python lists.
 
 ### 12.2 Bounds and sparse checks
 
