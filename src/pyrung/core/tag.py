@@ -578,16 +578,20 @@ class _TagTypeBase(LiveTag):
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
 
-    def __init__(self, name: str, retentive: bool | None = None) -> None:
+    def __init__(
+        self, name: str, retentive: bool | None = None, default: Any = None
+    ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
 
-    def __new__(cls, name: str, retentive: bool | None = None) -> LiveTag:
+    def __new__(
+        cls, name: str, retentive: bool | None = None, default: Any = None
+    ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
         if not isinstance(name, str):
             raise TypeError(f"{cls.__name__}() name must be a string.")
-        return LiveTag(name, cls._tag_type, retentive)
+        return LiveTag(name, cls._tag_type, retentive, default)
 
 
 class Bool(_TagTypeBase):

@@ -38,6 +38,22 @@ def test_tag_type_class_allows_retentive_override(factory):
     assert tag.retentive is False
 
 
+@pytest.mark.parametrize(
+    ("factory", "custom_default"),
+    [
+        (Bool, True),
+        (Int, 7),
+        (Dint, 11),
+        (Real, 1.5),
+        (Word, 0xBEEF),
+        (Char, "A"),
+    ],
+)
+def test_tag_type_class_allows_default_override(factory, custom_default):
+    tag = factory("X", default=custom_default)
+    assert tag.default == custom_default
+
+
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])
 def test_unnamed_tag_type_class_outside_namespace_raises(factory):
     with pytest.raises(TypeError):

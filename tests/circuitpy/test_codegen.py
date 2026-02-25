@@ -547,3 +547,86 @@ class TestGeneratedSourceSmoke:
 
         assert stub_base.roll_called == ["P1-08SIM", "P1-08TRS"]
         assert stub_base.discrete_writes[-1] == (2, 1)
+
+    def test_pack_text_parse_error_sets_fault_and_scan_continues(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        txt = Block("TXT", TagType.CHAR, 1, 1)
+        parsed = Int("Parsed")
+        fault_seen = Bool("FaultSeen")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                # Empty CHAR slot parses as empty text and should fault (not crash scan).
+                pack_text(txt.select(1, 1), parsed, allow_whitespace=True)
+            with Rung(system.fault.out_of_range):
+                out(fault_seen)
+
+        ctx = _context_for_program(prog, hw)
+        fault_symbol = ctx.symbol_for_tag(system.fault.out_of_range)
+        parsed_symbol = ctx.symbol_for_tag(parsed)
+        fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
+
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
+
+        class StubBase:
+            def __init__(self):
+                self.discrete_reads = {1: 0}
+
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return self.discrete_reads.get(slot, 0)
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        stub_base = StubBase()
+
+        board_mod = types.ModuleType("board")
+        board_mod.SD_SCK = object()
+        board_mod.SD_MOSI = object()
+        board_mod.SD_MISO = object()
+        board_mod.SD_CS = object()
+
+        busio_mod = types.ModuleType("busio")
+        busio_mod.SPI = lambda *args, **kwargs: object()
+
+        sdcardio_mod = types.ModuleType("sdcardio")
+        sdcardio_mod.SDCard = lambda *args, **kwargs: object()
+
+        storage_mod = types.ModuleType("storage")
+        storage_mod.VfsFat = lambda *_args, **_kwargs: object()
+        storage_mod.mount = lambda *_args, **_kwargs: None
+
+        p1am_mod = types.ModuleType("P1AM")
+        p1am_mod.Base = lambda: stub_base
+
+        microcontroller_mod = types.ModuleType("microcontroller")
+        microcontroller_mod.nvm = bytearray(1)
+
+        monkeypatch.setitem(sys.modules, "board", board_mod)
+        monkeypatch.setitem(sys.modules, "busio", busio_mod)
+        monkeypatch.setitem(sys.modules, "sdcardio", sdcardio_mod)
+        monkeypatch.setitem(sys.modules, "storage", storage_mod)
+        monkeypatch.setitem(sys.modules, "P1AM", p1am_mod)
+        monkeypatch.setitem(sys.modules, "microcontroller", microcontroller_mod)
+
+        namespace: dict[str, object] = {}
+        exec(compile(single_scan_source, "code.py", "exec"), namespace, namespace)
+
+        assert namespace[fault_symbol] is True
+        assert namespace[fault_seen_symbol] is True
+        assert namespace[parsed_symbol] == 0

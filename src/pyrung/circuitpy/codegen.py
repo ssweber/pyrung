@@ -2067,6 +2067,7 @@ def _compile_pack_text_instruction(
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source_range, ctx, stem=f"{stem}_src", include_addresses=False
     )
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
     enabled_body = [
         *src_setup,
         f"_text = ''.join(str({src_symbol}[_idx]) for _idx in {src_indices})",
@@ -2077,24 +2078,37 @@ def _compile_pack_text_instruction(
         enabled_body.extend(
             [
                 "if _text != _text.strip():",
-                "    pass",
+                *_indent_body(fault_body, 4),
                 "else:",
-                f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
-                f'    _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+                "    try:",
+                f'        _parsed = _parse_pack_text_value(_text, "{dest_type}")',
+                f'        _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
                 *_indent_body(
-                    _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4
+                    _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 8
                 ),
+                "    except (TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 8),
             ]
         )
         return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
     enabled_body.extend(
         [
-            f'_parsed = _parse_pack_text_value(_text, "{dest_type}")',
-            f'_packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
-            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+            "try:",
+            f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
+            f'    _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+            *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+            "except (TypeError, ValueError, OverflowError):",
+            *_indent_body(fault_body, 4),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
+    fault_symbol = ctx.symbol_if_referenced(_FAULT_OUT_OF_RANGE_TAG)
+    if fault_symbol is None:
+        return ["pass"]
+    return [f"{fault_symbol} = True"]
 
 
 def _compile_unpack_bits_instruction(
