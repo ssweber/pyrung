@@ -152,6 +152,41 @@ class TestDeterministicOutput:
         assert s1 == s2
 
 
+class TestPrevSnapshotScope:
+    def test_no_edge_conditions_emit_no_prev_snapshots(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                out(Bool("Light"))
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert '_prev["' not in source_code
+
+    def test_prev_snapshots_only_include_edge_tags(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        sensor = Bool("Car_Sensor")
+        log_enable = Bool("Car_LogEnable")
+        aux = Bool("Aux")
+        light = Bool("Light")
+
+        with Program(strict=False) as prog:
+            with Rung(RisingEdgeCondition(sensor)):
+                out(light)
+            with Rung(BitCondition(log_enable)):
+                out(aux)
+            with Rung(FallingEdgeCondition(log_enable)):
+                out(light)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert '_prev["Car_Sensor"]' in source_code
+        assert '_prev["Car_LogEnable"]' in source_code
+        assert source_code.count('_prev["') == 2
+        assert '_prev["Aux"]' not in source_code
+        assert '_prev["Light"]' not in source_code
+
+
 class TestConditionAndExpressionCompiler:
     @pytest.mark.parametrize(
         ("condition", "needle"),
