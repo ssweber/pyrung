@@ -494,7 +494,7 @@ def _run_main_rungs():
         _preset = int(5)
         _t_CtdDone = (_acc <= -_preset)
         _t_CtdAcc = _acc
-    _rung_7_enabled = (bool(_t_Running) and bool(_t_RTonDone))
+    _rung_7_enabled = bool(_t_Running) and bool(_t_RTonDone)
     if _rung_7_enabled:
         _t_Source = _store_copy_value_to_type(120, "INT")
     if _rung_7_enabled:
@@ -642,7 +642,7 @@ def _run_main_rungs():
         _hi_word = ((_bits >> 16) & 0xFFFF)
         _b_WORDS[_unpackwords_1_dst_1_indices[0]] = _wrap_int(_lo_word, 16, True)
         _b_WORDS[_unpackwords_1_dst_1_indices[1]] = _wrap_int(_hi_word, 16, True)
-    _rung_11_enabled = (bool(_t_Running) and bool(_t_AutoMode))
+    _rung_11_enabled = bool(_t_Running) and bool(_t_AutoMode)
     if _rung_11_enabled:
         _fn_result_1 = _fn_plus_offset(offset=5, value=_t_CalcOut)
         if _fn_result_1 is None:

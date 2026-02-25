@@ -118,7 +118,7 @@ with Program(strict=False) as logic:
         count_down(CtdDone, CtdAcc, preset=5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
-    with Rung(all_of(Running, RTonDone)):
+    with Rung(Running, RTonDone):
         copy(120, Source)
         calc((Source * 2) + (Idx << 1) - 3, CalcOut, mode="decimal")
         copy(DS[Idx], DD[Idx + 1])
@@ -143,7 +143,7 @@ with Program(strict=False) as logic:
         unpack_to_words(PackedDword, WORDS.select(1, 2))
 
     # Function calls, for-loop, and subroutine call.
-    with Rung(all_of(Running, AutoMode)):
+    with Rung(Running, AutoMode):
         run_function(plus_offset, ins={"value": CalcOut, "offset": 5}, outs={"result": FnOut})
         run_enabled_function(
             gated_scale,
@@ -166,7 +166,7 @@ with Program(strict=False) as logic:
     # Indirect compare condition and SD command points.
     with Rung(DD[Idx] > 0):
         out(StepDone)
-    with Rung(any_of(AutoMode, Found)):
+    with Rung(AutoMode | Found):
         out(system.storage.sd.save_cmd)
     with Rung(Abort):
         out(system.storage.sd.delete_all_cmd)
