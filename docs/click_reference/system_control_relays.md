@@ -53,6 +53,7 @@
 Error History, Failed Password Attempts Record, Email Log, Allow List Denied Record.The bit will turn OFF when the action is completed. Read/Write
 - SC68 _SD_Ready_To_Use ON when the SD card is "Ready to Use". Read
 - SC69 _SD_Write_Status ON when writing data to the SD card. Read
+- Note (pyrung CircuitPython codegen): `system.storage.sd.write_status` is emitted as a one-scan pulse when SD commands are serviced.
 - SC70 _SD_Error ON when there is a SD card error. [SD69](system_data_registers.md) will contain the error information. Read
 - SC75 _WLAN_Reset Set this bit ON to ask the system to Reconnect to the configured WLAN. ModbusTCP, MQTT and DHCP will be momentarily interrupted. The bit will turn OFF when the action is completed. Read/Write
 - SC76 _Sub_CPU_Reset Set this bit ON to ask the system to Reset operation of the sub-systems: WLAN, Bluetooth, SD Card. WLAN will reconnect, Bluetooth will disconnect current session, SD Card will be remounted. ModbusTCP, MQTT and DHCP will be momentarily interrupted. The bit will turn OFF when the action is completed. Read/Write

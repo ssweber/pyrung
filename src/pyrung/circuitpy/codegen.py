@@ -1151,6 +1151,7 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
         "    if not _command_failed:",
         "        _sd_error = False",
         "        _sd_error_code = 0",
+        "    # SC69 pulses for this serviced-command scan; reset occurs at next scan start.",
         "    _sd_write_status = True",
         "",
     ]

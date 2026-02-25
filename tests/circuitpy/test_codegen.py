@@ -496,6 +496,20 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "_t_storage_sd_eject_cmd" in source_code
         assert 'storage.umount("/sd")' in source_code
         assert "_sd_available = False" in source_code
+        assert (
+            "while True:\n"
+            "    scan_start = time.monotonic()\n"
+            "    _sd_write_status = False\n"
+            in source_code
+        )
+        helper_section = source_code.split("def _service_sd_commands():", 1)[1].split(
+            "\ndef _", 1
+        )[0]
+        assert helper_section.count("_sd_write_status = True") == 2
+        assert (
+            "# SC69 pulses for this serviced-command scan; reset occurs at next scan start."
+            in helper_section
+        )
         assert "_t_storage_sd_copy_system_cmd" not in source_code
 
     def test_watchdog_and_scan_diagnostics_emit(self):
