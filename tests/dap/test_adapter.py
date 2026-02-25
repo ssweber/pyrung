@@ -954,6 +954,52 @@ def test_stepout_from_top_level_advances_to_new_scan_context(tmp_path: Path):
     assert adapter._current_ctx is not origin_ctx
 
 
+def test_pyrung_step_scan_from_entry_advances_to_next_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    assert adapter._current_ctx is None
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_ctx is not None
+    assert adapter._current_scan_id == 2
+
+
+def test_pyrung_step_scan_from_nested_step_advances_to_new_scan_context(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "nested_logic.py", _nested_debug_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="stepIn")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="stepIn")
+    _drain_messages(out_stream)
+
+    assert adapter._current_step is not None
+    assert len(adapter._current_step.call_stack) > 0
+    origin_ctx = adapter._current_ctx
+    origin_scan_id = adapter._current_scan_id
+
+    messages = _send_request(adapter, out_stream, seq=4, command="pyrungStepScan")
+    response = _single_response(messages)
+    assert response["success"] is True
+    stopped = _stopped_events(messages)
+    assert stopped and stopped[0]["body"]["reason"] == "step"
+    assert adapter._current_ctx is not origin_ctx
+    assert adapter._current_scan_id is not None
+    assert origin_scan_id is not None
+    assert adapter._current_scan_id > origin_scan_id
+
+
 def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_lines(
     tmp_path: Path,
 ):

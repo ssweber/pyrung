@@ -296,6 +296,9 @@ class DAPAdapter:
     def _on_stepOut(self, _args: dict[str, Any]) -> HandlerResult:
         return execution_flow.on_step_out(self, _args)
 
+    def _on_pyrungStepScan(self, _args: dict[str, Any]) -> HandlerResult:
+        return execution_flow.on_pyrung_step_scan(self, _args)
+
     def _on_continue(self, _args: dict[str, Any]) -> HandlerResult:
         return execution_flow.on_continue(self, _args)
 

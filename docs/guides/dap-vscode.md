@@ -13,6 +13,7 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 - Monitor values in the Variables panel under `PLC Monitors`
 - Custom debug events in Output channel `pyrung: Debug Events`
 - Trace decorations and inline condition annotations
+- Rapid auto-step mode (`next` / `stepIn` / `scan`) for live Watch and inline updates
 
 ## Requirements
 
@@ -92,6 +93,39 @@ Use the VS Code `Watch` panel for read-only expression evaluation.
 
 Watch evaluation uses the same visible state as the Variables panel during stepping, including pending mid-scan values.
 
+## Rapid step mode
+
+Rapid step mode repeatedly sends step requests while paused to produce frequent `stopped` states for Watch and inline feedback.
+
+Commands:
+
+- `pyrung: Toggle Rapid Step`
+- `pyrung: Configure Rapid Step`
+
+Defaults:
+
+- Mode: `next`
+- Interval: `100 ms`
+- Enabled: `false`
+
+Modes:
+
+- `next`: stop at rung-level boundaries.
+- `stepIn`: stop at finer-grained instruction/subroutine boundaries.
+- `scan`: execute to the next scan boundary (`pyrungStepScan`), then stop.
+
+Status bar:
+
+- `R:...` is a dedicated rapid-step status item (separate from monitor `M:<count>`).
+- Click the rapid item to start/stop rapid mode.
+
+Behavior notes:
+
+- If already paused, rapid mode starts stepping immediately.
+- If running, rapid mode sends `pause`, waits for the next stop, then begins stepping.
+- Manual debug controls (`Continue`, `Pause`, step commands, `Disconnect`, `Terminate`) stop rapid mode so normal debugger behavior takes over.
+- Rapid mode is step-based and intentionally does not change true `Continue` behavior.
+
 ## Debug console force commands
 
 The Debug Console is command-only for force operations:
@@ -107,7 +141,7 @@ Use `Watch` for predicate evaluation.
 
 ## DAP to runner mapping
 
-- Step Over / Into / Out: `runner.scan_steps_debug()`
+- Step Over / Into / Out + `pyrungStepScan`: `runner.scan_steps_debug()`
 - Continue: adapter continue loop over `scan_steps_debug()`
 - Conditional source breakpoints: adapter expression parser + compiled predicates
 - Monitor callbacks: `runner.monitor(tag, callback)`

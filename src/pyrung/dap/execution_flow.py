@@ -53,6 +53,23 @@ def on_step_out(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     return {}, [("stopped", adapter._stopped_body("step"))]
 
 
+def on_pyrung_step_scan(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    with adapter._state_lock:
+        adapter._assert_can_step_locked()
+        origin_ctx = adapter._current_ctx
+
+        if origin_ctx is None:
+            if not adapter._advance_with_step_logpoints_locked():
+                return {}, [("stopped", adapter._stopped_body("step"))]
+            origin_ctx = adapter._current_ctx
+
+        while adapter._current_ctx is origin_ctx:
+            if not adapter._advance_with_step_logpoints_locked():
+                break
+
+    return {}, [("stopped", adapter._stopped_body("step"))]
+
+
 def on_continue(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
     with adapter._state_lock:
         adapter._require_runner_locked()

@@ -16,7 +16,9 @@
     "onCommand:pyrung.addMonitor",
     "onCommand:pyrung.removeMonitor",
     "onCommand:pyrung.findLabel",
-    "onCommand:pyrung.monitorMenu"
+    "onCommand:pyrung.monitorMenu",
+    "onCommand:pyrung.toggleRapidStep",
+    "onCommand:pyrung.configureRapidStep"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -36,6 +38,14 @@
       {
         "command": "pyrung.monitorMenu",
         "title": "pyrung: Monitor Menu"
+      },
+      {
+        "command": "pyrung.toggleRapidStep",
+        "title": "pyrung: Toggle Rapid Step"
+      },
+      {
+        "command": "pyrung.configureRapidStep",
+        "title": "pyrung: Configure Rapid Step"
       }
     ],
     "breakpoints": [
