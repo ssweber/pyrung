@@ -884,19 +884,19 @@ def _render_code(ctx: CodegenContext) -> str:
     )
 
     # 4) watchdog API binding + startup config
-    lines.extend(
-        [
-            '_wd_config = getattr(base, "config_watchdog", None)',
-            '_wd_start = getattr(base, "start_watchdog", None)',
-            '_wd_pet = getattr(base, "pet_watchdog", None)',
-            "if WATCHDOG_MS is not None:",
-            "    if _wd_config is None or _wd_start is None or _wd_pet is None:",
-            '        raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")',
-            "    _wd_config(WATCHDOG_MS)",
-            "    _wd_start()",
-            "",
-        ]
-    )
+    if ctx.watchdog_ms is not None:
+        lines.extend(
+            [
+                '_wd_config = getattr(base, "config_watchdog", None)',
+                '_wd_start = getattr(base, "start_watchdog", None)',
+                '_wd_pet = getattr(base, "pet_watchdog", None)',
+                "if _wd_config is None or _wd_start is None or _wd_pet is None:",
+                '    raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")',
+                "_wd_config(WATCHDOG_MS)",
+                "_wd_start()",
+                "",
+            ]
+        )
 
     # 5) tag and block declarations
     lines.append("# Scalars (non-block tags).")
@@ -1420,12 +1420,12 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
     for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]
         lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')
+    lines.append("")
+    if ctx.watchdog_ms is not None:
+        lines.append("    _wd_pet()")
+        lines.append("")
     lines.extend(
         [
-            "",
-            "    if WATCHDOG_MS is not None:",
-            "        _wd_pet()",
-            "",
             "    elapsed_ms = (time.monotonic() - scan_start) * 1000.0",
             "    sleep_ms = TARGET_SCAN_MS - elapsed_ms",
             "    if sleep_ms > 0:",
@@ -1805,9 +1805,7 @@ def _compile_blockcopy_instruction(
         *dst_setup,
         f"if len({src_indices}) != len({dst_indices}):",
         f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
-        f"for _i in range(len({src_indices})):",
-        f"    _src_idx = {src_indices}[_i]",
-        f"    _dst_idx = {dst_indices}[_i]",
+        f"for _src_idx, _dst_idx in zip({src_indices}, {dst_indices}):",
         f"    _raw = {src_symbol}[_src_idx]",
         f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_raw, "{_range_type_name(instr.dest)}")',
     ]
@@ -2368,8 +2366,8 @@ def _compile_range_setup(
     if isinstance(range_value, BlockRange):
         addresses = [int(addr) for addr in range_value.addresses]
         indices = [addr - binding.start for addr in addresses]
-        indices_expr = repr(indices)
-        addrs_expr = repr(addresses)
+        indices_expr = _sequence_expr(indices)
+        addrs_expr = _sequence_expr(addresses)
         return [], symbol, indices_expr, addrs_expr
 
     helper = ctx.use_indirect_block(binding.block_id)
@@ -2397,6 +2395,18 @@ def _compile_range_setup(
     if range_value.reverse_order:
         lines.extend([f"{indices_var}.reverse()", f"{addrs_var}.reverse()"])
     return lines, symbol, indices_var, addrs_var
+
+
+def _sequence_expr(values: list[int]) -> str:
+    if not values:
+        return "[]"
+    if len(values) == 1:
+        return repr(range(values[0], values[0] + 1))
+
+    step = values[1] - values[0]
+    if step != 0 and all(values[i + 1] - values[i] == step for i in range(len(values) - 1)):
+        return repr(range(values[0], values[-1] + step, step))
+    return repr(values)
 
 
 def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str:

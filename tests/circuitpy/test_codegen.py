@@ -292,6 +292,7 @@ class TestInstructionCoverage:
         assert "_store_copy_value_to_type(" in source_code
         assert "_wrap_int(" in source_code
         assert "BlockCopy length mismatch" in source_code
+        assert "for _src_idx, _dst_idx in zip(range(0, 3), range(0, 3)):" in source_code
         assert "Indirect range start must be <= end" in source_code
 
     def test_search_shift_pack_unpack_and_forloop_emit(self):
@@ -418,6 +419,8 @@ class TestPersistenceWatchdogAndDiagnostics:
             'raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")'
             in source_code
         )
+        assert "if WATCHDOG_MS is not None:" not in source_code
+        assert "    _wd_pet()" in source_code
         assert "_scan_overrun_count += 1" in source_code
         assert "PRINT_SCAN_OVERRUNS" in source_code
 
@@ -479,6 +482,8 @@ class TestGeneratedSourceSmoke:
                 out(do[1])
 
         source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        assert 'getattr(base, "config_watchdog", None)' not in source
+        assert "_wd_pet()" not in source
         compile(source, "code.py", "exec")
         single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
