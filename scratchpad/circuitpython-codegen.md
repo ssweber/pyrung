@@ -1565,6 +1565,61 @@ On-device smoke procedure (manual):
 
 ---
 
+## 17. Two-Step Implementation Split
+
+### Step 1: Foundation - Scaffolding through basic code generation
+
+Goal: `generate_circuitpy()` works end-to-end for a simple DI->DO program.
+
+Covers:
+
+- section 3 Public API (`generate_circuitpy` signature, preconditions, validation gate, error model)
+- section 5 `CodegenContext`, `SlotBinding`, `BlockBinding` data structures
+- section 6 tag collection, classification, symbol mangling, default initialization
+- section 7 condition compiler (all condition types)
+- section 8 expression compiler (all expression nodes)
+- section 9.3 coil compilers only (`out`/`latch`/`reset` - simplest instructions)
+- section 10 I/O mapping (discrete/analog/temperature read+write, roll-call)
+- section 11 branch compilation
+- section 12 indirect addressing
+- section 13 runtime helper emission policy
+- section 4 generated `code.py` assembly (template sections 1-5, 8-13; persistence sections 6-7 emit stubs)
+- section 14.2 `__init__.py` export
+- tests: API validation, deterministic output, condition/expression compilers, coils, I/O mapping, indirect addressing, branch ordering, `compile()` smoke test
+
+Exit criteria: the verification script from section 16 passes - a minimal DI->DO program generates valid `code.py` that passes `compile()`.
+
+---
+
+### Step 2: Full instruction coverage + runtime features
+
+Goal: complete v1 spec - all instructions, SD persistence, watchdog, end-to-end smoke.
+
+Covers:
+
+- section 9.2 one-shot handling
+- section 9.4 timers (TON, RTON, TOFF)
+- section 9.5 counters (up/down)
+- section 9.6 copy + calc (clamp vs wrap semantics)
+- section 9.7 block operations (`blockcopy`, `fill`)
+- section 9.8 function call compilers (inspectability, source embedding, output mapping)
+- section 9.9 subroutine call/return
+- section 9.10 search (numeric/text, continuous resume)
+- section 9.11 shift (rising-edge, reset priority)
+- section 9.12 pack/unpack (bits, words, text, IEEE reinterpretation)
+- section 9.13 for-loop (disabled-path child reset)
+- sections 2.3 + 4 sections 6-7 SD retentive persistence (mount, load, save, NVM dirty flag, SD status points, command bit ack)
+- sections 2.6 + 4 section 4 watchdog API binding + scan overrun diagnostics
+- tests: all section 15 test classes not covered in step 1 - timers, counters, copy/calc, block ops, search, shift, pack/unpack, function calls, for-loop, retentive persistence, watchdog, scan diagnostics, end-to-end generated-code smoke with stubbed `P1AM`
+
+Exit criteria: `make test` and `make lint` pass, all 21 required scenarios from section 15.11 covered.
+
+---
+
+Key insight for the split: step 1 gets the code generation pipeline working end-to-end (`context building -> compile -> assemble -> emit`), so step 2 is purely additive. Each instruction compiler slots into the existing dispatch without restructuring. SD persistence and watchdog also slot cleanly into the already-emitted template sections.
+
+---
+
 ## Completeness Checklist
 
 - [x] Context and pipeline placement defined.
@@ -1585,3 +1640,4 @@ On-device smoke procedure (manual):
 - [x] Future implementation file list defined.
 - [x] Test plan and scenarios defined.
 - [x] Verification commands and pass criteria defined.
+- [x] Two-step implementation split defined (foundation vs additive completion).

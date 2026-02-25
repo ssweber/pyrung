@@ -26,6 +26,7 @@ from pyrung.circuitpy.hardware import (
     MAX_SLOTS,
     P1AM,
 )
+from pyrung.circuitpy.codegen import generate_circuitpy
 from pyrung.circuitpy.validation import (
     CircuitPyFinding,
     CircuitPyValidationReport,
@@ -56,5 +57,6 @@ __all__ = [
     "ModuleSpec",
     "P1AM",
     "ValidationMode",
+    "generate_circuitpy",
     "validate_circuitpy_program",
 ]
