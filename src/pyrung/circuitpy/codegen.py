@@ -2327,48 +2327,62 @@ def _compile_search_instruction(
     value_expr = _compile_value(instr.value, ctx)
     range_type = _range_type_name(instr.search_range)
     compare_expr = _search_compare_expr(instr.condition, "_candidate", "_rhs")
+    static_len = _static_range_length(instr.search_range)
     miss_body = [f"{result_symbol} = -1", f"{found_symbol} = False"]
 
     text_path = range_type == "CHAR"
-    enabled_body: list[str] = [
-        *range_setup,
-        f"if not {range_addrs}:",
-        "    _cursor_index = None",
-        "else:",
-    ]
+    if text_path and instr.condition not in {"==", "!="}:
+        raise ValueError("Text search only supports '==' and '!=' conditions")
+
+    cursor_body: list[str] = []
     if instr.continuous:
-        enabled_body.extend(
+        cursor_body.extend(
             [
-                f"    _current_result = int({result_symbol})",
-                "    if _current_result == 0:",
-                "        _cursor_index = 0",
-                "    elif _current_result == -1:",
-                "        _cursor_index = None",
-                "    else:",
+                f"_current_result = int({result_symbol})",
+                "if _current_result == 0:",
+                "    _cursor_index = 0",
+                "elif _current_result == -1:",
+                "    _cursor_index = None",
+                "else:",
             ]
         )
         if _range_reverse(instr.search_range):
-            enabled_body.extend(
+            cursor_body.extend(
                 [
-                    "        _cursor_index = None",
-                    f"        for _idx, _addr in enumerate({range_addrs}):",
-                    "            if _addr < _current_result:",
-                    "                _cursor_index = _idx",
-                    "                break",
+                    "    _cursor_index = None",
+                    f"    for _idx, _addr in enumerate({range_addrs}):",
+                    "        if _addr < _current_result:",
+                    "            _cursor_index = _idx",
+                    "            break",
                 ]
             )
         else:
-            enabled_body.extend(
+            cursor_body.extend(
                 [
-                    "        _cursor_index = None",
-                    f"        for _idx, _addr in enumerate({range_addrs}):",
-                    "            if _addr > _current_result:",
-                    "                _cursor_index = _idx",
-                    "                break",
+                    "    _cursor_index = None",
+                    f"    for _idx, _addr in enumerate({range_addrs}):",
+                    "        if _addr > _current_result:",
+                    "            _cursor_index = _idx",
+                    "            break",
                 ]
             )
     else:
-        enabled_body.append("    _cursor_index = 0")
+        cursor_body.append("_cursor_index = 0")
+
+    enabled_body: list[str] = [*range_setup]
+    if static_len is None:
+        enabled_body.extend(
+            [
+                f"if not {range_addrs}:",
+                "    _cursor_index = None",
+                "else:",
+                *_indent_body(cursor_body, 4),
+            ]
+        )
+    elif static_len == 0:
+        enabled_body.append("_cursor_index = None")
+    else:
+        enabled_body.extend(cursor_body)
 
     enabled_body.extend(
         [
@@ -2379,41 +2393,62 @@ def _compile_search_instruction(
     )
 
     if text_path:
+        if isinstance(instr.value, str) and instr.value == "":
+            raise ValueError("Text search value cannot be empty")
+        fixed_window_len = len(instr.value) if isinstance(instr.value, str) else None
+        len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
+        match_lines = [
+            "if _cursor_index > _last_start:",
+            *[f"    {line}" for line in miss_body],
+            "else:",
+            "    _matched = None",
+            "    for _start in range(_cursor_index, _last_start + 1):",
+            "        _candidate = ''.join(str("
+            f"{range_symbol}[{range_indices}[_start + _off]]) for _off in range(_window_len))",
+            f"        if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
+            "            _matched = _start",
+            "            break",
+            "    if _matched is None:",
+            *[f"        {line}" for line in miss_body],
+            "    else:",
+            f"        {result_symbol} = {range_addrs}[_matched]",
+            f"        {found_symbol} = True",
+        ]
         enabled_body.extend(
             [
-                f'    if {instr.condition!r} not in ("==", "!="):',
-                "        raise ValueError(\"Text search only supports '==' and '!=' conditions\")",
-                f"    _rhs = str({value_expr})",
-                '    if _rhs == "":',
-                '        raise ValueError("Text search value cannot be empty")',
-                "    _window_len = len(_rhs)",
-                f"    if _window_len > len({range_indices}):",
-                *[f"        {line}" for line in miss_body],
-                "    else:",
-                f"        _last_start = len({range_indices}) - _window_len",
-                "        if _cursor_index > _last_start:",
-                *[f"            {line}" for line in miss_body],
-                "        else:",
-                "            _matched = None",
-                "            for _start in range(_cursor_index, _last_start + 1):",
-                "                _candidate = ''.join(str("
-                f"{range_symbol}[{range_indices}[_start + _off]]) for _off in range(_window_len))",
-                f"                if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
-                "                    _matched = _start",
-                "                    break",
-                "            if _matched is None:",
-                *[f"                {line}" for line in miss_body],
-                "            else:",
-                f"                {result_symbol} = {range_addrs}[_matched]",
-                f"                {found_symbol} = True",
+                f"    _rhs = {value_expr}" if isinstance(instr.value, str) else f"    _rhs = str({value_expr})",
             ]
         )
+        if fixed_window_len is None:
+            enabled_body.extend(
+                [
+                    '    if _rhs == "":',
+                    '        raise ValueError("Text search value cannot be empty")',
+                    "    _window_len = len(_rhs)",
+                    f"    if _window_len > {len_expr}:",
+                    *[f"        {line}" for line in miss_body],
+                    "    else:",
+                    f"        _last_start = {len_expr} - _window_len",
+                    *_indent_body(match_lines, 8),
+                ]
+            )
+        elif static_len is not None and fixed_window_len > static_len:
+            enabled_body.extend([f"    {line}" for line in miss_body])
+        else:
+            enabled_body.extend(
+                [
+                    f"    _window_len = {fixed_window_len}",
+                    f"    _last_start = {len_expr} - _window_len",
+                    *_indent_body(match_lines, 4),
+                ]
+            )
     else:
+        len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
         enabled_body.extend(
             [
                 f"    _rhs = {value_expr}",
                 "    _matched = None",
-                f"    for _idx in range(_cursor_index, len({range_indices})):",
+                f"    for _idx in range(_cursor_index, {len_expr}):",
                 f"        _candidate = {range_symbol}[{range_indices}[_idx]]",
                 f"        if {compare_expr}:",
                 "            _matched = _idx",
@@ -2443,19 +2478,21 @@ def _compile_shift_instruction(
     range_setup, range_symbol, range_indices, _ = _compile_range_setup(
         instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
     )
+    static_len = _static_range_length(instr.bit_range)
+    if static_len == 0:
+        raise ValueError("shift bit_range resolved to an empty range")
+    shift_len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
     clock_expr = compile_condition(instr.clock_condition, ctx)
     reset_expr = compile_condition(instr.reset_condition, ctx)
     lines = [
         *range_setup,
-        f"if not {range_indices}:",
-        '    raise ValueError("shift bit_range resolved to an empty range")',
         f"_clock_curr = {clock_expr}",
         f"_clock_prev = bool(_mem.get({key!r}, False))",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
         f"    _prev_values = [bool({range_symbol}[_idx]) for _idx in {range_indices}]",
         f"    {range_symbol}[{range_indices}[0]] = bool({enabled_expr})",
-        f"    for _pos in range(1, len({range_indices})):",
+        f"    for _pos in range(1, {shift_len_expr}):",
         f"        {range_symbol}[{range_indices}[_pos]] = _prev_values[_pos - 1]",
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
@@ -2481,17 +2518,29 @@ def _compile_pack_bits_instruction(
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.bit_block, ctx, stem=f"{stem}_src", include_addresses=False
     )
-    enabled_body = [
-        *src_setup,
-        f"if len({src_indices}) > {width}:",
-        f'    raise ValueError(f"pack_bits destination width is {width} bits but block has {{len({src_indices})}} tags")',
+    static_len = _static_range_length(instr.bit_block)
+    if static_len is not None and static_len > width:
+        raise ValueError(
+            f"pack_bits destination width is {width} bits but block has {static_len} tags"
+        )
+    enabled_body = [*src_setup]
+    if static_len is None:
+        enabled_body.extend(
+            [
+                f"if len({src_indices}) > {width}:",
+                f'    raise ValueError(f"pack_bits destination width is {width} bits but block has {{len({src_indices})}} tags")',
+            ]
+        )
+    enabled_body.extend(
+        [
         "_packed = 0",
         f"for _bit_index, _src_idx in enumerate({src_indices}):",
         f"    if bool({src_symbol}[_src_idx]):",
         "        _packed |= (1 << _bit_index)",
         f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
         *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
-    ]
+        ]
+    )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2510,16 +2559,26 @@ def _compile_pack_words_instruction(
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.word_block, ctx, stem=f"{stem}_src", include_addresses=False
     )
-    enabled_body = [
-        *src_setup,
-        f"if len({src_indices}) != 2:",
-        f'    raise ValueError(f"pack_words requires exactly 2 source tags; got {{len({src_indices})}}")',
+    static_len = _static_range_length(instr.word_block)
+    if static_len is not None and static_len != 2:
+        raise ValueError(f"pack_words requires exactly 2 source tags; got {static_len}")
+    enabled_body = [*src_setup]
+    if static_len is None:
+        enabled_body.extend(
+            [
+                f"if len({src_indices}) != 2:",
+                f'    raise ValueError(f"pack_words requires exactly 2 source tags; got {{len({src_indices})}}")',
+            ]
+        )
+    enabled_body.extend(
+        [
         f"_lo_value = int({src_symbol}[{src_indices}[0]])",
         f"_hi_value = int({src_symbol}[{src_indices}[1]])",
         "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
         f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
         *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
-    ]
+        ]
+    )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2608,14 +2667,26 @@ def _compile_unpack_bits_instruction(
         bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFF)"
     else:
         bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
-    enabled_body = [
-        *dst_setup,
-        f"if len({dst_indices}) > {width}:",
-        f'    raise ValueError(f"unpack_to_bits source width is {width} bits but block has {{len({dst_indices})}} tags")',
+    static_len = _static_range_length(instr.bit_block)
+    if static_len is not None and static_len > width:
+        raise ValueError(
+            f"unpack_to_bits source width is {width} bits but block has {static_len} tags"
+        )
+    enabled_body = [*dst_setup]
+    if static_len is None:
+        enabled_body.extend(
+            [
+                f"if len({dst_indices}) > {width}:",
+                f'    raise ValueError(f"unpack_to_bits source width is {width} bits but block has {{len({dst_indices})}} tags")',
+            ]
+        )
+    enabled_body.extend(
+        [
         f"_bits = {bits_expr}",
         f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
         f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
-    ]
+        ]
+    )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2649,16 +2720,26 @@ def _compile_unpack_words_instruction(
     else:
         lo_store = f"({lo_expr} & 0xFFFF)"
         hi_store = f"({hi_expr} & 0xFFFF)"
-    enabled_body = [
-        *dst_setup,
-        f"if len({dst_indices}) != 2:",
-        f'    raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {{len({dst_indices})}}")',
+    static_len = _static_range_length(instr.word_block)
+    if static_len is not None and static_len != 2:
+        raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {static_len}")
+    enabled_body = [*dst_setup]
+    if static_len is None:
+        enabled_body.extend(
+            [
+                f"if len({dst_indices}) != 2:",
+                f'    raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {{len({dst_indices})}}")',
+            ]
+        )
+    enabled_body.extend(
+        [
         f"_bits = {bits_expr}",
         "_lo_word = (_bits & 0xFFFF)",
         "_hi_word = ((_bits >> 16) & 0xFFFF)",
         f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
         f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
-    ]
+        ]
+    )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2902,6 +2983,12 @@ def _range_reverse(range_value: Any) -> bool:
     return False
 
 
+def _static_range_length(range_value: Any) -> int | None:
+    if isinstance(range_value, BlockRange):
+        return len(range_value.addresses)
+    return None
+
+
 def _compile_assignment_lines(
     target: Tag | IndirectRef | IndirectExprRef,
     value_expr: str,
@@ -2953,11 +3040,18 @@ def _compile_range_setup(
     binding = ctx.block_bindings[id(range_value.block)]
     symbol = ctx.symbol_for_block(range_value.block)
     if isinstance(range_value, BlockRange):
+        name = ctx.next_name(stem)
+        indices_var = f"_{name}_indices"
+        addrs_var = f"_{name}_addrs"
         addresses = [int(addr) for addr in range_value.addresses]
         indices = [addr - binding.start for addr in addresses]
         indices_expr = _sequence_expr(indices)
-        addrs_expr = _sequence_expr(addresses)
-        return [], symbol, indices_expr, addrs_expr
+        lines = [f"{indices_var} = {indices_expr}"]
+        if include_addresses:
+            lines.append(f"{addrs_var} = {_sequence_expr(addresses)}")
+        else:
+            addrs_var = "[]"
+        return lines, symbol, indices_var, addrs_var
 
     helper = ctx.use_indirect_block(binding.block_id)
     name = ctx.next_name(stem)

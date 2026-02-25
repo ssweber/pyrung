@@ -4,7 +4,7 @@ This example intentionally exercises a broad instruction surface so reviewers ca
 inspect one generated file that includes:
 - inline pointer refs (DS[idx], DD[idx + 1])
 - inline expressions in calc/copy
-- control-flow (call/subroutine/return_early, forloop)
+- control-flow (branch, call/subroutine/return_early, forloop)
 - timers/counters
 - block/search/shift/pack/unpack instructions
 - function call embedding (run_function/run_enabled_function)
@@ -21,6 +21,7 @@ from pyrung import (
     all_of,
     any_of,
     blockcopy,
+    branch,
     calc,
     call,
     copy,
@@ -152,6 +153,15 @@ with Program(strict=False) as logic:
         with forloop(LoopCount, oneshot=True) as loop:
             copy(loop.idx + Idx, DD[loop.idx + 1])
         call("service")
+
+    # Branch paths execute in parallel under parent rung power.
+    with Rung(Running):
+        copy(Idx, DS[14])
+        with branch(AutoMode):
+            copy(FnOut, DS[12])
+        with branch(Found, CtuDone):
+            copy(FoundAddr + 1, DS[13])
+        copy(Span + Idx, DS[15])
 
     # Indirect compare condition and SD command points.
     with Rung(DD[Idx] > 0):

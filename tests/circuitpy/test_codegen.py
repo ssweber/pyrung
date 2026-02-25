@@ -366,7 +366,7 @@ class TestInstructionCoverage:
         assert "_store_copy_value_to_type(" in source_code
         assert "_wrap_int(" in source_code
         assert "BlockCopy length mismatch" in source_code
-        assert "for _src_idx, _dst_idx in zip(range(0, 3), range(0, 3)):" in source_code
+        assert "for _src_idx, _dst_idx in zip(" in source_code
         assert "Indirect range start must be <= end" in source_code
 
     def test_search_shift_pack_unpack_and_forloop_emit(self):
@@ -407,6 +407,15 @@ class TestInstructionCoverage:
         assert "_float_to_int_bits(" in source_code
         assert "_parse_pack_text_value(" in source_code
         assert "_for_i" in source_code
+        assert "_search_1_rng_1_indices = range(0, 10)" in source_code
+        assert "_search_1_rng_1_addrs = range(1, 11)" in source_code
+        assert "_shift_1_rng_1_indices = range(0, 8)" in source_code
+        assert '"Text search only supports \'==\' and \'!=\' conditions"' not in source_code
+        assert '"shift bit_range resolved to an empty range"' not in source_code
+        assert '"pack_bits destination width is 16 bits but block has' not in source_code
+        assert '"pack_words requires exactly 2 source tags; got' not in source_code
+        assert '"unpack_to_bits source width is 32 bits but block has' not in source_code
+        assert '"unpack_to_words requires exactly 2 destination tags; got' not in source_code
         assert "import hashlib" not in source_code
         assert "if True:" not in source_code
         assert "if False:" not in source_code

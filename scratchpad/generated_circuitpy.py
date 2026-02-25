@@ -330,6 +330,7 @@ def _service_sd_commands():
     if not _command_failed:
         _sd_error = False
         _sd_error_code = 0
+    # SC69 pulses for this serviced-command scan; reset occurs at next scan start.
     _sd_write_status = True
 
 def _resolve_index_b_DD(addr):
@@ -416,13 +417,13 @@ _fn_plus_offset = plus_offset
 
 def _sub_service():
     global _b_DD, _b_DS, _t_Abort, _t_FnOut, _t_Found, _t_Idx, _t_Running
-    _rung_16_enabled = bool(_t_Abort)
-    if _rung_16_enabled:
+    _rung_17_enabled = bool(_t_Abort)
+    if _rung_17_enabled:
         return
-    _rung_17_enabled = (bool(_t_Running) and bool(_t_Found))
-    if _rung_17_enabled:
+    _rung_18_enabled = (bool(_t_Running) and bool(_t_Found))
+    if _rung_18_enabled:
         _b_DS[9] = _store_copy_value_to_type(_b_DD[_resolve_index_b_DD(int(_t_Idx))], "INT")
-    if _rung_17_enabled:
+    if _rung_18_enabled:
         _b_DS[10] = _store_copy_value_to_type((_t_FnOut + 1), "INT")
 
 def _run_main_rungs():
@@ -509,9 +510,11 @@ def _run_main_rungs():
     if _rung_7_enabled:
         _b_DS[_resolve_index_b_DS(int((_t_Idx + _t_Span)))] = _store_copy_value_to_type((_t_CalcOut // 2), "INT")
     if _rung_7_enabled:
-        if len(range(0, 4)) != len(range(1, 5)):
-            raise ValueError(f"BlockCopy length mismatch: source has {len(range(0, 4))} elements, dest has {len(range(1, 5))} elements")
-        for _src_idx, _dst_idx in zip(range(0, 4), range(1, 5)):
+        _blockcopy_1_src_1_indices = range(0, 4)
+        _blockcopy_1_dst_1_indices = range(1, 5)
+        if len(_blockcopy_1_src_1_indices) != len(_blockcopy_1_dst_1_indices):
+            raise ValueError(f"BlockCopy length mismatch: source has {len(_blockcopy_1_src_1_indices)} elements, dest has {len(_blockcopy_1_dst_1_indices)} elements")
+        for _src_idx, _dst_idx in zip(_blockcopy_1_src_1_indices, _blockcopy_1_dst_1_indices):
             _raw = _b_DS[_src_idx]
             _b_DS[_dst_idx] = _store_copy_value_to_type(_raw, "INT")
     if _rung_7_enabled:
@@ -530,28 +533,27 @@ def _run_main_rungs():
             _b_DD[_dst_idx] = _store_copy_value_to_type(_fill_value, "INT")
     _rung_8_enabled = bool(_t_Running)
     if _rung_8_enabled:
-        if not range(1, 21):
+        _search_1_rng_1_indices = range(0, 20)
+        _search_1_rng_1_addrs = range(1, 21)
+        _current_result = int(_t_FoundAddr)
+        if _current_result == 0:
+            _cursor_index = 0
+        elif _current_result == -1:
             _cursor_index = None
         else:
-            _current_result = int(_t_FoundAddr)
-            if _current_result == 0:
-                _cursor_index = 0
-            elif _current_result == -1:
-                _cursor_index = None
-            else:
-                _cursor_index = None
-                for _idx, _addr in enumerate(range(1, 21)):
-                    if _addr > _current_result:
-                        _cursor_index = _idx
-                        break
+            _cursor_index = None
+            for _idx, _addr in enumerate(_search_1_rng_1_addrs):
+                if _addr > _current_result:
+                    _cursor_index = _idx
+                    break
         if _cursor_index is None:
             _t_FoundAddr = -1
             _t_Found = False
         else:
             _rhs = _t_CalcOut
             _matched = None
-            for _idx in range(_cursor_index, len(range(0, 20))):
-                _candidate = _b_DD[range(0, 20)[_idx]]
+            for _idx in range(_cursor_index, 20):
+                _candidate = _b_DD[_search_1_rng_1_indices[_idx]]
                 if (_candidate >= _rhs):
                     _matched = _idx
                     break
@@ -559,79 +561,68 @@ def _run_main_rungs():
                 _t_FoundAddr = -1
                 _t_Found = False
             else:
-                _t_FoundAddr = range(1, 21)[_matched]
+                _t_FoundAddr = _search_1_rng_1_addrs[_matched]
                 _t_Found = True
     if _rung_8_enabled:
-        if not range(1, 9):
-            _cursor_index = None
-        else:
-            _cursor_index = 0
+        _search_2_rng_1_indices = range(0, 8)
+        _search_2_rng_1_addrs = range(1, 9)
+        _cursor_index = 0
         if _cursor_index is None:
             _t_FoundAddr = -1
             _t_Found = False
         else:
-            if '==' not in ("==", "!="):
-                raise ValueError("Text search only supports '==' and '!=' conditions")
-            _rhs = str('AB')
-            if _rhs == "":
-                raise ValueError("Text search value cannot be empty")
-            _window_len = len(_rhs)
-            if _window_len > len(range(0, 8)):
+            _rhs = 'AB'
+            _window_len = 2
+            _last_start = 8 - _window_len
+            if _cursor_index > _last_start:
                 _t_FoundAddr = -1
                 _t_Found = False
             else:
-                _last_start = len(range(0, 8)) - _window_len
-                if _cursor_index > _last_start:
+                _matched = None
+                for _start in range(_cursor_index, _last_start + 1):
+                    _candidate = ''.join(str(_b_TXT[_search_2_rng_1_indices[_start + _off]]) for _off in range(_window_len))
+                    if ((_candidate == _rhs)):
+                        _matched = _start
+                        break
+                if _matched is None:
                     _t_FoundAddr = -1
                     _t_Found = False
                 else:
-                    _matched = None
-                    for _start in range(_cursor_index, _last_start + 1):
-                        _candidate = ''.join(str(_b_TXT[range(0, 8)[_start + _off]]) for _off in range(_window_len))
-                        if ((_candidate == _rhs)):
-                            _matched = _start
-                            break
-                    if _matched is None:
-                        _t_FoundAddr = -1
-                        _t_Found = False
-                    else:
-                        _t_FoundAddr = range(1, 9)[_matched]
-                        _t_Found = True
+                    _t_FoundAddr = _search_2_rng_1_addrs[_matched]
+                    _t_Found = True
     _rung_9_enabled = bool(_t_Running)
-    if not range(0, 8):
-        raise ValueError("shift bit_range resolved to an empty range")
+    _shift_1_rng_1_indices = range(0, 8)
     _clock_curr = bool(_t_Clock)
-    _clock_prev = bool(_mem.get('_shift_prev_clock:examples/circuitpy_codegen_review.py:135:128412888c', False))
+    _clock_prev = bool(_mem.get('_shift_prev_clock:i1', False))
     _rising_edge = _clock_curr and not _clock_prev
     if _rising_edge:
-        _prev_values = [bool(_b_BITS[_idx]) for _idx in range(0, 8)]
-        _b_BITS[range(0, 8)[0]] = bool(_rung_9_enabled)
-        for _pos in range(1, len(range(0, 8))):
-            _b_BITS[range(0, 8)[_pos]] = _prev_values[_pos - 1]
+        _prev_values = [bool(_b_BITS[_idx]) for _idx in _shift_1_rng_1_indices]
+        _b_BITS[_shift_1_rng_1_indices[0]] = bool(_rung_9_enabled)
+        for _pos in range(1, 8):
+            _b_BITS[_shift_1_rng_1_indices[_pos]] = _prev_values[_pos - 1]
     if bool(_t_ShiftReset):
-        for _idx in range(0, 8):
+        for _idx in _shift_1_rng_1_indices:
             _b_BITS[_idx] = False
-    _mem['_shift_prev_clock:examples/circuitpy_codegen_review.py:135:128412888c'] = _clock_curr
+    _mem['_shift_prev_clock:i1'] = _clock_curr
     _rung_10_enabled = bool(_t_Running)
     if _rung_10_enabled:
-        if len(range(0, 16)) > 16:
-            raise ValueError(f"pack_bits destination width is 16 bits but block has {len(range(0, 16))} tags")
+        _packbits_1_src_1_indices = range(0, 16)
         _packed = 0
-        for _bit_index, _src_idx in enumerate(range(0, 16)):
+        for _bit_index, _src_idx in enumerate(_packbits_1_src_1_indices):
             if bool(_b_BITS[_src_idx]):
                 _packed |= (1 << _bit_index)
         _packed_value = _wrap_int(int(_packed), 16, True)
         _t_PackedWord = _packed_value
     if _rung_10_enabled:
-        if len(range(0, 2)) != 2:
-            raise ValueError(f"pack_words requires exactly 2 source tags; got {len(range(0, 2))}")
-        _lo_value = int(_b_WORDS[range(0, 2)[0]])
-        _hi_value = int(_b_WORDS[range(0, 2)[1]])
+        _packwords_1_src_1_indices = range(0, 2)
+        _lo_value = int(_b_WORDS[_packwords_1_src_1_indices[0]])
+        _hi_value = int(_b_WORDS[_packwords_1_src_1_indices[1]])
         _packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))
         _packed_value = _wrap_int(int(_packed), 32, True)
         _t_PackedDword = _packed_value
     if _rung_10_enabled:
-        _text = ''.join(str(_b_TXT[_idx]) for _idx in range(0, 8))
+        _packtext_1_src_1_indices = range(0, 8)
+        _text = ''.join(str(_b_TXT[_idx]) for _idx in _packtext_1_src_1_indices)
         _text = _text.strip()
         try:
             _parsed = _parse_pack_text_value(_text, "DINT")
@@ -640,19 +631,17 @@ def _run_main_rungs():
         except (TypeError, ValueError, OverflowError):
             pass
     if _rung_10_enabled:
-        if len(range(0, 32)) > 32:
-            raise ValueError(f"unpack_to_bits source width is 32 bits but block has {len(range(0, 32))} tags")
+        _unpackbits_1_dst_1_indices = range(0, 32)
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
-        for _bit_index, _dst_idx in enumerate(range(0, 32)):
+        for _bit_index, _dst_idx in enumerate(_unpackbits_1_dst_1_indices):
             _b_BITS[_dst_idx] = bool((_bits >> _bit_index) & 1)
     if _rung_10_enabled:
-        if len(range(0, 2)) != 2:
-            raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {len(range(0, 2))}")
+        _unpackwords_1_dst_1_indices = range(0, 2)
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
         _lo_word = (_bits & 0xFFFF)
         _hi_word = ((_bits >> 16) & 0xFFFF)
-        _b_WORDS[range(0, 2)[0]] = _wrap_int(_lo_word, 16, True)
-        _b_WORDS[range(0, 2)[1]] = _wrap_int(_hi_word, 16, True)
+        _b_WORDS[_unpackwords_1_dst_1_indices[0]] = _wrap_int(_lo_word, 16, True)
+        _b_WORDS[_unpackwords_1_dst_1_indices[1]] = _wrap_int(_hi_word, 16, True)
     _rung_11_enabled = (bool(_t_Running) and bool(_t_AutoMode))
     if _rung_11_enabled:
         _fn_result_1 = _fn_plus_offset(offset=5, value=_t_CalcOut)
@@ -672,32 +661,43 @@ def _run_main_rungs():
         )
     _t_FnOut = _store_copy_value_to_type(_fn_result_2['result'], "INT")
     if not (_rung_11_enabled):
-        _mem['_oneshot:examples/circuitpy_codegen_review.py:152:128412888c:ForLoopInstruction'] = False
-    elif not bool(_mem.get('_oneshot:examples/circuitpy_codegen_review.py:152:128412888c:ForLoopInstruction', False)):
+        _mem['_oneshot:i2'] = False
+    elif not bool(_mem.get('_oneshot:i2', False)):
         _iterations = max(0, int(_t_LoopCount))
         for _for_i in range(_iterations):
             _t__forloop_idx = _for_i
             _b_DD[_resolve_index_b_DD(int((_t__forloop_idx + 1)))] = _store_copy_value_to_type((_t__forloop_idx + _t_Idx), "INT")
-        _mem['_oneshot:examples/circuitpy_codegen_review.py:152:128412888c:ForLoopInstruction'] = True
+        _mem['_oneshot:i2'] = True
     if _rung_11_enabled:
         _sub_service()
-    _rung_12_enabled = (_b_DD[_resolve_index_b_DD(int(_t_Idx))] > 0)
+    _rung_12_enabled = bool(_t_Running)
+    _rung_12_branch_0 = (_rung_12_enabled and (bool(_t_AutoMode)))
+    _rung_12_branch_1 = (_rung_12_enabled and (bool(_t_Found) and bool(_t_CtuDone)))
     if _rung_12_enabled:
+        _b_DS[13] = _store_copy_value_to_type(_t_Idx, "INT")
+    if _rung_12_branch_0:
+        _b_DS[11] = _store_copy_value_to_type(_t_FnOut, "INT")
+    if _rung_12_branch_1:
+        _b_DS[12] = _store_copy_value_to_type((_t_FoundAddr + 1), "INT")
+    if _rung_12_enabled:
+        _b_DS[14] = _store_copy_value_to_type((_t_Span + _t_Idx), "INT")
+    _rung_13_enabled = (_b_DD[_resolve_index_b_DD(int(_t_Idx))] > 0)
+    if _rung_13_enabled:
         _t_StepDone = True
     else:
         _t_StepDone = False
-    _rung_13_enabled = (bool(_t_AutoMode) or bool(_t_Found))
-    if _rung_13_enabled:
+    _rung_14_enabled = (bool(_t_AutoMode) or bool(_t_Found))
+    if _rung_14_enabled:
         _t_storage_sd_save_cmd = True
     else:
         _t_storage_sd_save_cmd = False
-    _rung_14_enabled = bool(_t_Abort)
-    if _rung_14_enabled:
+    _rung_15_enabled = bool(_t_Abort)
+    if _rung_15_enabled:
         _t_storage_sd_delete_all_cmd = True
     else:
         _t_storage_sd_delete_all_cmd = False
-    _rung_15_enabled = bool(_t_Stop)
-    if _rung_15_enabled:
+    _rung_16_enabled = bool(_t_Stop)
+    if _rung_16_enabled:
         _t_storage_sd_eject_cmd = True
     else:
         _t_storage_sd_eject_cmd = False
