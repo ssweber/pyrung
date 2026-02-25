@@ -417,7 +417,8 @@ class TestInstructionCoverage:
         ]
         assert key_lines
         for line in key_lines:
-            assert ":\\\\" not in line
+            assert ":i" in line
+            assert ".py:" not in line
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()

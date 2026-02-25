@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import inspect
 import math as _math
-import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -203,6 +202,8 @@ class CodegenContext:
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
     _current_function: str | None = None
     _name_counters: dict[str, int] = field(default_factory=dict)
+    _state_key_counter: int = 0
+    _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -452,6 +453,16 @@ class CodegenContext:
 
     def reset_name_counters(self) -> None:
         self._name_counters.clear()
+
+    def state_key_for(self, obj: Any) -> str:
+        obj_id = id(obj)
+        existing = self._state_keys_by_obj.get(obj_id)
+        if existing is not None:
+            return existing
+        self._state_key_counter += 1
+        key = f"i{self._state_key_counter}"
+        self._state_keys_by_obj[obj_id] = key
+        return key
 
     def index_helper_name(self, block_id: int) -> str:
         symbol = self.block_symbols.get(block_id)
@@ -1652,7 +1663,7 @@ def _compile_out_instruction(
     sp = " " * indent
     enabled_literal = _bool_literal(enabled_expr)
     if instr.oneshot:
-        key = f"_oneshot:{_source_key(instr)}"
+        key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
@@ -1697,7 +1708,7 @@ def _compile_guarded_instruction(
     lines: list[str] = []
     enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
-        key = f"_oneshot:{_source_key(instr)}:{type(instr).__name__}"
+        key = f"_oneshot:{ctx.state_key_for(instr)}"
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         if enabled_literal is False:
@@ -2427,7 +2438,7 @@ def _compile_shift_instruction(
         raise TypeError("shift bit_range must contain BOOL tags")
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
-    key = f"_shift_prev_clock:{_source_key(instr)}"
+    key = f"_shift_prev_clock:{ctx.state_key_for(instr)}"
     stem = ctx.next_name("shift")
     range_setup, range_symbol, range_indices, _ = _compile_range_setup(
         instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
@@ -3200,25 +3211,6 @@ def _source_location(obj: Any) -> str:
     if src_file is None or src_line is None:
         return "unknown"
     return f"{src_file}:{src_line}"
-
-
-def _source_key(obj: Any) -> str:
-    src_file = getattr(obj, "source_file", None)
-    src_line = getattr(obj, "source_line", None)
-    if src_file is None or src_line is None:
-        return "unknown"
-
-    source_path = str(src_file)
-    try:
-        relpath = os.path.relpath(source_path, os.getcwd())
-    except (TypeError, ValueError):
-        relpath = source_path
-    relpath = relpath.replace("\\", "/")
-    if relpath == "." or relpath.startswith("../"):
-        relpath = source_path.replace("\\", "/").rsplit("/", 1)[-1]
-
-    digest = hashlib.sha1(relpath.encode("utf-8")).hexdigest()[:10]
-    return f"{relpath}:{int(src_line)}:{digest}"
 
 
 def _mangle_symbol(logical_name: str, prefix: str, used: set[str]) -> str:
