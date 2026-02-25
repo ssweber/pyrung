@@ -35,6 +35,12 @@ FindingSeverity = Literal["error", "warning", "hint"]
 CPY_FUNCTION_CALL_VERIFY = "CPY_FUNCTION_CALL_VERIFY"
 CPY_IO_BLOCK_UNTRACKED = "CPY_IO_BLOCK_UNTRACKED"
 CPY_TIMER_RESOLUTION = "CPY_TIMER_RESOLUTION"
+_NON_BLOCKING_ADVISORY_CODES = frozenset(
+    {
+        CPY_FUNCTION_CALL_VERIFY,
+        CPY_TIMER_RESOLUTION,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -83,8 +89,8 @@ def _format_location(loc: ProgramLocation) -> str:
     return f"{prefix}.{loc.arg_path}"
 
 
-def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:  # noqa: ARG001
-    if mode == "strict":
+def _route_severity(code: str, mode: ValidationMode) -> FindingSeverity:
+    if mode == "strict" and code not in _NON_BLOCKING_ADVISORY_CODES:
         return "error"
     return "hint"
 

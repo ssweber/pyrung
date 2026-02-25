@@ -99,6 +99,43 @@ def _basic_hw() -> tuple[P1AM, object, object]:
     return hw, di, do
 
 
+def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict[str, object]:
+    single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
+
+    board_mod = types.ModuleType("board")
+    board_mod.SD_SCK = object()
+    board_mod.SD_MOSI = object()
+    board_mod.SD_MISO = object()
+    board_mod.SD_CS = object()
+
+    busio_mod = types.ModuleType("busio")
+    busio_mod.SPI = lambda *args, **kwargs: object()
+
+    sdcardio_mod = types.ModuleType("sdcardio")
+    sdcardio_mod.SDCard = lambda *args, **kwargs: object()
+
+    storage_mod = types.ModuleType("storage")
+    storage_mod.VfsFat = lambda *_args, **_kwargs: object()
+    storage_mod.mount = lambda *_args, **_kwargs: None
+
+    p1am_mod = types.ModuleType("P1AM")
+    p1am_mod.Base = lambda: stub_base
+
+    microcontroller_mod = types.ModuleType("microcontroller")
+    microcontroller_mod.nvm = bytearray(1)
+
+    monkeypatch.setitem(sys.modules, "board", board_mod)
+    monkeypatch.setitem(sys.modules, "busio", busio_mod)
+    monkeypatch.setitem(sys.modules, "sdcardio", sdcardio_mod)
+    monkeypatch.setitem(sys.modules, "storage", storage_mod)
+    monkeypatch.setitem(sys.modules, "P1AM", p1am_mod)
+    monkeypatch.setitem(sys.modules, "microcontroller", microcontroller_mod)
+
+    namespace: dict[str, object] = {}
+    exec(compile(single_scan_source, "code.py", "exec"), namespace, namespace)
+    return namespace
+
+
 class TestGenerateCircuitPyAPI:
     def test_rejects_bad_argument_types_and_values(self):
         hw = P1AM()
@@ -138,6 +175,37 @@ class TestGenerateCircuitPyAPI:
 
         with pytest.raises(ValueError, match="inspect"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0)
+
+    def test_strict_validation_blocks_io_untracked_findings(self):
+        hw = P1AM()
+        outputs = hw.slot(1, "P1-08TRS")
+        light = outputs[1]
+        external = InputBlock("External", TagType.BOOL, 1, 8)[1]
+
+        with Program(strict=False) as prog:
+            with Rung(external):
+                out(light)
+
+        with pytest.raises(ValueError, match="CPY_IO_BLOCK_UNTRACKED"):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0)
+
+    def test_strict_validation_keeps_advisories_non_blocking(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        done = Bool("Done")
+        acc = Int("Acc")
+        dest = Int("Dest")
+
+        def fn():
+            return {"result": 1}
+
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                on_delay(done, acc, preset=5, unit=Tms)
+                run_function(fn, outs={"result": dest})
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "def _run_main_rungs():" in source_code
 
 
 class TestDeterministicOutput:

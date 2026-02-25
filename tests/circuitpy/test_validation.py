@@ -84,7 +84,7 @@ class TestFunctionCallVerify:
         strict_report = validate_circuitpy_program(prog, mode="strict")
 
         assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in warn_report.hints)
-        assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in strict_report.errors)
+        assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in strict_report.hints)
 
 
 class TestEnabledFunctionCallVerify:
@@ -107,7 +107,7 @@ class TestEnabledFunctionCallVerify:
         strict_report = validate_circuitpy_program(prog, mode="strict")
 
         assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in warn_report.hints)
-        assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in strict_report.errors)
+        assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in strict_report.hints)
 
 
 class TestIOBlockUntracked:
@@ -266,7 +266,7 @@ class TestReportSummary:
         strict_report = validate_circuitpy_program(prog, mode="strict")
 
         assert "hint(s)" in warn_report.summary()
-        assert "error(s)" in strict_report.summary()
+        assert "hint(s)" in strict_report.summary()
 
 
 class TestLocationFormatting:
@@ -378,7 +378,7 @@ class TestBranches:
 
 
 class TestStrictMode:
-    def test_all_findings_are_errors(self):
+    def test_strict_mode_keeps_non_blocking_advisories_as_hints(self):
         hw = P1AM()
         outputs = hw.slot(1, "P1-08TRS")
         light = outputs[1]
@@ -399,7 +399,9 @@ class TestStrictMode:
         codes = set(_finding_codes(report))
 
         assert {CPY_FUNCTION_CALL_VERIFY, CPY_IO_BLOCK_UNTRACKED, CPY_TIMER_RESOLUTION} <= codes
-        assert report.hints == ()
+        assert any(f.code == CPY_IO_BLOCK_UNTRACKED for f in report.errors)
+        assert any(f.code == CPY_FUNCTION_CALL_VERIFY for f in report.hints)
+        assert any(f.code == CPY_TIMER_RESOLUTION for f in report.hints)
 
 
 class TestWarnMode:

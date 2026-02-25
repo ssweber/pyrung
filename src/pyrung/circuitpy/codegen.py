@@ -799,11 +799,9 @@ def generate_circuitpy(
         )
 
     report = validate_circuitpy_program(program, hw=hw, mode="strict")
-    ignored_codes = {"CPY_FUNCTION_CALL_VERIFY", "CPY_TIMER_RESOLUTION"}
-    blocking_errors = [err for err in report.errors if err.code not in ignored_codes]
-    if blocking_errors:
-        lines = [f"{len(blocking_errors)} error(s)."]
-        for err in blocking_errors:
+    if report.errors:
+        lines = [f"{len(report.errors)} error(s)."]
+        for err in report.errors:
             lines.append(f"{err.code} @ {err.location}: {err.message}")
         raise ValueError("\n".join(lines))
 

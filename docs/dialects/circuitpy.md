@@ -175,7 +175,7 @@ report = program.validate("circuitpy", hw=hw, mode="warn")
 |-----------|------|---------|-------------|
 | `program` | `Program` | — | Program to validate |
 | `hw` | `P1AM \| None` | `None` | Hardware config for I/O traceability checks |
-| `mode` | `"warn" \| "strict"` | `"warn"` | `"warn"` emits hints; `"strict"` upgrades to errors |
+| `mode` | `"warn" \| "strict"` | `"warn"` | `"warn"` emits hints; `"strict"` enforces blocking findings as errors |
 
 ### Finding codes
 
@@ -185,7 +185,7 @@ report = program.validate("circuitpy", hw=hw, mode="warn")
 | `CPY_IO_BLOCK_UNTRACKED` | I/O tag not traceable to a `P1AM` slot | Tag was created outside `hw.slot()` — it won't be wired to physical I/O in generated code |
 | `CPY_TIMER_RESOLUTION` | `on_delay` / `off_delay` with `Tms` timing | Millisecond timer accuracy depends on scan time; effective resolution is one scan |
 
-In `"warn"` mode these produce hints. In `"strict"` mode they become errors. `generate_circuitpy()` runs strict validation internally but ignores `CPY_FUNCTION_CALL_VERIFY` and `CPY_TIMER_RESOLUTION` (non-blocking advisories).
+In `"warn"` mode these produce hints. In `"strict"` mode, `CPY_IO_BLOCK_UNTRACKED` is an error, while `CPY_FUNCTION_CALL_VERIFY` and `CPY_TIMER_RESOLUTION` remain non-blocking advisory hints. `generate_circuitpy()` runs strict validation internally and blocks on validation errors.
 
 ## Deploying to Hardware
 
