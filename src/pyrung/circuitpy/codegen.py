@@ -1,10 +1,12 @@
-"""CircuitPython code generation (Step 1 foundation)."""
+"""CircuitPython code generation (feature-complete v1)."""
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import math as _math
 import re
+import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -62,7 +64,31 @@ from pyrung.core.expression import (
     TagExpr,
     XorExpr,
 )
-from pyrung.core.instruction import LatchInstruction, OutInstruction, ResetInstruction
+from pyrung.core.instruction import (
+    BlockCopyInstruction,
+    CalcInstruction,
+    CallInstruction,
+    CopyInstruction,
+    CountDownInstruction,
+    CountUpInstruction,
+    EnabledFunctionCallInstruction,
+    FillInstruction,
+    ForLoopInstruction,
+    FunctionCallInstruction,
+    LatchInstruction,
+    OffDelayInstruction,
+    OnDelayInstruction,
+    OutInstruction,
+    PackBitsInstruction,
+    PackTextInstruction,
+    PackWordsInstruction,
+    ResetInstruction,
+    ReturnInstruction,
+    SearchInstruction,
+    ShiftInstruction,
+    UnpackToBitsInstruction,
+    UnpackToWordsInstruction,
+)
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -75,6 +101,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.program import Program
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.tag import Tag, TagType
+from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import _INSTRUCTION_FIELDS, _condition_children
 
 _IDENT_RE = re.compile(r"[^A-Za-z0-9_]")
@@ -96,6 +123,22 @@ _HELPER_ORDER = (
     "_parse_pack_text_value",
     "_store_copy_value_to_type",
 )
+_INT_MIN = -32768
+_INT_MAX = 32767
+_DINT_MIN = -2147483648
+_DINT_MAX = 2147483647
+
+_SD_READY_TAG = "storage.sd.ready"
+_SD_WRITE_STATUS_TAG = "storage.sd.write_status"
+_SD_ERROR_TAG = "storage.sd.error"
+_SD_ERROR_CODE_TAG = "storage.sd.error_code"
+_SD_EJECT_CMD_TAG = "storage.sd.eject_cmd"
+_SD_DELETE_ALL_CMD_TAG = "storage.sd.delete_all_cmd"
+_SD_COPY_SYSTEM_CMD_TAG = "storage.sd.copy_system_cmd"
+
+_SD_MOUNT_ERROR = 1
+_SD_LOAD_ERROR = 2
+_SD_SAVE_ERROR = 3
 
 
 @dataclass(frozen=True)
@@ -147,6 +190,7 @@ class CodegenContext:
     block_symbols: dict[int, str] = field(default_factory=dict)
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
+    function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
     _current_function: str | None = None
     _name_counters: dict[str, int] = field(default_factory=dict)
 
@@ -409,6 +453,34 @@ class CodegenContext:
         self.used_indirect_blocks.add(block_id)
         return self.index_helper_name(block_id)
 
+    def symbol_if_referenced(self, tag_name: str) -> str | None:
+        tag = self.referenced_tags.get(tag_name)
+        if tag is None:
+            return None
+        return self.symbol_for_tag(tag)
+
+    def register_function_source(self, fn: Any) -> str:
+        key = id(fn)
+        existing = self.function_symbols_by_obj.get(key)
+        if existing is not None:
+            return existing
+
+        try:
+            source = inspect.getsource(fn)
+        except (OSError, TypeError) as exc:
+            raise ValueError(f"Could not inspect source for callable {fn!r}") from exc
+        rendered = textwrap.dedent(source).rstrip()
+        if not rendered:
+            raise ValueError(f"Could not inspect source for callable {fn!r}")
+        if _first_defined_name(rendered) is None:
+            raise ValueError(f"Callable source is not inspectable for embedding: {fn!r}")
+
+        fn_name = getattr(fn, "__name__", type(fn).__name__)
+        symbol = _mangle_symbol(fn_name, "_fn_", set(self.function_sources))
+        self.function_sources[symbol] = rendered
+        self.function_symbols_by_obj[key] = symbol
+        return symbol
+
     def _ensure_block_binding(
         self,
         block: Block | None,
@@ -620,6 +692,46 @@ def compile_instruction(
         lines = [f'{" " * indent}if {enabled_expr}:']
         lines.extend(_compile_target_write_lines(instr.target, default_expr, ctx, indent + 4))
         return lines
+    if isinstance(instr, OnDelayInstruction):
+        return _compile_on_delay_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, OffDelayInstruction):
+        return _compile_off_delay_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, CountUpInstruction):
+        return _compile_count_up_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, CountDownInstruction):
+        return _compile_count_down_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, CopyInstruction):
+        return _compile_copy_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, CalcInstruction):
+        return _compile_calc_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, BlockCopyInstruction):
+        return _compile_blockcopy_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, FillInstruction):
+        return _compile_fill_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, SearchInstruction):
+        return _compile_search_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, ShiftInstruction):
+        return _compile_shift_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, PackBitsInstruction):
+        return _compile_pack_bits_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, PackWordsInstruction):
+        return _compile_pack_words_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, PackTextInstruction):
+        return _compile_pack_text_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, UnpackToBitsInstruction):
+        return _compile_unpack_bits_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, UnpackToWordsInstruction):
+        return _compile_unpack_words_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, FunctionCallInstruction):
+        return _compile_function_call_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, EnabledFunctionCallInstruction):
+        return _compile_enabled_function_call_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, CallInstruction):
+        return _compile_call_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, ReturnInstruction):
+        return _compile_return_instruction(enabled_expr, indent)
+    if isinstance(instr, ForLoopInstruction):
+        return _compile_for_loop_instruction(instr, enabled_expr, ctx, indent)
 
     loc = _source_location(instr)
     raise NotImplementedError(f"Unsupported instruction type: {type(instr).__name__} at {loc}")
@@ -680,9 +792,11 @@ def generate_circuitpy(
         )
 
     report = validate_circuitpy_program(program, hw=hw, mode="strict")
-    if report.errors:
-        lines = [report.summary()]
-        for err in report.errors:
+    ignored_codes = {"CPY_FUNCTION_CALL_VERIFY", "CPY_TIMER_RESOLUTION"}
+    blocking_errors = [err for err in report.errors if err.code not in ignored_codes]
+    if blocking_errors:
+        lines = [f"{len(blocking_errors)} error(s)."]
+        for err in blocking_errors:
             lines.append(f"{err.code} @ {err.location}: {err.message}")
         raise ValueError("\n".join(lines))
 
@@ -721,6 +835,8 @@ def _render_code(ctx: CodegenContext) -> str:
             "import json",
             "import math",
             "import os",
+            "import re",
+            "import struct",
             "import time",
             "",
             "import board",
@@ -820,19 +936,129 @@ def _render_code(ctx: CodegenContext) -> str:
         ]
     )
 
-    # 7) SD mount + load memory startup call (stubs in foundation step)
+    # 7) SD mount + load memory startup call
+    ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
+    load_globals = ", ".join(ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"])
+    save_globals = load_globals
     lines.extend(
         [
             "def _mount_sd():",
-            "    global _sd_available, _sd_error, _sd_error_code",
-            "    _sd_available = False",
-            "    _sd_error = False",
-            "    _sd_error_code = 0",
+            "    global _sd_available, _sd_spi, _sd, _sd_vfs, _sd_error, _sd_error_code",
+            "    try:",
+            "        _sd_spi = busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)",
+            "        _sd = sdcardio.SDCard(_sd_spi, board.SD_CS)",
+            "        _sd_vfs = storage.VfsFat(_sd)",
+            '        storage.mount(_sd_vfs, "/sd")',
+            "        _sd_available = True",
+            "        _sd_error = False",
+            "        _sd_error_code = 0",
+            "    except Exception as exc:",
+            "        _sd_available = False",
+            "        _sd_error = True",
+            f"        _sd_error_code = {_SD_MOUNT_ERROR}",
+            '        print(f"Retentive storage unavailable: {exc}")',
             "",
             "def load_memory():",
-            "    global _sd_write_status",
+        ]
+    )
+    if load_globals:
+        lines.append(f"    global {load_globals}")
+    lines.extend(
+        [
+            "    if not _sd_available:",
+            '        print("Retentive load skipped: SD unavailable")',
+            "        return",
+            "    _sd_write_status = True",
+            "    if microcontroller is not None and len(microcontroller.nvm) > 0 and microcontroller.nvm[0] == 1:",
+            "        _sd_error = True",
+            f"        _sd_error_code = {_SD_LOAD_ERROR}",
+            "        _sd_write_status = False",
+            '        print("Retentive load skipped: interrupted previous save detected")',
+            "        return",
+            "    try:",
+            '        with open(_MEMORY_PATH, "r", encoding="utf-8") as f:',
+            "            payload = json.load(f)",
+            "    except Exception as exc:",
+            "        _sd_error = True",
+            f"        _sd_error_code = {_SD_LOAD_ERROR}",
+            "        _sd_write_status = False",
+            '        print(f"Retentive load skipped: {exc}")',
+            "        return",
+            '    if payload.get("schema") != _RET_SCHEMA:',
+            "        _sd_error = True",
+            f"        _sd_error_code = {_SD_LOAD_ERROR}",
+            "        _sd_write_status = False",
+            '        print("Retentive load skipped: schema mismatch")',
+            "        return",
+            '    values = payload.get("values", {})',
+        ]
+    )
+    for name, tag in sorted(ctx.retentive_tags.items()):
+        symbol = ctx.symbol_for_tag(tag)
+        load_expr = _load_cast_expr("_entry.get(\"value\", " + symbol + ")", tag.type.name)
+        lines.extend(
+            [
+                f'    _entry = values.get("{name}")',
+                f'    if isinstance(_entry, dict) and _entry.get("type") == "{tag.type.name}":',
+                "        try:",
+                f"            {symbol} = {load_expr}",
+                "        except Exception:",
+                "            pass",
+            ]
+        )
+    lines.extend(
+        [
+            "    _sd_error = False",
+            "    _sd_error_code = 0",
             "    _sd_write_status = False",
-            "    return",
+            "",
+            "def save_memory():",
+        ]
+    )
+    if save_globals:
+        lines.append(f"    global {save_globals}")
+    lines.extend(
+        [
+            "    if not _sd_available:",
+            "        return",
+            "    _sd_write_status = True",
+            "    values = {}",
+        ]
+    )
+    for name, tag in sorted(ctx.retentive_tags.items()):
+        symbol = ctx.symbol_for_tag(tag)
+        lines.extend(
+            [
+                f'    if {symbol} != _RET_DEFAULTS["{name}"]:',
+                f'        values["{name}"] = {{"type": "{tag.type.name}", "value": {symbol}}}',
+            ]
+        )
+    lines.extend(
+        [
+            '    payload = {"schema": _RET_SCHEMA, "values": values}',
+            "    dirty_armed = False",
+            "    if microcontroller is not None and len(microcontroller.nvm) > 0:",
+            "        microcontroller.nvm[0] = 1",
+            "        dirty_armed = True",
+            "    try:",
+            '        with open(_MEMORY_TMP_PATH, "w", encoding="utf-8") as f:',
+            "            json.dump(payload, f)",
+            "        try:",
+            "            os.remove(_MEMORY_PATH)",
+            "        except OSError:",
+            "            pass",
+            "        os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)",
+            "    except Exception as exc:",
+            "        _sd_error = True",
+            f"        _sd_error_code = {_SD_SAVE_ERROR}",
+            "        _sd_write_status = False",
+            '        print(f"Retentive save failed: {exc}")',
+            "        return",
+            "    if dirty_armed:",
+            "        microcontroller.nvm[0] = 0",
+            "    _sd_error = False",
+            "    _sd_error_code = 0",
+            "    _sd_write_status = False",
             "",
             "_mount_sd()",
             "load_memory()",
@@ -864,20 +1090,16 @@ def _render_code(ctx: CodegenContext) -> str:
 def _render_helper_section(ctx: CodegenContext) -> list[str]:
     lines = [
         "def _service_sd_commands():",
-        "    global _sd_write_status, _sd_eject_cmd, _sd_delete_all_cmd, _sd_copy_system_cmd",
+        "    global _sd_write_status, _sd_error, _sd_error_code",
+        "    global _sd_eject_cmd, _sd_delete_all_cmd, _sd_copy_system_cmd",
         "    if not (_sd_eject_cmd or _sd_delete_all_cmd or _sd_copy_system_cmd):",
         "        return",
         "    _sd_write_status = True",
+        "    _sd_error = False",
+        "    _sd_error_code = 0",
         "    _sd_eject_cmd = False",
         "    _sd_delete_all_cmd = False",
         "    _sd_copy_system_cmd = False",
-        "",
-        "def save_memory():",
-        "    global _sd_write_status",
-        "    if not _sd_available:",
-        "        return",
-        "    _sd_write_status = True",
-        "    _sd_write_status = False",
         "",
     ]
 
@@ -930,22 +1152,66 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
         ],
         "_int_to_float_bits": [
             "def _int_to_float_bits(n):",
-            "    raise NotImplementedError('Step 2 helper not emitted in foundation step')",
+            '    return struct.unpack("<f", struct.pack("<I", int(n) & 0xFFFFFFFF))[0]',
             "",
         ],
         "_float_to_int_bits": [
             "def _float_to_int_bits(f):",
-            "    raise NotImplementedError('Step 2 helper not emitted in foundation step')",
+            '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
             "",
         ],
         "_parse_pack_text_value": [
             "def _parse_pack_text_value(text, dest_type):",
-            "    raise NotImplementedError('Step 2 helper not emitted in foundation step')",
+            '    if text == "":',
+            '        raise ValueError("empty text cannot be parsed")',
+            '    if dest_type in {"INT", "DINT"}:',
+            '        if not re.fullmatch(r"[+-]?\\d+", text):',
+            '            raise ValueError("integer parse failed")',
+            "        parsed = int(text, 10)",
+            '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
+            '            raise ValueError("integer out of INT range")',
+            '        if dest_type == "DINT" and (parsed < -2147483648 or parsed > 2147483647):',
+            '            raise ValueError("integer out of DINT range")',
+            "        return parsed",
+            '    if dest_type == "WORD":',
+            '        if not re.fullmatch(r"[0-9A-Fa-f]+", text):',
+            '            raise ValueError("hex parse failed")',
+            "        parsed = int(text, 16)",
+            "        if parsed < 0 or parsed > 0xFFFF:",
+            '            raise ValueError("hex out of WORD range")',
+            "        return parsed",
+            '    if dest_type == "REAL":',
+            "        parsed = float(text)",
+            "        if not math.isfinite(parsed):",
+            '            raise ValueError("REAL parse produced non-finite value")',
+            '        struct.pack("<f", parsed)',
+            "        return parsed",
+            '    raise TypeError(f"Unsupported pack_text destination type: {dest_type}")',
             "",
         ],
         "_store_copy_value_to_type": [
             "def _store_copy_value_to_type(value, dest_type):",
-            "    raise NotImplementedError('Step 2 helper not emitted in foundation step')",
+            "    if isinstance(value, float) and not math.isfinite(value):",
+            "        value = 0",
+            '    if dest_type == "INT":',
+            f"        return max({_INT_MIN}, min({_INT_MAX}, int(value)))",
+            '    if dest_type == "DINT":',
+            f"        return max({_DINT_MIN}, min({_DINT_MAX}, int(value)))",
+            '    if dest_type == "WORD":',
+            "        return int(value) & 0xFFFF",
+            '    if dest_type == "REAL":',
+            "        return float(value)",
+            '    if dest_type == "BOOL":',
+            "        return bool(value)",
+            '    if dest_type == "CHAR":',
+            "        if not isinstance(value, str):",
+            '            raise ValueError("CHAR value must be a string")',
+            '        if value == "":',
+            "            return value",
+            "        if len(value) != 1 or ord(value) > 127:",
+            '            raise ValueError("CHAR value must be blank or one ASCII character")',
+            "        return value",
+            "    return value",
             "",
         ],
     }
@@ -965,6 +1231,9 @@ def _render_embedded_functions(ctx: CodegenContext) -> list[str]:
     for symbol in sorted(ctx.function_sources):
         src = ctx.function_sources[symbol].rstrip()
         lines.append(src)
+        fn_name = _first_defined_name(src)
+        if fn_name is not None and fn_name != symbol:
+            lines.append(f"{symbol} = {fn_name}")
         lines.append("")
     return lines
 
@@ -1090,6 +1359,14 @@ def _render_io_helpers(ctx: CodegenContext) -> list[str]:
 
 
 def _render_scan_loop(ctx: CodegenContext) -> list[str]:
+    sd_ready_symbol = ctx.symbol_if_referenced(_SD_READY_TAG)
+    sd_write_symbol = ctx.symbol_if_referenced(_SD_WRITE_STATUS_TAG)
+    sd_error_symbol = ctx.symbol_if_referenced(_SD_ERROR_TAG)
+    sd_error_code_symbol = ctx.symbol_if_referenced(_SD_ERROR_CODE_TAG)
+    sd_eject_symbol = ctx.symbol_if_referenced(_SD_EJECT_CMD_TAG)
+    sd_delete_symbol = ctx.symbol_if_referenced(_SD_DELETE_ALL_CMD_TAG)
+    sd_copy_symbol = ctx.symbol_if_referenced(_SD_COPY_SYSTEM_CMD_TAG)
+
     lines = [
         "while True:",
         "    scan_start = time.monotonic()",
@@ -1100,12 +1377,42 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
         "    _last_scan_ts = scan_start",
         '    _mem["_dt"] = dt',
         "",
+    ]
+
+    if sd_eject_symbol is not None:
+        lines.append(f"    _sd_eject_cmd = bool({sd_eject_symbol})")
+    if sd_delete_symbol is not None:
+        lines.append(f"    _sd_delete_all_cmd = bool({sd_delete_symbol})")
+    if sd_copy_symbol is not None:
+        lines.append(f"    _sd_copy_system_cmd = bool({sd_copy_symbol})")
+    lines.extend(
+        [
         "    _service_sd_commands()",
+        ]
+    )
+    if sd_eject_symbol is not None:
+        lines.append(f"    {sd_eject_symbol} = _sd_eject_cmd")
+    if sd_delete_symbol is not None:
+        lines.append(f"    {sd_delete_symbol} = _sd_delete_all_cmd")
+    if sd_copy_symbol is not None:
+        lines.append(f"    {sd_copy_symbol} = _sd_copy_system_cmd")
+    if sd_ready_symbol is not None:
+        lines.append(f"    {sd_ready_symbol} = bool(_sd_available)")
+    if sd_write_symbol is not None:
+        lines.append(f"    {sd_write_symbol} = bool(_sd_write_status)")
+    if sd_error_symbol is not None:
+        lines.append(f"    {sd_error_symbol} = bool(_sd_error)")
+    if sd_error_code_symbol is not None:
+        lines.append(f"    {sd_error_code_symbol} = int(_sd_error_code)")
+
+    lines.extend(
+        [
         "    _read_inputs()",
         "    _run_main_rungs()",
         "    _write_outputs()",
         "",
     ]
+    )
     for tag_name in sorted(ctx.referenced_tags):
         tag = ctx.referenced_tags[tag_name]
         lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')
@@ -1202,6 +1509,979 @@ def _compile_out_instruction(
     lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
     return lines
 
+
+def _compile_guarded_instruction(
+    instr: Any,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+    enabled_body: list[str],
+    *,
+    disabled_body: list[str] | None = None,
+) -> list[str]:
+    sp = " " * indent
+    lines: list[str] = []
+    if getattr(instr, "oneshot", False):
+        key = f"_oneshot:{_source_location(instr)}:{type(instr).__name__}"
+        if ctx._current_function is not None:
+            ctx.mark_function_global(ctx._current_function, "_mem")
+        lines.append(f"{sp}if not ({enabled_expr}):")
+        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = False')
+        if disabled_body:
+            lines.extend(f'{" " * (indent + 4)}{line}' for line in disabled_body)
+        lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
+        lines.extend(f'{" " * (indent + 4)}{line}' for line in enabled_body)
+        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = True')
+        return lines
+
+    lines.append(f"{sp}if {enabled_expr}:")
+    lines.extend(f'{" " * (indent + 4)}{line}' for line in enabled_body)
+    if disabled_body is not None:
+        lines.append(f"{sp}else:")
+        lines.extend(f'{" " * (indent + 4)}{line}' for line in disabled_body)
+    return lines
+
+
+def _compile_call_instruction(
+    instr: CallInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    sp = " " * indent
+    fn = _subroutine_symbol(instr.subroutine_name)
+    return [f"{sp}if {enabled_expr}:", f"{sp}    {fn}()"]
+
+
+def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
+    sp = " " * indent
+    return [f"{sp}if {enabled_expr}:", f"{sp}    return"]
+
+
+def _compile_on_delay_instruction(
+    instr: OnDelayInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    done = ctx.symbol_for_tag(instr.done_bit)
+    acc = ctx.symbol_for_tag(instr.accumulator)
+    frac_key = f"_frac:{instr.accumulator.name}"
+    preset = _compile_value(instr.preset, ctx)
+    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
+    if ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
+    sp = " " * indent
+    lines: list[str] = [
+        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
+    ]
+    if instr.reset_condition is not None:
+        reset_expr = compile_condition(instr.reset_condition, ctx)
+        lines.extend(
+            [
+                f"{sp}if {reset_expr}:",
+                f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (indent + 4)}{done} = False',
+                f'{" " * (indent + 4)}{acc} = 0',
+                f"{sp}else:",
+            ]
+        )
+        inner = indent + 4
+    else:
+        inner = indent
+    isp = " " * inner
+    lines.extend(
+        [
+            f"{isp}if {enabled_expr}:",
+            f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
+            f'{" " * (inner + 4)}_acc = int({acc})',
+            f'{" " * (inner + 4)}_dt_units = {unit_expr}',
+            f'{" " * (inner + 4)}_int_units = int(_dt_units)',
+            f'{" " * (inner + 4)}_new_frac = _dt_units - _int_units',
+            f'{" " * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})',
+            f'{" " * (inner + 4)}_preset = int({preset})',
+            f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
+            f'{" " * (inner + 4)}{done} = (_acc >= _preset)',
+            f'{" " * (inner + 4)}{acc} = _acc',
+            f"{isp}else:",
+        ]
+    )
+    if instr.has_reset:
+        lines.append(f"{' ' * (inner + 4)}pass")
+    else:
+        lines.extend(
+            [
+                f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
+                f'{" " * (inner + 4)}{done} = False',
+                f'{" " * (inner + 4)}{acc} = 0',
+            ]
+        )
+    return lines
+
+
+def _compile_off_delay_instruction(
+    instr: OffDelayInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    done = ctx.symbol_for_tag(instr.done_bit)
+    acc = ctx.symbol_for_tag(instr.accumulator)
+    frac_key = f"_frac:{instr.accumulator.name}"
+    preset = _compile_value(instr.preset, ctx)
+    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
+    if ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
+    sp = " " * indent
+    return [
+        f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
+        f"{sp}if {enabled_expr}:",
+        f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
+        f'{" " * (indent + 4)}{done} = True',
+        f'{" " * (indent + 4)}{acc} = 0',
+        f"{sp}else:",
+        f'{" " * (indent + 4)}_dt = float(_mem.get("_dt", 0.0))',
+        f'{" " * (indent + 4)}_acc = int({acc})',
+        f'{" " * (indent + 4)}_dt_units = {unit_expr}',
+        f'{" " * (indent + 4)}_int_units = int(_dt_units)',
+        f'{" " * (indent + 4)}_new_frac = _dt_units - _int_units',
+        f'{" " * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})',
+        f'{" " * (indent + 4)}_preset = int({preset})',
+        f'{" " * (indent + 4)}_mem["{frac_key}"] = _new_frac',
+        f'{" " * (indent + 4)}{done} = (_acc < _preset)',
+        f'{" " * (indent + 4)}{acc} = _acc',
+    ]
+
+
+def _compile_count_up_instruction(
+    instr: CountUpInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    done = ctx.symbol_for_tag(instr.done_bit)
+    acc = ctx.symbol_for_tag(instr.accumulator)
+    preset = _compile_value(instr.preset, ctx)
+    sp = " " * indent
+    lines: list[str] = []
+    if instr.reset_condition is not None:
+        reset_expr = compile_condition(instr.reset_condition, ctx)
+        lines.extend(
+            [
+                f"{sp}if {reset_expr}:",
+                f'{" " * (indent + 4)}{done} = False',
+                f'{" " * (indent + 4)}{acc} = 0',
+                f"{sp}else:",
+            ]
+        )
+        inner = indent + 4
+    else:
+        inner = indent
+    isp = " " * inner
+    lines.extend(
+        [
+            f'{" " * inner}_acc = int({acc})',
+            f'{" " * inner}_delta = 0',
+            f"{isp}if {enabled_expr}:",
+            f'{" " * (inner + 4)}_delta += 1',
+        ]
+    )
+    if instr.down_condition is not None:
+        down_expr = compile_condition(instr.down_condition, ctx)
+        lines.extend(
+            [
+                f"{isp}if {down_expr}:",
+                f'{" " * (inner + 4)}_delta -= 1',
+            ]
+        )
+    lines.extend(
+        [
+            f'{" " * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))',
+            f'{" " * inner}_preset = int({preset})',
+            f'{" " * inner}{done} = (_acc >= _preset)',
+            f'{" " * inner}{acc} = _acc',
+        ]
+    )
+    return lines
+
+
+def _compile_count_down_instruction(
+    instr: CountDownInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    done = ctx.symbol_for_tag(instr.done_bit)
+    acc = ctx.symbol_for_tag(instr.accumulator)
+    preset = _compile_value(instr.preset, ctx)
+    sp = " " * indent
+    lines: list[str] = []
+    if instr.reset_condition is not None:
+        reset_expr = compile_condition(instr.reset_condition, ctx)
+        lines.extend(
+            [
+                f"{sp}if {reset_expr}:",
+                f'{" " * (indent + 4)}{done} = False',
+                f'{" " * (indent + 4)}{acc} = 0',
+                f"{sp}else:",
+            ]
+        )
+        inner = indent + 4
+    else:
+        inner = indent
+    isp = " " * inner
+    lines.extend(
+        [
+            f'{" " * inner}_acc = int({acc})',
+            f"{isp}if {enabled_expr}:",
+            f'{" " * (inner + 4)}_acc -= 1',
+            f'{" " * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))',
+            f'{" " * inner}_preset = int({preset})',
+            f'{" " * inner}{done} = (_acc <= -_preset)',
+            f'{" " * inner}{acc} = _acc',
+        ]
+    )
+    return lines
+
+
+def _compile_copy_instruction(
+    instr: CopyInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    target_type = _value_type_name(instr.target)
+    if isinstance(instr.source, CopyModifier):
+        raise NotImplementedError("CopyModifier-based copy() codegen is not implemented")
+    ctx.mark_helper("_store_copy_value_to_type")
+    source_expr = _compile_value(instr.source, ctx)
+    value_expr = f'_store_copy_value_to_type({source_expr}, "{target_type}")'
+    enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_calc_instruction(
+    instr: CalcInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    value_expr = _compile_value(instr.expression, ctx)
+    store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
+    enabled_body = [
+        "try:",
+        f"    _calc_value = {value_expr}",
+        "except ZeroDivisionError:",
+        "    _calc_value = 0",
+        "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
+        "    _calc_value = 0",
+        f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}",
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_blockcopy_instruction(
+    instr: BlockCopyInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    if isinstance(instr.source, CopyModifier):
+        raise NotImplementedError("CopyModifier-based blockcopy() codegen is not implemented")
+    ctx.mark_helper("_store_copy_value_to_type")
+    stem = ctx.next_name("blockcopy")
+    src_setup, src_symbol, src_indices, _ = _compile_range_setup(
+        instr.source, ctx, stem=f"{stem}_src", include_addresses=False
+    )
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    enabled_body = [
+        *src_setup,
+        *dst_setup,
+        f"if len({src_indices}) != len({dst_indices}):",
+        f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
+        f"for _i in range(len({src_indices})):",
+        f"    _src_idx = {src_indices}[_i]",
+        f"    _dst_idx = {dst_indices}[_i]",
+        f"    _raw = {src_symbol}[_src_idx]",
+        f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_raw, "{_range_type_name(instr.dest)}")',
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_fill_instruction(
+    instr: FillInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    if isinstance(instr.value, CopyModifier):
+        raise NotImplementedError("CopyModifier-based fill() codegen is not implemented")
+    ctx.mark_helper("_store_copy_value_to_type")
+    stem = ctx.next_name("fill")
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    value_expr = _compile_value(instr.value, ctx)
+    enabled_body = [
+        *dst_setup,
+        f"_fill_value = {value_expr}",
+        f'for _dst_idx in {dst_indices}:',
+        f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_search_instruction(
+    instr: SearchInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    stem = ctx.next_name("search")
+    range_setup, range_symbol, range_indices, range_addrs = _compile_range_setup(
+        instr.search_range,
+        ctx,
+        stem=f"{stem}_rng",
+        include_addresses=True,
+    )
+    result_symbol = ctx.symbol_for_tag(instr.result)
+    found_symbol = ctx.symbol_for_tag(instr.found)
+    value_expr = _compile_value(instr.value, ctx)
+    range_type = _range_type_name(instr.search_range)
+    compare_expr = _search_compare_expr(instr.condition, "_candidate", "_rhs")
+    miss_body = [f"{result_symbol} = -1", f"{found_symbol} = False"]
+
+    text_path = range_type == "CHAR"
+    enabled_body: list[str] = [
+        *range_setup,
+        f"if not {range_addrs}:",
+        "    _cursor_index = None",
+        "else:",
+    ]
+    if instr.continuous:
+        enabled_body.extend(
+            [
+                f"    _current_result = int({result_symbol})",
+                "    if _current_result == 0:",
+                "        _cursor_index = 0",
+                "    elif _current_result == -1:",
+                "        _cursor_index = None",
+                "    else:",
+            ]
+        )
+        if _range_reverse(instr.search_range):
+            enabled_body.extend(
+                [
+                    "        _cursor_index = None",
+                    f"        for _idx, _addr in enumerate({range_addrs}):",
+                    "            if _addr < _current_result:",
+                    "                _cursor_index = _idx",
+                    "                break",
+                ]
+            )
+        else:
+            enabled_body.extend(
+                [
+                    "        _cursor_index = None",
+                    f"        for _idx, _addr in enumerate({range_addrs}):",
+                    "            if _addr > _current_result:",
+                    "                _cursor_index = _idx",
+                    "                break",
+                ]
+            )
+    else:
+        enabled_body.append("    _cursor_index = 0")
+
+    enabled_body.extend(
+        [
+            "if _cursor_index is None:",
+            *[f"    {line}" for line in miss_body],
+            "else:",
+        ]
+    )
+
+    if text_path:
+        enabled_body.extend(
+            [
+                f'    if {instr.condition!r} not in ("==", "!="):',
+                '        raise ValueError("Text search only supports \'==\' and \'!=\' conditions")',
+                f"    _rhs = str({value_expr})",
+                '    if _rhs == "":',
+                '        raise ValueError("Text search value cannot be empty")',
+                "    _window_len = len(_rhs)",
+                f"    if _window_len > len({range_indices}):",
+                *[f"        {line}" for line in miss_body],
+                "    else:",
+                f"        _last_start = len({range_indices}) - _window_len",
+                "        if _cursor_index > _last_start:",
+                *[f"            {line}" for line in miss_body],
+                "        else:",
+                "            _matched = None",
+                "            for _start in range(_cursor_index, _last_start + 1):",
+                "                _candidate = ''.join(str("
+                f"{range_symbol}[{range_indices}[_start + _off]]) for _off in range(_window_len))",
+                f"                if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
+                "                    _matched = _start",
+                "                    break",
+                "            if _matched is None:",
+                *[f"                {line}" for line in miss_body],
+                "            else:",
+                f"                {result_symbol} = {range_addrs}[_matched]",
+                f"                {found_symbol} = True",
+            ]
+        )
+    else:
+        enabled_body.extend(
+            [
+                f"    _rhs = {value_expr}",
+                "    _matched = None",
+                f"    for _idx in range(_cursor_index, len({range_indices})):",
+                f"        _candidate = {range_symbol}[{range_indices}[_idx]]",
+                f"        if {compare_expr}:",
+                "            _matched = _idx",
+                "            break",
+                "    if _matched is None:",
+                *[f"        {line}" for line in miss_body],
+                "    else:",
+                f"        {result_symbol} = {range_addrs}[_matched]",
+                f"        {found_symbol} = True",
+            ]
+        )
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_shift_instruction(
+    instr: ShiftInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    if _range_type_name(instr.bit_range) != "BOOL":
+        raise TypeError("shift bit_range must contain BOOL tags")
+    if ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
+    key = f"_shift_prev_clock:{_source_location(instr)}"
+    stem = ctx.next_name("shift")
+    range_setup, range_symbol, range_indices, _ = _compile_range_setup(
+        instr.bit_range, ctx, stem=f"{stem}_rng", include_addresses=False
+    )
+    clock_expr = compile_condition(instr.clock_condition, ctx)
+    reset_expr = compile_condition(instr.reset_condition, ctx)
+    lines = [
+        *range_setup,
+        f"if not {range_indices}:",
+        '    raise ValueError("shift bit_range resolved to an empty range")',
+        f"_clock_curr = bool({clock_expr})",
+        f"_clock_prev = bool(_mem.get({key!r}, False))",
+        "_rising_edge = _clock_curr and not _clock_prev",
+        "if _rising_edge:",
+        f"    _prev_values = [bool({range_symbol}[_idx]) for _idx in {range_indices}]",
+        f"    {range_symbol}[{range_indices}[0]] = bool({enabled_expr})",
+        f"    for _pos in range(1, len({range_indices})):",
+        f"        {range_symbol}[{range_indices}[_pos]] = _prev_values[_pos - 1]",
+        f"if {reset_expr}:",
+        f"    for _idx in {range_indices}:",
+        f"        {range_symbol}[_idx] = False",
+        f"_mem[{key!r}] = _clock_curr",
+    ]
+    return [" " * indent + line for line in lines]
+
+
+def _compile_pack_bits_instruction(
+    instr: PackBitsInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    dest_type = _value_type_name(instr.dest)
+    if dest_type not in {"INT", "WORD", "DINT", "REAL"}:
+        raise TypeError("pack_bits destination must be INT, WORD, DINT, or REAL")
+    if _range_type_name(instr.bit_block) != "BOOL":
+        raise TypeError("pack_bits source range must contain BOOL tags")
+    width = 16 if dest_type in {"INT", "WORD"} else 32
+    stem = ctx.next_name("packbits")
+    src_setup, src_symbol, src_indices, _ = _compile_range_setup(
+        instr.bit_block, ctx, stem=f"{stem}_src", include_addresses=False
+    )
+    enabled_body = [
+        *src_setup,
+        f"if len({src_indices}) > {width}:",
+        f'    raise ValueError("pack_bits destination width is {width} bits but block has {{len({src_indices})}} tags")',
+        "_packed = 0",
+        f"for _bit_index, _src_idx in enumerate({src_indices}):",
+        f"    if bool({src_symbol}[_src_idx]):",
+        "        _packed |= (1 << _bit_index)",
+        f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
+        *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_pack_words_instruction(
+    instr: PackWordsInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    dest_type = _value_type_name(instr.dest)
+    if dest_type not in {"DINT", "REAL"}:
+        raise TypeError("pack_words destination must be DINT or REAL")
+    if _range_type_name(instr.word_block) not in {"INT", "WORD"}:
+        raise TypeError("pack_words source range must contain INT/WORD tags")
+    stem = ctx.next_name("packwords")
+    src_setup, src_symbol, src_indices, _ = _compile_range_setup(
+        instr.word_block, ctx, stem=f"{stem}_src", include_addresses=False
+    )
+    enabled_body = [
+        *src_setup,
+        f"if len({src_indices}) != 2:",
+        f'    raise ValueError("pack_words requires exactly 2 source tags; got {{len({src_indices})}}")',
+        f"_lo_value = int({src_symbol}[{src_indices}[0]])",
+        f"_hi_value = int({src_symbol}[{src_indices}[1]])",
+        "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
+        f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
+        *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_pack_text_instruction(
+    instr: PackTextInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    source_type = _range_type_name(instr.source_range)
+    if source_type != "CHAR":
+        raise TypeError("pack_text source range must contain CHAR tags")
+    dest_type = _value_type_name(instr.dest)
+    if dest_type not in {"INT", "DINT", "WORD", "REAL"}:
+        raise TypeError("pack_text destination must be INT, DINT, WORD, or REAL")
+    ctx.mark_helper("_parse_pack_text_value")
+    ctx.mark_helper("_store_copy_value_to_type")
+    stem = ctx.next_name("packtext")
+    src_setup, src_symbol, src_indices, _ = _compile_range_setup(
+        instr.source_range, ctx, stem=f"{stem}_src", include_addresses=False
+    )
+    enabled_body = [
+        *src_setup,
+        f"_text = ''.join(str({src_symbol}[_idx]) for _idx in {src_indices})",
+    ]
+    if instr.allow_whitespace:
+        enabled_body.append("_text = _text.strip()")
+    else:
+        enabled_body.extend(
+            [
+                "if _text != _text.strip():",
+                "    pass",
+                "else:",
+                f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
+                f'    _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+                *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+            ]
+        )
+        return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+    enabled_body.extend(
+        [
+            f'_parsed = _parse_pack_text_value(_text, "{dest_type}")',
+            f'_packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
+            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+        ]
+    )
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_unpack_bits_instruction(
+    instr: UnpackToBitsInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    source_type = _value_type_name(instr.source)
+    if source_type not in {"INT", "WORD", "DINT", "REAL"}:
+        raise TypeError("unpack_to_bits source must be INT, WORD, DINT, or REAL")
+    if _range_type_name(instr.bit_block) != "BOOL":
+        raise TypeError("unpack_to_bits destination range must contain BOOL tags")
+    width = 16 if source_type in {"INT", "WORD"} else 32
+    stem = ctx.next_name("unpackbits")
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.bit_block, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    if source_type == "REAL":
+        ctx.mark_helper("_float_to_int_bits")
+        bits_expr = f"_float_to_int_bits({_compile_value(instr.source, ctx)})"
+    elif source_type in {"INT", "WORD"}:
+        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFF)"
+    else:
+        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
+    enabled_body = [
+        *dst_setup,
+        f"if len({dst_indices}) > {width}:",
+        f'    raise ValueError("unpack_to_bits source width is {width} bits but block has {{len({dst_indices})}} tags")',
+        f"_bits = {bits_expr}",
+        f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
+        f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_unpack_words_instruction(
+    instr: UnpackToWordsInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    source_type = _value_type_name(instr.source)
+    if source_type not in {"DINT", "REAL"}:
+        raise TypeError("unpack_to_words source must be DINT or REAL")
+    dst_type = _range_type_name(instr.word_block)
+    if dst_type not in {"INT", "WORD"}:
+        raise TypeError("unpack_to_words destination range must contain INT/WORD tags")
+    stem = ctx.next_name("unpackwords")
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.word_block, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    if source_type == "REAL":
+        ctx.mark_helper("_float_to_int_bits")
+        bits_expr = f"_float_to_int_bits({_compile_value(instr.source, ctx)})"
+    else:
+        bits_expr = f"(int({_compile_value(instr.source, ctx)}) & 0xFFFFFFFF)"
+    lo_expr = "_lo_word"
+    hi_expr = "_hi_word"
+    if dst_type == "INT":
+        ctx.mark_helper("_wrap_int")
+        lo_store = f"_wrap_int({lo_expr}, 16, True)"
+        hi_store = f"_wrap_int({hi_expr}, 16, True)"
+    else:
+        lo_store = f"({lo_expr} & 0xFFFF)"
+        hi_store = f"({hi_expr} & 0xFFFF)"
+    enabled_body = [
+        *dst_setup,
+        f"if len({dst_indices}) != 2:",
+        f'    raise ValueError("unpack_to_words requires exactly 2 destination tags; got {{len({dst_indices})}}")',
+        f"_bits = {bits_expr}",
+        "_lo_word = (_bits & 0xFFFF)",
+        "_hi_word = ((_bits >> 16) & 0xFFFF)",
+        f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
+        f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
+    ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_function_call_instruction(
+    instr: FunctionCallInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    fn_symbol = ctx.register_function_source(instr._fn)
+    fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
+    result_var = f"_{ctx.next_name('fn_result')}"
+    kwargs = ", ".join(
+        f"{name}={_compile_value(value, ctx)}" for name, value in sorted(instr._ins.items())
+    )
+    call_expr = f"{fn_symbol}({kwargs})" if kwargs else f"{fn_symbol}()"
+    enabled_body = [f"{result_var} = {call_expr}"]
+    if instr._outs:
+        enabled_body.extend(
+            [
+                f"if {result_var} is None:",
+                f'    raise TypeError("run_function: {fn_name!r} returned None but outs were declared")',
+            ]
+        )
+        ctx.mark_helper("_store_copy_value_to_type")
+        for key, target in sorted(instr._outs.items()):
+            target_type = _value_type_name(target)
+            enabled_body.extend(
+                [
+                    f"if {key!r} not in {result_var}:",
+                    "    raise KeyError(",
+                    f'        "run_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    "    )",
+                ]
+            )
+            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_enabled_function_call_instruction(
+    instr: EnabledFunctionCallInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    fn_symbol = ctx.register_function_source(instr._fn)
+    result_var = f"_{ctx.next_name('fn_result')}"
+    kwargs = ", ".join(
+        f"{name}={_compile_value(value, ctx)}" for name, value in sorted(instr._ins.items())
+    )
+    call_args = f"bool({enabled_expr})"
+    if kwargs:
+        call_args += f", {kwargs}"
+    lines = [f'{" " * indent}{result_var} = {fn_symbol}({call_args})']
+    if instr._outs:
+        fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
+        ctx.mark_helper("_store_copy_value_to_type")
+        lines.extend(
+            [
+                f'{" " * indent}if {result_var} is None:',
+                f'{" " * (indent + 4)}raise TypeError("run_enabled_function: {fn_name!r} returned None but outs were declared")',
+            ]
+        )
+        for key, target in sorted(instr._outs.items()):
+            target_type = _value_type_name(target)
+            lines.extend(
+                [
+                    f'{" " * indent}if {key!r} not in {result_var}:',
+                    f'{" " * (indent + 4)}raise KeyError(',
+                    f'{" " * (indent + 8)}"run_enabled_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    f'{" " * (indent + 4)})',
+                ]
+            )
+            value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
+            lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))
+    return lines
+
+
+def _compile_for_loop_instruction(
+    instr: ForLoopInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    count_expr = _compile_value(instr.count, ctx)
+    idx_symbol = ctx.symbol_for_tag(instr.idx_tag)
+    disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
+    enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
+    body = [
+        f"_iterations = max(0, int({count_expr}))",
+        "for _for_i in range(_iterations):",
+        f"    {idx_symbol} = _for_i",
+        *_indent_body(enabled_children, 4),
+    ]
+    return _compile_guarded_instruction(
+        instr,
+        enabled_expr,
+        ctx,
+        indent,
+        body,
+        disabled_body=disabled_children,
+    )
+
+
+def _indent_body(lines: list[str], spaces: int) -> list[str]:
+    prefix = " " * spaces
+    return [f"{prefix}{line}" if line else line for line in lines]
+
+
+def _compile_instruction_list(
+    instructions: list[Any],
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    lines: list[str] = []
+    for instruction in instructions:
+        lines.extend(compile_instruction(instruction, enabled_expr, ctx, indent))
+    return lines
+
+
+def _value_type_name(value: Any) -> str:
+    if isinstance(value, Tag):
+        return value.type.name
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return value.block.type.name
+    raise TypeError(f"Unsupported typed value target: {type(value).__name__}")
+
+
+def _range_type_name(range_value: Any) -> str:
+    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
+        return range_value.block.type.name
+    raise TypeError(f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}")
+
+
+def _range_reverse(range_value: Any) -> bool:
+    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
+        return bool(range_value.reverse_order)
+    return False
+
+
+def _compile_assignment_lines(
+    target: Tag | IndirectRef | IndirectExprRef,
+    value_expr: str,
+    ctx: CodegenContext,
+    *,
+    indent: int,
+) -> list[str]:
+    lvalue = _compile_lvalue(target, ctx)
+    return [f'{" " * indent}{lvalue} = {value_expr}']
+
+
+def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
+    if isinstance(target, Tag):
+        return ctx.symbol_for_tag(target)
+    if isinstance(target, IndirectRef):
+        block_id = id(target.block)
+        binding = ctx.block_bindings.get(block_id)
+        if binding is None:
+            raise RuntimeError(f"Missing block binding for indirect target {target.block.name!r}")
+        block_symbol = ctx.symbol_for_block(target.block)
+        helper = ctx.use_indirect_block(binding.block_id)
+        ptr = _compile_value(target.pointer, ctx)
+        return f"{block_symbol}[{helper}(int({ptr}))]"
+    if isinstance(target, IndirectExprRef):
+        block_id = id(target.block)
+        binding = ctx.block_bindings.get(block_id)
+        if binding is None:
+            raise RuntimeError(
+                f"Missing block binding for indirect expression target {target.block.name!r}"
+            )
+        block_symbol = ctx.symbol_for_block(target.block)
+        helper = ctx.use_indirect_block(binding.block_id)
+        expr = compile_expression(target.expr, ctx)
+        return f"{block_symbol}[{helper}(int({expr}))]"
+    raise TypeError(f"Unsupported assignment target: {type(target).__name__}")
+
+
+def _compile_range_setup(
+    range_value: Any,
+    ctx: CodegenContext,
+    *,
+    stem: str,
+    include_addresses: bool,
+) -> tuple[list[str], str, str, str]:
+    if not isinstance(range_value, (BlockRange, IndirectBlockRange)):
+        raise TypeError(
+            f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
+        )
+    binding = ctx.block_bindings[id(range_value.block)]
+    symbol = ctx.symbol_for_block(range_value.block)
+    if isinstance(range_value, BlockRange):
+        addresses = [int(addr) for addr in range_value.addresses]
+        indices = [addr - binding.start for addr in addresses]
+        indices_expr = repr(indices)
+        addrs_expr = repr(addresses)
+        return [], symbol, indices_expr, addrs_expr
+
+    helper = ctx.use_indirect_block(binding.block_id)
+    name = ctx.next_name(stem)
+    start_var = f"_{name}_start"
+    end_var = f"_{name}_end"
+    addr_var = f"_{name}_addr"
+    idx_var = f"_{name}_idx"
+    indices_var = f"_{name}_indices"
+    addrs_var = f"_{name}_addrs"
+    start_expr = _compile_address_expr(range_value.start_expr, ctx)
+    end_expr = _compile_address_expr(range_value.end_expr, ctx)
+    lines = [
+        f"{start_var} = int({start_expr})",
+        f"{end_var} = int({end_expr})",
+        f"if {start_var} > {end_var}:",
+        '    raise ValueError("Indirect range start must be <= end")',
+        f"{indices_var} = []",
+        f"{addrs_var} = []",
+        f"for {addr_var} in range({start_var}, {end_var} + 1):",
+        f"    {idx_var} = {helper}(int({addr_var}))",
+        f"    {indices_var}.append({idx_var})",
+        f"    {addrs_var}.append(int({addr_var}))",
+    ]
+    if range_value.reverse_order:
+        lines.extend([f"{indices_var}.reverse()", f"{addrs_var}.reverse()"])
+    return lines, symbol, indices_var, addrs_var
+
+
+def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str:
+    if condition == "==":
+        return f"({left_expr} == {right_expr})"
+    if condition == "!=":
+        return f"({left_expr} != {right_expr})"
+    if condition == "<":
+        return f"({left_expr} < {right_expr})"
+    if condition == "<=":
+        return f"({left_expr} <= {right_expr})"
+    if condition == ">":
+        return f"({left_expr} > {right_expr})"
+    if condition == ">=":
+        return f"({left_expr} >= {right_expr})"
+    raise ValueError(f"Unsupported search comparison: {condition!r}")
+
+
+def _pack_store_expr(value_expr: str, dest_type: str, ctx: CodegenContext) -> str:
+    if dest_type == "REAL":
+        ctx.mark_helper("_int_to_float_bits")
+        return f"_int_to_float_bits({value_expr})"
+    if dest_type == "INT":
+        ctx.mark_helper("_wrap_int")
+        return f"_wrap_int(int({value_expr}), 16, True)"
+    if dest_type == "DINT":
+        ctx.mark_helper("_wrap_int")
+        return f"_wrap_int(int({value_expr}), 32, True)"
+    if dest_type == "WORD":
+        return f"(int({value_expr}) & 0xFFFF)"
+    raise TypeError(f"Unsupported pack destination type: {dest_type}")
+
+
+def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenContext) -> str:
+    if mode == "hex":
+        return f"(int({value_expr}) & 0xFFFF)"
+    if dest_type == "BOOL":
+        return f"bool({value_expr})"
+    if dest_type == "REAL":
+        return f"float({value_expr})"
+    if dest_type == "CHAR":
+        return value_expr
+    if dest_type == "WORD":
+        return f"(int({value_expr}) & 0xFFFF)"
+    if dest_type == "INT":
+        ctx.mark_helper("_wrap_int")
+        return f"_wrap_int(int({value_expr}), 16, True)"
+    if dest_type == "DINT":
+        ctx.mark_helper("_wrap_int")
+        return f"_wrap_int(int({value_expr}), 32, True)"
+    return value_expr
+
+
+def _timer_dt_to_units_expr(unit: TimeUnit, dt_expr: str, frac_expr: str) -> str:
+    if unit == TimeUnit.Tms:
+        return f"(({dt_expr} * 1000.0) + {frac_expr})"
+    if unit == TimeUnit.Ts:
+        return f"(({dt_expr}) + {frac_expr})"
+    if unit == TimeUnit.Tm:
+        return f"(({dt_expr} / 60.0) + {frac_expr})"
+    if unit == TimeUnit.Th:
+        return f"(({dt_expr} / 3600.0) + {frac_expr})"
+    if unit == TimeUnit.Td:
+        return f"(({dt_expr} / 86400.0) + {frac_expr})"
+    raise ValueError(f"Unsupported timer unit: {unit}")
+
+
+def _load_cast_expr(value_expr: str, tag_type: str) -> str:
+    if tag_type == "BOOL":
+        return f"bool({value_expr})"
+    if tag_type == "INT":
+        return f"max({_INT_MIN}, min({_INT_MAX}, int({value_expr})))"
+    if tag_type == "DINT":
+        return f"max({_DINT_MIN}, min({_DINT_MAX}, int({value_expr})))"
+    if tag_type == "WORD":
+        return f"(int({value_expr}) & 0xFFFF)"
+    if tag_type == "REAL":
+        return f"float({value_expr})"
+    if tag_type == "CHAR":
+        return f"({value_expr} if isinstance({value_expr}, str) else '')"
+    return value_expr
+
+
+def _first_defined_name(source: str) -> str | None:
+    match = re.search(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source, flags=re.MULTILINE)
+    if match is not None:
+        return match.group(1)
+    match = re.search(r"^\s*async\s+def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source, flags=re.MULTILINE)
+    if match is not None:
+        return match.group(1)
+    return None
 
 def _compile_target_write_lines(
     target: Tag | BlockRange | IndirectBlockRange,
