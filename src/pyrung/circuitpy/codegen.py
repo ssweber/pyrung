@@ -120,6 +120,13 @@ _HELPER_ORDER = (
     "_fall",
     "_int_to_float_bits",
     "_float_to_int_bits",
+    "_ascii_char_from_code",
+    "_as_single_ascii_char",
+    "_text_from_source_value",
+    "_store_numeric_text_digit",
+    "_format_int_text",
+    "_render_text_from_numeric",
+    "_termination_char",
     "_parse_pack_text_value",
     "_store_copy_value_to_type",
 )
@@ -1205,6 +1212,104 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
             '    return struct.unpack("<I", struct.pack("<f", float(f)))[0]',
             "",
         ],
+        "_ascii_char_from_code": [
+            "def _ascii_char_from_code(code):",
+            "    if code < 0 or code > 127:",
+            '        raise ValueError("ASCII code out of range")',
+            "    return chr(code)",
+            "",
+        ],
+        "_as_single_ascii_char": [
+            "def _as_single_ascii_char(value):",
+            "    if not isinstance(value, str):",
+            '        raise ValueError("CHAR value must be a string")',
+            '    if value == "":',
+            "        return value",
+            "    if len(value) != 1 or ord(value) > 127:",
+            '        raise ValueError("CHAR value must be blank or one ASCII character")',
+            "    return value",
+            "",
+        ],
+        "_text_from_source_value": [
+            "def _text_from_source_value(value):",
+            "    if isinstance(value, str):",
+            "        return value",
+            '    raise ValueError("text conversion source must resolve to str")',
+            "",
+        ],
+        "_store_numeric_text_digit": [
+            "def _store_numeric_text_digit(char, mode):",
+            "    _char = _as_single_ascii_char(char)",
+            '    if _char == "":',
+            '        raise ValueError("empty CHAR cannot be converted to numeric")',
+            '    if mode == "value":',
+            '        if _char < "0" or _char > "9":',
+            '            raise ValueError("Copy Character Value accepts only digits 0-9")',
+            '        return ord(_char) - ord("0")',
+            '    if mode == "ascii":',
+            "        return ord(_char)",
+            '    raise ValueError(f"Unsupported text->numeric mode: {mode}")',
+            "",
+        ],
+        "_format_int_text": [
+            "def _format_int_text(value, width, suppress_zero, signed=True):",
+            "    if suppress_zero:",
+            "        return str(value)",
+            "    if not signed:",
+            '        return f"{value:0{width}X}"',
+            "    if value < 0:",
+            '        return f"-{abs(value):0{width}d}"',
+            '    return f"{value:0{width}d}"',
+            "",
+        ],
+        "_render_text_from_numeric": [
+            "def _render_text_from_numeric(",
+            "    value,",
+            "    *,",
+            "    source_type=None,",
+            "    suppress_zero=True,",
+            "    pad=None,",
+            "    exponential=False,",
+            "):",
+            '    if source_type == "REAL" or isinstance(value, float):',
+            "        numeric = float(value)",
+            "        if not math.isfinite(numeric):",
+            '            raise ValueError("REAL source is not finite")',
+            '        return f"{numeric:.7E}" if exponential else f"{numeric:.7f}"',
+            "",
+            "    number = int(value)",
+            "    effective_suppress_zero = suppress_zero if pad is None else False",
+            "    signed_width = max(pad - 1, 0) if pad is not None and number < 0 else pad",
+            "",
+            '    if source_type == "WORD":',
+            "        width = 4 if pad is None else pad",
+            "        return _format_int_text(number & 0xFFFF, width, effective_suppress_zero, False)",
+            '    if source_type == "DINT":',
+            "        width = 10 if signed_width is None else signed_width",
+            "        return _format_int_text(number, width, effective_suppress_zero)",
+            '    if source_type == "INT":',
+            "        width = 5 if signed_width is None else signed_width",
+            "        return _format_int_text(number, width, effective_suppress_zero)",
+            "",
+            "    if pad is None:",
+            '        return str(number) if suppress_zero else f"{number:05d}"',
+            "    width = 5 if signed_width is None else signed_width",
+            "    return _format_int_text(number, width, False)",
+            "",
+        ],
+        "_termination_char": [
+            "def _termination_char(termination_code):",
+            "    if termination_code is None:",
+            '        return ""',
+            "    if isinstance(termination_code, str):",
+            "        if len(termination_code) != 1:",
+            '            raise ValueError("termination_code must be one character or int ASCII code")',
+            "        return _as_single_ascii_char(termination_code)",
+            "    if not isinstance(termination_code, int):",
+            '        raise TypeError("termination_code must be int, str, or None")',
+            "    return _ascii_char_from_code(termination_code)",
+            "",
+        ],
         "_parse_pack_text_value": [
             "def _parse_pack_text_value(text, dest_type):",
             '    if text == "":',
@@ -1260,8 +1365,16 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
             "",
         ],
     }
+    needed_helpers = set(ctx.used_helpers)
+    if "_store_numeric_text_digit" in needed_helpers:
+        needed_helpers.add("_as_single_ascii_char")
+    if "_termination_char" in needed_helpers:
+        needed_helpers.update({"_as_single_ascii_char", "_ascii_char_from_code"})
+    if "_render_text_from_numeric" in needed_helpers:
+        needed_helpers.add("_format_int_text")
+
     for helper in _HELPER_ORDER:
-        if helper in ctx.used_helpers:
+        if helper in needed_helpers:
             lines.extend(helper_defs[helper])
     return lines
 
@@ -1795,13 +1908,98 @@ def _compile_copy_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    target_type = _value_type_name(instr.target)
     if isinstance(instr.source, CopyModifier):
-        raise NotImplementedError("CopyModifier-based copy() codegen is not implemented")
+        return _compile_copy_modifier_instruction(instr, enabled_expr, ctx, indent)
+    target_type = _value_type_name(instr.target)
     ctx.mark_helper("_store_copy_value_to_type")
     source_expr = _compile_value(instr.source, ctx)
     value_expr = f'_store_copy_value_to_type({source_expr}, "{target_type}")'
     enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_copy_modifier_instruction(
+    instr: CopyInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    modifier = instr.source
+    if not isinstance(modifier, CopyModifier):
+        raise TypeError("copy modifier compiler requires CopyModifier source")
+
+    stem = ctx.next_name("copymod")
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    mode = modifier.mode
+    source_expr = _compile_value(modifier.source, ctx)
+
+    setup, target_kind, target_symbol, target_start_var, target_type = _copy_modifier_target_info(
+        instr.target, ctx, stem
+    )
+    values_var = f"_{stem}_values"
+    write_lines = _copy_modifier_write_lines(
+        values_var=values_var,
+        target_kind=target_kind,
+        target_symbol=target_symbol,
+        target_start_var=target_start_var,
+        fault_body=fault_body,
+    )
+
+    enabled_body: list[str] = [*setup]
+    if mode in {"value", "ascii"}:
+        ctx.mark_helper("_text_from_source_value")
+        ctx.mark_helper("_store_numeric_text_digit")
+        ctx.mark_helper("_store_copy_value_to_type")
+        enabled_body.extend(
+            [
+                "try:",
+                f"    _copy_text = _text_from_source_value({source_expr})",
+                f"    {values_var} = []",
+                "    for _copy_char in _copy_text:",
+                f'        _copy_numeric = _store_numeric_text_digit(_copy_char, "{mode}")',
+                f'        {values_var}.append(_store_copy_value_to_type(_copy_numeric, "{target_type}"))',
+                *_indent_body(write_lines, 4),
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif mode == "text":
+        ctx.mark_helper("_render_text_from_numeric")
+        ctx.mark_helper("_termination_char")
+        ctx.mark_helper("_store_copy_value_to_type")
+        source_type = _optional_value_type_name(modifier.source)
+        enabled_body.extend(
+            [
+                "try:",
+                "    _rendered = _render_text_from_numeric(",
+                f"        {source_expr},",
+                f"        source_type={source_type!r},",
+                f"        suppress_zero={modifier.suppress_zero!r},",
+                f"        pad={modifier.pad!r},",
+                f"        exponential={modifier.exponential!r},",
+                "    )",
+                f"    _rendered += _termination_char({modifier.termination_code!r})",
+                f'    {values_var} = [_store_copy_value_to_type(_ch, "{target_type}") for _ch in _rendered]',
+                *_indent_body(write_lines, 4),
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif mode == "binary":
+        ctx.mark_helper("_ascii_char_from_code")
+        ctx.mark_helper("_store_copy_value_to_type")
+        enabled_body.extend(
+            [
+                "try:",
+                f"    _copy_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
+                f'    {values_var} = [_store_copy_value_to_type(_copy_char, "{target_type}")]',
+                *_indent_body(write_lines, 4),
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    else:
+        enabled_body.extend(fault_body)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -1832,7 +2030,7 @@ def _compile_blockcopy_instruction(
     indent: int,
 ) -> list[str]:
     if isinstance(instr.source, CopyModifier):
-        raise NotImplementedError("CopyModifier-based blockcopy() codegen is not implemented")
+        return _compile_blockcopy_modifier_instruction(instr, enabled_expr, ctx, indent)
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("blockcopy")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
@@ -1853,6 +2051,103 @@ def _compile_blockcopy_instruction(
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
+def _compile_blockcopy_modifier_instruction(
+    instr: BlockCopyInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    modifier = instr.source
+    if not isinstance(modifier, CopyModifier):
+        raise TypeError("blockcopy modifier compiler requires CopyModifier source")
+
+    stem = ctx.next_name("blockcopymod")
+    src_setup, src_symbol, src_indices, _ = _compile_range_setup(
+        modifier.source, ctx, stem=f"{stem}_src", include_addresses=False
+    )
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    mode = modifier.mode
+    dst_type = _range_type_name(instr.dest)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    enabled_body: list[str] = [
+        *src_setup,
+        *dst_setup,
+        f"if len({src_indices}) != len({dst_indices}):",
+        f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
+    ]
+
+    if mode in {"value", "ascii"}:
+        ctx.mark_helper("_text_from_source_value")
+        ctx.mark_helper("_store_numeric_text_digit")
+        ctx.mark_helper("_store_copy_value_to_type")
+        enabled_body.extend(
+            [
+                "try:",
+                "    _converted = []",
+                f"    for _src_idx in {src_indices}:",
+                f"        _raw_char = _text_from_source_value({src_symbol}[_src_idx])",
+                "        if len(_raw_char) != 1:",
+                '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
+                f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
+                f'        _converted.append(_store_copy_value_to_type(_numeric, "{dst_type}"))',
+                f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
+                f"        {dst_symbol}[_dst_idx] = _converted_value",
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif mode == "text":
+        ctx.mark_helper("_render_text_from_numeric")
+        ctx.mark_helper("_termination_char")
+        ctx.mark_helper("_store_copy_value_to_type")
+        source_type = _optional_range_type_name(modifier.source)
+        enabled_body.extend(
+            [
+                "try:",
+                "    _rendered_parts = []",
+                f"    for _src_idx in {src_indices}:",
+                "        _rendered_parts.append(",
+                "            _render_text_from_numeric(",
+                f"                {src_symbol}[_src_idx],",
+                f"                source_type={source_type!r},",
+                f"                suppress_zero={modifier.suppress_zero!r},",
+                f"                pad={modifier.pad!r},",
+                f"                exponential={modifier.exponential!r},",
+                "            )",
+                "        )",
+                "    _rendered = ''.join(_rendered_parts)",
+                f"    _rendered += _termination_char({modifier.termination_code!r})",
+                f"    if len(_rendered) != len({dst_indices}):",
+                '        raise ValueError("formatted text length does not match destination range")',
+                f"    for _dst_idx, _char in zip({dst_indices}, _rendered):",
+                f'        {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_char, "{dst_type}")',
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    elif mode == "binary":
+        ctx.mark_helper("_ascii_char_from_code")
+        ctx.mark_helper("_store_copy_value_to_type")
+        enabled_body.extend(
+            [
+                "try:",
+                "    _converted = []",
+                f"    for _src_idx in {src_indices}:",
+                f"        _char = _ascii_char_from_code(int({src_symbol}[_src_idx]) & 0xFF)",
+                f'        _converted.append(_store_copy_value_to_type(_char, "{dst_type}"))',
+                f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
+                f"        {dst_symbol}[_dst_idx] = _converted_value",
+                "except (IndexError, TypeError, ValueError, OverflowError):",
+                *_indent_body(fault_body, 4),
+            ]
+        )
+    else:
+        enabled_body.extend(fault_body)
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
 def _compile_fill_instruction(
     instr: FillInstruction,
     enabled_expr: str,
@@ -1860,7 +2155,7 @@ def _compile_fill_instruction(
     indent: int,
 ) -> list[str]:
     if isinstance(instr.value, CopyModifier):
-        raise NotImplementedError("CopyModifier-based fill() codegen is not implemented")
+        return _compile_fill_modifier_instruction(instr, enabled_expr, ctx, indent)
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("fill")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
@@ -1873,6 +2168,90 @@ def _compile_fill_instruction(
         f"for _dst_idx in {dst_indices}:",
         f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
     ]
+    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
+
+def _compile_fill_modifier_instruction(
+    instr: FillInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    modifier = instr.value
+    if not isinstance(modifier, CopyModifier):
+        raise TypeError("fill modifier compiler requires CopyModifier value")
+
+    stem = ctx.next_name("fillmod")
+    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
+        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
+    )
+    mode = modifier.mode
+    dst_type = _range_type_name(instr.dest)
+    source_expr = _compile_value(modifier.source, ctx)
+    enabled_body: list[str] = [
+        *dst_setup,
+        f"if not {dst_indices}:",
+        "    pass",
+        "else:",
+    ]
+
+    inner: list[str] = []
+    if mode in {"value", "ascii"}:
+        ctx.mark_helper("_text_from_source_value")
+        ctx.mark_helper("_store_numeric_text_digit")
+        ctx.mark_helper("_store_copy_value_to_type")
+        inner.extend(
+            [
+                f"_fill_text = _text_from_source_value({source_expr})",
+                "if len(_fill_text) != 1:",
+                '    raise ValueError("fill text->numeric conversion requires a single source character")',
+                f'_fill_numeric = _store_numeric_text_digit(_fill_text, "{mode}")',
+                f'_fill_value = _store_copy_value_to_type(_fill_numeric, "{dst_type}")',
+                f"for _dst_idx in {dst_indices}:",
+                f"    {dst_symbol}[_dst_idx] = _fill_value",
+            ]
+        )
+    elif mode == "text":
+        ctx.mark_helper("_render_text_from_numeric")
+        ctx.mark_helper("_termination_char")
+        ctx.mark_helper("_store_copy_value_to_type")
+        source_type = _optional_value_type_name(modifier.source)
+        inner.extend(
+            [
+                f'if "{dst_type}" != "CHAR":',
+                '    raise TypeError("fill(as_text(...)) requires CHAR destination range")',
+                "_fill_text = _render_text_from_numeric(",
+                f"    {source_expr},",
+                f"    source_type={source_type!r},",
+                f"    suppress_zero={modifier.suppress_zero!r},",
+                f"    pad={modifier.pad!r},",
+                f"    exponential={modifier.exponential!r},",
+                ")",
+                f"_fill_text += _termination_char({modifier.termination_code!r})",
+                f"if len(_fill_text) > len({dst_indices}):",
+                '    raise ValueError("formatted fill text exceeds destination range")',
+                f"for _fill_offset, _dst_idx in enumerate({dst_indices}):",
+                "    if _fill_offset < len(_fill_text):",
+                f'        {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_text[_fill_offset], "CHAR")',
+                "    else:",
+                f"        {dst_symbol}[_dst_idx] = ''",
+            ]
+        )
+    elif mode == "binary":
+        ctx.mark_helper("_ascii_char_from_code")
+        ctx.mark_helper("_store_copy_value_to_type")
+        inner.extend(
+            [
+                f"_fill_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
+                f'_fill_value = _store_copy_value_to_type(_fill_char, "{dst_type}")',
+                f"for _dst_idx in {dst_indices}:",
+                f"    {dst_symbol}[_dst_idx] = _fill_value",
+            ]
+        )
+    else:
+        inner.append(f'raise ValueError("Unsupported fill modifier mode: {mode}")')
+
+    enabled_body.extend(_indent_body(inner, 4))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2346,6 +2725,98 @@ def _compile_instruction_list(
     for instruction in instructions:
         lines.extend(compile_instruction(instruction, enabled_expr, ctx, indent))
     return lines
+
+
+def _copy_modifier_target_info(
+    target: Tag | IndirectRef | IndirectExprRef,
+    ctx: CodegenContext,
+    stem: str,
+) -> tuple[list[str], str, str, str | None, str]:
+    if isinstance(target, Tag):
+        block_info = ctx.tag_block_addresses.get(target.name)
+        if block_info is None:
+            return [], "scalar", ctx.symbol_for_tag(target), None, target.type.name
+        block_id, addr = block_info
+        binding = ctx.block_bindings.get(block_id)
+        if binding is None:
+            raise RuntimeError(f"Missing block binding for tag-backed target {target.name!r}")
+        symbol = ctx.symbol_for_block(binding.block)
+        start_var = f"_{stem}_start_idx"
+        return [f"{start_var} = {addr - binding.start}"], "block", symbol, start_var, target.type.name
+
+    if isinstance(target, IndirectRef):
+        binding = ctx.block_bindings.get(id(target.block))
+        if binding is None:
+            raise RuntimeError(f"Missing block binding for indirect target {target.block.name!r}")
+        symbol = ctx.symbol_for_block(target.block)
+        helper = ctx.use_indirect_block(binding.block_id)
+        start_var = f"_{stem}_start_idx"
+        ptr = _compile_value(target.pointer, ctx)
+        return [f"{start_var} = {helper}(int({ptr}))"], "block", symbol, start_var, binding.tag_type.name
+
+    if isinstance(target, IndirectExprRef):
+        binding = ctx.block_bindings.get(id(target.block))
+        if binding is None:
+            raise RuntimeError(
+                f"Missing block binding for indirect expression target {target.block.name!r}"
+            )
+        symbol = ctx.symbol_for_block(target.block)
+        helper = ctx.use_indirect_block(binding.block_id)
+        start_var = f"_{stem}_start_idx"
+        expr = compile_expression(target.expr, ctx)
+        return (
+            [f"{start_var} = {helper}(int({expr}))"],
+            "block",
+            symbol,
+            start_var,
+            binding.tag_type.name,
+        )
+
+    raise TypeError(f"Unsupported copy modifier target type: {type(target).__name__}")
+
+
+def _copy_modifier_write_lines(
+    *,
+    values_var: str,
+    target_kind: str,
+    target_symbol: str,
+    target_start_var: str | None,
+    fault_body: list[str],
+) -> list[str]:
+    if target_kind == "scalar":
+        return [
+            f"if len({values_var}) > 1:",
+            *_indent_body(fault_body, 4),
+            f"elif len({values_var}) == 1:",
+            f"    {target_symbol} = {values_var}[0]",
+        ]
+
+    if target_start_var is None:
+        raise RuntimeError("copy modifier block target is missing start index")
+    return [
+        f"_copy_count = len({values_var})",
+        "if _copy_count == 0:",
+        "    pass",
+        f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
+        *_indent_body(fault_body, 4),
+        "else:",
+        f"    for _copy_offset, _copy_value in enumerate({values_var}):",
+        f"        {target_symbol}[{target_start_var} + _copy_offset] = _copy_value",
+    ]
+
+
+def _optional_value_type_name(value: Any) -> str | None:
+    if isinstance(value, Tag):
+        return value.type.name
+    if isinstance(value, (IndirectRef, IndirectExprRef)):
+        return value.block.type.name
+    return None
+
+
+def _optional_range_type_name(range_value: Any) -> str | None:
+    if isinstance(range_value, (BlockRange, IndirectBlockRange)):
+        return range_value.block.type.name
+    return None
 
 
 def _value_type_name(value: Any) -> str:

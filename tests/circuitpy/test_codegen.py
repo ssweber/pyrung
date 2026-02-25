@@ -19,12 +19,18 @@ from pyrung.core import (
     Block,
     Bool,
     Dint,
+    InputBlock,
     Int,
     Program,
     Real,
     Rung,
     TagType,
+    Tms,
     all_of,
+    as_ascii,
+    as_binary,
+    as_text,
+    as_value,
     blockcopy,
     branch,
     calc,
@@ -548,6 +554,225 @@ class TestIOMappingAndBranching:
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
         assert branch_idx < a_idx < b_idx < c_idx
+
+
+class TestCopyModifierCodegen:
+    def test_generation_unblocks_copy_blockcopy_fill_modifiers(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        ch = Block("CH", TagType.CHAR, 1, 12)
+        ds = Block("DS", TagType.INT, 1, 12)
+
+        with Program(strict=False) as prog:
+            with Rung(Bool("Enable")):
+                copy(as_value(ch[1]), ds[1])
+                blockcopy(as_ascii(ch.select(1, 3)), ds.select(1, 3))
+                fill(as_binary(ds[4]), ch.select(4, 6))
+                fill(as_text(ds[5], suppress_zero=False, pad=4), ch.select(7, 12))
+
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "CopyModifier-based copy() codegen is not implemented" not in source
+        assert "CopyModifier-based blockcopy() codegen is not implemented" not in source
+        assert "CopyModifier-based fill() codegen is not implemented" not in source
+        assert "_store_numeric_text_digit(" in source
+        assert "_render_text_from_numeric(" in source
+        assert "_termination_char(" in source
+
+    def test_copy_modifier_runtime_modes_smoke(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        ch = Block("CH", TagType.CHAR, 1, 12)
+        ds = Block("DS", TagType.INT, 1, 12)
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                fill("", ch.select(1, 12))
+                fill(0, ds.select(1, 12))
+                copy("5", ch[1])
+                copy("A", ch[2])
+                copy(7, ds[3])
+                copy(123, ds[4])
+                copy(as_value(ch[1]), ds[1])
+                copy(as_ascii(ch[2]), ds[2])
+                copy(as_text(ds[3], suppress_zero=False, pad=5, termination_code=13), ch[4])
+                copy(as_binary(ds[4]), ch[10])
+
+        ctx = _context_for_program(prog, hw)
+        ch_symbol = ctx.symbol_for_block(ch)
+        ds_symbol = ctx.symbol_for_block(ds)
+
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        ch_values = namespace[ch_symbol]
+        ds_values = namespace[ds_symbol]
+
+        assert ds_values[0] == 5
+        assert ds_values[1] == 65
+        assert ch_values[3] == "0"
+        assert ch_values[4] == "0"
+        assert ch_values[5] == "0"
+        assert ch_values[6] == "0"
+        assert ch_values[7] == "7"
+        assert ord(ch_values[8]) == 13
+        assert ch_values[9] == "{"
+
+    def test_blockcopy_modifier_failure_sets_fault_and_avoids_partial_write(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        ch = Block("CH", TagType.CHAR, 1, 10)
+        ds = Block("DS", TagType.INT, 1, 10)
+        fault_seen = Bool("FaultSeen")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                copy("1", ch[1])
+                copy("A", ch[2])
+                copy("3", ch[3])
+                fill(9, ds.select(1, 3))
+                blockcopy(as_value(ch.select(1, 3)), ds.select(1, 3))
+            with Rung(system.fault.out_of_range):
+                out(fault_seen)
+
+        ctx = _context_for_program(prog, hw)
+        ds_symbol = ctx.symbol_for_block(ds)
+        fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
+
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        ds_values = namespace[ds_symbol]
+        assert ds_values[0] == 9
+        assert ds_values[1] == 9
+        assert ds_values[2] == 9
+        assert namespace[fault_seen_symbol] is True
+
+    def test_fill_modifier_text_renders_and_blank_fills_tail(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        txt = Block("TXT", TagType.CHAR, 1, 8)
+        src = Int("Src", default=12)
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                fill(as_text(src, suppress_zero=False, pad=4, termination_code=13), txt.select(1, 8))
+
+        ctx = _context_for_program(prog, hw)
+        txt_symbol = ctx.symbol_for_block(txt)
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        txt_values = namespace[txt_symbol]
+        assert txt_values[0] == "0"
+        assert txt_values[1] == "0"
+        assert txt_values[2] == "1"
+        assert txt_values[3] == "2"
+        assert ord(txt_values[4]) == 13
+        assert txt_values[5] == ""
+        assert txt_values[6] == ""
+        assert txt_values[7] == ""
+
+    def test_scalar_multi_char_copy_modifier_faults_and_skips_write(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        source_value = Int("SourceValue", default=123)
+        target = Int("Target", default=9)
+        fault_seen = Bool("FaultSeen")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                copy(as_text(source_value, suppress_zero=False), target)
+            with Rung(system.fault.out_of_range):
+                out(fault_seen)
+
+        ctx = _context_for_program(prog, hw)
+        target_symbol = ctx.symbol_for_tag(target)
+        fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        assert namespace[target_symbol] == 9
+        assert namespace[fault_seen_symbol] is True
 
 
 class TestGeneratedSourceSmoke:
