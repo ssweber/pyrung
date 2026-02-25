@@ -25,9 +25,8 @@ A Pythonic ladder logic framework with an immutable, pure-functional architectur
 - `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork
 - `docs/guides/dap-vscode.md` — VS Code DAP integration (breakpoints, logpoints, monitors, trace decorations)
 - `docs/dialects/click.md` — Click dialect (pre-built blocks, TagMap, nickname files, validation, soft-PLC via ClickDataProvider)
-- `docs/dialects/circuitpy.md` — CircuitPython dialect (planned, not implemented)
+- `docs/dialects/circuitpy.md` — CircuitPython dialect (P1AM hardware model, module catalog, validation, code generation)
 - `docs/internal/debug-spec.md` — Debug architecture specification
-- `docs/internal/circuitpy-spec.md` — CircuitPython architecture decisions and open questions
 - `docs/click_reference/` — Click PLC instruction reference (42 files: contacts, coils, timers, counters, copy, calc, shift, search, memory banks, system memory, data types)
 
 ## Build & Development Commands
@@ -53,7 +52,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 - **Tags**: Named typed references (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`). No runtime state in tags — all values live in `SystemState.tags`
 - **Structured tags**: `@udt()` for mixed-type structs, `@named_array()` for single-type interleaved arrays. Both support singleton and counted modes
 - **Blocks**: Named, typed, 1-indexed arrays for I/O and grouped memory (`Block`, `InputBlock`, `OutputBlock`)
-- **Hardware-agnostic core** with dialect modules layered on top (Click implemented, CircuitPython planned)
+- **Hardware-agnostic core** with dialect modules layered on top (Click and CircuitPython implemented)
 
 ### Key Patterns
 
@@ -87,5 +86,5 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 
 Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~19k lines of source and 1,100+ tests covering core, click, dap, and examples.
 
-**Not yet done:** CircuitPy dialect (architecture decided, implementation deferred), PyPI publishing, stable public API guarantee.
+**Not yet done:** PyPI publishing, stable public API guarantee.
 

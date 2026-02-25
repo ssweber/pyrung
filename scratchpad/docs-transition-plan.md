@@ -126,12 +126,11 @@ In `src/pyrung/core/instruction/`: `CopyInstruction`, `CalcInstruction`, `OnDela
 | `spec/core/engine.md` | `runner.md` + PLCRunner/SystemState docstrings | Scan Cycle Phases 0-8 → `runner.md` and `SystemState` class docstring. "Needs Specification" → delete. |
 | `spec/core/debug.md` | `forces-debug.md` + `dap-vscode.md` | Phase 1+2 fully guide-ready. For Phase 3, `history`, `seek/rewind/playhead`, `diff`, and `fork_from` are implemented; keep `inspect`, monitors, breakpoints, and labels in planned sections until shipped. (Track in `scratchpad/debug-api-next-steps.md`.) |
 | `spec/dialects/click.md` | `dialects/click.md` + click module docstrings | "Needs Specification" → delete. |
-| `spec/dialects/circuitpy.md` | `dialects/circuitpy.md` as stub | No source code exists yet; keep spec as internal reference until dialect is implemented. |
+| `spec/dialects/circuitpy.md` | `dialects/circuitpy.md` | Retired — dialect doc written. Spec and internal handoff brief deleted. |
 
 ### After migration, `spec/` collapses to:
 - `spec/core/debug.md` (Phase 3 remainder — internal reference for next implementation batch)
-- `spec/dialects/circuitpy.md` (keep until dialect exists)
-- Or: move both to `docs/internal/` and add to `exclude_docs` in mkdocs.yml.
+- Or: move to `docs/internal/` and add to `exclude_docs` in mkdocs.yml.
 
 ---
 
