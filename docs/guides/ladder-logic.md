@@ -30,6 +30,23 @@ with Rung(condition1, condition2, ...):
 
 ## Conditions
 
+Quick reference — all forms are valid inside `Rung(...)`:
+
+```
+Fault                          tag is truthy
+~Fault                         tag is falsy
+MotorTemp > 100                comparison  (==  !=  <  <=  >  >=)
+Fault, Pump                    comma = implicit AND
+Fault, MotorTemp > 100         implicit AND with comparison
+Fault & Pump                   & works for truthy tags
+Running | ~Estop               | and ~ work for truthy tags
+Fault & (MotorTemp > 100)      & with comparison needs parens
+Running | (Mode == 1)          | with comparison needs parens
+Running | ~Estop, Mode == 1    mix commas and operators freely
+all_of(Fault, Pump, Valve)     explicit AND (same as commas)
+any_of(Low, High, Emergency)   explicit OR
+```
+
 ### Normally open (examine-on)
 
 ```python

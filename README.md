@@ -44,7 +44,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - Instructions: `out`, `latch`/`reset`, `copy`, `calc`, `run_function`/`run_enabled_function`
 - Timers (`on_delay`, `off_delay`) and counters (`count_up`, `count_down`)
 - Shift registers, search, bit/word packing, blockcopy, copy/fill
-- Branching (`branch`, `any_of`, `all_of`), subroutines, for-loops
+- Branching (`branch`), subroutines, for-loops
 - Structured tags (`@udt`, `@named_array`) with auto-naming and field options
 - Edge detection (`rise`, `fall`), one-shot support
 - Program validation and scan-cycle introspection
