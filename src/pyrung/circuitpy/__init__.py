@@ -22,11 +22,11 @@ from pyrung.circuitpy.catalog import (
     ModuleDirection,
     ModuleSpec,
 )
+from pyrung.circuitpy.codegen import generate_circuitpy
 from pyrung.circuitpy.hardware import (
     MAX_SLOTS,
     P1AM,
 )
-from pyrung.circuitpy.codegen import generate_circuitpy
 from pyrung.circuitpy.validation import (
     CircuitPyFinding,
     CircuitPyValidationReport,

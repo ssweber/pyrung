@@ -379,7 +379,10 @@ class TestPersistenceWatchdogAndDiagnostics:
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000)
         assert 'getattr(base, "config_watchdog", None)' in source_code
-        assert 'raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")' in source_code
+        assert (
+            'raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")'
+            in source_code
+        )
         assert "_scan_overrun_count += 1" in source_code
         assert "PRINT_SCAN_OVERRUNS" in source_code
 

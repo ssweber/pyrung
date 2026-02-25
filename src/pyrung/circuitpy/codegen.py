@@ -180,6 +180,7 @@ class CodegenContext:
     scalar_tags: dict[str, Tag] = field(default_factory=dict)
     referenced_tags: dict[str, Tag] = field(default_factory=dict)
     retentive_tags: dict[str, Tag] = field(default_factory=dict)
+    edge_prev_tags: set[str] = field(default_factory=set)
 
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
@@ -236,9 +237,7 @@ class CodegenContext:
                     input_block_id=in_id,
                     output_block_id=out_id,
                     input_kind=_io_kind(spec.input_group.tag_type) if spec.input_group else None,
-                    output_kind=_io_kind(spec.output_group.tag_type)
-                    if spec.output_group
-                    else None,
+                    output_kind=_io_kind(spec.output_group.tag_type) if spec.output_group else None,
                     input_count=spec.input_group.count if spec.input_group else 0,
                     output_count=spec.output_group.count if spec.output_group else 0,
                 )
@@ -246,6 +245,7 @@ class CodegenContext:
 
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
+        self.edge_prev_tags.clear()
         self.subroutine_names = sorted(self.program.subroutines)
         seen_values: set[int] = set()
 
@@ -325,6 +325,8 @@ class CodegenContext:
                 return
 
             if isinstance(value, Condition):
+                if isinstance(value, (RisingEdgeCondition, FallingEdgeCondition)):
+                    self.edge_prev_tags.add(value.tag.name)
                 for _, child in _condition_children(value):
                     walk_value(child)
                 return
@@ -520,7 +522,9 @@ class CodegenContext:
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses:
             return
-        for binding in sorted(self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)):
+        for binding in sorted(
+            self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)
+        ):
             for addr, cached_tag in binding.block._tag_cache.items():
                 if cached_tag is tag:
                     self.tag_block_addresses[tag.name] = (binding.block_id, addr)
@@ -684,12 +688,12 @@ def compile_instruction(
     if isinstance(instr, OutInstruction):
         return _compile_out_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, LatchInstruction):
-        lines = [f'{" " * indent}if {enabled_expr}:']
+        lines = [f"{' ' * indent}if {enabled_expr}:"]
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
         return lines
     if isinstance(instr, ResetInstruction):
         default_expr = _coil_target_default(instr.target, ctx)
-        lines = [f'{" " * indent}if {enabled_expr}:']
+        lines = [f"{' ' * indent}if {enabled_expr}:"]
         lines.extend(_compile_target_write_lines(instr.target, default_expr, ctx, indent + 4))
         return lines
     if isinstance(instr, OnDelayInstruction):
@@ -745,7 +749,7 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
         cond_expr = _compile_condition_group(rung._conditions, ctx)
-        lines = [f'{" " * indent}{enabled_var} = bool({cond_expr})']
+        lines = [f"{' ' * indent}{enabled_var} = bool({cond_expr})"]
         lines.extend(
             _compile_rung_items(
                 rung=rung,
@@ -772,7 +776,9 @@ def generate_circuitpy(
     if not isinstance(hw, P1AM):
         raise TypeError(f"hw must be P1AM, got {type(hw).__name__}")
     if not isinstance(target_scan_ms, (int, float)):
-        raise TypeError(f"target_scan_ms must be a finite number > 0, got {type(target_scan_ms).__name__}")
+        raise TypeError(
+            f"target_scan_ms must be a finite number > 0, got {type(target_scan_ms).__name__}"
+        )
     if not _math.isfinite(float(target_scan_ms)) or float(target_scan_ms) <= 0:
         raise ValueError("target_scan_ms must be finite and > 0")
     if watchdog_ms is not None:
@@ -904,7 +910,9 @@ def _render_code(ctx: CodegenContext) -> str:
     lines.append("")
 
     lines.append("# Blocks (list-backed; PLC addresses remain 1-based, list indexes are 0-based).")
-    block_bindings = sorted(ctx.block_bindings.values(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id))
+    block_bindings = sorted(
+        ctx.block_bindings.values(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+    )
     for binding in block_bindings:
         symbol = ctx.block_symbols[binding.block_id]
         size = binding.end - binding.start + 1
@@ -995,7 +1003,7 @@ def _render_code(ctx: CodegenContext) -> str:
     )
     for name, tag in sorted(ctx.retentive_tags.items()):
         symbol = ctx.symbol_for_tag(tag)
-        load_expr = _load_cast_expr("_entry.get(\"value\", " + symbol + ")", tag.type.name)
+        load_expr = _load_cast_expr('_entry.get("value", ' + symbol + ")", tag.type.name)
         lines.extend(
             [
                 f'    _entry = values.get("{name}")',
@@ -1383,7 +1391,7 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
         lines.append(f"    _sd_copy_system_cmd = bool({sd_copy_symbol})")
     lines.extend(
         [
-        "    _service_sd_commands()",
+            "    _service_sd_commands()",
         ]
     )
     if sd_eject_symbol is not None:
@@ -1403,13 +1411,13 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
 
     lines.extend(
         [
-        "    _read_inputs()",
-        "    _run_main_rungs()",
-        "    _write_outputs()",
-        "",
-    ]
+            "    _read_inputs()",
+            "    _run_main_rungs()",
+            "    _write_outputs()",
+            "",
+        ]
     )
-    for tag_name in sorted(ctx.referenced_tags):
+    for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]
         lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')
     lines.extend(
@@ -1450,7 +1458,7 @@ def _compile_rung_items(
         branch_var = f"_{scope_key}_branch_{branch_idx}"
         branch_idx += 1
         branch_vars[id(item)] = branch_var
-        lines.append(f'{" " * indent}{branch_var} = bool({enabled_expr} and ({local_expr}))')
+        lines.append(f"{' ' * indent}{branch_var} = bool({enabled_expr} and ({local_expr}))")
 
     branch_scope_idx = 0
     for item in rung._execution_items:
@@ -1492,11 +1500,11 @@ def _compile_out_instruction(
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = False')
+        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
         lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
         lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
         lines.extend(_compile_target_write_lines(instr.target, "True", ctx, indent + 4))
-        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = True')
+        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
         return lines
 
     lines.append(f"{sp}if {enabled_expr}:")
@@ -1522,19 +1530,19 @@ def _compile_guarded_instruction(
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_mem")
         lines.append(f"{sp}if not ({enabled_expr}):")
-        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = False')
+        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = False")
         if disabled_body:
-            lines.extend(f'{" " * (indent + 4)}{line}' for line in disabled_body)
+            lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
         lines.append(f"{sp}elif not bool(_mem.get({key!r}, False)):")
-        lines.extend(f'{" " * (indent + 4)}{line}' for line in enabled_body)
-        lines.append(f'{" " * (indent + 4)}_mem[{key!r}] = True')
+        lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
+        lines.append(f"{' ' * (indent + 4)}_mem[{key!r}] = True")
         return lines
 
     lines.append(f"{sp}if {enabled_expr}:")
-    lines.extend(f'{" " * (indent + 4)}{line}' for line in enabled_body)
+    lines.extend(f"{' ' * (indent + 4)}{line}" for line in enabled_body)
     if disabled_body is not None:
         lines.append(f"{sp}else:")
-        lines.extend(f'{" " * (indent + 4)}{line}' for line in disabled_body)
+        lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
     return lines
 
 
@@ -1577,8 +1585,8 @@ def _compile_on_delay_instruction(
             [
                 f"{sp}if {reset_expr}:",
                 f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-                f'{" " * (indent + 4)}{done} = False',
-                f'{" " * (indent + 4)}{acc} = 0',
+                f"{' ' * (indent + 4)}{done} = False",
+                f"{' ' * (indent + 4)}{acc} = 0",
                 f"{sp}else:",
             ]
         )
@@ -1590,15 +1598,15 @@ def _compile_on_delay_instruction(
         [
             f"{isp}if {enabled_expr}:",
             f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
-            f'{" " * (inner + 4)}_acc = int({acc})',
-            f'{" " * (inner + 4)}_dt_units = {unit_expr}',
-            f'{" " * (inner + 4)}_int_units = int(_dt_units)',
-            f'{" " * (inner + 4)}_new_frac = _dt_units - _int_units',
-            f'{" " * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})',
-            f'{" " * (inner + 4)}_preset = int({preset})',
+            f"{' ' * (inner + 4)}_acc = int({acc})",
+            f"{' ' * (inner + 4)}_dt_units = {unit_expr}",
+            f"{' ' * (inner + 4)}_int_units = int(_dt_units)",
+            f"{' ' * (inner + 4)}_new_frac = _dt_units - _int_units",
+            f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
+            f"{' ' * (inner + 4)}_preset = int({preset})",
             f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
-            f'{" " * (inner + 4)}{done} = (_acc >= _preset)',
-            f'{" " * (inner + 4)}{acc} = _acc',
+            f"{' ' * (inner + 4)}{done} = (_acc >= _preset)",
+            f"{' ' * (inner + 4)}{acc} = _acc",
             f"{isp}else:",
         ]
     )
@@ -1608,8 +1616,8 @@ def _compile_on_delay_instruction(
         lines.extend(
             [
                 f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
-                f'{" " * (inner + 4)}{done} = False',
-                f'{" " * (inner + 4)}{acc} = 0',
+                f"{' ' * (inner + 4)}{done} = False",
+                f"{' ' * (inner + 4)}{acc} = 0",
             ]
         )
     return lines
@@ -1633,19 +1641,19 @@ def _compile_off_delay_instruction(
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f"{sp}if {enabled_expr}:",
         f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-        f'{" " * (indent + 4)}{done} = True',
-        f'{" " * (indent + 4)}{acc} = 0',
+        f"{' ' * (indent + 4)}{done} = True",
+        f"{' ' * (indent + 4)}{acc} = 0",
         f"{sp}else:",
         f'{" " * (indent + 4)}_dt = float(_mem.get("_dt", 0.0))',
-        f'{" " * (indent + 4)}_acc = int({acc})',
-        f'{" " * (indent + 4)}_dt_units = {unit_expr}',
-        f'{" " * (indent + 4)}_int_units = int(_dt_units)',
-        f'{" " * (indent + 4)}_new_frac = _dt_units - _int_units',
-        f'{" " * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})',
-        f'{" " * (indent + 4)}_preset = int({preset})',
+        f"{' ' * (indent + 4)}_acc = int({acc})",
+        f"{' ' * (indent + 4)}_dt_units = {unit_expr}",
+        f"{' ' * (indent + 4)}_int_units = int(_dt_units)",
+        f"{' ' * (indent + 4)}_new_frac = _dt_units - _int_units",
+        f"{' ' * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
+        f"{' ' * (indent + 4)}_preset = int({preset})",
         f'{" " * (indent + 4)}_mem["{frac_key}"] = _new_frac',
-        f'{" " * (indent + 4)}{done} = (_acc < _preset)',
-        f'{" " * (indent + 4)}{acc} = _acc',
+        f"{' ' * (indent + 4)}{done} = (_acc < _preset)",
+        f"{' ' * (indent + 4)}{acc} = _acc",
     ]
 
 
@@ -1665,8 +1673,8 @@ def _compile_count_up_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}{done} = False',
-                f'{" " * (indent + 4)}{acc} = 0',
+                f"{' ' * (indent + 4)}{done} = False",
+                f"{' ' * (indent + 4)}{acc} = 0",
                 f"{sp}else:",
             ]
         )
@@ -1676,10 +1684,10 @@ def _compile_count_up_instruction(
     isp = " " * inner
     lines.extend(
         [
-            f'{" " * inner}_acc = int({acc})',
-            f'{" " * inner}_delta = 0',
+            f"{' ' * inner}_acc = int({acc})",
+            f"{' ' * inner}_delta = 0",
             f"{isp}if {enabled_expr}:",
-            f'{" " * (inner + 4)}_delta += 1',
+            f"{' ' * (inner + 4)}_delta += 1",
         ]
     )
     if instr.down_condition is not None:
@@ -1687,15 +1695,15 @@ def _compile_count_up_instruction(
         lines.extend(
             [
                 f"{isp}if {down_expr}:",
-                f'{" " * (inner + 4)}_delta -= 1',
+                f"{' ' * (inner + 4)}_delta -= 1",
             ]
         )
     lines.extend(
         [
-            f'{" " * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))',
-            f'{" " * inner}_preset = int({preset})',
-            f'{" " * inner}{done} = (_acc >= _preset)',
-            f'{" " * inner}{acc} = _acc',
+            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))",
+            f"{' ' * inner}_preset = int({preset})",
+            f"{' ' * inner}{done} = (_acc >= _preset)",
+            f"{' ' * inner}{acc} = _acc",
         ]
     )
     return lines
@@ -1717,8 +1725,8 @@ def _compile_count_down_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f'{" " * (indent + 4)}{done} = False',
-                f'{" " * (indent + 4)}{acc} = 0',
+                f"{' ' * (indent + 4)}{done} = False",
+                f"{' ' * (indent + 4)}{acc} = 0",
                 f"{sp}else:",
             ]
         )
@@ -1728,13 +1736,13 @@ def _compile_count_down_instruction(
     isp = " " * inner
     lines.extend(
         [
-            f'{" " * inner}_acc = int({acc})',
+            f"{' ' * inner}_acc = int({acc})",
             f"{isp}if {enabled_expr}:",
-            f'{" " * (inner + 4)}_acc -= 1',
-            f'{" " * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))',
-            f'{" " * inner}_preset = int({preset})',
-            f'{" " * inner}{done} = (_acc <= -_preset)',
-            f'{" " * inner}{acc} = _acc',
+            f"{' ' * (inner + 4)}_acc -= 1",
+            f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
+            f"{' ' * inner}_preset = int({preset})",
+            f"{' ' * inner}{done} = (_acc <= -_preset)",
+            f"{' ' * inner}{acc} = _acc",
         ]
     )
     return lines
@@ -1823,7 +1831,7 @@ def _compile_fill_instruction(
     enabled_body = [
         *dst_setup,
         f"_fill_value = {value_expr}",
-        f'for _dst_idx in {dst_indices}:',
+        f"for _dst_idx in {dst_indices}:",
         f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -1902,7 +1910,7 @@ def _compile_search_instruction(
         enabled_body.extend(
             [
                 f'    if {instr.condition!r} not in ("==", "!="):',
-                '        raise ValueError("Text search only supports \'==\' and \'!=\' conditions")',
+                "        raise ValueError(\"Text search only supports '==' and '!=' conditions\")",
                 f"    _rhs = str({value_expr})",
                 '    if _rhs == "":',
                 '        raise ValueError("Text search value cannot be empty")',
@@ -2075,7 +2083,9 @@ def _compile_pack_text_instruction(
                 "else:",
                 f'    _parsed = _parse_pack_text_value(_text, "{dest_type}")',
                 f'    _packed_value = _store_copy_value_to_type(_parsed, "{dest_type}")',
-                *_indent_body(_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4),
+                *_indent_body(
+                    _compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0), 4
+                ),
             ]
         )
         return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -2217,13 +2227,13 @@ def _compile_enabled_function_call_instruction(
     call_args = f"bool({enabled_expr})"
     if kwargs:
         call_args += f", {kwargs}"
-    lines = [f'{" " * indent}{result_var} = {fn_symbol}({call_args})']
+    lines = [f"{' ' * indent}{result_var} = {fn_symbol}({call_args})"]
     if instr._outs:
         fn_name = getattr(instr._fn, "__name__", type(instr._fn).__name__)
         ctx.mark_helper("_store_copy_value_to_type")
         lines.extend(
             [
-                f'{" " * indent}if {result_var} is None:',
+                f"{' ' * indent}if {result_var} is None:",
                 f'{" " * (indent + 4)}raise TypeError("run_enabled_function: {fn_name!r} returned None but outs were declared")',
             ]
         )
@@ -2231,10 +2241,10 @@ def _compile_enabled_function_call_instruction(
             target_type = _value_type_name(target)
             lines.extend(
                 [
-                    f'{" " * indent}if {key!r} not in {result_var}:',
-                    f'{" " * (indent + 4)}raise KeyError(',
+                    f"{' ' * indent}if {key!r} not in {result_var}:",
+                    f"{' ' * (indent + 4)}raise KeyError(",
                     f'{" " * (indent + 8)}"run_enabled_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
-                    f'{" " * (indent + 4)})',
+                    f"{' ' * (indent + 4)})",
                 ]
             )
             value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
@@ -2313,7 +2323,7 @@ def _compile_assignment_lines(
     indent: int,
 ) -> list[str]:
     lvalue = _compile_lvalue(target, ctx)
-    return [f'{" " * indent}{lvalue} = {value_expr}']
+    return [f"{' ' * indent}{lvalue} = {value_expr}"]
 
 
 def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
@@ -2474,10 +2484,13 @@ def _first_defined_name(source: str) -> str | None:
     match = re.search(r"^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source, flags=re.MULTILINE)
     if match is not None:
         return match.group(1)
-    match = re.search(r"^\s*async\s+def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source, flags=re.MULTILINE)
+    match = re.search(
+        r"^\s*async\s+def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", source, flags=re.MULTILINE
+    )
     if match is not None:
         return match.group(1)
     return None
+
 
 def _compile_target_write_lines(
     target: Tag | BlockRange | IndirectBlockRange,
@@ -2560,7 +2573,9 @@ def _compile_value(value: Any, ctx: CodegenContext) -> str:
         block_id = id(value.block)
         binding = ctx.block_bindings.get(block_id)
         if binding is None:
-            raise RuntimeError(f"Missing block binding for indirect expression ref {value.block.name!r}")
+            raise RuntimeError(
+                f"Missing block binding for indirect expression ref {value.block.name!r}"
+            )
         block_symbol = ctx.symbol_for_block(value.block)
         helper = ctx.use_indirect_block(binding.block_id)
         expr = compile_expression(value.expr, ctx)
@@ -2580,7 +2595,7 @@ def _coil_target_default(target: Tag | BlockRange | IndirectBlockRange, ctx: Cod
 def _global_line(symbols: list[str], indent: int) -> str | None:
     if not symbols:
         return None
-    return f'{" " * indent}global {", ".join(symbols)}'
+    return f"{' ' * indent}global {', '.join(symbols)}"
 
 
 def _ret_defaults_literal(ctx: CodegenContext) -> dict[str, Any]:
