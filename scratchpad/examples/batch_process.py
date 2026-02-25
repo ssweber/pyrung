@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from pyclickplc import DataviewFile, DataViewRecord, run_server_tui, write_cdv
+from pyclickplc import DataViewFile, DataViewRecord, run_server_tui, write_cdv
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
@@ -146,7 +146,7 @@ def export_click_addresses(tag_map: TagMap) -> tuple[Path, Path]:
     for row in rows:
         row.update_data_type()
 
-    write_cdv(cdv_path, DataviewFile(rows=rows))
+    write_cdv(cdv_path, DataViewFile(rows=rows))
     return csv_path, cdv_path
 
 
