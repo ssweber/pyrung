@@ -618,7 +618,7 @@ def _run_main_rungs():
     _rung_10_enabled = bool((bool(_t_Running)))
     if _rung_10_enabled:
         if len(range(0, 16)) > 16:
-            raise ValueError("pack_bits destination width is 16 bits but block has {len(range(0, 16))} tags")
+            raise ValueError(f"pack_bits destination width is 16 bits but block has {len(range(0, 16))} tags")
         _packed = 0
         for _bit_index, _src_idx in enumerate(range(0, 16)):
             if bool(_b_BITS[_src_idx]):
@@ -627,7 +627,7 @@ def _run_main_rungs():
         _t_PackedWord = _packed_value
     if _rung_10_enabled:
         if len(range(0, 2)) != 2:
-            raise ValueError("pack_words requires exactly 2 source tags; got {len(range(0, 2))}")
+            raise ValueError(f"pack_words requires exactly 2 source tags; got {len(range(0, 2))}")
         _lo_value = int(_b_WORDS[range(0, 2)[0]])
         _hi_value = int(_b_WORDS[range(0, 2)[1]])
         _packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))
@@ -644,13 +644,13 @@ def _run_main_rungs():
             pass
     if _rung_10_enabled:
         if len(range(0, 32)) > 32:
-            raise ValueError("unpack_to_bits source width is 32 bits but block has {len(range(0, 32))} tags")
+            raise ValueError(f"unpack_to_bits source width is 32 bits but block has {len(range(0, 32))} tags")
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
         for _bit_index, _dst_idx in enumerate(range(0, 32)):
             _b_BITS[_dst_idx] = bool((_bits >> _bit_index) & 1)
     if _rung_10_enabled:
         if len(range(0, 2)) != 2:
-            raise ValueError("unpack_to_words requires exactly 2 destination tags; got {len(range(0, 2))}")
+            raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {len(range(0, 2))}")
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
         _lo_word = (_bits & 0xFFFF)
         _hi_word = ((_bits >> 16) & 0xFFFF)
@@ -663,7 +663,7 @@ def _run_main_rungs():
             raise TypeError("run_function: 'plus_offset' returned None but outs were declared")
         if 'result' not in _fn_result_1:
             raise KeyError(
-                "run_function: 'plus_offset' missing key 'result'; got {sorted(_fn_result_1)}"
+                f"run_function: 'plus_offset' missing key 'result'; got {sorted(_fn_result_1)}"
             )
         _t_FnOut = _store_copy_value_to_type(_fn_result_1['result'], "INT")
     _fn_result_2 = _fn_gated_scale(bool(_rung_11_enabled), factor=2, value=_t_FnOut)
@@ -671,7 +671,7 @@ def _run_main_rungs():
         raise TypeError("run_enabled_function: 'gated_scale' returned None but outs were declared")
     if 'result' not in _fn_result_2:
         raise KeyError(
-            "run_enabled_function: 'gated_scale' missing key 'result'; got {sorted(_fn_result_2)}"
+            f"run_enabled_function: 'gated_scale' missing key 'result'; got {sorted(_fn_result_2)}"
         )
     _t_FnOut = _store_copy_value_to_type(_fn_result_2['result'], "INT")
     if not (_rung_11_enabled):

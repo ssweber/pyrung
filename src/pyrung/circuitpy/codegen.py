@@ -2430,7 +2430,7 @@ def _compile_pack_bits_instruction(
     enabled_body = [
         *src_setup,
         f"if len({src_indices}) > {width}:",
-        f'    raise ValueError("pack_bits destination width is {width} bits but block has {{len({src_indices})}} tags")',
+        f'    raise ValueError(f"pack_bits destination width is {width} bits but block has {{len({src_indices})}} tags")',
         "_packed = 0",
         f"for _bit_index, _src_idx in enumerate({src_indices}):",
         f"    if bool({src_symbol}[_src_idx]):",
@@ -2459,7 +2459,7 @@ def _compile_pack_words_instruction(
     enabled_body = [
         *src_setup,
         f"if len({src_indices}) != 2:",
-        f'    raise ValueError("pack_words requires exactly 2 source tags; got {{len({src_indices})}}")',
+        f'    raise ValueError(f"pack_words requires exactly 2 source tags; got {{len({src_indices})}}")',
         f"_lo_value = int({src_symbol}[{src_indices}[0]])",
         f"_hi_value = int({src_symbol}[{src_indices}[1]])",
         "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
@@ -2557,7 +2557,7 @@ def _compile_unpack_bits_instruction(
     enabled_body = [
         *dst_setup,
         f"if len({dst_indices}) > {width}:",
-        f'    raise ValueError("unpack_to_bits source width is {width} bits but block has {{len({dst_indices})}} tags")',
+        f'    raise ValueError(f"unpack_to_bits source width is {width} bits but block has {{len({dst_indices})}} tags")',
         f"_bits = {bits_expr}",
         f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
         f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
@@ -2598,7 +2598,7 @@ def _compile_unpack_words_instruction(
     enabled_body = [
         *dst_setup,
         f"if len({dst_indices}) != 2:",
-        f'    raise ValueError("unpack_to_words requires exactly 2 destination tags; got {{len({dst_indices})}}")',
+        f'    raise ValueError(f"unpack_to_words requires exactly 2 destination tags; got {{len({dst_indices})}}")',
         f"_bits = {bits_expr}",
         "_lo_word = (_bits & 0xFFFF)",
         "_hi_word = ((_bits >> 16) & 0xFFFF)",
@@ -2636,7 +2636,7 @@ def _compile_function_call_instruction(
                 [
                     f"if {key!r} not in {result_var}:",
                     "    raise KeyError(",
-                    f'        "run_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    f'        f"run_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
                     "    )",
                 ]
             )
@@ -2675,7 +2675,7 @@ def _compile_enabled_function_call_instruction(
                 [
                     f"{' ' * indent}if {key!r} not in {result_var}:",
                     f"{' ' * (indent + 4)}raise KeyError(",
-                    f'{" " * (indent + 8)}"run_enabled_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
+                    f'{" " * (indent + 8)}f"run_enabled_function: {fn_name!r} missing key {key!r}; got {{sorted({result_var})}}"',
                     f"{' ' * (indent + 4)})",
                 ]
             )
