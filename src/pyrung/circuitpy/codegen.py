@@ -132,9 +132,10 @@ _SD_READY_TAG = "storage.sd.ready"
 _SD_WRITE_STATUS_TAG = "storage.sd.write_status"
 _SD_ERROR_TAG = "storage.sd.error"
 _SD_ERROR_CODE_TAG = "storage.sd.error_code"
+_SD_SAVE_CMD_TAG = "storage.sd.save_cmd"
 _SD_EJECT_CMD_TAG = "storage.sd.eject_cmd"
 _SD_DELETE_ALL_CMD_TAG = "storage.sd.delete_all_cmd"
-_SD_COPY_SYSTEM_CMD_TAG = "storage.sd.copy_system_cmd"
+_FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
 
 _SD_MOUNT_ERROR = 1
 _SD_LOAD_ERROR = 2
@@ -937,9 +938,9 @@ def _render_code(ctx: CodegenContext) -> str:
             "_sd_write_status = False",
             "_sd_error = False",
             "_sd_error_code = 0",
+            "_sd_save_cmd = False",
             "_sd_eject_cmd = False",
             "_sd_delete_all_cmd = False",
-            "_sd_copy_system_cmd = False",
             "",
         ]
     )
@@ -1095,15 +1096,57 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
     lines = [
         "def _service_sd_commands():",
         "    global _sd_write_status, _sd_error, _sd_error_code",
-        "    global _sd_eject_cmd, _sd_delete_all_cmd, _sd_copy_system_cmd",
-        "    if not (_sd_eject_cmd or _sd_delete_all_cmd or _sd_copy_system_cmd):",
+        "    global _sd_save_cmd, _sd_eject_cmd, _sd_delete_all_cmd",
+        "    global _sd_available, _sd_spi, _sd, _sd_vfs",
+        "    if not (_sd_save_cmd or _sd_eject_cmd or _sd_delete_all_cmd):",
         "        return",
-        "    _sd_write_status = True",
-        "    _sd_error = False",
-        "    _sd_error_code = 0",
+        "    _do_delete = bool(_sd_delete_all_cmd)",
+        "    _do_save = bool(_sd_save_cmd)",
+        "    _do_eject = bool(_sd_eject_cmd)",
+        "    _sd_save_cmd = False",
         "    _sd_eject_cmd = False",
         "    _sd_delete_all_cmd = False",
-        "    _sd_copy_system_cmd = False",
+        "    _sd_write_status = True",
+        "    _command_failed = False",
+        "    if _do_delete:",
+        "        try:",
+        "            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):",
+        "                try:",
+        "                    os.remove(_path)",
+        "                except OSError:",
+        "                    pass",
+        "        except Exception as exc:",
+        "            _command_failed = True",
+        "            _sd_error = True",
+        f"            _sd_error_code = {_SD_SAVE_ERROR}",
+        '            print(f"SD delete_all command failed: {exc}")',
+        "    if _do_save:",
+        "        try:",
+        "            save_memory()",
+        f"            if _sd_error and _sd_error_code == {_SD_SAVE_ERROR}:",
+        "                _command_failed = True",
+        "        except Exception as exc:",
+        "            _command_failed = True",
+        "            _sd_error = True",
+        f"            _sd_error_code = {_SD_SAVE_ERROR}",
+        '            print(f"SD save command failed: {exc}")',
+        "    if _do_eject:",
+        "        try:",
+        "            if _sd_available:",
+        '                storage.umount("/sd")',
+        "            _sd_available = False",
+        "            _sd_spi = None",
+        "            _sd = None",
+        "            _sd_vfs = None",
+        "        except Exception as exc:",
+        "            _command_failed = True",
+        "            _sd_error = True",
+        f"            _sd_error_code = {_SD_SAVE_ERROR}",
+        '            print(f"SD eject command failed: {exc}")',
+        "    if not _command_failed:",
+        "        _sd_error = False",
+        "        _sd_error_code = 0",
+        "    _sd_write_status = True",
         "",
     ]
 
@@ -1367,9 +1410,9 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
     sd_write_symbol = ctx.symbol_if_referenced(_SD_WRITE_STATUS_TAG)
     sd_error_symbol = ctx.symbol_if_referenced(_SD_ERROR_TAG)
     sd_error_code_symbol = ctx.symbol_if_referenced(_SD_ERROR_CODE_TAG)
+    sd_save_symbol = ctx.symbol_if_referenced(_SD_SAVE_CMD_TAG)
     sd_eject_symbol = ctx.symbol_if_referenced(_SD_EJECT_CMD_TAG)
     sd_delete_symbol = ctx.symbol_if_referenced(_SD_DELETE_ALL_CMD_TAG)
-    sd_copy_symbol = ctx.symbol_if_referenced(_SD_COPY_SYSTEM_CMD_TAG)
 
     lines = [
         "while True:",
@@ -1383,23 +1426,23 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
         "",
     ]
 
+    if sd_save_symbol is not None:
+        lines.append(f"    _sd_save_cmd = bool({sd_save_symbol})")
     if sd_eject_symbol is not None:
         lines.append(f"    _sd_eject_cmd = bool({sd_eject_symbol})")
     if sd_delete_symbol is not None:
         lines.append(f"    _sd_delete_all_cmd = bool({sd_delete_symbol})")
-    if sd_copy_symbol is not None:
-        lines.append(f"    _sd_copy_system_cmd = bool({sd_copy_symbol})")
     lines.extend(
         [
             "    _service_sd_commands()",
         ]
     )
+    if sd_save_symbol is not None:
+        lines.append(f"    {sd_save_symbol} = _sd_save_cmd")
     if sd_eject_symbol is not None:
         lines.append(f"    {sd_eject_symbol} = _sd_eject_cmd")
     if sd_delete_symbol is not None:
         lines.append(f"    {sd_delete_symbol} = _sd_delete_all_cmd")
-    if sd_copy_symbol is not None:
-        lines.append(f"    {sd_copy_symbol} = _sd_copy_system_cmd")
     if sd_ready_symbol is not None:
         lines.append(f"    {sd_ready_symbol} = bool(_sd_available)")
     if sd_write_symbol is not None:

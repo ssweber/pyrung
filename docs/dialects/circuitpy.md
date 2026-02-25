@@ -127,6 +127,26 @@ Tags marked `retentive=True` are automatically persisted to an SD card:
 - **Schema hash:** SHA-256 of tag names and types. On load, a schema mismatch (e.g. after a firmware change) skips the stale file and starts from defaults.
 - **NVM dirty flag:** `microcontroller.nvm[0]` is set to `1` before writing and cleared to `0` after. If the controller restarts mid-write, the dirty flag prevents loading a corrupt file.
 
+### SD system command bits
+
+The generated runtime supports the system SD command bits below:
+
+- `system.storage.sd.save_cmd` triggers `save_memory()` from ladder logic.
+- `system.storage.sd.delete_all_cmd` removes only retentive files (`/sd/memory.json` and `/sd/_memory.tmp`).
+- `system.storage.sd.eject_cmd` calls `storage.umount("/sd")` and keeps SD unavailable until reboot/remount.
+
+Commands are auto-cleared after servicing and pulse `system.storage.sd.write_status` for that scan. Command-operation failures set `system.storage.sd.error = True` and `system.storage.sd.error_code = 3`.
+
+`system.storage.sd.save_cmd` intentionally has no Click SC relay mapping. `system.storage.sd.copy_system_cmd` is removed.
+
+Example ladder trigger:
+
+```python
+with Program() as logic:
+    with Rung(Bool("PersistNow")):
+        out(system.storage.sd.save_cmd)
+```
+
 ### Watchdog
 
 When `watchdog_ms` is set, the generated code calls `base.config_watchdog()` and `base.start_watchdog()` at boot, then `base.pet_watchdog()` each scan. If the scan loop stalls longer than the timeout, the P1AM hardware resets the controller.

@@ -95,9 +95,6 @@ SYSTEM_CLICK_SLOTS = (
     SystemClickSlot(
         system.storage.sd.delete_all_cmd, _hardware_tag("SC66"), "_SD_Delete_All", False
     ),
-    SystemClickSlot(
-        system.storage.sd.copy_system_cmd, _hardware_tag("SC67"), "_SD_Copy_System", False
-    ),
     SystemClickSlot(system.storage.sd.ready, _hardware_tag("SC68"), "_SD_Ready_To_Use", True),
     SystemClickSlot(
         system.storage.sd.write_status, _hardware_tag("SC69"), "_SD_Write_Status", True

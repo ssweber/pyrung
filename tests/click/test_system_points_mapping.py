@@ -27,11 +27,12 @@ def test_tag_map_includes_system_points_by_default():
     assert mapping.resolve("rtc.year4") == "SD19"
     assert mapping.resolve("storage.sd.eject_cmd") == "SC65"
     assert mapping.resolve("storage.sd.delete_all_cmd") == "SC66"
-    assert mapping.resolve("storage.sd.copy_system_cmd") == "SC67"
     assert mapping.resolve("storage.sd.ready") == "SC68"
     assert mapping.resolve("storage.sd.write_status") == "SC69"
     assert mapping.resolve("storage.sd.error") == "SC70"
     assert mapping.resolve("storage.sd.error_code") == "SD69"
+    with pytest.raises(KeyError):
+        mapping.resolve("storage.sd.save_cmd")
 
 
 def test_tag_map_can_disable_system_points():
@@ -53,7 +54,7 @@ def test_system_mapped_slots_include_read_only_and_source_metadata():
     assert system_slots["rtc.apply_date"].read_only is False
     assert system_slots["storage.sd.eject_cmd"].read_only is False
     assert system_slots["storage.sd.delete_all_cmd"].read_only is False
-    assert system_slots["storage.sd.copy_system_cmd"].read_only is False
+    assert "storage.sd.save_cmd" not in system_slots
     assert system_slots["storage.sd.ready"].read_only is True
     assert system_slots["storage.sd.write_status"].read_only is True
     assert system_slots["storage.sd.error"].read_only is True
@@ -133,13 +134,11 @@ def test_provider_write_to_writable_command_bits_routes_through_patch():
     provider.write("SC55", True)
     provider.write("SC65", True)
     provider.write("SC66", True)
-    provider.write("SC67", True)
     assert runner.current_state.tags.get("rtc.apply_time", False) is False
     runner.step()
     assert runner.current_state.tags["rtc.apply_time"] is True
     assert runner.current_state.tags["storage.sd.eject_cmd"] is True
     assert runner.current_state.tags["storage.sd.delete_all_cmd"] is True
-    assert runner.current_state.tags["storage.sd.copy_system_cmd"] is True
 
 
 def test_provider_write_sc50_stops_runner_immediately():

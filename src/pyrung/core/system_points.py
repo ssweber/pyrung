@@ -82,9 +82,9 @@ class FirmwareNamespace:
 
 @dataclass(frozen=True)
 class StorageSdNamespace:
+    save_cmd: Tag
     eject_cmd: Tag
     delete_all_cmd: Tag
-    copy_system_cmd: Tag
     ready: Tag
     write_status: Tag
     error: Tag
@@ -169,9 +169,9 @@ system = SystemNamespaces(
     ),
     storage=StorageNamespace(
         sd=StorageSdNamespace(
+            save_cmd=Bool("storage.sd.save_cmd"),
             eject_cmd=Bool("storage.sd.eject_cmd"),
             delete_all_cmd=Bool("storage.sd.delete_all_cmd"),
-            copy_system_cmd=Bool("storage.sd.copy_system_cmd"),
             ready=Bool("storage.sd.ready"),
             write_status=Bool("storage.sd.write_status"),
             error=Bool("storage.sd.error"),
@@ -201,9 +201,9 @@ WRITABLE_SYSTEM_TAG_NAMES = frozenset(
         system.rtc.apply_time.name,
         system.sys.cmd_mode_stop.name,
         system.sys.cmd_watchdog_reset.name,
+        system.storage.sd.save_cmd.name,
         system.storage.sd.eject_cmd.name,
         system.storage.sd.delete_all_cmd.name,
-        system.storage.sd.copy_system_cmd.name,
     }
 )
 READ_ONLY_SYSTEM_TAG_NAMES = frozenset(
@@ -471,9 +471,9 @@ class SystemPointRuntime:
 
     def _process_storage_sd_commands(self, ctx: ScanContext) -> None:
         command_names = (
+            system.storage.sd.save_cmd.name,
             system.storage.sd.eject_cmd.name,
             system.storage.sd.delete_all_cmd.name,
-            system.storage.sd.copy_system_cmd.name,
         )
         has_command = any(bool(_raw_get_tag(ctx, name, False)) for name in command_names)
         if not has_command:

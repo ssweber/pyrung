@@ -391,21 +391,27 @@ class TestPersistenceWatchdogAndDiagnostics:
         with Program(strict=False) as prog:
             with Rung(all_of(Bool("Enable"), system.storage.sd.ready)):
                 copy(5, step)
+                out(system.storage.sd.save_cmd)
                 out(system.storage.sd.eject_cmd)
                 out(system.storage.sd.delete_all_cmd)
-                out(system.storage.sd.copy_system_cmd)
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
         assert "busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)" in source_code
         assert "_MEMORY_TMP_PATH" in source_code
         assert "os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)" in source_code
-        assert "os.remove(_MEMORY_PATH)" not in source_code
+        assert "for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):" in source_code
+        assert "os.remove(_path)" in source_code
         assert 'payload = {"schema": _RET_SCHEMA, "values": values}' in source_code
         assert "_sd_error_code = 1" in source_code
         assert "_sd_error_code = 2" in source_code
         assert "_sd_error_code = 3" in source_code
         assert "_service_sd_commands()" in source_code
-        assert "storage.sd.eject_cmd" in source_code
+        assert "save_memory()" in source_code
+        assert "_t_storage_sd_save_cmd" in source_code
+        assert "_t_storage_sd_eject_cmd" in source_code
+        assert "storage.umount(\"/sd\")" in source_code
+        assert "_sd_available = False" in source_code
+        assert "_t_storage_sd_copy_system_cmd" not in source_code
 
     def test_watchdog_and_scan_diagnostics_emit(self):
         hw, di, do = _basic_hw()
@@ -419,6 +425,8 @@ class TestPersistenceWatchdogAndDiagnostics:
             'raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")'
             in source_code
         )
+        assert "\n_wd_config(WATCHDOG_MS)\n" in source_code
+        assert "\n_wd_start()\n" in source_code
         assert "if WATCHDOG_MS is not None:" not in source_code
         assert "    _wd_pet()" in source_code
         assert "_scan_overrun_count += 1" in source_code

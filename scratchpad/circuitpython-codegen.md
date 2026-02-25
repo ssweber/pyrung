@@ -74,18 +74,22 @@ Instruction classes outside this list must fail generation with a deterministic 
   - on boot, if flag is `1`, treat last save as interrupted, warn, skip restore, keep defaults
 - Generated runtime must define core-equivalent SD system-point semantics:
   - `storage.sd.ready` mirrors `_sd_available`
-  - `storage.sd.write_status` pulses `True` while processing SD command acknowledgements
+  - `storage.sd.write_status` pulses `True` while processing SD commands
   - `storage.sd.error` is `True` when the latest SD operation failed
   - `storage.sd.error_code` uses dialect-neutral codes:
     - `0`: no error
     - `1`: mount failure
     - `2`: load failure
     - `3`: save failure
-- SD command bits `storage.sd.eject_cmd`, `storage.sd.delete_all_cmd`, and
-  `storage.sd.copy_system_cmd` are ack-only no-op in this phase:
-  - when observed `True`, set `storage.sd.write_status` for that processing cycle
-  - auto-clear the command bits after processing
-  - do not unmount or mutate card contents for these command bits in v1
+- SD command bits `storage.sd.save_cmd`, `storage.sd.eject_cmd`, and
+  `storage.sd.delete_all_cmd` execute real operations in this phase:
+  - command order is deterministic: `delete_all_cmd`, then `save_cmd`, then `eject_cmd`
+  - `delete_all_cmd` removes only `/sd/memory.json` and `/sd/_memory.tmp` (best effort)
+  - `save_cmd` calls `save_memory()`
+  - `eject_cmd` calls `storage.umount("/sd")`, then marks SD unavailable
+  - commands auto-clear after servicing
+  - command operation failures set `storage.sd.error=True` and `storage.sd.error_code=3`
+  - `storage.sd.save_cmd` has no Click SC relay mapping
 
 ### 2.4 Output format
 
@@ -204,7 +208,7 @@ Generated file must include:
 - SD status/command globals for core parity:
   - `storage.sd.ready` mirror (`_sd_available`)
   - `storage.sd.write_status`, `storage.sd.error`, `storage.sd.error_code`
-  - command bits: `storage.sd.eject_cmd`, `storage.sd.delete_all_cmd`, `storage.sd.copy_system_cmd`
+  - command bits: `storage.sd.save_cmd`, `storage.sd.eject_cmd`, `storage.sd.delete_all_cmd`
 - optional NVM dirty-flag globals when enabled
 - watchdog method bindings + optional watchdog config/petting
 - scan pacing diagnostics (`_scan_overrun_count`, optional print toggle)
@@ -312,9 +316,9 @@ _sd_vfs = None
 _sd_write_status = False
 _sd_error = False
 _sd_error_code = 0  # 0=none, 1=mount_failure, 2=load_failure, 3=save_failure
+_sd_save_cmd = False
 _sd_eject_cmd = False
 _sd_delete_all_cmd = False
-_sd_copy_system_cmd = False
 
 def _mount_sd():
     global _sd_available, _sd_spi, _sd, _sd_vfs, _sd_error, _sd_error_code
@@ -374,14 +378,19 @@ load_memory()
 
 # Optional helpers are emitted only when referenced by generated code.
 def _service_sd_commands():
-    global _sd_write_status, _sd_eject_cmd, _sd_delete_all_cmd, _sd_copy_system_cmd
-    # v1 behavior: acknowledge commands and auto-clear, without eject/delete/copy side effects.
-    if not (_sd_eject_cmd or _sd_delete_all_cmd or _sd_copy_system_cmd):
+    global _sd_write_status, _sd_error, _sd_error_code
+    global _sd_save_cmd, _sd_eject_cmd, _sd_delete_all_cmd
+    if not (_sd_save_cmd or _sd_eject_cmd or _sd_delete_all_cmd):
         return
     _sd_write_status = True
+    # v2 behavior: delete/save/eject with deterministic order and auto-clear bits.
+    _do_delete = bool(_sd_delete_all_cmd)
+    _do_save = bool(_sd_save_cmd)
+    _do_eject = bool(_sd_eject_cmd)
+    _sd_save_cmd = False
     _sd_eject_cmd = False
     _sd_delete_all_cmd = False
-    _sd_copy_system_cmd = False
+    # ... delete retentive files, call save_memory(), and umount("/sd") for eject.
 
 def save_memory():
     global Step, _sd_write_status, _sd_error, _sd_error_code  # trimmed retentive + SD status
@@ -532,7 +541,7 @@ storage.mount(_sd_vfs, "/sd")
 - SD status mirrors are explicit:
   - `storage.sd.ready` from `_sd_available`
   - `storage.sd.error`/`storage.sd.error_code` updated on mount/load/save outcomes
-  - command bits (`storage.sd.eject_cmd/delete_all_cmd/copy_system_cmd`) are ack-only no-op with auto-clear
+  - command bits (`storage.sd.save_cmd/delete_all_cmd/eject_cmd`) execute real operations and auto-clear
 - Watchdog calls use snake_case runtime methods (`config_watchdog`, `start_watchdog`, `pet_watchdog`).
 - `global` statements are trimmed per function to only referenced mutable symbols.
 
@@ -1430,10 +1439,12 @@ Test style should follow existing `tests/circuitpy/` class-based layout.
   - `storage.sd.ready` mirrors `_sd_available`
   - mount/load/save failures set `storage.sd.error=True` and expected enum `storage.sd.error_code` (`1/2/3`)
   - successful mount/save path clears `storage.sd.error` and resets `storage.sd.error_code` to `0`
-  - `storage.sd.eject_cmd/delete_all_cmd/copy_system_cmd` ack-only behavior:
+  - `storage.sd.save_cmd/delete_all_cmd/eject_cmd` command behavior:
     - command observed -> `storage.sd.write_status` pulse
     - command bits auto-clear
-    - no eject/delete/copy side effects in v1
+    - delete removes only `/sd/memory.json` and `/sd/_memory.tmp`
+    - save calls `save_memory()`
+    - eject calls `storage.umount("/sd")` and sets SD unavailable
   - `load_memory()` applies only matching name+type retentive entries
   - missing file/corrupt JSON/schema mismatch paths keep defaults and do not fault
   - `save_memory()` writes only values changed from defaults
