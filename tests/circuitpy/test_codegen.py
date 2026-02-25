@@ -362,6 +362,8 @@ class TestPersistenceWatchdogAndDiagnostics:
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
         assert "busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)" in source_code
         assert "_MEMORY_TMP_PATH" in source_code
+        assert "os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)" in source_code
+        assert "os.remove(_MEMORY_PATH)" not in source_code
         assert 'payload = {"schema": _RET_SCHEMA, "values": values}' in source_code
         assert "_sd_error_code = 1" in source_code
         assert "_sd_error_code = 2" in source_code
