@@ -62,8 +62,8 @@ StepDone = Bool("StepDone")
 Found = Bool("Found")
 
 # Timer/counter tags
-TonDone = Bool("TonDone")
-TonAcc = Int("TonAcc")
+RTonDone = Bool("RTonDone")
+RTonAcc = Int("RTonAcc")
 TofDone = Bool("TofDone")
 TofAcc = Int("TofAcc")
 CtuDone = Bool("CtuDone")
@@ -108,7 +108,7 @@ with Program(strict=False) as logic:
 
     # Timers + counters.
     with Rung(Running):
-        on_delay(TonDone, TonAcc, preset=250).reset(ShiftReset)
+        on_delay(RTonDone, RTonAcc, preset=250).reset(ShiftReset)
     with Rung(Running):
         off_delay(TofDone, TofAcc, preset=100)
     with Rung(Running):
@@ -117,7 +117,7 @@ with Program(strict=False) as logic:
         count_down(CtdDone, CtdAcc, preset=5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
-    with Rung(all_of(Running, TonDone)):
+    with Rung(all_of(Running, RTonDone)):
         copy(120, Source)
         calc((Source * 2) + (Idx << 1) - 3, CalcOut, mode="decimal")
         copy(DS[Idx], DD[Idx + 1])
