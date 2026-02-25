@@ -409,7 +409,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "save_memory()" in source_code
         assert "_t_storage_sd_save_cmd" in source_code
         assert "_t_storage_sd_eject_cmd" in source_code
-        assert "storage.umount(\"/sd\")" in source_code
+        assert 'storage.umount("/sd")' in source_code
         assert "_sd_available = False" in source_code
         assert "_t_storage_sd_copy_system_cmd" not in source_code
 
