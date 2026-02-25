@@ -21,7 +21,7 @@ with runner.active():
 
 ## What it does
 
-Ladder logic has always been a domain language for industrial control. pyrung asks a simple question: **what if that language lived in Python?**
+Ladder logic has always been a domain language for industrial control. pyrung asks a simple question: **what if that language lived in Python?** It turns out a `with` block is a rung — condition on the rail, instructions in the body.
 
 **For controls engineers:** Write and simulate Click PLC logic without hardware or proprietary software. Use plain tag names from day one. Add hardware addresses when you're ready. A validator checks your program against Click constraints and tells you exactly what to fix.
 
@@ -29,17 +29,19 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 ## How it works
 
-**Every scan is a snapshot.** Logic is a pure function — the same inputs always produce the same outputs, nothing is mutated in place. Every step produces a new immutable state, so history is always there when you want it.
+**Rungs look like rungs.** `with Rung(Button): out(Light)` maps directly to a ladder diagram — condition on the left rail, coil on the right. Python's `with` block carries the "power flows to the body" semantics naturally. A controls engineer reads it like a rung; a Python developer reads it as ordinary Python.
 
-**You drive execution.** The engine never runs on its own. Call `step()`, `run()`, or `run_until()` from tests, a GUI, or a debugger. Pause anywhere, inject inputs, inspect any historical state.
-
-**Time is a variable.** `FIXED_STEP` mode advances the clock by a fixed amount each scan, making timers and counters perfectly deterministic in tests. Rewind and replay whenever you need to.
+**Program collects the ladder, Runner steps through it.** `Program` accumulates your rungs into a logic graph. Pass it to `PLCRunner`, which executes one scan at a time — you call `step()` and decide when things happen.
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
+**Test with perfect repeatability.** Every scan produces an immutable snapshot. The same inputs always give the same outputs. Timers and counters advance by a fixed step, so tests are deterministic — no flaky timing, no hidden state.
+
+**Debug like code.** Step through scans, set breakpoints on rungs, rewind to any previous state. Force tag values, diff two scans, fork from history. VS Code sees it as a debuggable program because it is one.
+
 ## What's Included
 
-**Core engine** — Immutable state machine with a context-manager DSL. All logic is pure `f(state) -> new_state`.
+**Core engine** — Rungs are `with` blocks; all logic is pure `f(state) → new_state`.
 
 - Instructions: `out`, `latch`/`reset`, `copy`, `calc`, `run_function`/`run_enabled_function`
 - Timers (`on_delay`, `off_delay`) and counters (`count_up`, `count_down`)
