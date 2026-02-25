@@ -2,6 +2,8 @@
 
 `pyrung.circuitpy` adds a P1AM-200 hardware model, module catalog, program validation, and CircuitPython code generation on top of the hardware-agnostic core.
 
+> **Aspirational PoC.** The CircuitPython dialect demonstrates the "write once, simulate and deploy" thesis end-to-end: the same pyrung program runs in Python simulation *and* generates a self-contained CircuitPython `while True` scan loop that runs directly on the hardware. The hardware model (35 modules) and code generator are fully implemented and tested. The P1AM-200 is the natural target: tinkerer-friendly PLC hardware with a CircuitPython runtime, and currently the only PLC-class controller where this kind of codegen is this straightforward.
+
 ## Installation / Imports
 
 ```bash
@@ -104,7 +106,7 @@ source = generate_circuitpy(program, hw, *, target_scan_ms, watchdog_ms=None)
 | `target_scan_ms` | `float` | Target scan cycle time in milliseconds (must be > 0) |
 | `watchdog_ms` | `int \| None` | Hardware watchdog timeout in ms, or `None` to disable |
 
-Returns a `str` containing a complete, self-contained CircuitPython source file. The generator runs strict validation internally and compiles the output to verify syntax correctness.
+Returns a `str` containing a complete, self-contained CircuitPython source file. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
 ### Generated file structure
 
@@ -117,7 +119,7 @@ The output is a single `.py` file organized as:
 5. **Memory buffers** — edge-detection state, scan timing
 6. **SD mount / retentive load/save** — generated when retentive tags exist
 7. **Helper functions** — rising edge, type conversions, math helpers
-8. **Main scan loop** — reads inputs, executes rungs, writes outputs, paces to target scan time
+8. **`while True` scan loop** — reads inputs, executes rungs, writes outputs, paces to target scan time
 
 ### Retentive tag persistence
 

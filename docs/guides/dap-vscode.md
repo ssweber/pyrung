@@ -17,9 +17,11 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 
 ## Requirements
 
+> **Pending publish** — the pyrung VS Code extension is not yet available on the marketplace. This section will be updated with install instructions when it ships. In the meantime, the extension can be built and installed locally from `editors/vscode/pyrung-debug`.
+
 - VS Code with the Python extension
 - `pyrung` installed: `pip install pyrung`
-- The VS Code debugger extension from `editors/vscode/pyrung-debug`
+- The pyrung VS Code extension *(marketplace link pending)*
 
 ## Launch configuration
 

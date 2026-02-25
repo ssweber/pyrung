@@ -17,6 +17,20 @@ from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, r
 from pyrung.click import x, y, c, ds, TagMap
 ```
 
+## Workflow: write first, validate later
+
+pyrung is intentionally permissive. Write logic with semantic tag names and native Python expressions — no address mapping required — and simulate freely. Hardware constraints are opt-in.
+
+The natural progression:
+
+1. **Write** — define semantic tags (`StartButton`, `MotorRunning`, `Speed`) and express logic in Python
+2. **Simulate** — run tests with `FIXED_STEP`; patch inputs, assert outputs, iterate
+3. **Map** — create a `TagMap` linking semantic tags to Click hardware addresses
+4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces Click-incompatible patterns
+5. **Iterate** — fix findings, tighten to `mode="strict"` when the program is clean
+
+The validator tells you exactly what Click can't do — inline expressions, unsupported pointer modes, type mismatches — before you discover it at deploy time.
+
 ## Pre-built blocks
 
 `pyrung.click` exports pre-built blocks for every Click memory bank:
