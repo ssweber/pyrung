@@ -72,7 +72,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 - **Monitors**: `runner.monitor(tag, callback)` fires on committed value changes
 - **Time travel**: `runner.seek(scan_id)`, `runner.rewind(seconds)`, `runner.playhead`
 - **Inspection**: `runner.inspect(rung_id)` → `RungTrace`, `runner.diff(scan_a, scan_b)`
-- **Fork**: `runner.fork_from(scan_id)` — independent runner from historical snapshot
+- **Fork**: `runner.fork(scan_id=None)` (primary) / `runner.fork_from(scan_id)` (alias) — independent runner from historical snapshot
 
 ### Click Dialect
 

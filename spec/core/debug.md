@@ -103,7 +103,7 @@ runner.playhead
 runner.inspect(rung_id, scan_id=None)
 runner.inspect_event()
 runner.diff(scan_a, scan_b)
-runner.fork_from(scan_id)
+runner.fork(scan_id=None)
 ```
 
 `tag` accepts `str` or `Tag`.
@@ -404,7 +404,7 @@ runner.diff(scan_a, scan_b) -> dict[str, tuple[Any, Any]]
 ## Fork
 
 ```python
-alt_runner = runner.fork_from(scan_id)
+alt_runner = runner.fork(scan_id=None)
 ```
 
 Creates an independent runner with:
@@ -414,6 +414,7 @@ Creates an independent runner with:
 - initial state from the selected snapshot
 - clean debug runtime state (no forces, breakpoints, monitors, labels, or pending patches)
 - history containing only the fork snapshot initially
+- `fork_from(scan_id)` remains available as a compatibility alias
 
 ---
 

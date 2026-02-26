@@ -220,6 +220,73 @@ def test_diff_raises_for_unknown_scan() -> None:
         runner.diff(0, 99)
 
 
+def test_fork_defaults_to_current_tip_even_if_playhead_is_in_the_past() -> None:
+    runner = PLCRunner(logic=[])
+    runner.run(cycles=3)
+    runner.seek(1)
+
+    fork = runner.fork()
+
+    assert fork.current_state.scan_id == 3
+    assert fork.current_state.timestamp == pytest.approx(runner.current_state.timestamp)
+    assert _scan_ids(fork) == [3]
+    assert fork.playhead == 3
+
+
+def test_fork_with_scan_id_starts_from_exact_snapshot_and_preserves_time_config() -> None:
+    initial = SystemState().with_tags({"A": 1}).with_memory({"m": 7})
+    runner = PLCRunner(logic=[], initial_state=initial)
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner.patch({"A": 2})
+    runner.step()
+
+    snapshot = runner.history.at(1)
+    fork = runner.fork(scan_id=1)
+
+    assert fork.current_state == snapshot
+    assert fork.current_state.scan_id == 1
+    assert fork.current_state.timestamp == pytest.approx(0.25)
+    assert dict(fork.current_state.tags) == dict(snapshot.tags)
+    assert dict(fork.current_state.memory) == dict(snapshot.memory)
+    assert [state.scan_id for state in fork.history.latest(10)] == [1]
+    assert fork.time_mode == TimeMode.FIXED_STEP
+
+    fork.step()
+    assert fork.current_state.scan_id == 2
+    assert fork.current_state.timestamp == pytest.approx(0.5)
+
+
+def test_fork_starts_clean_and_parent_fork_evolve_independently() -> None:
+    runner = PLCRunner(logic=[])
+    runner.patch({"X": 1})
+    runner.step()
+    runner.add_force("X", 5)
+    runner.patch({"Y": 2})  # pending only in parent runtime state
+
+    fork = runner.fork()
+    assert dict(fork.forces) == {}
+    assert fork._pending_patches == {}
+
+    runner.clear_forces()
+    runner.patch({"X": 2})
+    runner.step()
+
+    fork.patch({"X": 99})
+    fork.step()
+
+    assert runner.current_state.tags["X"] == 2
+    assert fork.current_state.tags["X"] == 99
+    assert _scan_ids(runner) == [0, 1, 2]
+    assert _scan_ids(fork) == [1, 2]
+
+
+def test_fork_raises_for_unknown_scan() -> None:
+    runner = PLCRunner(logic=[])
+
+    with pytest.raises(KeyError):
+        runner.fork(scan_id=999)
+
+
 def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> None:
     initial = SystemState().with_tags({"A": 1}).with_memory({"m": 7})
     runner = PLCRunner(logic=[], initial_state=initial)

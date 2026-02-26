@@ -367,9 +367,14 @@ class PLCRunner:
         self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
         return self._latest_committed_trace_event
 
-    def fork_from(self, scan_id: int) -> PLCRunner:
-        """Create an independent runner from a retained historical snapshot."""
-        historical_state = self.history.at(scan_id)
+    def fork(self, scan_id: int | None = None) -> PLCRunner:
+        """Create an independent runner from retained historical state.
+
+        Args:
+            scan_id: Snapshot to fork from. Defaults to current committed tip state.
+        """
+        target_scan_id = self._state.scan_id if scan_id is None else scan_id
+        historical_state = self.history.at(target_scan_id)
         fork = PLCRunner(
             logic=list(self._logic),
             initial_state=historical_state,
@@ -377,6 +382,10 @@ class PLCRunner:
         )
         fork.set_time_mode(self._time_mode, dt=self._dt)
         return fork
+
+    def fork_from(self, scan_id: int) -> PLCRunner:
+        """Create an independent runner from a retained historical snapshot."""
+        return self.fork(scan_id=scan_id)
 
     @property
     def simulation_time(self) -> float:
