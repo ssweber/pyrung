@@ -113,14 +113,12 @@ with Rung(State == "g"):
 
 The accumulator tracks progress in the unit you specify (`Tms` for milliseconds). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
 
-Counters work on edges — each rising edge of the rung increments the accumulator:
+Counters increment once per scan while enabled. To count only on the rising edge (holding the sensor high counts once), use `oneshot=True`:
 
 ```python
-with Rung(rise(Sensor)):
-    count_up(CountDone, CountAcc, preset=9999).reset(CountReset)
+with Rung(Sensor):
+    count_up(CountDone, CountAcc, preset=9999, oneshot=True).reset(CountReset)
 ```
-
-`rise()` detects the transition from false to true, so holding the sensor high only counts once.
 
 ## Programs
 
@@ -188,23 +186,23 @@ A block is a contiguous array of tags — used for grouped memory and physical I
 ```python
 from pyrung import Block, InputBlock, OutputBlock, TagType
 
-DS = Block("DS", TagType.INT, 1, 100)         # Internal memory DS1..DS100
-X  = InputBlock("X", TagType.BOOL, 1, 16)     # Physical inputs X1..X16
-Y  = OutputBlock("Y", TagType.BOOL, 1, 16)    # Physical outputs Y1..Y16
+ds = Block("DS", TagType.INT, 1, 100)         # Internal memory DS1..DS100
+x  = InputBlock("X", TagType.BOOL, 1, 16)     # Physical inputs X1..X16
+y  = OutputBlock("Y", TagType.BOOL, 1, 16)    # Physical outputs Y1..Y16
 ```
 
 Index into a block to get a tag:
 
 ```python
-DS[1]   # Tag "DS1", INT
-X[1]    # Input tag "X1", BOOL
-Y[1]    # Output tag "Y1", BOOL
+ds[1]   # Tag "DS1", INT
+x[1]    # Input tag "X1", BOOL
+y[1]    # Output tag "Y1", BOOL
 ```
 
 Use `.select()` for bulk operations:
 
 ```python
-blockcopy(DS.select(1, 4), DS.select(2, 5))  # Shift DS1..DS4 into DS2..DS5
+blockcopy(ds.select(1, 4), ds.select(2, 5))  # Shift DS1..DS4 into DS2..DS5
 ```
 
 ## Reading and writing values
