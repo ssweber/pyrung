@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import pytest
 
@@ -80,9 +79,9 @@ def test_parse_args_list_parses_each_object() -> None:
 
 def test_parse_args_list_rejects_non_object_entries() -> None:
     with pytest.raises(_ParseError, match="Breakpoint entry must be an object"):
-        parse_args_list(_LaunchArgs, [{"program": "a.py"}, 1], error=_ParseError)  # type: ignore[list-item]
+        parse_args_list(_LaunchArgs, [{"program": "a.py"}, 1], error=_ParseError)
 
 
 def test_parse_args_requires_mapping_inputs() -> None:
     with pytest.raises(_ParseError, match="Arguments must be an object"):
-        parse_args(_LaunchArgs, cast(object, 1), error=_ParseError)
+        parse_args(_LaunchArgs, 1, error=_ParseError)

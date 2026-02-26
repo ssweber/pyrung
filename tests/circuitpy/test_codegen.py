@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sys
 import types
+from typing import cast
 
 import pytest
 
@@ -21,6 +22,7 @@ from pyrung.core import (
     Dint,
     InputBlock,
     Int,
+    OutputBlock,
     Program,
     Real,
     Rung,
@@ -98,37 +100,45 @@ def _manual_context(*tags) -> CodegenContext:
     return ctx
 
 
-def _basic_hw() -> tuple[P1AM, object, object]:
+def _basic_hw() -> tuple[P1AM, InputBlock, OutputBlock]:
     hw = P1AM()
     di = hw.slot(1, "P1-08SIM")
     do = hw.slot(2, "P1-08TRS")
     return hw, di, do
 
 
+def _stub_module(name: str, **attrs: object) -> types.ModuleType:
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+
+def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
+    value = namespace[symbol]
+    assert isinstance(value, list)
+    return cast(list[object], value)
+
+
 def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict[str, object]:
     single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
-    board_mod = types.ModuleType("board")
-    board_mod.SD_SCK = object()
-    board_mod.SD_MOSI = object()
-    board_mod.SD_MISO = object()
-    board_mod.SD_CS = object()
-
-    busio_mod = types.ModuleType("busio")
-    busio_mod.SPI = lambda *args, **kwargs: object()
-
-    sdcardio_mod = types.ModuleType("sdcardio")
-    sdcardio_mod.SDCard = lambda *args, **kwargs: object()
-
-    storage_mod = types.ModuleType("storage")
-    storage_mod.VfsFat = lambda *_args, **_kwargs: object()
-    storage_mod.mount = lambda *_args, **_kwargs: None
-
-    p1am_mod = types.ModuleType("P1AM")
-    p1am_mod.Base = lambda: stub_base
-
-    microcontroller_mod = types.ModuleType("microcontroller")
-    microcontroller_mod.nvm = bytearray(1)
+    board_mod = _stub_module(
+        "board",
+        SD_SCK=object(),
+        SD_MOSI=object(),
+        SD_MISO=object(),
+        SD_CS=object(),
+    )
+    busio_mod = _stub_module("busio", SPI=lambda *args, **kwargs: object())
+    sdcardio_mod = _stub_module("sdcardio", SDCard=lambda *args, **kwargs: object())
+    storage_mod = _stub_module(
+        "storage",
+        VfsFat=lambda *_args, **_kwargs: object(),
+        mount=lambda *_args, **_kwargs: None,
+    )
+    p1am_mod = _stub_module("P1AM", Base=lambda: stub_base)
+    microcontroller_mod = _stub_module("microcontroller", nvm=bytearray(1))
 
     monkeypatch.setitem(sys.modules, "board", board_mod)
     monkeypatch.setitem(sys.modules, "busio", busio_mod)
@@ -658,8 +668,8 @@ class TestCopyModifierCodegen:
                 return 0.0
 
         namespace = _run_single_scan_source(source, monkeypatch, StubBase())
-        ch_values = namespace[ch_symbol]
-        ds_values = namespace[ds_symbol]
+        ch_values = _namespace_list(namespace, ch_symbol)
+        ds_values = _namespace_list(namespace, ds_symbol)
 
         assert ds_values[0] == 5
         assert ds_values[1] == 65
@@ -668,7 +678,9 @@ class TestCopyModifierCodegen:
         assert ch_values[5] == "0"
         assert ch_values[6] == "0"
         assert ch_values[7] == "7"
-        assert ord(ch_values[8]) == 13
+        ch_terminator = ch_values[8]
+        assert isinstance(ch_terminator, str)
+        assert ord(ch_terminator) == 13
         assert ch_values[9] == "{"
 
     def test_blockcopy_modifier_failure_sets_fault_and_avoids_partial_write(self, monkeypatch):
@@ -715,7 +727,7 @@ class TestCopyModifierCodegen:
                 return 0.0
 
         namespace = _run_single_scan_source(source, monkeypatch, StubBase())
-        ds_values = namespace[ds_symbol]
+        ds_values = _namespace_list(namespace, ds_symbol)
         assert ds_values[0] == 9
         assert ds_values[1] == 9
         assert ds_values[2] == 9
@@ -758,12 +770,14 @@ class TestCopyModifierCodegen:
                 return 0.0
 
         namespace = _run_single_scan_source(source, monkeypatch, StubBase())
-        txt_values = namespace[txt_symbol]
+        txt_values = _namespace_list(namespace, txt_symbol)
         assert txt_values[0] == "0"
         assert txt_values[1] == "0"
         assert txt_values[2] == "1"
         assert txt_values[3] == "2"
-        assert ord(txt_values[4]) == 13
+        txt_terminator = txt_values[4]
+        assert isinstance(txt_terminator, str)
+        assert ord(txt_terminator) == 13
         assert txt_values[5] == ""
         assert txt_values[6] == ""
         assert txt_values[7] == ""
@@ -850,27 +864,22 @@ class TestGeneratedSourceSmoke:
 
         stub_base = StubBase()
 
-        board_mod = types.ModuleType("board")
-        board_mod.SD_SCK = object()
-        board_mod.SD_MOSI = object()
-        board_mod.SD_MISO = object()
-        board_mod.SD_CS = object()
-
-        busio_mod = types.ModuleType("busio")
-        busio_mod.SPI = lambda *args, **kwargs: object()
-
-        sdcardio_mod = types.ModuleType("sdcardio")
-        sdcardio_mod.SDCard = lambda *args, **kwargs: object()
-
-        storage_mod = types.ModuleType("storage")
-        storage_mod.VfsFat = lambda *_args, **_kwargs: object()
-        storage_mod.mount = lambda *_args, **_kwargs: None
-
-        p1am_mod = types.ModuleType("P1AM")
-        p1am_mod.Base = lambda: stub_base
-
-        microcontroller_mod = types.ModuleType("microcontroller")
-        microcontroller_mod.nvm = bytearray(1)
+        board_mod = _stub_module(
+            "board",
+            SD_SCK=object(),
+            SD_MOSI=object(),
+            SD_MISO=object(),
+            SD_CS=object(),
+        )
+        busio_mod = _stub_module("busio", SPI=lambda *args, **kwargs: object())
+        sdcardio_mod = _stub_module("sdcardio", SDCard=lambda *args, **kwargs: object())
+        storage_mod = _stub_module(
+            "storage",
+            VfsFat=lambda *_args, **_kwargs: object(),
+            mount=lambda *_args, **_kwargs: None,
+        )
+        p1am_mod = _stub_module("P1AM", Base=lambda: stub_base)
+        microcontroller_mod = _stub_module("microcontroller", nvm=bytearray(1))
 
         monkeypatch.setitem(sys.modules, "board", board_mod)
         monkeypatch.setitem(sys.modules, "busio", busio_mod)
@@ -932,27 +941,22 @@ class TestGeneratedSourceSmoke:
 
         stub_base = StubBase()
 
-        board_mod = types.ModuleType("board")
-        board_mod.SD_SCK = object()
-        board_mod.SD_MOSI = object()
-        board_mod.SD_MISO = object()
-        board_mod.SD_CS = object()
-
-        busio_mod = types.ModuleType("busio")
-        busio_mod.SPI = lambda *args, **kwargs: object()
-
-        sdcardio_mod = types.ModuleType("sdcardio")
-        sdcardio_mod.SDCard = lambda *args, **kwargs: object()
-
-        storage_mod = types.ModuleType("storage")
-        storage_mod.VfsFat = lambda *_args, **_kwargs: object()
-        storage_mod.mount = lambda *_args, **_kwargs: None
-
-        p1am_mod = types.ModuleType("P1AM")
-        p1am_mod.Base = lambda: stub_base
-
-        microcontroller_mod = types.ModuleType("microcontroller")
-        microcontroller_mod.nvm = bytearray(1)
+        board_mod = _stub_module(
+            "board",
+            SD_SCK=object(),
+            SD_MOSI=object(),
+            SD_MISO=object(),
+            SD_CS=object(),
+        )
+        busio_mod = _stub_module("busio", SPI=lambda *args, **kwargs: object())
+        sdcardio_mod = _stub_module("sdcardio", SDCard=lambda *args, **kwargs: object())
+        storage_mod = _stub_module(
+            "storage",
+            VfsFat=lambda *_args, **_kwargs: object(),
+            mount=lambda *_args, **_kwargs: None,
+        )
+        p1am_mod = _stub_module("P1AM", Base=lambda: stub_base)
+        microcontroller_mod = _stub_module("microcontroller", nvm=bytearray(1))
 
         monkeypatch.setitem(sys.modules, "board", board_mod)
         monkeypatch.setitem(sys.modules, "busio", busio_mod)

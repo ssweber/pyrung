@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.core.condition import Condition
@@ -99,14 +99,15 @@ def _collect_hw_blocks(hw: P1AM) -> set[int]:
     _BLOCK_REGISTRY.clear()
     block_ids: set[int] = set()
 
-    for _, (_, configured) in sorted(hw._slots.items()):
-        blocks: tuple[InputBlock | OutputBlock, ...]
-        if isinstance(configured, tuple):
-            blocks = configured
+    for _, (spec, configured) in sorted(hw._slots.items()):
+        if spec.is_combo:
+            combo = cast(tuple[InputBlock, OutputBlock], configured)
+            for block in combo:
+                block_id = id(block)
+                block_ids.add(block_id)
+                _BLOCK_REGISTRY[block_id] = block
         else:
-            blocks = (configured,)
-
-        for block in blocks:
+            block = cast(InputBlock | OutputBlock, configured)
             block_id = id(block)
             block_ids.add(block_id)
             _BLOCK_REGISTRY[block_id] = block

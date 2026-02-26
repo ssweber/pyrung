@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Mapping
-from typing import Any, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, cast, get_args, get_origin, get_type_hints
 
 T = TypeVar("T")
 
 
 def parse_args(
     model: type[T],
-    raw_args: Mapping[str, Any],
+    raw_args: object,
     *,
     error: Callable[[str], Exception] = ValueError,
     coercers: Mapping[str, Callable[[Any], Any]] | None = None,
@@ -26,22 +26,23 @@ def parse_args(
         raise TypeError("model must be a dataclass type")
     if not isinstance(raw_args, Mapping):
         raise error("Arguments must be an object")
+    args_map = cast(Mapping[str, Any], raw_args)
 
     coercers = coercers or {}
     resolved_types = get_type_hints(model)
     kwargs: dict[str, Any] = {}
     for field in dataclasses.fields(model):
-        has_value = field.name in raw_args
+        has_value = field.name in args_map
         if not has_value:
             if field.default is not dataclasses.MISSING:
                 kwargs[field.name] = field.default
                 continue
-            if field.default_factory is not dataclasses.MISSING:  # type: ignore[comparison-overlap]
+            if field.default_factory is not dataclasses.MISSING:
                 kwargs[field.name] = field.default_factory()
                 continue
             raise error(f"Missing required field: {field.name}")
 
-        value = raw_args[field.name]
+        value = args_map[field.name]
         coercer = coercers.get(field.name)
         if coercer is not None:
             try:

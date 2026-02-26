@@ -18,6 +18,9 @@ import pyclickplc
 from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key, parse_address
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, MEMORY_TYPE_BASES, DataType
 from pyclickplc.blocks import (
+    BlockRange as ClickBlockRange,
+)
+from pyclickplc.blocks import (
     compute_all_block_ranges,
     format_block_tag,
     parse_structured_block_name,
@@ -315,9 +318,7 @@ def _parse_structured_block_name(
     return ("plain", None, None, None, None, name, None)
 
 
-def _build_block_spec(
-    rows: list[AddressRecord], block_range: pyclickplc.blocks.BlockRange
-) -> _BlockImportSpec:
+def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -> _BlockImportSpec:
     start_row = rows[block_range.start_idx]
     end_row = rows[block_range.end_idx]
     memory_type = start_row.memory_type
@@ -639,13 +640,18 @@ class TagMap:
 
                 slot_config = logical_block.slot_config(logical_addr)
                 default = _parse_default(row.initial_value, logical_block.type)
-                configure_kwargs: dict[str, object] = {}
-                if row.retentive != slot_config.retentive:
-                    configure_kwargs["retentive"] = row.retentive
-                if default != slot_config.default:
-                    configure_kwargs["default"] = default
-                if configure_kwargs:
-                    logical_block.configure_slot(logical_addr, **configure_kwargs)
+                retentive_changed = row.retentive != slot_config.retentive
+                default_changed = default != slot_config.default
+                if retentive_changed and default_changed:
+                    logical_block.configure_slot(
+                        logical_addr,
+                        retentive=row.retentive,
+                        default=default,
+                    )
+                elif retentive_changed:
+                    logical_block.configure_slot(logical_addr, retentive=row.retentive)
+                elif default_changed:
+                    logical_block.configure_slot(logical_addr, default=default)
 
         def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
             if explicit_start is not None:
@@ -825,13 +831,18 @@ class TagMap:
                             block.rename_slot(instance, row.nickname)
 
                         default = _parse_default(row.initial_value, block.type)
-                        configure_kwargs: dict[str, object] = {}
-                        if row.retentive != slot_config.retentive:
-                            configure_kwargs["retentive"] = row.retentive
-                        if default != slot_config.default:
-                            configure_kwargs["default"] = default
-                        if configure_kwargs:
-                            block.configure_slot(instance, **configure_kwargs)
+                        retentive_changed = row.retentive != slot_config.retentive
+                        default_changed = default != slot_config.default
+                        if retentive_changed and default_changed:
+                            block.configure_slot(
+                                instance,
+                                retentive=row.retentive,
+                                default=default,
+                            )
+                        elif retentive_changed:
+                            block.configure_slot(instance, retentive=row.retentive)
+                        elif default_changed:
+                            block.configure_slot(instance, default=default)
 
                 mappings.extend(runtime.map_to(spec.hardware_range))
                 append_structure(

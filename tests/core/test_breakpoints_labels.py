@@ -193,11 +193,11 @@ def test_when_rejects_callable_with_migration_hint() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(TypeError, match="when_fn\\(\\.\\.\\.\\)"):
-        runner.when(lambda state: state.scan_id >= 1).pause()
+        runner.when(lambda state: state.scan_id >= 1).pause()  # type: ignore[arg-type]
 
 
 def test_run_until_rejects_callable_with_migration_hint() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(TypeError, match="run_until_fn\\(\\.\\.\\.\\)"):
-        runner.run_until(lambda state: state.scan_id >= 1, max_cycles=1)
+        runner.run_until(lambda state: state.scan_id >= 1, max_cycles=1)  # type: ignore[arg-type]

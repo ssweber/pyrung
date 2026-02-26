@@ -16,7 +16,7 @@ from pyrung.dap.expressions import (
 )
 
 
-def _state(tags: dict[str, object]) -> SystemState:
+def _state(tags: dict[str, bool | int | float | str]) -> SystemState:
     return SystemState().with_tags(tags)
 
 

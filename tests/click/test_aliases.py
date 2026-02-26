@@ -236,6 +236,7 @@ def test_click_prebuilt_block_allows_in_place_slot_policy_before_materialization
     )
     if candidate is None:
         pytest.skip("No unmaterialized DS slot available for in-place policy test.")
+    assert candidate is not None
 
     baseline = ds.slot_config(candidate)
     ds.configure_slot(candidate, retentive=not baseline.retentive, default=1234)

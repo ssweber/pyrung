@@ -84,13 +84,13 @@ def compile(expr: Expr) -> Callable[[SystemState], bool]:
                 if node.op == "!=":
                     return left != right
                 if node.op == "<":
-                    return left < right  # type: ignore[operator]
+                    return left < right
                 if node.op == "<=":
-                    return left <= right  # type: ignore[operator]
+                    return left <= right
                 if node.op == ">":
-                    return left > right  # type: ignore[operator]
+                    return left > right
                 if node.op == ">=":
-                    return left >= right  # type: ignore[operator]
+                    return left >= right
             except TypeError:
                 return False
             return False

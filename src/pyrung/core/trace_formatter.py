@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 
 class TraceFormatter:
@@ -20,15 +21,16 @@ class TraceFormatter:
         return f"[{label}] {text}"
 
     @staticmethod
-    def condition_detail_map(details: list[dict[str, Any]]) -> dict[str, Any]:
+    def condition_detail_map(details: Sequence[object]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for detail in details:
-            if not isinstance(detail, dict):
+            if not isinstance(detail, Mapping):
                 continue
-            name = detail.get("name")
+            mapped_detail = cast(Mapping[str, Any], detail)
+            name = mapped_detail.get("name")
             if not isinstance(name, str):
                 continue
-            result[name] = detail.get("value")
+            result[name] = mapped_detail.get("value")
         return result
 
     @staticmethod
@@ -65,7 +67,7 @@ class TraceFormatter:
         return right
 
     @classmethod
-    def condition_term_text(cls, *, expression: str, details: list[dict[str, Any]]) -> str:
+    def condition_term_text(cls, *, expression: str, details: Sequence[object]) -> str:
         detail_map = cls.condition_detail_map(details)
 
         if "left" in detail_map and "left_value" in detail_map:

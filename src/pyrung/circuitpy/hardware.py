@@ -8,7 +8,7 @@ pyrung :class:`~pyrung.core.memory_block.InputBlock` and
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Literal, TypeAlias, overload
 
 from pyrung.circuitpy.catalog import (
     MODULE_CATALOG,
@@ -18,6 +18,52 @@ from pyrung.core.memory_block import InputBlock, OutputBlock
 
 MAX_SLOTS: Final[int] = 15
 """Maximum number of I/O module slots on the P1AM-200 base unit."""
+
+InputModuleName: TypeAlias = Literal[
+    "P1-08ND-TTL",
+    "P1-08ND3",
+    "P1-08NA",
+    "P1-08SIM",
+    "P1-08NE3",
+    "P1-16ND3",
+    "P1-16NE3",
+    "P1-04AD",
+    "P1-04AD-1",
+    "P1-04AD-2",
+    "P1-04RTD",
+    "P1-04THM",
+    "P1-04NTC",
+    "P1-04ADL-1",
+    "P1-04ADL-2",
+    "P1-08ADL-1",
+    "P1-08ADL-2",
+]
+
+OutputModuleName: TypeAlias = Literal[
+    "P1-04TRS",
+    "P1-08TA",
+    "P1-08TRS",
+    "P1-16TR",
+    "P1-08TD-TTL",
+    "P1-08TD1",
+    "P1-08TD2",
+    "P1-15TD1",
+    "P1-15TD2",
+    "P1-04DAL-1",
+    "P1-04DAL-2",
+    "P1-08DAL-1",
+    "P1-08DAL-2",
+]
+
+ComboModuleName: TypeAlias = Literal[
+    "P1-16CDR",
+    "P1-15CDD1",
+    "P1-15CDD2",
+    "P1-4ADL2DAL-1",
+    "P1-4ADL2DAL-2",
+]
+
+SlotValue: TypeAlias = InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]
 
 
 def _make_formatter(prefix: str) -> Callable[[str, int], str]:
@@ -53,9 +99,43 @@ class P1AM:
     """
 
     def __init__(self) -> None:
-        self._slots: dict[
-            int, tuple[ModuleSpec, InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]]
-        ] = {}
+        self._slots: dict[int, tuple[ModuleSpec, SlotValue]] = {}
+
+    @overload
+    def slot(
+        self,
+        number: int,
+        module: InputModuleName,
+        *,
+        name: str | None = None,
+    ) -> InputBlock: ...
+
+    @overload
+    def slot(
+        self,
+        number: int,
+        module: OutputModuleName,
+        *,
+        name: str | None = None,
+    ) -> OutputBlock: ...
+
+    @overload
+    def slot(
+        self,
+        number: int,
+        module: ComboModuleName,
+        *,
+        name: str | None = None,
+    ) -> tuple[InputBlock, OutputBlock]: ...
+
+    @overload
+    def slot(
+        self,
+        number: int,
+        module: str,
+        *,
+        name: str | None = None,
+    ) -> SlotValue: ...
 
     def slot(
         self,
@@ -63,7 +143,7 @@ class P1AM:
         module: str,
         *,
         name: str | None = None,
-    ) -> InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]:
+    ) -> SlotValue:
         """Configure a module in the given slot and return its block(s).
 
         Args:
@@ -109,7 +189,7 @@ class P1AM:
         """Mapping of slot number → :class:`ModuleSpec` for all configured slots."""
         return {num: spec for num, (spec, _) in self._slots.items()}
 
-    def get_slot(self, number: int) -> InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]:
+    def get_slot(self, number: int) -> SlotValue:
         """Retrieve the block(s) for an already-configured slot.
 
         Raises:
@@ -128,7 +208,7 @@ class P1AM:
     def _build_blocks(
         prefix: str,
         spec: ModuleSpec,
-    ) -> InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]:
+    ) -> SlotValue:
         input_group = spec.input_group
         output_group = spec.output_group
 
