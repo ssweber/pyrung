@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from pyrung.core import PLCRunner, TimeMode
@@ -256,6 +258,18 @@ def test_fork_with_scan_id_starts_from_exact_snapshot_and_preserves_time_config(
     assert fork.current_state.timestamp == pytest.approx(0.5)
 
 
+def test_fork_starts_with_same_rtc_as_parent_at_fork_point() -> None:
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+    runner.run(cycles=6)
+
+    expected_parent_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    fork = runner.fork()
+
+    assert fork.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
+
+
 def test_fork_starts_clean_and_parent_fork_evolve_independently() -> None:
     runner = PLCRunner(logic=[])
     runner.patch({"X": 1})
@@ -308,6 +322,19 @@ def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> Non
     fork.step()
     assert fork.current_state.scan_id == 2
     assert fork.current_state.timestamp == pytest.approx(0.5)
+
+
+def test_fork_from_starts_with_same_rtc_as_parent_at_selected_scan() -> None:
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+    runner.run(cycles=6)
+
+    snapshot = runner.history.at(3)
+    expected_parent_rtc = runner.system_runtime._rtc_now(snapshot)
+    fork = runner.fork_from(3)
+
+    assert fork.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
 def test_fork_from_inherits_history_limit_and_evicts_oldest() -> None:

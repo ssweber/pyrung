@@ -24,14 +24,6 @@ from pyrung.core import (
 )
 
 
-class _FrozenDateTime(datetime):
-    fixed_now = datetime(2026, 1, 15, 10, 20, 30)
-
-    @classmethod
-    def now(cls, tz=None):  # noqa: ARG003
-        return cls.fixed_now
-
-
 def _resolved(runner: PLCRunner, tag_name: str):
     found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
@@ -130,12 +122,9 @@ def test_scan_counter_and_scan_min_max_stats_update():
     assert _resolved(runner, system.sys.scan_time_current_ms.name) == 250
 
 
-def test_rtc_wall_clock_derived_fields_follow_datetime_now(monkeypatch):
-    _FrozenDateTime.fixed_now = datetime(2026, 3, 5, 6, 7, 8)
-    monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
-
+def test_rtc_fields_derive_from_set_rtc_anchor():
     runner = PLCRunner(logic=[])
-    runner.step()
+    runner.set_rtc(datetime(2026, 3, 5, 6, 7, 8))
 
     assert _resolved(runner, system.rtc.year4.name) == 2026
     assert _resolved(runner, system.rtc.year2.name) == 26
@@ -146,11 +135,24 @@ def test_rtc_wall_clock_derived_fields_follow_datetime_now(monkeypatch):
     assert _resolved(runner, system.rtc.second.name) == 8
 
 
-def test_rtc_apply_date_updates_offset_and_current_date(monkeypatch):
-    _FrozenDateTime.fixed_now = datetime(2026, 1, 15, 10, 20, 30)
-    monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
-
+def test_rtc_fixed_step_advances_deterministically_with_simulation_time():
     runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.001)
+    base = datetime(2026, 3, 5, 6, 7, 8)
+    runner.set_rtc(base)
+
+    runner.run(cycles=1000)
+
+    rtc_now = runner.system_runtime._rtc_now(runner.current_state)
+    assert (rtc_now - base).total_seconds() == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("mode", [TimeMode.FIXED_STEP, TimeMode.REALTIME])
+def test_rtc_apply_date_updates_current_date_in_all_time_modes(mode: TimeMode):
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(mode, dt=0.1)
+    runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
+
     runner.patch(
         {
             system.rtc.new_year4.name: 2030,
@@ -169,11 +171,12 @@ def test_rtc_apply_date_updates_offset_and_current_date(monkeypatch):
     assert runner.current_state.tags[system.rtc.apply_date_error.name] is False
 
 
-def test_rtc_apply_time_updates_offset_and_current_time(monkeypatch):
-    _FrozenDateTime.fixed_now = datetime(2026, 1, 15, 10, 20, 30)
-    monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
-
+@pytest.mark.parametrize("mode", [TimeMode.FIXED_STEP, TimeMode.REALTIME])
+def test_rtc_apply_time_updates_current_time_in_all_time_modes(mode: TimeMode):
     runner = PLCRunner(logic=[])
+    runner.set_time_mode(mode, dt=0.1)
+    runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
+
     runner.patch(
         {
             system.rtc.new_hour.name: 23,
@@ -192,11 +195,9 @@ def test_rtc_apply_time_updates_offset_and_current_time(monkeypatch):
     assert runner.current_state.tags[system.rtc.apply_time_error.name] is False
 
 
-def test_rtc_invalid_date_sets_error_status_for_single_scan(monkeypatch):
-    _FrozenDateTime.fixed_now = datetime(2026, 1, 15, 10, 20, 30)
-    monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
-
+def test_rtc_invalid_date_sets_error_status_for_single_scan():
     runner = PLCRunner(logic=[])
+    runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
     runner.patch(
         {
             system.rtc.new_year4.name: 2030,
@@ -212,6 +213,36 @@ def test_rtc_invalid_date_sets_error_status_for_single_scan(monkeypatch):
 
     runner.step()
     assert runner.current_state.tags[system.rtc.apply_date_error.name] is False
+
+
+def test_rtc_shift_changeover_example_at_fixed_step():
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+
+    runner.run(cycles=100)
+
+    assert _resolved(runner, system.rtc.hour.name) == 7
+    assert _resolved(runner, system.rtc.minute.name) == 0
+    assert _resolved(runner, system.rtc.second.name) == 0
+
+
+def test_rtc_values_are_not_stored_in_state_memory():
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
+    runner.patch(
+        {
+            system.rtc.new_hour.name: 8,
+            system.rtc.new_minute.name: 0,
+            system.rtc.new_second.name: 0,
+            system.rtc.apply_time.name: True,
+        }
+    )
+    runner.step()
+    runner.step()
+
+    assert "_sys.rtc.offset" not in runner.current_state.memory
 
 
 def test_read_only_system_points_reject_logic_and_patch_writes():

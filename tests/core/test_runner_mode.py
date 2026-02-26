@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from pyrung.core import (
@@ -119,6 +121,20 @@ def test_stop_restart_preserves_time_mode_and_debug_registrations():
     assert runner.current_state.timestamp == pytest.approx(0.25)
     assert monitor.id in runner._monitors_by_id
     assert breakpoint_handle.id in runner._breakpoints_by_id
+
+
+def test_stop_restart_preserves_rtc_continuity():
+    runner = PLCRunner(logic=[])
+    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+    runner.run(cycles=4)
+    before_stop_rtc = runner.system_runtime._rtc_now(runner.current_state)
+
+    runner.stop()
+    runner.step()
+    after_restart_rtc = runner.system_runtime._rtc_now(runner.current_state)
+
+    assert (after_restart_rtc - before_stop_rtc).total_seconds() == pytest.approx(0.25)
 
 
 def test_cmd_mode_stop_written_in_scan_transitions_runner_to_stop():

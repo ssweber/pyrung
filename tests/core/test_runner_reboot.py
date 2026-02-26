@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, copy, system
 
 
@@ -92,3 +94,37 @@ def test_reboot_without_battery_uses_per_slot_defaults_regardless_of_retentive()
 
     assert runner.current_state.tags["RebootSlot1"] == 10
     assert runner.current_state.tags["RebootSlot2"] == 20
+
+
+def test_reboot_with_battery_preserves_rtc_continuity():
+    runner = PLCRunner(logic=[])
+    runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+    runner.step()
+    rtc_before_reboot = runner.system_runtime._rtc_now(runner.current_state)
+
+    runner.reboot()
+    rtc_after_reboot = runner.system_runtime._rtc_now(runner.current_state)
+
+    assert rtc_after_reboot == rtc_before_reboot
+
+
+def test_reboot_without_battery_resets_rtc_to_reboot_wall_time(monkeypatch):
+    class _FrozenDateTime(datetime):
+        fixed_now = datetime(2026, 1, 15, 10, 20, 30)
+
+        @classmethod
+        def now(cls, tz=None):  # noqa: ARG003
+            return cls.fixed_now
+
+    monkeypatch.setattr("pyrung.core.runner.datetime", _FrozenDateTime)
+
+    runner = PLCRunner(logic=[])
+    runner.set_rtc(datetime(2035, 4, 10, 1, 2, 3))
+    runner.step()
+
+    runner.set_battery_present(False)
+    _FrozenDateTime.fixed_now = datetime(2028, 7, 8, 9, 10, 11)
+    runner.reboot()
+
+    rtc_after_reboot = runner.system_runtime._rtc_now(runner.current_state)
+    assert rtc_after_reboot == datetime(2028, 7, 8, 9, 10, 11)

@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition_trace import ConditionTraceEngine
@@ -246,9 +246,13 @@ class PLCRunner:
         self._time_mode = TimeMode.FIXED_STEP
         self._dt = 0.1  # Default: 100ms per scan
         self._last_step_time: float | None = None  # For REALTIME mode
+        self._rtc_base = self._normalize_rtc_datetime(datetime.now())
+        self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
             time_mode_getter=lambda: self._time_mode,
             fixed_step_dt_getter=lambda: self._dt,
+            rtc_now_getter=self._rtc_at_sim_time,
+            rtc_setter=self._set_rtc_internal,
         )
         self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
         # Preserve direct access used in tests/live-tag helpers.
@@ -381,6 +385,8 @@ class PLCRunner:
             history_limit=self._history_limit,
         )
         fork.set_time_mode(self._time_mode, dt=self._dt)
+        parent_rtc_at_fork_point = self.system_runtime._rtc_now(historical_state)
+        fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         return fork
 
     def fork_from(self, scan_id: int) -> PLCRunner:
@@ -428,9 +434,17 @@ class PLCRunner:
             preserve_all=self._battery_present,
             preserve_retentive=False,
         )
-        self._reset_runtime_scope(tag_values=tag_values, mode_run=True)
+        self._reset_runtime_scope(
+            tag_values=tag_values,
+            mode_run=True,
+            preserve_rtc_continuity=self._battery_present,
+        )
         self._running = True
         return self._state
+
+    def set_rtc(self, value: datetime) -> None:
+        """Set the current RTC value for the runner."""
+        self._set_rtc_internal(self._normalize_rtc_datetime(value), self._state.timestamp)
 
     def set_time_mode(self, mode: TimeMode, *, dt: float = 0.1) -> None:
         """Set the time mode for simulation.
@@ -515,13 +529,37 @@ class PLCRunner:
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
 
-    def _reset_runtime_scope(self, *, tag_values: Mapping[str, Any], mode_run: bool) -> None:
+    def _normalize_rtc_datetime(self, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value
+        return value.astimezone().replace(tzinfo=None)
+
+    def _set_rtc_internal(self, value: datetime, sim_time: float) -> None:
+        self._rtc_base = value
+        self._rtc_base_sim_time = float(sim_time)
+
+    def _rtc_at_sim_time(self, sim_time: float) -> datetime:
+        return self._rtc_base + timedelta(seconds=float(sim_time) - self._rtc_base_sim_time)
+
+    def _reset_runtime_scope(
+        self,
+        *,
+        tag_values: Mapping[str, Any],
+        mode_run: bool,
+        preserve_rtc_continuity: bool = True,
+    ) -> None:
+        rtc_after_reset = (
+            self._rtc_at_sim_time(self._state.timestamp)
+            if preserve_rtc_continuity
+            else self._normalize_rtc_datetime(datetime.now())
+        )
         next_state = SystemState().with_tags(dict(tag_values))
         self._state = self._apply_runtime_memory_flags(
             next_state,
             mode_run=mode_run,
             battery_present=self._battery_present,
         )
+        self._set_rtc_internal(rtc_after_reset, self._state.timestamp)
         self._history = History(self._state, limit=self._history_limit)
         self._playhead = self._state.scan_id
 
@@ -542,7 +580,11 @@ class PLCRunner:
             preserve_all=False,
             preserve_retentive=True,
         )
-        self._reset_runtime_scope(tag_values=tag_values, mode_run=True)
+        self._reset_runtime_scope(
+            tag_values=tag_values,
+            mode_run=True,
+            preserve_rtc_continuity=True,
+        )
         self._running = True
 
     def _ensure_running(self) -> None:
@@ -871,13 +913,11 @@ class PLCRunner:
             self._pause_requested_this_scan = True
 
     def _snapshot_metadata_for_state(self, state: SystemState) -> dict[str, Any]:
-        rtc_now = self._system_runtime._rtc_now(state)
-        offset = state.memory.get("_sys.rtc.offset", timedelta())
-        if not isinstance(offset, timedelta):
-            offset = timedelta()
+        rtc_now = self._rtc_at_sim_time(state.timestamp)
+        wall_now = self._normalize_rtc_datetime(datetime.now())
         return {
             "rtc_iso": rtc_now.isoformat(),
-            "rtc_offset_seconds": float(offset.total_seconds()),
+            "rtc_offset_seconds": float((rtc_now - wall_now).total_seconds()),
         }
 
     def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:

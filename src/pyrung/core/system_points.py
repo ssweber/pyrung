@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.tag import Bool, Int, Tag
@@ -255,7 +255,6 @@ _CLOCK_HALF_PERIODS = {
     system.sys.clock_1m.name: 30.0,
     system.sys.clock_1h.name: 1800.0,
 }
-_RTC_OFFSET_KEY = "_sys.rtc.offset"
 _MODE_RUN_KEY = "_sys.mode.run"
 _BATTERY_PRESENT_KEY = "_sys.battery_present"
 _SD_READY_KEY = "_sys.storage.sd.ready"
@@ -314,9 +313,13 @@ class SystemPointRuntime:
         *,
         time_mode_getter: Callable[[], TimeMode],
         fixed_step_dt_getter: Callable[[], float],
+        rtc_now_getter: Callable[[float], datetime],
+        rtc_setter: Callable[[datetime, float], None],
     ) -> None:
         self._time_mode_getter = time_mode_getter
         self._fixed_step_dt_getter = fixed_step_dt_getter
+        self._rtc_now_getter = rtc_now_getter
+        self._rtc_setter = rtc_setter
 
     @property
     def read_only_tags(self) -> frozenset[str]:
@@ -429,8 +432,6 @@ class SystemPointRuntime:
         )
 
     def _ensure_memory_defaults(self, ctx: ScanContext) -> None:
-        if not _raw_has_memory(ctx, _RTC_OFFSET_KEY):
-            ctx.set_memory(_RTC_OFFSET_KEY, timedelta())
         if not _raw_has_memory(ctx, _MODE_RUN_KEY):
             ctx.set_memory(_MODE_RUN_KEY, True)
         if not _raw_has_memory(ctx, _BATTERY_PRESENT_KEY):
@@ -486,7 +487,6 @@ class SystemPointRuntime:
         ctx._set_tags_internal({name: False for name in command_names})
 
     def _apply_rtc_date(self, ctx: ScanContext) -> None:
-        now = datetime.now()
         rtc_now = self._rtc_now(ctx)
         try:
             target = datetime(
@@ -502,10 +502,9 @@ class SystemPointRuntime:
             ctx._set_tag_internal(system.rtc.apply_date_error.name, True)
             return
 
-        ctx.set_memory(_RTC_OFFSET_KEY, target - now)
+        self._rtc_setter(target, ctx.timestamp)
 
     def _apply_rtc_time(self, ctx: ScanContext) -> None:
-        now = datetime.now()
         rtc_now = self._rtc_now(ctx)
         try:
             target = datetime(
@@ -521,7 +520,7 @@ class SystemPointRuntime:
             ctx._set_tag_internal(system.rtc.apply_time_error.name, True)
             return
 
-        ctx.set_memory(_RTC_OFFSET_KEY, target - now)
+        self._rtc_setter(target, ctx.timestamp)
 
     def _process_mode_commands(self, ctx: ScanContext) -> None:
         mode_run = bool(_raw_get_memory(ctx, _MODE_RUN_KEY, True))
@@ -543,7 +542,4 @@ class SystemPointRuntime:
         return int(round(dt * 1000))
 
     def _rtc_now(self, ctx_or_state: ScanContext | SystemState) -> datetime:
-        offset = _raw_get_memory(ctx_or_state, _RTC_OFFSET_KEY, timedelta())
-        if not isinstance(offset, timedelta):
-            offset = timedelta()
-        return datetime.now() + offset
+        return self._rtc_now_getter(ctx_or_state.timestamp)
