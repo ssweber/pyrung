@@ -35,13 +35,12 @@ def test_step_timer_reaches_5s_then_transitions_to_steps_2_and_3(
     task_example: ModuleType,
 ) -> None:
     runner = task_example.runner
-    step_name = task_example.Task.Step.name
 
     with runner.active():
         task_example.Task.Call.value = 1
 
     runner.step()  # Enter step 1 and set Active.
-    runner.run_until(lambda state: state.tags.get(step_name) == 2, max_cycles=700)
+    runner.run_until(task_example.Task.Step == 2, max_cycles=700)
 
     with runner.active():
         assert task_example.Task.Elapsed.value >= 5

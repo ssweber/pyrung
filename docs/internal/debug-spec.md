@@ -81,8 +81,10 @@ with runner.force({tag_or_name: value, ...}):
     ...
 
 # breakpoints
-runner.when(predicate).pause()
-runner.when(predicate).snapshot("label")
+runner.when(condition).pause()
+runner.when(condition).snapshot("label")
+runner.when_fn(predicate).pause()
+runner.when_fn(predicate).snapshot("label")
 
 # monitors
 runner.monitor(tag, callback)

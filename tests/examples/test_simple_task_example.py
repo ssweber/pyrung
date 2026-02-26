@@ -33,13 +33,12 @@ def test_call_activates_and_enters_step_1(simple_task: ModuleType) -> None:
 
 def test_step_timer_reaches_5s_and_advances_to_step_2(simple_task: ModuleType) -> None:
     runner = simple_task.runner
-    step_name = simple_task.Task.Step.name
 
     with runner.active():
         simple_task.Task.Call.value = 1
 
     runner.step()  # Enter step 1 and set Active.
-    runner.run_until(lambda state: state.tags.get(step_name) == 2, max_cycles=700)
+    runner.run_until(simple_task.Task.Step == 2, max_cycles=700)
 
     with runner.active():
         assert simple_task.Task.Step.value == 2

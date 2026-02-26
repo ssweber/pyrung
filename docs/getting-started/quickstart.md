@@ -80,7 +80,7 @@ print(state.timestamp)             # 0.1
 ```python
 # Run until MotorRunning turns False (or 100 scans max)
 state = runner.run_until(
-    lambda s: not s.tags.get("MotorRunning", True),
+    ~MotorRunning,
     max_cycles=100,
 )
 print(f"Motor stopped at scan {state.scan_id}, time {state.timestamp:.1f}s")

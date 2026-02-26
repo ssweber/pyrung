@@ -82,7 +82,7 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
         ("step", lambda r: r.step()),
         ("run", lambda r: r.run(1)),
         ("run_for", lambda r: r.run_for(0.01)),
-        ("run_until", lambda r: r.run_until(lambda s: s.scan_id >= 1, max_cycles=1)),
+        ("run_until", lambda r: r.run_until_fn(lambda s: s.scan_id >= 1, max_cycles=1)),
         ("scan_steps", lambda r: list(r.scan_steps())),
     ],
 )
@@ -112,7 +112,7 @@ def test_stop_restart_preserves_time_mode_and_debug_registrations():
     runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
 
     monitor = runner.monitor("WatchedTag", lambda current, previous: None)
-    breakpoint_handle = runner.when(lambda _state: False).pause()
+    breakpoint_handle = runner.when_fn(lambda _state: False).pause()
 
     runner.stop()
     runner.step()

@@ -232,7 +232,8 @@ The engine never runs unsolicited. You call:
 - `runner.step()` — one complete scan cycle
 - `runner.run(cycles)` — exactly N scan cycles
 - `runner.run_for(seconds)` — run until simulation time advances by N seconds
-- `runner.run_until(predicate)` — run until a condition is met
+- `runner.run_until(condition)` — run until a Tag/Condition expression is met
+- `runner.run_until_fn(predicate)` — run until an advanced callable predicate is met
 - `runner.scan_steps()` — rung-by-rung generator for DAP debugging
 - `runner.stop()` — transition to STOP mode
 - `runner.reboot()` — power-cycle simulation (battery-aware)

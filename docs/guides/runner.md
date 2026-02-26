@@ -58,16 +58,27 @@ state = runner.run(10)    # Run exactly 10 scans
 state = runner.run_for(1.0)   # Advance simulation clock by at least 1 second
 ```
 
-### `run_until(predicate)` — run until condition is met
+### `run_until(condition)` — run until condition is met
 
 ```python
 state = runner.run_until(
-    lambda s: s.tags.get("MotorRunning", False) is False,
+    ~MotorRunning,
     max_cycles=10000,
 )
 ```
 
-If `max_cycles` is reached before the predicate returns True, execution stops and the final state is returned.
+If `max_cycles` is reached before the condition evaluates True, execution stops and the final state is returned.
+
+### `run_until_fn(predicate)` — advanced callable predicates
+
+Use `run_until_fn` when the stop condition is not expressible as a `Tag`/`Condition` expression:
+
+```python
+state = runner.run_until_fn(
+    lambda s: s.scan_id >= 100,
+    max_cycles=10000,
+)
+```
 
 ## Mode control and reboot
 

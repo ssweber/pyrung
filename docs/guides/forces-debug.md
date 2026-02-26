@@ -155,13 +155,19 @@ Current incremental limitation:
 - `inspect()` trace retention is currently populated through `scan_steps_debug()` (including DAP stepping flows).
 - Scans produced only with `step()`/`run()` may not yet have retained inspect trace.
 
-## Predicate breakpoints and snapshot labels
+## Condition breakpoints and snapshot labels
 
-Predicate breakpoints evaluate on each committed `SystemState` snapshot.
+Condition breakpoints evaluate on each committed `SystemState` snapshot.
 
 ```python
-pause_handle = runner.when(lambda s: s.tags.get("Fault")).pause()
-snapshot_handle = runner.when(lambda s: s.tags.get("Fault")).snapshot("fault_triggered")
+pause_handle = runner.when(Fault).pause()
+snapshot_handle = runner.when(Fault).snapshot("fault_triggered")
+```
+
+For advanced callable predicates (for example, `scan_id` checks), use `when_fn(...)`:
+
+```python
+runner.when_fn(lambda s: s.scan_id % 10 == 0).snapshot("every_10_scans")
 ```
 
 `pause()` behavior:

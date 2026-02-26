@@ -87,7 +87,7 @@ from pyrung import PLCRunner
 
 def test_snapshot_captures_frozen_rtc():
     runner = PLCRunner(logic=[])
-    runner.when(lambda s: s.scan_id == 1).snapshot("boot")
+    runner.when_fn(lambda s: s.scan_id == 1).snapshot("boot")
 
     with freeze_time("2026-03-05 06:07:08"):
         runner.run(cycles=1)
@@ -232,6 +232,18 @@ def test_counter_reaches_target():
 
     assert runner.current_state.tags["CountDone"] is True
     assert runner.current_state.tags["CountAcc"] >= 10
+```
+
+Use expression-first `run_until(...)` when a `Tag`/`Condition` is enough:
+
+```python
+runner.run_until(~Fault, max_cycles=200)
+```
+
+Use `run_until_fn(...)` only for advanced callable predicates:
+
+```python
+runner.run_until_fn(lambda s: s.scan_id >= 50, max_cycles=200)
 ```
 
 ## Pytest fixtures

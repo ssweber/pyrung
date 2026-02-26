@@ -37,6 +37,7 @@ from pyrung.core.trace_formatter import TraceFormatter
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
 
+    from pyrung.core.condition import Condition
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
 
@@ -112,7 +113,7 @@ class _RunnerHandle:
 
 
 class _BreakpointBuilder:
-    """Fluent builder returned by ``runner.when(predicate)``."""
+    """Fluent builder returned by ``runner.when(...)`` / ``runner.when_fn(...)``."""
 
     __slots__ = ("_runner", "_predicate")
 
@@ -721,9 +722,41 @@ class PLCRunner:
             disable=self._disable_monitor,
         )
 
-    def when(self, predicate: Callable[[SystemState], bool]) -> _BreakpointBuilder:
-        """Create a predicate breakpoint builder evaluated after each committed scan."""
+    def when(self, condition: Condition | Tag) -> _BreakpointBuilder:
+        """Create a condition breakpoint builder evaluated after each committed scan."""
+        predicate = self._compile_condition_predicate(condition, method="when")
         return _BreakpointBuilder(self, predicate)
+
+    def when_fn(self, predicate: Callable[[SystemState], bool]) -> _BreakpointBuilder:
+        """Create a callable-predicate breakpoint builder evaluated after each scan."""
+        return _BreakpointBuilder(self, predicate)
+
+    def _compile_condition_predicate(
+        self,
+        condition: Condition | Tag,
+        *,
+        method: Literal["run_until", "when"],
+    ) -> Callable[[SystemState], bool]:
+        """Compile a Tag/Condition expression into a ``SystemState`` predicate."""
+        if callable(condition):
+            raise TypeError(
+                f"{method}() now accepts Tag/Condition expressions; "
+                f"use {method}_fn(...) for callable predicates."
+            )
+
+        from pyrung.core.condition import _as_condition
+
+        normalized = _as_condition(condition)
+
+        def _predicate(state: SystemState) -> bool:
+            ctx = ScanContext(
+                state,
+                resolver=self._system_runtime.resolve,
+                read_only_tags=self._system_runtime.read_only_tags,
+            )
+            return normalized.evaluate(ctx)
+
+        return _predicate
 
     def _normalize_tag_name(self, tag: str | Tag, *, method: str) -> str:
         from pyrung.core.tag import Tag as TagClass
@@ -1124,14 +1157,32 @@ class PLCRunner:
 
     def run_until(
         self,
+        condition: Condition | Tag,
+        *,
+        max_cycles: int = 10000,
+    ) -> SystemState:
+        """Run until condition is true, pause breakpoint fires, or max_cycles reached.
+
+        Args:
+            condition: ``Tag`` or ``Condition`` expression to evaluate each scan.
+            max_cycles: Maximum scans before giving up (default 10000).
+
+        Returns:
+            The state that matched the condition, or final state if max reached.
+        """
+        predicate = self._compile_condition_predicate(condition, method="run_until")
+        return self.run_until_fn(predicate, max_cycles=max_cycles)
+
+    def run_until_fn(
+        self,
         predicate: Callable[[SystemState], bool],
         *,
         max_cycles: int = 10000,
     ) -> SystemState:
-        """Run until predicate returns True, pause breakpoint fires, or max_cycles reached.
+        """Run until callable predicate is true, paused, or ``max_cycles`` reached.
 
         Args:
-            predicate: Function that takes SystemState and returns bool.
+            predicate: Callable receiving committed ``SystemState`` snapshots.
             max_cycles: Maximum scans before giving up (default 10000).
 
         Returns:

@@ -132,37 +132,37 @@ class TestRunFor:
 
 
 class TestRunUntil:
-    """Test run_until() - predicate-based termination."""
+    """Test run_until_fn() callable predicates and run_until() behavior."""
 
     def test_run_until_predicate_true(self):
-        """run_until() stops when predicate returns True."""
+        """run_until_fn() stops when predicate returns True."""
         from pyrung.core import PLCRunner, TimeMode
 
         runner = PLCRunner(logic=[])
         runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
 
         # Run until scan_id reaches 5
-        runner.run_until(lambda s: s.scan_id >= 5)
+        runner.run_until_fn(lambda s: s.scan_id >= 5)
 
         assert runner.current_state.scan_id == 5
 
     def test_run_until_with_max_cycles(self):
-        """run_until() respects max_cycles limit."""
+        """run_until_fn() respects max_cycles limit."""
         from pyrung.core import PLCRunner
 
         runner = PLCRunner(logic=[])
 
         # Predicate never true, but max_cycles prevents infinite loop
-        runner.run_until(lambda s: False, max_cycles=10)
+        runner.run_until_fn(lambda s: False, max_cycles=10)
 
         assert runner.current_state.scan_id == 10
 
     def test_run_until_returns_matched_state(self):
-        """run_until() returns state that matched predicate."""
+        """run_until_fn() returns state that matched predicate."""
         from pyrung.core import PLCRunner
 
         runner = PLCRunner(logic=[])
 
-        result = runner.run_until(lambda s: s.scan_id == 3)
+        result = runner.run_until_fn(lambda s: s.scan_id == 3)
 
         assert result.scan_id == 3
