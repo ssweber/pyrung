@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
+import re
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
@@ -17,7 +17,11 @@ if TYPE_CHECKING:
 import pyclickplc
 from pyclickplc.addresses import AddressRecord, format_address_display, get_addr_key, parse_address
 from pyclickplc.banks import BANKS, DEFAULT_RETENTIVE, MEMORY_TYPE_BASES, DataType
-from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
+from pyclickplc.blocks import (
+    compute_all_block_ranges,
+    format_block_tag,
+    parse_structured_block_name,
+)
 from pyclickplc.validation import validate_nickname
 
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
@@ -85,17 +89,6 @@ _DATA_TYPE_TO_TAG_TYPE: dict[DataType, TagType] = {
 }
 
 _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
-_UDT_BLOCK_NAME_RE = re.compile(
-    r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*)\.(?P<field>[A-Za-z_][A-Za-z0-9_]*)$"
-)
-_NAMED_ARRAY_BLOCK_NAME_RE = re.compile(
-    r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*):named_array\((?P<count>[1-9][0-9]*),(?P<stride>[1-9][0-9]*)\)$"
-)
-_PLAIN_BLOCK_WITH_START_RE = re.compile(
-    r"^(?P<base>[A-Za-z_][A-Za-z0-9_]*):block\((?P<start>(?:0|[1-9][0-9]*|start=(?:0|[1-9][0-9]*)))\)$"
-)
-
-
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
     config = BANKS[memory_type]
     return _DATA_TYPE_TO_TAG_TYPE[config.data_type]
@@ -278,14 +271,17 @@ def _parse_structured_block_name(
     str,
     int | None,
 ]:
-    named_array_match = _NAMED_ARRAY_BLOCK_NAME_RE.fullmatch(name)
-    if named_array_match is not None:
+    structured = parse_structured_block_name(name)
+
+    if structured.kind == "named_array":
+        assert structured.count is not None
+        assert structured.stride is not None
         return (
             "named_array",
-            named_array_match.group("base"),
+            structured.base,
             None,
-            int(named_array_match.group("count")),
-            int(named_array_match.group("stride")),
+            structured.count,
+            structured.stride,
             name,
             None,
         )
@@ -296,24 +292,18 @@ def _parse_structured_block_name(
             "with identifier tokens and positive integers."
         )
 
-    udt_match = _UDT_BLOCK_NAME_RE.fullmatch(name)
-    if udt_match is not None:
-        return ("udt", udt_match.group("base"), udt_match.group("field"), None, None, name, None)
+    if structured.kind == "udt":
+        assert structured.field is not None
+        return ("udt", structured.base, structured.field, None, None, name, None)
+
+    if structured.kind == "block":
+        assert structured.start is not None
+        return ("plain", None, None, None, None, structured.base, structured.start)
 
     if "." in name:
         raise ValueError(
             f"Invalid UDT block tag {name!r}. Expected Base.field with identifier tokens."
         )
-
-    block_start_match = _PLAIN_BLOCK_WITH_START_RE.fullmatch(name)
-    if block_start_match is not None:
-        base_name = block_start_match.group("base")
-        start_token = block_start_match.group("start")
-        if start_token.startswith("start="):
-            start = int(start_token.split("=", maxsplit=1)[1])
-        else:
-            start = int(start_token)
-        return ("plain", None, None, None, None, base_name, start)
 
     if ":block(" in name:
         raise ValueError(
