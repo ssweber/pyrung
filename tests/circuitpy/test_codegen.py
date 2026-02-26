@@ -410,7 +410,7 @@ class TestInstructionCoverage:
         assert "_search_1_rng_1_indices = range(0, 10)" in source_code
         assert "_search_1_rng_1_addrs = range(1, 11)" in source_code
         assert "_shift_1_rng_1_indices = range(0, 8)" in source_code
-        assert '"Text search only supports \'==\' and \'!=\' conditions"' not in source_code
+        assert "\"Text search only supports '==' and '!=' conditions\"" not in source_code
         assert '"shift bit_range resolved to an empty range"' not in source_code
         assert '"pack_bits destination width is 16 bits but block has' not in source_code
         assert '"pack_words requires exactly 2 source tags; got' not in source_code
@@ -509,12 +509,11 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert (
             "while True:\n"
             "    scan_start = time.monotonic()\n"
-            "    _sd_write_status = False\n"
-            in source_code
+            "    _sd_write_status = False\n" in source_code
         )
-        helper_section = source_code.split("def _service_sd_commands():", 1)[1].split(
-            "\ndef _", 1
-        )[0]
+        helper_section = source_code.split("def _service_sd_commands():", 1)[1].split("\ndef _", 1)[
+            0
+        ]
         assert helper_section.count("_sd_write_status = True") == 2
         assert (
             "# SC69 pulses for this serviced-command scan; reset occurs at next scan start."
@@ -731,7 +730,9 @@ class TestCopyModifierCodegen:
 
         with Program(strict=False) as prog:
             with Rung(enable):
-                fill(as_text(src, suppress_zero=False, pad=4, termination_code=13), txt.select(1, 8))
+                fill(
+                    as_text(src, suppress_zero=False, pad=4, termination_code=13), txt.select(1, 8)
+                )
 
         ctx = _context_for_program(prog, hw)
         txt_symbol = ctx.symbol_for_block(txt)

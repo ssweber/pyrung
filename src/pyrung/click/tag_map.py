@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
-import re
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
@@ -89,6 +89,8 @@ _DATA_TYPE_TO_TAG_TYPE: dict[DataType, TagType] = {
 }
 
 _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
+
+
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
     config = BANKS[memory_type]
     return _DATA_TYPE_TO_TAG_TYPE[config.data_type]
@@ -313,7 +315,9 @@ def _parse_structured_block_name(
     return ("plain", None, None, None, None, name, None)
 
 
-def _build_block_spec(rows: list[AddressRecord], block_range: pyclickplc.blocks.BlockRange) -> _BlockImportSpec:
+def _build_block_spec(
+    rows: list[AddressRecord], block_range: pyclickplc.blocks.BlockRange
+) -> _BlockImportSpec:
     start_row = rows[block_range.start_idx]
     end_row = rows[block_range.end_idx]
     memory_type = start_row.memory_type
@@ -555,9 +559,7 @@ class TagMap:
                 mismatched memory types, or if ``mode`` is invalid.
         """
         if mode not in {"warn", "strict"}:
-            raise ValueError(
-                f"Invalid mode {mode!r}; expected 'warn' or 'strict'."
-            )
+            raise ValueError(f"Invalid mode {mode!r}; expected 'warn' or 'strict'.")
 
         records = pyclickplc.read_csv(path)
         rows = sorted(
@@ -588,8 +590,7 @@ class TagMap:
             existing_display = format_address_display(existing[0], existing[1])
             display = format_address_display(memory_type, address)
             raise ValueError(
-                f"Duplicate logical name {name!r} at {display}; already used at "
-                f"{existing_display}."
+                f"Duplicate logical name {name!r} at {display}; already used at {existing_display}."
             )
 
         def require_representable_block_nickname(
@@ -614,10 +615,10 @@ class TagMap:
             seen_names[name] = (memory_type, address)
 
         def apply_block_rows(logical_block: Block, spec: _BlockImportSpec) -> None:
-            logical_addresses = tuple(logical_block.select(logical_block.start, logical_block.end).addresses)
-            hardware_to_logical = dict(
-                zip(spec.hardware_addresses, logical_addresses, strict=True)
+            logical_addresses = tuple(
+                logical_block.select(logical_block.start, logical_block.end).addresses
             )
+            hardware_to_logical = dict(zip(spec.hardware_addresses, logical_addresses, strict=True))
 
             for row_idx in range(spec.start_idx, spec.end_idx + 1):
                 row = rows[row_idx]
@@ -778,7 +779,9 @@ class TagMap:
                         f"Named array {base_name!r} did not infer any fields from nicknames."
                     )
 
-                ordered_fields_with_offsets = sorted(field_offsets.items(), key=lambda item: item[1])
+                ordered_fields_with_offsets = sorted(
+                    field_offsets.items(), key=lambda item: item[1]
+                )
                 for field, offset in ordered_fields_with_offsets:
                     for instance in range(1, count + 1):
                         key = (field, instance)
@@ -870,11 +873,17 @@ class TagMap:
                 try:
                     runtime_annotations: dict[str, object] = {}
                     for spec, field_name in grouped_specs:
-                        runtime_annotations[field_name] = _tag_type_for_memory_type(spec.memory_type)
+                        runtime_annotations[field_name] = _tag_type_for_memory_type(
+                            spec.memory_type
+                        )
 
                     runtime_type = cast(
                         type[Any],
-                        type(base_name, (), {"__annotations__": runtime_annotations, "__module__": __name__}),
+                        type(
+                            base_name,
+                            (),
+                            {"__annotations__": runtime_annotations, "__module__": __name__},
+                        ),
                     )
                     count = next(iter(logical_counts))
                     runtime = udt(count=count)(runtime_type)
@@ -914,9 +923,7 @@ class TagMap:
             if row.nickname == "":
                 continue
 
-            register_logical_name(
-                row.nickname, memory_type=row.memory_type, address=row.address
-            )
+            register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
 
             memory_type = row.memory_type
             logical_type = _tag_type_for_memory_type(memory_type)

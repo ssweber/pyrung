@@ -2416,7 +2416,9 @@ def _compile_search_instruction(
         ]
         enabled_body.extend(
             [
-                f"    _rhs = {value_expr}" if isinstance(instr.value, str) else f"    _rhs = str({value_expr})",
+                f"    _rhs = {value_expr}"
+                if isinstance(instr.value, str)
+                else f"    _rhs = str({value_expr})",
             ]
         )
         if fixed_window_len is None:
@@ -2533,12 +2535,12 @@ def _compile_pack_bits_instruction(
         )
     enabled_body.extend(
         [
-        "_packed = 0",
-        f"for _bit_index, _src_idx in enumerate({src_indices}):",
-        f"    if bool({src_symbol}[_src_idx]):",
-        "        _packed |= (1 << _bit_index)",
-        f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
-        *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+            "_packed = 0",
+            f"for _bit_index, _src_idx in enumerate({src_indices}):",
+            f"    if bool({src_symbol}[_src_idx]):",
+            "        _packed |= (1 << _bit_index)",
+            f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
+            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -2572,11 +2574,11 @@ def _compile_pack_words_instruction(
         )
     enabled_body.extend(
         [
-        f"_lo_value = int({src_symbol}[{src_indices}[0]])",
-        f"_hi_value = int({src_symbol}[{src_indices}[1]])",
-        "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
-        f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
-        *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
+            f"_lo_value = int({src_symbol}[{src_indices}[0]])",
+            f"_hi_value = int({src_symbol}[{src_indices}[1]])",
+            "_packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))",
+            f"_packed_value = {_pack_store_expr('_packed', dest_type, ctx)}",
+            *_compile_assignment_lines(instr.dest, "_packed_value", ctx, indent=0),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -2682,9 +2684,9 @@ def _compile_unpack_bits_instruction(
         )
     enabled_body.extend(
         [
-        f"_bits = {bits_expr}",
-        f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
-        f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
+            f"_bits = {bits_expr}",
+            f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
+            f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -2733,11 +2735,11 @@ def _compile_unpack_words_instruction(
         )
     enabled_body.extend(
         [
-        f"_bits = {bits_expr}",
-        "_lo_word = (_bits & 0xFFFF)",
-        "_hi_word = ((_bits >> 16) & 0xFFFF)",
-        f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
-        f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
+            f"_bits = {bits_expr}",
+            "_lo_word = (_bits & 0xFFFF)",
+            "_hi_word = ((_bits >> 16) & 0xFFFF)",
+            f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
+            f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -2886,7 +2888,13 @@ def _copy_modifier_target_info(
             raise RuntimeError(f"Missing block binding for tag-backed target {target.name!r}")
         symbol = ctx.symbol_for_block(binding.block)
         start_var = f"_{stem}_start_idx"
-        return [f"{start_var} = {addr - binding.start}"], "block", symbol, start_var, target.type.name
+        return (
+            [f"{start_var} = {addr - binding.start}"],
+            "block",
+            symbol,
+            start_var,
+            target.type.name,
+        )
 
     if isinstance(target, IndirectRef):
         binding = ctx.block_bindings.get(id(target.block))
@@ -2896,7 +2904,13 @@ def _copy_modifier_target_info(
         helper = ctx.use_indirect_block(binding.block_id)
         start_var = f"_{stem}_start_idx"
         ptr = _compile_value(target.pointer, ctx)
-        return [f"{start_var} = {helper}(int({ptr}))"], "block", symbol, start_var, binding.tag_type.name
+        return (
+            [f"{start_var} = {helper}(int({ptr}))"],
+            "block",
+            symbol,
+            start_var,
+            binding.tag_type.name,
+        )
 
     if isinstance(target, IndirectExprRef):
         binding = ctx.block_bindings.get(id(target.block))
