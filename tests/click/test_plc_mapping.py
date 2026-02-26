@@ -78,3 +78,19 @@ def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path)
     assert rows[get_addr_key("DS", 4001)].nickname == "AlarmPacked1_id"
     assert rows[get_addr_key("DS", 4001)].retentive is True
     assert rows[get_addr_key("DS", 4001)].comment == ""
+
+
+def test_named_array_export_without_structured_metadata_has_no_named_array_markers(tmp_path):
+    @named_array(Int, count=2, stride=3)
+    class AlarmPacked:
+        id = auto()
+        val = 0
+
+    packed = cast(Any, AlarmPacked)
+    mapping = TagMap([*packed.map_to(ds.select(4201, 4206))])
+
+    path = tmp_path / "named_array_no_markers.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+
+    assert all("named_array(" not in row.comment for row in rows.values())

@@ -209,14 +209,33 @@ Load an existing Click nickname CSV:
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv")
+# optional strict mode for dotted UDT grouping:
+mapping_strict = TagMap.from_nickname_file("project.csv", mode="strict")
 ```
 
-- Block tag pairs (`<Name>` / `</Name>` comments) are reconstructed as `Block` objects.
+- Generic block tag pairs (`<Name>` / `</Name>`) are reconstructed as `Block` objects.
+- Imported `Block` logical index start is inferred from hardware span start:
+  `0` when the block starts at address `0`, otherwise `1`.
+- Optional explicit block-start override:
+  `<Base:block(n)> ... </Base:block(n)>` or `<Base:block(start=n)>`.
+- Structured block names are supported:
+  - UDT fields: `<Base.field>` are grouped into one UDT (`mapping.structures`).
+  - Named arrays: `<Base:named_array(count,stride)>` are reconstructed strictly
+    from `Base{instance}_{field}` nicknames.
+- Structured metadata APIs:
+  - `mapping.structures` -> tuple of structured imports.
+  - `mapping.structure_by_name("Base")` -> one structure or `None`.
+  - `mapping.structure_warnings` -> soft UDT fallback reasons.
+- Dotted UDT grouping mode:
+  - `mode="warn"` (default): per-base fallback to plain blocks +
+    warning.
+  - `mode="strict"`: fail-fast with `ValueError` on the first dotted
+    UDT grouping mismatch.
 - Standalone nicknames become individual `Tag` objects.
-- Timer/counter `_D` suffix pairs are linked automatically.
 - For block rows, nickname import is strict: each nickname must be non-empty,
   valid, and unique in the resulting map. Non-representable nicknames fail fast
   with a `ValueError` that includes memory type/address.
+- Duplicate block definition names are rejected during import.
 
 ### To nickname file
 
@@ -228,6 +247,9 @@ mapping.to_nickname_file("project.csv")
 
 - Mapped tags/blocks emit rows with canonical logical names (`Tag.name`), initial
   value, and retentive flag.
+- Named-array block markers are exported only when structured metadata exists
+  (for maps produced by `from_nickname_file`), and synthetic boundary rows are
+  emitted if the marker boundary falls on a gap slot.
 - Unmapped tags are omitted.
 
 ## Validation
