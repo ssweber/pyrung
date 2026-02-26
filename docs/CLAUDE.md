@@ -1,14 +1,14 @@
-# Pyrung Documentation — Context for Claude
+# pyrung Documentation — Context for Claude
 
 ## What is pyrung
 
-Pyrung is a Python DSL for writing ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. It targets AutomationDirect CLICK PLCs and ProductivityOpen P1AM-200 controllers.
+pyrung is a Python DSL for writing ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. It targets AutomationDirect CLICK PLCs and ProductivityOpen P1AM-200 controllers.
 
 Core engine (~19k lines, 1,100+ tests) with three dialects: core, Click PLC, and CircuitPython. Includes a VS Code DAP debugger. Solo project, not yet on PyPI.
 
 ## The pitch
 
-Click PLCs have no built-in simulator. Pyrung lets you test first — write logic in Python, unit test with pytest, then transpose to Click. Or run as a soft PLC over Modbus to test send/receive instructions (two pyrung programs can talk to each other). Or generate a CircuitPython scan loop for P1AM-200.
+Click PLCs have no built-in simulator. pyrung lets you test first — write logic in Python, unit test with pytest, then transpose to Click. Or run as a soft PLC over Modbus to test send/receive instructions (two pyrung programs can talk to each other). Or generate a CircuitPython scan loop for P1AM-200.
 
 ## Tone and style decisions
 

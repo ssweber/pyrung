@@ -1,8 +1,8 @@
-# Pyrung
+# pyrung
 
 **Write ladder logic in Python. Simulate it. Test it. Deploy it.**
 
-Pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
+pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
 
 ```python
 from pyrung import Bool, PLCRunner, Program, Rung, out
@@ -25,7 +25,7 @@ with runner.active():
 
 ## Why?
 
-AutomationDirect CLICK PLCs have no built-in simulator. You write logic, download it to hardware, and hope. Pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
+AutomationDirect CLICK PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
 
 Or don't transpose at all. Run your program as a **soft PLC** to test Modbus send/receive — it runs behind a Click-compatible Modbus interface, no hardware required. You can even spin up two pyrung programs and test them talking to each other. Or generate a CircuitPython scan loop for a ProductivityOpen P1AM-200 and run it on actual I/O.
 

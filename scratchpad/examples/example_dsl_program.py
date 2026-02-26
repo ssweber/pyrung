@@ -201,7 +201,7 @@ def run_demo():
     """Run the demo program with some simulated inputs."""
     plc = main()
 
-    print("=== Pyrung DSL Demo ===\n")
+    print("=== pyrung DSL Demo ===\n")
     print("Initial state:")
     print_state(plc)
 

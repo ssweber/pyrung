@@ -7,7 +7,7 @@ Repository = "https://github.com/ssweber/pyrung"
 
 [project]
 name = "pyrung"
-description = "A Pythonic Ladder Logic Framework"
+description = "Write ladder logic in Python"
 authors = [
     { name="ssweber", email="57631333+ssweber@users.noreply.github.com" },
 ]

@@ -1,11 +1,10 @@
 # pyrung
 
-A Pythonic ladder logic framework with an immutable, pure-functional architecture.
+pyrung is a Python DSL for writing ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. It targets AutomationDirect CLICK PLCs and ProductivityOpen P1AM-200 controllers.
 
 ## User Stories
 
-1. **Offline PLC development** — Controls engineers simulate Click PLC ladder logic in Python to develop, test, and debug without hardware.
-2. **PLC logic as testable code** — Developers express PLC logic as pure Python to use git, pytest, and CI workflows.
+Click PLCs have no built-in simulator. pyrung lets you test first — write logic in Python, unit test with pytest, then transpose to Click. Or run as a soft PLC over Modbus to test send/receive instructions (two pyrung programs can talk to each other). Or generate a CircuitPython scan loop for P1AM-200.
 
 ## Key Folders / Files
 
@@ -51,7 +50,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 - **DSL**: Context managers for readable logic (`with Rung(Button): out(Light)`)
 - **Tags**: Named typed references (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`). No runtime state in tags — all values live in `SystemState.tags`
 - **Structured tags**: `@udt()` for mixed-type structs, `@named_array()` for single-type interleaved arrays. Both support singleton and counted modes
-- **Blocks**: Named, typed, 1-indexed arrays for I/O and grouped memory (`Block`, `InputBlock`, `OutputBlock`)
+- **Blocks**: Named, typed, (typically) 1-indexed arrays for I/O and grouped memory (`Block`, `InputBlock`, `OutputBlock`)
 - **Hardware-agnostic core** with dialect modules layered on top (Click and CircuitPython implemented)
 
 ### Key Patterns
@@ -68,7 +67,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 ### Debug System
 
 - **History**: `runner.history.at(scan_id)`, `.range()`, `.latest()`, configurable `history_limit`
-- **Breakpoints**: `runner.when(predicate).pause()` / `.snapshot("label")`
+- **Breakpoints**: `runner.when(condition).pause()` / `.snapshot("label")`
 - **Monitors**: `runner.monitor(tag, callback)` fires on committed value changes
 - **Time travel**: `runner.seek(scan_id)`, `runner.rewind(seconds)`, `runner.playhead`
 - **Inspection**: `runner.inspect(rung_id)` → `RungTrace`, `runner.diff(scan_a, scan_b)`

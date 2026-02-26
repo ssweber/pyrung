@@ -146,12 +146,12 @@ class ClickHardwareProfile:
 3. `ClickHardwareProfile` methods are pure and deterministic.
 4. Unknown bank/role/operation raises `KeyError` (invalid caller contract).
 
-## Part C: Pyrung Adapter + Extended Rules
+## Part C: pyrung Adapter + Extended Rules
 
 ### New Adapter Module
 - `src/pyrung/click/profile.py`
 
-### Protocol in Pyrung
+### Protocol in pyrung
 ```python
 class HardwareProfile(Protocol):
     def is_writable(self, memory_type: str, address: int | None = None) -> bool: ...
