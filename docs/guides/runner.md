@@ -1,6 +1,6 @@
-# Running and Stepping
+# Runner
 
-`PLCRunner` is the execution engine. It accepts a `Program`, holds the current `SystemState`, and exposes methods to drive execution step by step.
+`PLCRunner` is the execution engine. It takes a program, holds the current state, and exposes methods to drive execution scan by scan.
 
 ## Creating a runner
 
@@ -10,79 +10,92 @@ from pyrung import PLCRunner
 runner = PLCRunner(logic)
 ```
 
-`PLCRunner` also accepts:
+The constructor accepts:
 
-- a list of rungs (`[rung1, rung2]`)
+- A `Program` (the common case)
+- A list of rungs (`[rung1, rung2]`)
 - `None` for an empty program (useful in tests)
-- an `initial_state` keyword argument for custom starting state
-- a `history_limit` keyword argument (`int | None`) for retained snapshots
+
+Optional keyword arguments:
+
+- `initial_state` — a `SystemState` to start from instead of the default
+- `history_limit` — how many state snapshots to retain (default: `None`, meaning no history)
 
 ## Time modes
 
-Before stepping, choose a time mode:
-
 ```python
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)  # 100ms per scan
-runner.set_time_mode(TimeMode.REALTIME)              # wall-clock
+from pyrung import TimeMode
+
+runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner.set_time_mode(TimeMode.REALTIME)                # wall-clock
 ```
 
-| Mode | Use case | Behavior |
+| Mode | Behavior | Use case |
 |------|----------|----------|
-| `FIXED_STEP` | Tests, offline simulation | `timestamp += dt` each scan |
-| `REALTIME` | Live hardware, integration tests | `timestamp` = actual elapsed time |
+| `FIXED_STEP` | `timestamp += dt` each scan | Tests, offline simulation |
+| `REALTIME` | `timestamp` = actual elapsed time | Live hardware, integration tests |
 
-`FIXED_STEP` is the default and the right choice for most work. Timer and counter instructions use `timestamp`, so `FIXED_STEP` gives perfectly reproducible results.
-`REALTIME` is intentionally non-deterministic because scan `dt` follows host elapsed wall-clock time.
+`FIXED_STEP` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `REALTIME` is intentionally non-deterministic — scan `dt` follows host elapsed time.
 
-Note: RTC system points (`rtc.year4`, `rtc.month`, `rtc.hour`, etc.) are wall-clock-derived (`datetime.now()` + RTC offset). `FIXED_STEP` does not freeze RTC by itself.
+## Real-time clock
+
+Logic that depends on time of day (shift changes, scheduled events) uses the RTC system points (`rtc.year4`, `rtc.month`, `rtc.hour`, etc.). By default, these track wall-clock time.
+
+`set_rtc` pins the RTC to a specific datetime:
+
+```python
+from datetime import datetime
+
+runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
+```
+
+The RTC then advances with simulation time: `rtc = base_datetime + (current_sim_time - sim_time_at_set)`. In `FIXED_STEP`, this makes time-of-day logic fully deterministic. In `REALTIME`, it effectively offsets the wall clock.
 
 ## Execution methods
 
-### `step()` — one complete scan
+### `step()` — one scan
 
 ```python
 state = runner.step()
 ```
 
-Executes one full scan cycle (all phases 0–8) and returns the committed `SystemState`.
+Executes one complete scan cycle (all phases) and returns the committed `SystemState`.
 
-### `run(n)` — N scans
-
-```python
-state = runner.run(10)    # Run exactly 10 scans
-```
-
-### `run_for(seconds)` — run until time advances
+### `run(cycles)` — N scans
 
 ```python
-state = runner.run_for(1.0)   # Advance simulation clock by at least 1 second
+state = runner.run(cycles=300)
 ```
 
-### `run_until(*conditions, ...)` — run until condition is met
+Runs exactly N scans, unless a [pause breakpoint](forces-debug.md#condition-breakpoints-and-snapshot-labels) fires first. Returns the final state.
+
+### `run_for(seconds)` — advance by time
 
 ```python
-state = runner.run_until(
-    ~MotorRunning,
-    AutoMode,
-    max_cycles=10000,
-)
+state = runner.run_for(1.0)  # advance simulation clock by at least 1 second
 ```
 
-Multiple conditions are combined with implicit AND.
+Keeps stepping until the simulation clock has advanced by the given amount (or a pause breakpoint fires).
 
-If `max_cycles` is reached before the condition evaluates True, execution stops and the final state is returned.
+### `run_until(*conditions)` — stop on condition
 
-Accepted condition input forms:
+```python
+state = runner.run_until(~MotorRunning, max_cycles=10000)
+```
 
-- single condition: `runner.run_until(Fault)`
-- multiple positional: `runner.run_until(Fault, AutoMode)`
-- grouped/nested tuple/list: `runner.run_until((Fault, AutoMode), Ready)`
+Accepts the same condition expressions used inside `Rung()`. Multiple conditions are AND-ed:
 
-Use `run_until_fn(...)` for callable predicates.
+```python
+runner.run_until(Motor & ~Fault)
+runner.run_until(Temp > 150.0)
+runner.run_until(any_of(AlarmA, AlarmB, AlarmC))
+```
 
-### `run_until_fn(predicate)` — advanced callable predicates
+Stops when the condition is true, a pause breakpoint fires, or `max_cycles` is reached — whichever comes first.
 
-Use `run_until_fn` when the stop condition is not expressible as a `Tag`/`Condition` expression:
+### `run_until_fn(predicate)` — callable predicate
+
+For conditions that aren't expressible as tag/condition expressions:
 
 ```python
 state = runner.run_until_fn(
@@ -91,70 +104,77 @@ state = runner.run_until_fn(
 )
 ```
 
-### `when(*conditions)` — condition breakpoints
+The predicate receives the committed `SystemState` each scan.
 
-`when(...)` uses the same condition input forms and implicit AND semantics as `run_until(...)`.
+## Injecting inputs
 
-```python
-pause_handle = runner.when(Fault, AutoMode).pause()
-snapshot_handle = runner.when(Fault, AutoMode, Ready).snapshot("fault_ready")
-```
-
-Use `when_fn(...)` for callable predicates.
-
-### `when_fn(predicate)` — callable breakpoints
-
-Use `when_fn(...)` for callable predicates:
+### `patch()` — one-shot
 
 ```python
-runner.when_fn(lambda s: s.scan_id % 10 == 0).snapshot("every_10_scans")
+runner.patch({Button: True, Step: 5})
 ```
 
-## Mode control and reboot
+Values are applied at the start of the next `step()` and then discarded. Multiple patches before a step merge — last write per tag wins.
 
-### `stop()` - enter STOP mode
+### `.value` via `active()`
+
+Inside `with runner.active():`, tag `.value` reads and writes go through the runner's current state:
+
+```python
+with runner.active():
+    Button.value = True       # queues a patch
+    print(Step.value)         # reads current value
+    runner.step()             # executes with the queued patch
+    assert Motor.value is True
+```
+
+### Forces
+
+For persistent overrides that hold across scans, see [Forces](forces-debug.md).
+
+## Mode control
+
+### `stop()` — enter STOP mode
 
 ```python
 runner.stop()
 ```
 
-- Sets PLC mode to STOP (`sys.mode_run == False`).
-- Does not clear tags by itself.
-- Idempotent: calling `stop()` again is a no-op.
+Sets PLC mode to STOP. Does not clear tags. Idempotent.
 
-### Auto restart from STOP
+### Auto-restart from STOP
 
-When stopped, any execution method (`step`, `run`, `run_for`, `run_until`, `scan_steps`) performs a STOP->RUN transition before executing scans.
+Any execution method (`step`, `run`, `run_for`, `run_until`) performs a STOP→RUN transition before executing:
 
-STOP->RUN transition behavior:
+- Non-retentive tags reset to defaults
+- Retentive tags preserve values
+- Runtime scope resets (`scan_id=0`, `timestamp=0.0`, history/patches/forces cleared)
 
-- Non-retentive known tags reset to defaults.
-- Retentive known tags preserve values.
-- Runtime scope resets (`scan_id=0`, `timestamp=0.0`, memory/history/patches/forces/debug-trace caches cleared).
-
-### `reboot()` - power-cycle simulation
+### `reboot()` — power-cycle
 
 ```python
 runner.reboot()
 ```
 
-- Battery present (`sys.battery_present=True`, default): all known tags preserve.
-- Battery absent (`sys.battery_present=False`): all known tags reset to defaults.
-- Runtime scope resets like STOP->RUN.
-- Runner returns in RUN mode.
+Simulates a power cycle. Tag behavior depends on battery:
 
-Battery status is simulation-controlled:
+- Battery present (default): all tags preserve
+- Battery absent: all tags reset to defaults
+
+Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
 
 ```python
 runner.set_battery_present(False)
+runner.reboot()  # all tags reset
 ```
 
 ## Inspecting state
 
 ```python
-runner.current_state           # SystemState snapshot at latest committed scan
-runner.simulation_time         # Shorthand for current_state.timestamp
-runner.time_mode               # Current TimeMode
+runner.current_state    # SystemState snapshot at latest committed scan
+runner.simulation_time  # shorthand for current_state.timestamp
+runner.time_mode        # current TimeMode
+runner.forces           # read-only view of active force overrides
 ```
 
 `SystemState` fields:
@@ -163,172 +183,82 @@ runner.time_mode               # Current TimeMode
 state.scan_id    # int — monotonic scan counter (starts at 0)
 state.timestamp  # float — simulation clock in seconds
 state.tags       # PMap[str, value] — all tag values
-state.memory     # PMap[str, value] - internal engine state
+state.memory     # PMap[str, value] — internal engine state
 ```
 
-`scan_id` and `timestamp` reset to `0` when STOP->RUN transition or `reboot()` rebuilds runtime scope.
+Both `scan_id` and `timestamp` reset to 0 on STOP→RUN transition or `reboot()`.
 
-## History, diff, and fork
+## History
 
-`PLCRunner` retains immutable `SystemState` snapshots, including the initial state.
+Enable history retention to keep immutable state snapshots:
 
 ```python
-runner = PLCRunner(logic, history_limit=1000)  # keep latest 1000 snapshots
+runner = PLCRunner(logic, history_limit=1000)  # keep latest 1000
 
-runner.history.at(5)         # one retained snapshot
-runner.history.range(3, 7)   # [scan_id 3, 4, 5, 6] if retained
-runner.history.latest(10)    # up to 10 snapshots (oldest -> newest)
+runner.history.at(5)          # snapshot at scan 5
+runner.history.range(3, 7)    # [scan 3, 4, 5, 6] if retained
+runner.history.latest(10)     # up to 10 most recent (oldest → newest)
 ```
 
-You can compare two retained scans by tag value:
-
-```python
-changes = runner.diff(scan_a=5, scan_b=10)
-# {"TagName": (old_value, new_value), ...}
-```
-
-And branch execution from a historical scan:
-
-```python
-fork = runner.fork_from(scan_id=10)
-fork.step()   # advances independently of parent runner
-```
+Without `history_limit`, no snapshots are retained. The initial state (scan 0) is always included.
 
 ## Time-travel playhead
 
-You can navigate retained history for read-only inspection:
+The playhead is a read-only cursor into retained history. It doesn't affect execution — `step()` always appends at the history tip.
 
 ```python
 runner.playhead              # current inspection scan_id
-runner.seek(scan_id=5)       # move playhead to retained scan
-runner.rewind(seconds=1.0)   # move playhead backward by simulation time
+runner.seek(scan_id=5)       # jump to retained scan (KeyError if evicted)
+runner.rewind(seconds=1.0)   # move backward by simulation time
 
 snapshot = runner.history.at(runner.playhead)
 ```
 
-Behavior:
+`rewind(seconds)` finds the nearest retained snapshot where `timestamp <= target`. If the current playhead's scan gets evicted by `history_limit`, the playhead moves to the oldest retained scan.
 
-- `seek(scan_id)` raises `KeyError` if that scan is not retained.
-- `rewind(seconds)` raises `ValueError` for negative values.
-- `rewind(seconds)` moves to the nearest retained snapshot where `timestamp <= target`.
-- `step()` is independent of playhead and always appends at history tip.
-- If `history_limit` eviction removes the current playhead scan, playhead moves to the oldest retained scan.
+## Diff
 
-## Rung inspection (`inspect`)
-
-`PLCRunner.inspect()` returns retained rung-level debug trace data for a specific scan:
+Compare two retained scans to see what changed:
 
 ```python
-trace = runner.inspect(rung_id=0)            # defaults to runner.playhead
-trace = runner.inspect(rung_id=0, scan_id=5) # explicit retained scan
+changes = runner.diff(scan_a=5, scan_b=10)
+# {"Motor": (True, False), "Step": (3, 7)}
 ```
 
-Returned object model:
+Returns string-keyed dicts — only tags whose values differ. Missing tags appear as `None`.
 
-- `RungTrace.scan_id`: committed scan id
-- `RungTrace.rung_id`: top-level rung index
-- `RungTrace.events`: ordered tuple of `RungTraceEvent`
+## Fork
 
-Each `RungTraceEvent` captures one debug boundary event with:
-
-- `kind`: `"rung" | "branch" | "subroutine" | "instruction"`
-- `source_file`, `source_line`, `end_line`
-- `subroutine_name`, `depth`, `call_stack`
-- `enabled_state`, `instruction_kind`
-- `trace`: `TraceEvent | None`
-
-Error behavior:
-
-- Missing/evicted scan id raises `KeyError(scan_id)`.
-- Existing scan with no retained rung trace raises `KeyError(rung_id)`.
-
-Current limitation (Phase 3 incremental):
-
-- Trace retention for `inspect()` is currently populated by `scan_steps_debug()` (including DAP stepping paths).
-- Scans produced only by `step()`/`run()`/`run_for()`/`run_until()` may not have retained rung trace yet.
-
-`PLCRunner.inspect_event()` returns the latest debug-trace event using a unified core path:
+Create an independent runner from a snapshot:
 
 ```python
-event = runner.inspect_event()
-if event is not None:
-    scan_id, rung_id, rung_event = event
+alt = runner.fork()              # from current state (common case)
+alt = runner.fork(scan_id=10)    # from a retained historical scan
+alt = runner.fork_from(scan_id=10)  # alias
 ```
 
-Behavior:
+The fork starts with the snapshot's state and the same time mode. It has clean runtime state — no forces, patches, breakpoints, or monitors carry over. Only the fork snapshot is in its initial history.
 
-- Returns latest in-flight event while a `scan_steps_debug()` scan is active and has yielded at least one step.
-- Otherwise returns latest committed retained debug-path event.
-- Returns `None` if no debug trace context exists.
-- Returned event is immutable `RungTraceEvent` model data.
+See [Testing — Forking](testing.md#forking-test-alternate-outcomes) for the alternate-outcomes pattern.
 
-Debug-path-only scope:
+## Breakpoints and monitors
 
-- `inspect_event()` and `inspect()` are populated through `scan_steps_debug()` (including DAP stepping flows).
-- Scans produced only by `step()`/`run()`/`run_for()`/`run_until()` are intentionally out of scope for trace retention in this phase.
-
-## Injecting inputs
-
-### `patch()` — one-shot inputs
+`when()` creates condition breakpoints evaluated after each committed scan. `monitor()` watches a tag for value changes. Both return handles with `.remove()`, `.enable()`, `.disable()`.
 
 ```python
-runner.patch({"Button": True})
+runner.when(Fault).pause()                   # halt run()/run_for()/run_until()
+runner.when(Fault).snapshot("fault_seen")    # label scan in history
+runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
 
-Values are applied at the start of the **next** `step()` and then discarded. Use for momentary button presses, sensor reads, or test scenarios.
+See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.
 
-`patch()` accepts both string keys and `Tag` keys:
+## Numeric behavior
 
-```python
-runner.patch({Button: True, Step: 5})
-```
-
-Multiple patches before a `step()` merge — last write per tag wins.
-
-### `.value` via `active()` scope
-
-Inside `with runner.active():`, tag `.value` reads and writes go through the runner's pending state:
-
-```python
-with runner.active():
-    Button.value = True      # equivalent to runner.patch({"Button": True})
-    print(Step.value)        # reads pending value before next step
-    runner.step()            # valid inside active(); applies pending patch
-```
-
-## scan_steps() — rung-boundary stepping
-
-For DAP debugging and custom step granularity, `scan_steps()` yields after each top-level rung evaluation:
-
-```python
-for rung_index, rung, ctx in runner.scan_steps():
-    # ctx has all writes batched so far in this scan
-    print(f"After rung {rung_index}: {dict(ctx._tags_pending)}")
-# scan is committed after the generator is exhausted
-```
-
-!!! warning
-    The scan is committed atomically when the `scan_steps()` generator is **fully exhausted**.
-    Partially consuming the generator leaves the runner in a partially-evaluated state.
-
-## scan_steps_debug() — DAP-level stepping
-
-```python
-for step in runner.scan_steps_debug():
-    print(step.rung_index, step.kind, step.source_line, step.enabled_state)
-```
-
-`scan_steps_debug()` yields `ScanStep` objects at top-level rung, branch, subroutine, and instruction boundaries. This is the API used by the DAP adapter to drive rung-by-rung execution with source location information.
-
-See [DAP Debugger in VS Code](dap-vscode.md) for details.
-
-## Numeric behavior summary
-
-| Operation | Behavior on out-of-range |
-|-----------|--------------------------|
+| Operation | Out-of-range behavior |
+|-----------|----------------------|
 | `copy()` | Clamps to destination min/max |
 | `calc()` | Wraps (modular arithmetic) |
-| Timer accumulator | Clamps at 32 767 |
+| Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
 | Division by zero | Result = 0, fault flag set |
-

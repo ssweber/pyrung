@@ -1,36 +1,10 @@
-# Writing Ladder Logic
+# Ladder Logic Reference
 
-pyrung expresses PLC ladder logic as Python context managers. A `Program` collects `Rung`s; each `Rung` has conditions (the left rail) and instructions (the output coils/blocks on the right).
-
-## Program
-
-```python
-with Program() as logic:
-    # All rungs go here
-    ...
-
-runner = PLCRunner(logic)
-```
-
-`Program` is a context manager that accumulates rungs into a logic graph. The resulting object is inert data — it describes logic but doesn't execute anything. Pass it to `PLCRunner` to run it.
-
-## Rung
-
-```python
-with Rung(condition1, condition2, ...):
-    instruction1(...)
-    instruction2(...)
-```
-
-- All conditions at the `Rung` level are **ANDed** (series circuit, like contacts in series on a real rung).
-- Instructions execute only when the combined condition evaluates True.
-- Rungs are evaluated **top-to-bottom**; writes are visible to subsequent rungs in the same scan.
-
----
+Full reference for conditions, instructions, and program structure. For an introduction to the DSL vocabulary, see [Core Concepts](../getting-started/concepts.md).
 
 ## Conditions
 
-Quick reference — all forms are valid inside `Rung(...)`:
+Everything that goes inside `Rung(...)`. All forms can be mixed freely.
 
 ```
 Fault                          tag is truthy
@@ -98,7 +72,6 @@ with Rung(Start | RemoteStart):
 ### Nested AND/OR
 
 ```python
-# OR of multiple groups
 with Rung(any_of(Start, all_of(AutoMode, Ready), RemoteStart)):
     latch(Motor)
 ```
@@ -118,7 +91,7 @@ with Rung(Counter != 5):
 
 ### INT truthiness
 
-INT tags can be used directly as conditions. They are True when non-zero.
+INT tags are True when non-zero:
 
 ```python
 with Rung(Step):                    # True if Step != 0
@@ -131,19 +104,15 @@ with Rung(any_of(Step, AlarmCode)):
 ### Inline expressions
 
 ```python
-# Python-native expression — valid in simulation
 with Rung((PressureA + PressureB) > 100):
     latch(HighPressureFault)
 ```
 
-!!! note "Hardware compatibility"
-    Inline expressions in conditions run fine in simulation. The Click dialect
-    validator will suggest rewriting them as `calc()` instructions if targeting
-    Click hardware.
+Inline expressions work in simulation. The Click dialect validator will flag them if targeting Click hardware — rewrite as `calc()` instructions instead.
 
 ---
 
-## Basic I/O Instructions
+## Basic I/O instructions
 
 ### `out` — energize output
 
@@ -179,7 +148,7 @@ with Rung(SensorA.immediate):
 
 ---
 
-## Copy and Block Operations
+## Copy and block operations
 
 ### `copy` — copy single value
 
@@ -217,7 +186,7 @@ copy(DS[1].as_text(pad=5), Txt[1])  # Numeric → zero-padded CHAR
 copy(DS[1].as_binary(), ModeChar)   # Numeric → raw byte CHAR
 ```
 
-### Pack / Unpack
+### Pack / unpack
 
 ```python
 pack_bits(C.select(1, 16), DS[1])          # Pack 16 BOOLs into one WORD
@@ -244,7 +213,7 @@ calc(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
 | Expression | Destination | Result |
 |------------|-------------|--------|
 | `DS1 + 1` (DS1=32767) | INT (16-bit signed) | −32768 (wraps) |
-| `50000 * 50000` | DINT (32-bit signed) | −1 794 967 296 (wraps) |
+| `50000 * 50000` | DINT (32-bit signed) | −1,794,967,296 (wraps) |
 | `40000` → `copy()` | INT | 32767 (clamped) |
 
 ### Division
@@ -265,13 +234,13 @@ calc(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
 
 Timers use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`INT`).
 
-### On-Delay Timer (TON / RTON)
+### On-delay timer (TON / RTON)
 
 ```python
-# TON: Auto-reset when rung goes False
+# TON: auto-reset when rung goes False
 on_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
 
-# RTON: Hold accumulator when rung goes False (manual reset required)
+# RTON: hold accumulator when rung goes False (manual reset required)
 on_delay(TimerDone, accumulator=TimerAcc, preset=100).reset(ResetButton)
 ```
 
@@ -282,12 +251,11 @@ on_delay(TimerDone, accumulator=TimerAcc, preset=100).reset(ResetButton)
 **RTON behavior:**
 - Same as TON while rung is True
 - Rung False → holds acc and done (does not reset)
-- `reset(tag)` → resets acc and done regardless of rung state
+- `.reset(tag)` → resets acc and done regardless of rung state
 
-`on_delay(...).reset(...)` (RTON) is terminal in its flow: once added, no later instruction
-or branch can be added in that same flow.
+`on_delay(...).reset(...)` (RTON) is terminal — no later instruction or branch can follow in the same flow.
 
-### Off-Delay Timer (TOF)
+### Off-delay timer (TOF)
 
 ```python
 off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
@@ -297,7 +265,7 @@ off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
 - Rung True → done = True, acc = 0
 - Rung False → accumulator counts up; done = False when acc ≥ preset
 
-TOF remains composable in-rung (non-terminal).
+TOF is non-terminal — instructions can follow it in the same rung.
 
 ### Time units
 
@@ -309,7 +277,7 @@ TOF remains composable in-rung (non-terminal).
 | `Th` | Hours |
 | `Td` | Days |
 
-The accumulator stores integer ticks in the selected `unit`. The time unit controls how `dt` is converted to accumulator ticks.
+The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
 ---
 
@@ -317,22 +285,20 @@ The accumulator stores integer ticks in the selected `unit`. The time unit contr
 
 Counters use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`DINT`).
 
-!!! warning "Count every scan, not on edge"
-    Click PLC counters count **every scan** while the condition is True — they are
-    not edge-triggered. Use `rise()` if you want one increment per leading edge.
+Counters count **every scan** while the condition is True — they are not edge-triggered. Use `rise()` on the rung condition if you want one increment per leading edge.
 
-### Count Up (CTU)
+### Count up (CTU)
 
 ```python
 count_up(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 ```
 
 - Rung True → accumulator increments each scan; done = True when acc ≥ preset
-- `reset(tag)` → resets acc and done when that tag is True
+- `.reset(tag)` → resets acc and done when that tag is True
 
-`count_up(...).reset(...)` is terminal in its flow.
+`count_up(...).reset(...)` is terminal.
 
-### Count Down (CTD)
+### Count down (CTD)
 
 ```python
 count_down(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
@@ -341,7 +307,7 @@ count_down(CountDone, accumulator=CountAcc, preset=100).reset(ResetButton)
 - Accumulator starts at 0 and goes negative each scan
 - done = True when acc ≤ −preset
 
-`count_down(...).reset(...)` is terminal in its flow.
+`count_down(...).reset(...)` is terminal.
 
 ### Bidirectional counter
 
@@ -353,8 +319,16 @@ count_up(CountDone, accumulator=CountAcc, preset=100) \
 
 Both up and down conditions are evaluated every scan; the net delta is applied once.
 
-For counters and shift builders, chained contacts like `.down(...)`, `.clock(...)`, and
-`.reset(...)` are required pseudo-inputs: complete the chain before any later DSL statement.
+### Oneshot counting
+
+To count edges instead of scans, use `oneshot=True`:
+
+```python
+with Rung(Sensor):
+    count_up(CountDone, CountAcc, preset=9999, oneshot=True).reset(CountReset)
+```
+
+For chained builders (counters, shift registers, drums), complete the full chain (`.down(...)`, `.clock(...)`, `.reset(...)`) before any later DSL statement.
 
 ---
 
@@ -406,16 +380,16 @@ Only `==` and `!=` are valid for CHAR ranges. Matches windowed substrings of len
 
 ---
 
-## Shift Register
+## Shift register
 
 ```python
 shift(C.select(1, 8)).clock(ClockBit).reset(ResetBit)
 ```
 
-- **Rung condition** (combined) is the data bit inserted at position 1
-- **Clock** — shift occurs on OFF→ON edge of the clock condition
+- **Rung condition** is the data bit inserted at position 1
+- **Clock** — shift occurs on the rising edge of the clock condition
 - **Reset** — level-sensitive: clears all bits in range while True
-- Shift is terminal in its flow after `.clock(...).reset(...)` finalization.
+- Terminal after `.clock(...).reset(...)`.
 
 Direction is determined by the range order:
 - `C.select(1, 8)` → shifts low-to-high (data enters at C1, exits at C8)
@@ -423,15 +397,11 @@ Direction is determined by the range order:
 
 ---
 
-## Drum Sequencers
+## Drum sequencers
 
-`event_drum(...)` and `time_drum(...)` are terminal builders.
+`event_drum(...)` and `time_drum(...)` are terminal builders. `.reset(...)` is required and finalizes the instruction. `.jump(...)` and `.jog(...)` are optional.
 
-- `.reset(...)` is required and finalizes the instruction.
-- `.jump(..., step=...)` is optional.
-- `.jog(...)` is optional.
-
-### Event Drum (`event_drum`)
+### Event drum
 
 ```python
 with Rung(Running):
@@ -449,7 +419,7 @@ with Rung(Running):
     ).reset(ShiftReset).jump((AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 ```
 
-### Time Drum (`time_drum`)
+### Time drum
 
 ```python
 with Rung(Running):
@@ -469,36 +439,34 @@ with Rung(Running):
     ).reset(ShiftReset).jump(Found, step=2).jog(Start)
 ```
 
-### Variadic condition chaining (implicit AND)
+### Variadic condition chaining
 
-Builder condition arguments (for example `.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(...)`, and `.jog(...)`) all accept:
-
-- a single condition
-- multiple positional conditions
-- tuple/list/nested condition groups
-
-All forms normalize to one AND expression.
+Builder condition arguments (`.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(...)`, `.jog(...)`) all accept single conditions, multiple positional conditions, or tuple/list groups. All forms normalize to one AND expression:
 
 ```python
-# Equivalent forms
 event_drum(...).reset(ResetA, ResetB).jog(JogA, JogB)
 event_drum(...).jump((AutoMode, Found), step=2)
 ```
-
-`jog(A, B)` is valid and means `A AND B`.
 
 ---
 
 ## Branching
 
-`branch()` creates a parallel path within a rung. The branch condition is ANDed with the rung's power rail, not with the main condition path.
+`branch()` creates a parallel path within a rung. The branch condition is ANDed with the parent rung's condition.
 
 ```python
-with Rung(MainCondition):
-    out(MainOutput)
-    with branch(BranchCondition):
-        out(BranchOutput)   # BranchOutput energizes only when MainCondition AND BranchCondition
+with Rung(First):          # ① Evaluate: First
+    out(Third)             # ③ Execute
+    with branch(Second):   # ② Evaluate: First AND Second
+        out(Fourth)        # ④ Execute
+    out(Fifth)             # ⑤ Execute
 ```
+
+Three rules:
+
+1. **Conditions evaluate before instructions.** ① and ② are resolved before ③ ④ ⑤ run. A branch ANDs its own condition with the parent rung's.
+2. **Instructions execute in source order.** ③ → ④ → ⑤, as written — not "all rung, then all branch."
+3. **Each rung starts fresh.** The next rung sees the state as it was left after the previous rung's instructions.
 
 ---
 
@@ -531,10 +499,21 @@ with Program() as logic:
 
 ---
 
-## API Reference
+## Programs
 
-See the [API Reference](../reference/index.md) for full parameter documentation:
+Two equivalent ways to define a program:
 
-- [`Tag`](../reference/api/core/tag.md)
-- [`Block` / `InputBlock` / `OutputBlock`](../reference/api/core/memory_block.md)
-- Instructions: [`out`, `latch`, `reset`, `copy`, `calc`, `on_delay`, `count_up`, ...](../reference/api/core/instruction.md)
+```python
+# Context manager
+with Program() as logic:
+    with Rung(Start):
+        latch(Running)
+
+# Decorator
+@program
+def logic():
+    with Rung(Start):
+        latch(Running)
+```
+
+Both produce a `Program` you pass to `PLCRunner`. See [Core Concepts — Programs](../getting-started/concepts.md#programs) for details.
