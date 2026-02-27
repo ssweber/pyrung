@@ -49,7 +49,9 @@ def _validate_output_tags(outputs: Sequence[Tag]) -> tuple[Tag, ...]:
         if not isinstance(output, Tag):
             raise TypeError(f"drum output must be Tag, got {type(output).__name__}")
         if output.type != TagType.BOOL:
-            raise TypeError(f"drum output tags must be BOOL; got {output.type.name} at {output.name}")
+            raise TypeError(
+                f"drum output tags must be BOOL; got {output.type.name} at {output.name}"
+            )
         if output.name in names:
             raise ValueError(f"drum output tags must be unique; duplicate {output.name!r}")
         names.add(output.name)
@@ -179,7 +181,9 @@ class _DrumBaseInstruction(Instruction):
         jog_prev = bool(ctx.get_memory(self._jog_prev_key, False))
         return jog_curr, jog_curr and not jog_prev
 
-    def _write_control_prev_state(self, ctx: ScanContext, *, jump_curr: bool, jog_curr: bool) -> None:
+    def _write_control_prev_state(
+        self, ctx: ScanContext, *, jump_curr: bool, jog_curr: bool
+    ) -> None:
         if self.jump_condition is not None:
             ctx.set_memory(self._jump_prev_key, jump_curr)
         if self.jog_condition is not None:
