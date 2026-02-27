@@ -1,0 +1,548 @@
+"""Condition classes for the immutable PLC engine.
+
+Conditions are evaluated lazily at scan time against SystemState.
+"""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeAlias
+
+from pyrung.core._source import _capture_source
+
+if TYPE_CHECKING:
+    from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import IndirectRef
+    from pyrung.core.tag import Tag
+
+
+ConditionTerm: TypeAlias = "Condition | Tag"
+ConditionGroup: TypeAlias = "tuple[ConditionTerm, ...] | list[ConditionTerm]"
+ConditionInput: TypeAlias = "ConditionTerm | ConditionGroup"
+
+
+class Condition(ABC):
+    """Base class for all conditions.
+
+    Conditions are pure functions: evaluate(state) -> bool.
+    They read from state but never modify it.
+
+    Supports both direct evaluation via evaluate(state) and
+    context-based evaluation via evaluate(ctx) for batched scans.
+    """
+
+    source_file: str | None = None
+    source_line: int | None = None
+
+    @abstractmethod
+    def evaluate(self, ctx: ScanContext) -> bool:
+        """Evaluate this condition against a ScanContext.
+
+        Uses context for read-after-write visibility within a scan.
+        """
+        pass
+
+    def __eq__(self, other: object) -> bool:
+        """Identity comparison, with helpful error for precedence mistakes."""
+        if not isinstance(other, Condition):
+            raise TypeError(
+                f"Cannot compare Condition with {type(other).__name__}. "
+                f"If using | or & with comparisons, add parentheses: Button | (Step == 0)"
+            )
+        return self is other
+
+    def __hash__(self) -> int:
+        """Allow conditions to be used in sets/dicts."""
+        return id(self)
+
+    def __or__(self, other: Condition | Tag) -> AnyCondition:
+        """OR two conditions: (Step == 0) | Start."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AnyCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+    def __ror__(self, other: Tag) -> AnyCondition:
+        """Support Tag | Condition."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Tag):
+            cond = AnyCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+    def __and__(self, other: Condition | Tag) -> AllCondition:
+        """AND two conditions: (Step == 0) & Start."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AllCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+    def __rand__(self, other: Condition | Tag) -> AllCondition:
+        """Support reverse AND: Tag & Condition."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AllCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+
+class CompareEq(Condition):
+    """Equality comparison: tag == value or tag == other_tag."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        from pyrung.core.tag import Tag
+
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        if isinstance(self.value, Tag):
+            other_value = ctx.get_tag(self.value.name, self.value.default)
+        else:
+            other_value = self.value
+        return tag_value == other_value
+
+
+class CompareNe(Condition):
+    """Inequality comparison: tag != value or tag != other_tag."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        from pyrung.core.tag import Tag
+
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        if isinstance(self.value, Tag):
+            other_value = ctx.get_tag(self.value.name, self.value.default)
+        else:
+            other_value = self.value
+        return tag_value != other_value
+
+
+def _resolve_value(value: Any, ctx: ScanContext) -> Any:
+    """Resolve a value that may be a Tag, Expression, or literal."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.tag import Tag
+
+    if isinstance(value, Expression):
+        return value.evaluate(ctx)
+    if isinstance(value, Tag):
+        return ctx.get_tag(value.name, value.default)
+    return value
+
+
+class CompareLt(Condition):
+    """Less-than comparison: tag < value."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        other_value = _resolve_value(self.value, ctx)
+        return tag_value < other_value
+
+
+class CompareLe(Condition):
+    """Less-than-or-equal comparison: tag <= value."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        other_value = _resolve_value(self.value, ctx)
+        return tag_value <= other_value
+
+
+class CompareGt(Condition):
+    """Greater-than comparison: tag > value."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        other_value = _resolve_value(self.value, ctx)
+        return tag_value > other_value
+
+
+class CompareGe(Condition):
+    """Greater-than-or-equal comparison: tag >= value."""
+
+    def __init__(self, tag: Tag, value: Any):
+        self.tag = tag
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        tag_value = ctx.get_tag(self.tag.name, self.tag.default)
+        other_value = _resolve_value(self.value, ctx)
+        return tag_value >= other_value
+
+
+class BitCondition(Condition):
+    """Normally open contact (XIC) - true when bit is on.
+
+    This is the default condition when a BOOL tag is used directly in a Rung.
+    """
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return bool(ctx.get_tag(self.tag.name, False))
+
+
+class IntTruthyCondition(Condition):
+    """INT truthiness contact - true when value is nonzero."""
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return int(ctx.get_tag(self.tag.name, self.tag.default)) != 0
+
+
+class NormallyClosedCondition(Condition):
+    """Normally closed contact (XIO) - true when bit is off.
+
+    The inverse of BitCondition.
+    """
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return not bool(ctx.get_tag(self.tag.name, False))
+
+
+class RisingEdgeCondition(Condition):
+    """Rising edge detection - true only on 0->1 transition.
+
+    Reads previous value from state.memory["_prev:{tag.name}"].
+    """
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        current = bool(ctx.get_tag(self.tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{self.tag.name}", False))
+        return current and not previous
+
+
+class FallingEdgeCondition(Condition):
+    """Falling edge detection - true only on 1->0 transition.
+
+    Reads previous value from state.memory["_prev:{tag.name}"].
+    """
+
+    def __init__(self, tag: Tag):
+        self.tag = tag
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        current = bool(ctx.get_tag(self.tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{self.tag.name}", False))
+        return not current and previous
+
+
+# =============================================================================
+# Indirect Comparison Conditions
+# =============================================================================
+
+
+class IndirectCompareEq(Condition):
+    """Equality comparison for IndirectRef: indirect_ref == value or indirect_ref == tag."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        from pyrung.core.tag import Tag
+
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        if isinstance(self.value, Tag):
+            other_value = ctx.get_tag(self.value.name, self.value.default)
+        else:
+            other_value = self.value
+        return resolved_value == other_value
+
+
+class IndirectCompareNe(Condition):
+    """Inequality comparison for IndirectRef: indirect_ref != value or indirect_ref != tag."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        from pyrung.core.tag import Tag
+
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        resolved_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        if isinstance(self.value, Tag):
+            other_value = ctx.get_tag(self.value.name, self.value.default)
+        else:
+            other_value = self.value
+        return resolved_value != other_value
+
+
+class IndirectCompareLt(Condition):
+    """Less-than comparison for IndirectRef: indirect_ref < value."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return tag_value < self.value
+
+
+class IndirectCompareLe(Condition):
+    """Less-than-or-equal comparison for IndirectRef: indirect_ref <= value."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return tag_value <= self.value
+
+
+class IndirectCompareGt(Condition):
+    """Greater-than comparison for IndirectRef: indirect_ref > value."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return tag_value > self.value
+
+
+class IndirectCompareGe(Condition):
+    """Greater-than-or-equal comparison for IndirectRef: indirect_ref >= value."""
+
+    def __init__(self, indirect_ref: IndirectRef, value: Any):
+        self.indirect_ref = indirect_ref
+        self.value = value
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        resolved_tag = self.indirect_ref.resolve_ctx(ctx)
+        tag_value = ctx.get_tag(resolved_tag.name, resolved_tag.default)
+        return tag_value >= self.value
+
+
+# =============================================================================
+# Composite Conditions (all_of / any_of)
+# =============================================================================
+
+
+def _as_condition(cond: object) -> Condition:
+    """Normalize a Tag/Condition into a concrete Condition."""
+    from pyrung.core.tag import Tag, TagType
+
+    if isinstance(cond, Tag):
+        if cond.type == TagType.BOOL:
+            return BitCondition(cond)
+        if cond.type == TagType.INT:
+            return IntTruthyCondition(cond)
+        raise TypeError(
+            f"Tag '{cond.name}' of type {cond.type.name} cannot be used directly as condition. "
+            "Direct tag conditions only support BOOL and INT. "
+            "Use comparison operators: tag == value, tag > 0, etc."
+        )
+    if isinstance(cond, Condition):
+        return cond
+    raise TypeError(f"Expected Condition or Tag, got {type(cond)}")
+
+
+def _flatten_condition_inputs(
+    *conditions: object,
+    coerce: Callable[[object], Condition] = _as_condition,
+    group_empty_error: str = "condition group cannot be empty",
+) -> list[Condition]:
+    """Flatten variadic and grouped condition inputs into concrete Conditions."""
+
+    flattened: list[Condition] = []
+
+    for condition in conditions:
+        if isinstance(condition, tuple | list):
+            if not condition:
+                raise ValueError(group_empty_error)
+            for item in condition:
+                flattened.append(coerce(item))
+        else:
+            flattened.append(coerce(condition))
+    return flattened
+
+
+class AllCondition(Condition):
+    """AND condition - true when all sub-conditions are true.
+
+    Example:
+        with Rung(all_of(Ready, AutoMode)):
+            out(StartPermissive)
+    """
+
+    def __init__(self, *conditions: ConditionInput):
+        self.conditions = _flatten_condition_inputs(
+            *conditions,
+            coerce=_as_condition,
+            group_empty_error="all_of() group cannot be empty",
+        )
+
+        if not self.conditions:
+            raise ValueError("all_of() requires at least one condition")
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return all(cond.evaluate(ctx) for cond in self.conditions)
+
+    def __and__(self, other: Condition | Tag) -> AllCondition:
+        """Support chaining: (A & B) & C flattens to AllCondition(A, B, C)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AllCondition(*self.conditions, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+    def __rand__(self, other: Condition | Tag) -> AllCondition:
+        """Support reverse: C & (A & B)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AllCondition(other, *self.conditions)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+
+class AnyCondition(Condition):
+    """OR condition - true when any sub-condition is true.
+
+    Example:
+        with Rung(Step == 1, any_of(Start, oCmdStart)):
+            out(Light)
+    """
+
+    def __init__(self, *conditions: ConditionTerm):
+        self.conditions: list[Condition] = []
+        for cond in conditions:
+            if isinstance(cond, tuple | list):
+                raise TypeError(
+                    "any_of() does not accept tuple/list groups. "
+                    "Use all_of(...) or '&' for grouped AND terms."
+                )
+            self.conditions.append(_as_condition(cond))
+
+        if not self.conditions:
+            raise ValueError("any_of() requires at least one condition")
+
+    def evaluate(self, ctx: ScanContext) -> bool:
+        return any(cond.evaluate(ctx) for cond in self.conditions)
+
+    def __or__(self, other: Condition | Tag) -> AnyCondition:
+        """Support chaining: (A | B) | C flattens to AnyCondition(A, B, C)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AnyCondition(*self.conditions, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+    def __ror__(self, other: Condition | Tag) -> AnyCondition:
+        """Support reverse: C | (A | B)."""
+        from pyrung.core.tag import Tag
+
+        if isinstance(other, Condition | Tag):
+            cond = AnyCondition(other, *self.conditions)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        return NotImplemented
+
+
+def _normalize_and_condition(
+    *conditions: object,
+    coerce: Callable[[object], Condition] = _as_condition,
+    empty_error: str = "condition requires at least one condition",
+    group_empty_error: str = "condition group cannot be empty",
+) -> Condition:
+    """Normalize variadic/grouped inputs into one Condition with AND semantics."""
+    normalized = _flatten_condition_inputs(
+        *conditions,
+        coerce=coerce,
+        group_empty_error=group_empty_error,
+    )
+    if not normalized:
+        raise ValueError(empty_error)
+    if len(normalized) == 1:
+        return normalized[0]
+    return AllCondition(*normalized)

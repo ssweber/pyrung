@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(make:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(uv run ruff:*)",
+      "Bash(uv run pytest:*)",
+      "WebFetch(domain:pyrsistent.readthedocs.io)",
+      "WebSearch",
+      "WebFetch(domain:cdn.automationdirect.com)",
+      "WebFetch(domain:accautomation.ca)",
+      "WebFetch(domain:community.automationdirect.com)",
+      "WebFetch(domain:www.automationdirect.com)",
+      "WebFetch(domain:facts-engineering.github.io)",
+      "WebFetch(domain:circuitpython.org)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

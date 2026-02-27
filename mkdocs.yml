@@ -1,0 +1,90 @@
+site_name: pyrung
+site_description: Pythonic PLC simulation engine — write ladder logic in Python, simulate with full debug support.
+repo_url: https://github.com/ssweber/pyrung
+site_url: https://ssweber.github.io/pyrung/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - Core Concepts: getting-started/concepts.md
+  - Guides:
+      - Ladder Logic Reference: guides/ladder-logic.md
+      - Tag Structures: guides/tag-structures.md
+      - Runner: guides/runner.md
+      - Testing: guides/testing.md
+      - Forces: guides/forces-debug.md
+      - Architecture: guides/architecture.md
+      - DAP Debugger in VS Code: guides/dap-vscode.md
+  - Dialects:
+      - Click PLC: dialects/click.md
+      - CircuitPython: dialects/circuitpy.md
+  - API Reference:
+      - Overview: reference/index.md
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - docs/gen_reference.py
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            filters:
+              - "!^_"
+            heading_level: 2
+            inherited_members: false
+            members_order: source
+            separate_signature: true
+            show_root_heading: true
+            show_root_toc_entry: false
+            show_signature_annotations: true
+            show_source: false
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Overview:
+          - index.md
+        Getting Started:
+          - getting-started/*.md
+        Guides:
+          - guides/*.md
+        Dialects:
+          - dialects/*.md
+        API Reference:
+          - reference/index.md
+          - reference/api/*.md
+
+exclude_docs: |
+  click_reference/**
+  internal/**
+
+not_in_nav: |
+  reference/api/**
+  CLAUDE.md
+
+markdown_extensions:
+  - toc:
+      toc_depth: 4
+  - admonition
+  - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true

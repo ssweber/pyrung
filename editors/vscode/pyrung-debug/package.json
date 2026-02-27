@@ -1,0 +1,108 @@
+{
+  "name": "pyrung-debug",
+  "displayName": "pyrung Debugger",
+  "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
+  "version": "0.0.1",
+  "publisher": "pyrung",
+  "license": "MPL-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebug",
+    "onCommand:pyrung.addMonitor",
+    "onCommand:pyrung.removeMonitor",
+    "onCommand:pyrung.findLabel",
+    "onCommand:pyrung.monitorMenu",
+    "onCommand:pyrung.toggleRapidStep",
+    "onCommand:pyrung.configureRapidStep"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "pyrung.addMonitor",
+        "title": "pyrung: Add Monitor"
+      },
+      {
+        "command": "pyrung.removeMonitor",
+        "title": "pyrung: Remove Monitor"
+      },
+      {
+        "command": "pyrung.findLabel",
+        "title": "pyrung: Find Label"
+      },
+      {
+        "command": "pyrung.monitorMenu",
+        "title": "pyrung: Monitor Menu"
+      },
+      {
+        "command": "pyrung.toggleRapidStep",
+        "title": "pyrung: Toggle Rapid Step"
+      },
+      {
+        "command": "pyrung.configureRapidStep",
+        "title": "pyrung: Configure Rapid Step"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "python"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "pyrung",
+        "label": "pyrung",
+        "languages": [
+          "python"
+        ],
+        "runtime": "python",
+        "runtimeArgs": [
+          "-m",
+          "pyrung.dap"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the Python file that constructs the Program or PLCRunner."
+              },
+              "pythonPath": {
+                "type": "string",
+                "description": "Path to Python interpreter (e.g. .venv/bin/python). Defaults to 'python'."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "name": "Debug PLC Logic",
+            "type": "pyrung",
+            "request": "launch",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "pyrung: Debug PLC Logic",
+            "description": "Launch pyrung DAP against a ladder logic script.",
+            "body": {
+              "name": "Debug PLC Logic",
+              "type": "pyrung",
+              "request": "launch",
+              "program": "${file}"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

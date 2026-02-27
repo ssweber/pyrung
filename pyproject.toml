@@ -7,7 +7,7 @@ Repository = "https://github.com/ssweber/pyrung"
 
 [project]
 name = "pyrung"
-description = "A Pythonic Ladder Logic Framework"
+description = "Write ladder logic in Python"
 authors = [
     { name="ssweber", email="57631333+ssweber@users.noreply.github.com" },
 ]
@@ -39,6 +39,8 @@ classifiers = [
 # ---- Main dependencies ----
 
 dependencies = [
+    "pyrsistent>=0.20.0",
+    "pyclickplc",
 ]
 
 
@@ -53,10 +55,18 @@ dev = [
     "ty>=0.0.14",
     "funlog>=0.2.0",
 ]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.0",
+    "mkdocstrings[python]>=0.30.0",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-llmstxt>=0.3.0",
+]
 
 [project.scripts]
 # Add script entry points here:
 pyrung = "pyrung:main"
+pyrung-dap = "pyrung.dap:main"
 
 
 # ---- Build system ----
@@ -83,8 +93,6 @@ bump = true
 # The source location for the package.
 packages = ["src/pyrung"]
 
-
-# ---- Settings ----
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
@@ -136,6 +144,7 @@ root = ["./src", "./tests", "./devtools"]
 
 [tool.ty.src]
 exclude = [
+    "scratchpad/*",
 ]
 
 [tool.ty.rules]
@@ -143,16 +152,21 @@ exclude = [
 # Note: unresolved-import is ignored because ty has issues with src-layout
 # projects and relative imports. The code runs correctly with Python.
 unresolved-import = "ignore"
+unused-ignore-comment = "error"
+
 
 [tool.codespell]
 # Add here as needed:
-# ignore-words-list = "foo,bar"
+# ignore-words-list = ""
 # skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]
 python_files = ["*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "integration: networked or multi-process integration test",
+]
 testpaths = [
     "src",
     "tests",

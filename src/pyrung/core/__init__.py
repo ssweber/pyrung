@@ -1,0 +1,212 @@
+"""Immutable PLC Engine.
+
+Redux-style architecture where logic is a pure function:
+    Logic(Current_State) -> Next_State
+
+Uses ScanContext for batched updates within a scan cycle,
+reducing object allocation from O(instructions) to O(1) per scan.
+"""
+
+from pyrung.core.context import ScanContext
+from pyrung.core.copy_modifiers import as_ascii, as_binary, as_text, as_value
+from pyrung.core.debug_trace import RungTrace, RungTraceEvent
+from pyrung.core.expression import (
+    PI,
+    Expression,
+    acos,
+    asin,
+    atan,
+    cos,
+    degrees,
+    log,
+    log10,
+    lro,
+    lsh,
+    radians,
+    rro,
+    rsh,
+    sin,
+    sqrt,
+    tan,
+)
+from pyrung.core.memory_block import (
+    Block,
+    BlockRange,
+    IndirectBlockRange,
+    IndirectExprRef,
+    IndirectRef,
+    InputBlock,
+    OutputBlock,
+    SlotConfig,
+)
+from pyrung.core.program import (
+    ForbiddenControlFlowError,
+    ForLoop,
+    Program,
+    Rung,
+    SubroutineFunc,
+    all_of,
+    any_of,
+    blockcopy,
+    branch,
+    calc,
+    call,
+    copy,
+    count_down,
+    count_up,
+    event_drum,
+    fall,
+    fill,
+    forloop,
+    latch,
+    off_delay,
+    on_delay,
+    out,
+    pack_bits,
+    pack_text,
+    pack_words,
+    program,
+    reset,
+    return_early,
+    rise,
+    run_enabled_function,
+    run_function,
+    search,
+    shift,
+    subroutine,
+    time_drum,
+    unpack_to_bits,
+    unpack_to_words,
+)
+from pyrung.core.runner import PLCRunner
+from pyrung.core.state import SystemState
+from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
+from pyrung.core.system_points import system
+from pyrung.core.tag import (
+    Bool,
+    Char,
+    Dint,
+    ImmediateRef,
+    InputTag,
+    Int,
+    OutputTag,
+    Real,
+    Tag,
+    TagType,
+    Word,
+)
+from pyrung.core.time_mode import TimeMode, TimeUnit
+
+# Time unit aliases for DSL ergonomics
+Tms = TimeUnit.Tms
+Ts = TimeUnit.Ts
+Tm = TimeUnit.Tm
+Th = TimeUnit.Th
+Td = TimeUnit.Td
+
+__all__ = [
+    "PLCRunner",
+    "ScanContext",
+    "SystemState",
+    "RungTrace",
+    "RungTraceEvent",
+    "system",
+    "TimeMode",
+    "TimeUnit",
+    "Tms",
+    "Ts",
+    "Tm",
+    "Th",
+    "Td",
+    # Structured factories
+    "Field",
+    "AutoDefault",
+    "auto",
+    "udt",
+    "named_array",
+    "InstanceView",
+    # Tags (IEC 61131-3 names)
+    "Tag",
+    "TagType",
+    "Bool",
+    "Int",
+    "Dint",
+    "Real",
+    "Char",
+    "Word",
+    "InputTag",
+    "OutputTag",
+    "ImmediateRef",
+    # Memory blocks
+    "Block",
+    "InputBlock",
+    "OutputBlock",
+    "BlockRange",
+    "IndirectBlockRange",
+    "IndirectRef",
+    "IndirectExprRef",
+    "SlotConfig",
+    # Program structure
+    "Program",
+    "Rung",
+    "SubroutineFunc",
+    "ForLoop",
+    "ForbiddenControlFlowError",
+    "program",
+    "branch",
+    "forloop",
+    "subroutine",
+    # Instructions
+    "out",
+    "latch",
+    "reset",
+    "copy",
+    "run_function",
+    "run_enabled_function",
+    "blockcopy",
+    "fill",
+    "pack_bits",
+    "pack_text",
+    "pack_words",
+    "unpack_to_bits",
+    "unpack_to_words",
+    "calc",
+    "call",
+    "return_early",
+    "count_up",
+    "count_down",
+    "event_drum",
+    "search",
+    "shift",
+    "on_delay",
+    "off_delay",
+    "time_drum",
+    # Conditions
+    "rise",
+    "fall",
+    "all_of",
+    "any_of",
+    # Copy modifiers
+    "as_value",
+    "as_ascii",
+    "as_text",
+    "as_binary",
+    # Expressions
+    "Expression",
+    "PI",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "radians",
+    "degrees",
+    "log",
+    "log10",
+    "lsh",
+    "rsh",
+    "lro",
+    "rro",
+]

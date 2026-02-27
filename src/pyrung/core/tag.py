@@ -1,0 +1,686 @@
+"""Tag definitions for the immutable PLC engine.
+
+Tags are lightweight references to values in SystemState.
+They carry type metadata but hold no runtime state.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING, Any, ClassVar, cast
+
+from pyrung.core._source import _capture_source
+from pyrung.core.live_binding import get_active_runner
+
+if TYPE_CHECKING:
+    from pyrung.core.condition import Condition
+    from pyrung.core.memory_block import Block, BlockRange
+
+
+class TagType(Enum):
+    """Data types for tags (IEC 61131-3 naming)."""
+
+    BOOL = "bool"  # Boolean: True/False
+    INT = "int"  # 16-bit signed: -32768 to 32767
+    DINT = "dint"  # 32-bit signed (Double INT)
+    REAL = "real"  # 32-bit float
+    WORD = "word"  # 16-bit unsigned
+    CHAR = "char"  # Single ASCII character
+
+
+@dataclass(frozen=True)
+class MappingEntry:
+    """Logical-to-hardware mapping declaration used by TagMap."""
+
+    source: Tag | Block
+    target: Tag | BlockRange
+
+
+@dataclass(frozen=True)
+class Tag:
+    """A reference to a value in SystemState.
+
+    Tags define what a value is (name, type, behavior) but hold no runtime state.
+    Values live only in SystemState.tags.
+
+    Attributes:
+        name: Unique identifier for this tag.
+        type: Data type (BOOL, INT, DINT, REAL, WORD, CHAR).
+        default: Default value (None means use type default).
+        retentive: Whether value survives power cycles.
+    """
+
+    name: str
+    type: TagType = TagType.BOOL
+    default: Any = field(default=None)
+    retentive: bool = False
+
+    def __post_init__(self):
+        # Set type-appropriate default if not specified
+        if self.default is None:
+            defaults = {
+                TagType.BOOL: False,
+                TagType.INT: 0,
+                TagType.DINT: 0,
+                TagType.REAL: 0.0,
+                TagType.WORD: 0,
+                TagType.CHAR: "",
+            }
+            # Use object.__setattr__ because frozen=True
+            object.__setattr__(self, "default", defaults.get(self.type, 0))
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+        """Create equality comparison condition."""
+        from pyrung.core.condition import CompareEq
+
+        cond = CompareEq(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+        """Create inequality comparison condition."""
+        from pyrung.core.condition import CompareNe
+
+        cond = CompareNe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __lt__(self, other: Any) -> Condition:
+        """Create less-than comparison condition."""
+        from pyrung.core.condition import CompareLt
+
+        cond = CompareLt(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __le__(self, other: Any) -> Condition:
+        """Create less-than-or-equal comparison condition."""
+        from pyrung.core.condition import CompareLe
+
+        cond = CompareLe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __gt__(self, other: Any) -> Condition:
+        """Create greater-than comparison condition."""
+        from pyrung.core.condition import CompareGt
+
+        cond = CompareGt(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __ge__(self, other: Any) -> Condition:
+        """Create greater-than-or-equal comparison condition."""
+        from pyrung.core.condition import CompareGe
+
+        cond = CompareGe(self, other)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+    def __or__(self, other: object) -> Any:
+        """Create OR condition (for BOOL) or bitwise OR expression (for non-BOOL)."""
+        from pyrung.core.condition import AnyCondition
+        from pyrung.core.condition import Condition as CondBase
+        from pyrung.core.expression import TagExpr
+
+        # For non-BOOL tags, use bitwise OR
+        if self.type != TagType.BOOL:
+            if isinstance(other, CondBase):
+                raise TypeError(
+                    f"Cannot OR Tag with {type(other).__name__}. "
+                    "Bitwise OR requires numeric/tag expression operands."
+                )
+            return TagExpr(self) | cast(Any, other)
+
+        if isinstance(other, Tag | CondBase):
+            cond = AnyCondition(self, other)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        raise TypeError(
+            f"Cannot OR Tag with {type(other).__name__}. "
+            f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
+        )
+
+    def __ror__(self, other: Any) -> Any:
+        """Support reverse OR for both condition and bitwise operations."""
+        from pyrung.core.condition import AnyCondition
+        from pyrung.core.condition import Condition as CondBase
+        from pyrung.core.expression import TagExpr
+
+        # For non-BOOL tags, use bitwise OR
+        if self.type != TagType.BOOL:
+            if isinstance(other, CondBase):
+                raise TypeError(
+                    f"Cannot OR {type(other).__name__} with Tag. "
+                    "Bitwise OR requires numeric/tag expression operands."
+                )
+            return other | TagExpr(self)
+
+        if isinstance(other, Tag | CondBase):
+            cond = AnyCondition(other, self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            for child in cond.conditions:
+                if child.source_file is None:
+                    child.source_file = cond.source_file
+                if child.source_line is None:
+                    child.source_line = cond.source_line
+            return cond
+        raise TypeError(
+            f"Cannot OR {type(other).__name__} with Tag. "
+            f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
+        )
+
+    def __bool__(self) -> bool:
+        """Prevent accidental use as boolean."""
+        raise TypeError(
+            f"Cannot use Tag '{self.name}' as boolean. "
+            "Use it in a Rung condition instead: Rung(tag) or Rung(tag == value)"
+        )
+
+    @property
+    def value(self) -> Any:
+        """Read or write this tag's value through the active runner scope.
+
+        Returns the current value as seen by the runner, including any pending
+        patches or forces. Writes are staged as one-shot patches consumed at
+        the next `step()`.
+
+        Raises:
+            RuntimeError: If called outside `with runner.active(): ...`.
+
+        Example:
+            ```python
+            runner = PLCRunner(logic)
+            with runner.active():
+                print(StartButton.value)    # read current value
+                StartButton.value = True    # queue for next scan
+            ```
+        """
+        runner = _require_active_runner(self.name)
+        return runner._peek_live_tag_value(self.name, self.default)
+
+    @value.setter
+    def value(self, new_value: Any) -> None:
+        runner = _require_active_runner(self.name)
+        runner.patch({self.name: new_value})
+
+    def map_to(self, target: Tag) -> MappingEntry:
+        """Create a logical-to-hardware mapping entry."""
+        return MappingEntry(source=self, target=target)
+
+    def as_value(self) -> Any:
+        """Wrap this tag for text->numeric character-value conversion."""
+        from pyrung.core.copy_modifiers import as_value
+
+        return as_value(self)
+
+    def as_ascii(self) -> Any:
+        """Wrap this tag for text->numeric ASCII-code conversion."""
+        from pyrung.core.copy_modifiers import as_ascii
+
+        return as_ascii(self)
+
+    def as_text(
+        self,
+        *,
+        suppress_zero: bool = True,
+        pad: int | None = None,
+        exponential: bool = False,
+        termination_code: int | str | None = None,
+    ) -> Any:
+        """Wrap this tag for numeric->text conversion."""
+        from pyrung.core.copy_modifiers import as_text
+
+        return as_text(
+            self,
+            suppress_zero=suppress_zero,
+            pad=pad,
+            exponential=exponential,
+            termination_code=termination_code,
+        )
+
+    def as_binary(self) -> Any:
+        """Wrap this tag for numeric->text binary-copy conversion."""
+        from pyrung.core.copy_modifiers import as_binary
+
+        return as_binary(self)
+
+    # =========================================================================
+    # Arithmetic Operators -> Expression
+    # =========================================================================
+
+    def __add__(self, other: Any) -> Any:
+        """Create addition expression: Tag + value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) + other
+
+    def __radd__(self, other: Any) -> Any:
+        """Create addition expression: value + Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other + TagExpr(self)
+
+    def __sub__(self, other: Any) -> Any:
+        """Create subtraction expression: Tag - value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) - other
+
+    def __rsub__(self, other: Any) -> Any:
+        """Create subtraction expression: value - Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other - TagExpr(self)
+
+    def __mul__(self, other: Any) -> Any:
+        """Create multiplication expression: Tag * value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) * other
+
+    def __rmul__(self, other: Any) -> Any:
+        """Create multiplication expression: value * Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other * TagExpr(self)
+
+    def __truediv__(self, other: Any) -> Any:
+        """Create division expression: Tag / value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) / other
+
+    def __rtruediv__(self, other: Any) -> Any:
+        """Create division expression: value / Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other / TagExpr(self)
+
+    def __floordiv__(self, other: Any) -> Any:
+        """Create floor division expression: Tag // value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) // other
+
+    def __rfloordiv__(self, other: Any) -> Any:
+        """Create floor division expression: value // Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other // TagExpr(self)
+
+    def __mod__(self, other: Any) -> Any:
+        """Create modulo expression: Tag % value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) % other
+
+    def __rmod__(self, other: Any) -> Any:
+        """Create modulo expression: value % Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other % TagExpr(self)
+
+    def __pow__(self, other: Any) -> Any:
+        """Create power expression: Tag ** value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) ** other
+
+    def __rpow__(self, other: Any) -> Any:
+        """Create power expression: value ** Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other ** TagExpr(self)
+
+    def __neg__(self) -> Any:
+        """Create negation expression: -Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return -TagExpr(self)
+
+    def __pos__(self) -> Any:
+        """Create positive expression: +Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return +TagExpr(self)
+
+    def __abs__(self) -> Any:
+        """Create absolute value expression: abs(Tag)."""
+        from pyrung.core.expression import TagExpr
+
+        return abs(TagExpr(self))
+
+    # =========================================================================
+    # Bitwise Operators -> Expression
+    # =========================================================================
+
+    def __and__(self, other: Any) -> Any:
+        """Create AND condition (for BOOL) or bitwise AND expression (non-BOOL)."""
+        from pyrung.core.condition import AllCondition
+        from pyrung.core.condition import Condition as CondBase
+        from pyrung.core.expression import TagExpr
+
+        if self.type == TagType.BOOL:
+            if isinstance(other, CondBase):
+                cond = AllCondition(self, other)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
+            if isinstance(other, Tag) and other.type == TagType.BOOL:
+                cond = AllCondition(self, other)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
+
+        return TagExpr(self) & other
+
+    def __rand__(self, other: Any) -> Any:
+        """Support reverse AND for conditions and bitwise expressions."""
+        from pyrung.core.condition import AllCondition
+        from pyrung.core.condition import Condition as CondBase
+        from pyrung.core.expression import TagExpr
+
+        if self.type == TagType.BOOL:
+            if isinstance(other, CondBase):
+                cond = AllCondition(other, self)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
+            if isinstance(other, Tag) and other.type == TagType.BOOL:
+                cond = AllCondition(other, self)
+                cond.source_file, cond.source_line = _capture_source(depth=2)
+                for child in cond.conditions:
+                    if child.source_file is None:
+                        child.source_file = cond.source_file
+                    if child.source_line is None:
+                        child.source_line = cond.source_line
+                return cond
+
+        return other & TagExpr(self)
+
+    def __xor__(self, other: Any) -> Any:
+        """Create bitwise XOR expression: Tag ^ value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) ^ other
+
+    def __rxor__(self, other: Any) -> Any:
+        """Create bitwise XOR expression: value ^ Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other ^ TagExpr(self)
+
+    def __lshift__(self, other: Any) -> Any:
+        """Create left shift expression: Tag << value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) << other
+
+    def __rlshift__(self, other: Any) -> Any:
+        """Create left shift expression: value << Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other << TagExpr(self)
+
+    def __rshift__(self, other: Any) -> Any:
+        """Create right shift expression: Tag >> value."""
+        from pyrung.core.expression import TagExpr
+
+        return TagExpr(self) >> other
+
+    def __rrshift__(self, other: Any) -> Any:
+        """Create right shift expression: value >> Tag."""
+        from pyrung.core.expression import TagExpr
+
+        return other >> TagExpr(self)
+
+    def __invert__(self) -> Any:
+        """Create a normally-closed condition for BOOL, bitwise invert expression otherwise."""
+        if self.type == TagType.BOOL:
+            from pyrung.core.condition import NormallyClosedCondition
+
+            cond = NormallyClosedCondition(self)
+            cond.source_file, cond.source_line = _capture_source(depth=2)
+            return cond
+
+        from pyrung.core.expression import TagExpr
+
+        return ~TagExpr(self)
+
+
+def _require_active_runner(tag_name: str):
+    runner = get_active_runner()
+    if runner is None:
+        raise RuntimeError(
+            f"Tag '{tag_name}' is not bound to an active runner. Use: with runner.active(): ..."
+        )
+    return runner
+
+
+class LiveTag(Tag):
+    """Tag with runner-bound staged value access via `.value`.
+
+    `LiveTag` is the concrete type returned by all IEC constructor functions
+    (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`) and by block indexing.
+    It extends `Tag` with the `.value` property, which provides read/write
+    access to the current runner state.
+
+    Note:
+        `.value` requires an active runner scope. Access outside
+        `with runner.active(): ...` raises `RuntimeError`.
+    """
+
+
+@dataclass(frozen=True)
+class ImmediateRef:
+    """Reference to the immediate (physical) value of an I/O tag.
+
+    Wraps an InputTag or OutputTag to access the physical I/O value
+    directly, bypassing the scan-cycle image table.
+    """
+
+    tag: Tag
+
+
+@dataclass(frozen=True)
+class InputTag(Tag):
+    """Tag representing a physical input channel.
+
+    `InputTag` instances are produced exclusively by indexing an `InputBlock`.
+    They add the `.immediate` property for bypassing the scan-cycle image table.
+
+    `.immediate` semantics by context:
+
+    - **Simulation (pure):** validation-time annotation only; no runtime effect.
+    - **Click dialect:** transcription hint for Click software export.
+    - **CircuitPython dialect:** generates direct hardware-read code.
+    - **Hardware-in-the-loop:** triggers a real hardware read mid-scan.
+
+    You cannot create an `InputTag` directly; use `InputBlock[n]` instead.
+
+    Example:
+        ```python
+        X = InputBlock("X", TagType.BOOL, 1, 16)
+        sensor = X[3]          # LiveInputTag
+        sensor.immediate       # ImmediateRef — bypass image table
+        ```
+    """
+
+    @property
+    def immediate(self) -> ImmediateRef:
+        """Return an ImmediateRef that bypasses the input image table."""
+        return ImmediateRef(self)
+
+
+@dataclass(frozen=True)
+class OutputTag(Tag):
+    """Tag representing a physical output channel.
+
+    `OutputTag` instances are produced exclusively by indexing an `OutputBlock`.
+    They add the `.immediate` property for bypassing the scan-cycle image table.
+
+    `.immediate` semantics by context:
+
+    - **Simulation (pure):** validation-time annotation only; no runtime effect.
+    - **Click dialect:** transcription hint for Click software export.
+    - **CircuitPython dialect:** generates direct hardware-write code.
+    - **Hardware-in-the-loop:** triggers a real hardware write mid-scan.
+
+    You cannot create an `OutputTag` directly; use `OutputBlock[n]` instead.
+
+    Example:
+        ```python
+        Y = OutputBlock("Y", TagType.BOOL, 1, 16)
+        valve = Y[1]           # LiveOutputTag
+        valve.immediate        # ImmediateRef — bypass image table
+        ```
+    """
+
+    @property
+    def immediate(self) -> ImmediateRef:
+        """Return an ImmediateRef that bypasses the output image table."""
+        return ImmediateRef(self)
+
+
+class LiveInputTag(LiveTag, InputTag):
+    """InputTag with runner-bound staged value access via .value."""
+
+
+class LiveOutputTag(LiveTag, OutputTag):
+    """OutputTag with runner-bound staged value access via .value."""
+
+
+class _TagTypeBase(LiveTag):
+    """Base class for tag type marker constructors."""
+
+    _tag_type: ClassVar[TagType]
+    _default_retentive: ClassVar[bool]
+
+    def __init__(self, name: str, *, default: Any = None, retentive: bool | None = None) -> None:
+        # __new__ returns LiveTag and bypasses this initializer.
+        return None
+
+    def __new__(cls, name: str, *, default: Any = None, retentive: bool | None = None) -> LiveTag:
+        if retentive is None:
+            retentive = cls._default_retentive
+        if not isinstance(name, str):
+            raise TypeError(f"{cls.__name__}() name must be a string.")
+        return LiveTag(name, cls._tag_type, default, retentive)
+
+
+class Bool(_TagTypeBase):
+    """Create a BOOL (1-bit boolean) tag.
+
+    Not retentive by default — resets to `False` on power cycle.
+
+    Example:
+        ```python
+        Button = Bool("Button")
+        Light  = Bool("Light", retentive=True)
+        ```
+    """
+
+    _tag_type = TagType.BOOL
+    _default_retentive = False
+
+
+class Int(_TagTypeBase):
+    """Create an INT (16-bit signed integer, −32768 to 32767) tag.
+
+    Retentive by default — survives power cycles.
+
+    Example:
+        ```python
+        Step     = Int("Step")
+        preset = Int("preset", retentive=False)
+        ```
+    """
+
+    _tag_type = TagType.INT
+    _default_retentive = True
+
+
+class Dint(_TagTypeBase):
+    """Create a DINT (32-bit signed integer, ±2 147 483 647) tag.
+
+    Retentive by default. Use for counters or values that exceed INT range.
+
+    Example:
+        ```python
+        TotalCount = Dint("TotalCount")
+        ```
+    """
+
+    _tag_type = TagType.DINT
+    _default_retentive = True
+
+
+class Real(_TagTypeBase):
+    """Create a REAL (32-bit IEEE 754 float) tag.
+
+    Retentive by default. Use for analog presets and process values.
+
+    Example:
+        ```python
+        Temperature = Real("Temperature")
+        FlowRate    = Real("FlowRate", retentive=False)
+        ```
+    """
+
+    _tag_type = TagType.REAL
+    _default_retentive = True
+
+
+class Word(_TagTypeBase):
+    """Create a WORD (16-bit unsigned integer, 0x0000–0xFFFF) tag.
+
+    Retentive by default. Use for bit-packed status registers or hex values.
+    In the Click dialect, `Hex` is an alias for `Word`.
+
+    Example:
+        ```python
+        StatusWord = Word("StatusWord")
+        ```
+    """
+
+    _tag_type = TagType.WORD
+    _default_retentive = True
+
+
+class Char(_TagTypeBase):
+    """Create a CHAR (8-bit ASCII character) tag.
+
+    Retentive by default. Use for single-character text values.
+    For multi-character strings, use a `Block` of `CHAR` tags.
+    In the Click dialect, `Txt` is an alias for `Char`.
+
+    Example:
+        ```python
+        ModeChar = Char("ModeChar")
+        ```
+    """
+
+    _tag_type = TagType.CHAR
+    _default_retentive = True
