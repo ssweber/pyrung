@@ -722,9 +722,12 @@ class PLCRunner:
             disable=self._disable_monitor,
         )
 
-    def when(self, condition: Condition | Tag) -> _BreakpointBuilder:
+    def when(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> _BreakpointBuilder:
         """Create a condition breakpoint builder evaluated after each committed scan."""
-        predicate = self._compile_condition_predicate(condition, method="when")
+        predicate = self._compile_condition_predicate(*conditions, method="when")
         return _BreakpointBuilder(self, predicate)
 
     def when_fn(self, predicate: Callable[[SystemState], bool]) -> _BreakpointBuilder:
@@ -733,20 +736,26 @@ class PLCRunner:
 
     def _compile_condition_predicate(
         self,
-        condition: Condition | Tag,
-        *,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
         method: Literal["run_until", "when"],
     ) -> Callable[[SystemState], bool]:
         """Compile a Tag/Condition expression into a ``SystemState`` predicate."""
-        if callable(condition):
+        if not conditions:
+            raise TypeError(f"{method}() requires at least one condition")
+        if len(conditions) == 1 and callable(conditions[0]):
             raise TypeError(
                 f"{method}() now accepts Tag/Condition expressions; "
                 f"use {method}_fn(...) for callable predicates."
             )
 
-        from pyrung.core.condition import _as_condition
+        from pyrung.core.condition import _as_condition, _normalize_and_condition
 
-        normalized = _as_condition(condition)
+        normalized = _normalize_and_condition(
+            *conditions,
+            coerce=_as_condition,
+            empty_error=f"{method}() requires at least one condition",
+            group_empty_error=f"{method}() condition group cannot be empty",
+        )
 
         def _predicate(state: SystemState) -> bool:
             ctx = ScanContext(
@@ -1157,20 +1166,19 @@ class PLCRunner:
 
     def run_until(
         self,
-        condition: Condition | Tag,
-        *,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
         max_cycles: int = 10000,
     ) -> SystemState:
         """Run until condition is true, pause breakpoint fires, or max_cycles reached.
 
         Args:
-            condition: ``Tag`` or ``Condition`` expression to evaluate each scan.
+            conditions: ``Tag`` / ``Condition`` expressions evaluated with implicit AND.
             max_cycles: Maximum scans before giving up (default 10000).
 
         Returns:
             The state that matched the condition, or final state if max reached.
         """
-        predicate = self._compile_condition_predicate(condition, method="run_until")
+        predicate = self._compile_condition_predicate(*conditions, method="run_until")
         return self.run_until_fn(predicate, max_cycles=max_cycles)
 
     def run_until_fn(

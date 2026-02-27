@@ -6,6 +6,7 @@ Conditions are evaluated lazily at scan time against SystemState.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pyrung.core._source import _capture_source
@@ -401,6 +402,29 @@ def _as_condition(cond: object) -> Condition:
     raise TypeError(f"Expected Condition or Tag, got {type(cond)}")
 
 
+def _flatten_condition_inputs(
+    *conditions: object,
+    coerce: Callable[[object], Condition] = _as_condition,
+    group_empty_error: str = "condition group cannot be empty",
+) -> list[Condition]:
+    """Flatten variadic and grouped condition inputs into concrete Conditions."""
+
+    flattened: list[Condition] = []
+
+    def _walk(value: object) -> None:
+        if isinstance(value, tuple | list):
+            if not value:
+                raise ValueError(group_empty_error)
+            for item in value:
+                _walk(item)
+            return
+        flattened.append(coerce(value))
+
+    for condition in conditions:
+        _walk(condition)
+    return flattened
+
+
 class AllCondition(Condition):
     """AND condition - true when all sub-conditions are true.
 
@@ -410,15 +434,11 @@ class AllCondition(Condition):
     """
 
     def __init__(self, *conditions: ConditionInput):
-        self.conditions: list[Condition] = []
-        for cond in conditions:
-            if isinstance(cond, tuple | list):
-                if not cond:
-                    raise ValueError("all_of() group cannot be empty")
-                for grouped in cond:
-                    self.conditions.append(_as_condition(grouped))
-            else:
-                self.conditions.append(_as_condition(cond))
+        self.conditions = _flatten_condition_inputs(
+            *conditions,
+            coerce=_as_condition,
+            group_empty_error="all_of() group cannot be empty",
+        )
 
         if not self.conditions:
             raise ValueError("all_of() requires at least one condition")
@@ -510,3 +530,22 @@ class AnyCondition(Condition):
                     child.source_line = cond.source_line
             return cond
         return NotImplemented
+
+
+def _normalize_and_condition(
+    *conditions: object,
+    coerce: Callable[[object], Condition] = _as_condition,
+    empty_error: str = "condition requires at least one condition",
+    group_empty_error: str = "condition group cannot be empty",
+) -> Condition:
+    """Normalize variadic/grouped inputs into one Condition with AND semantics."""
+    normalized = _flatten_condition_inputs(
+        *conditions,
+        coerce=coerce,
+        group_empty_error=group_empty_error,
+    )
+    if not normalized:
+        raise ValueError(empty_error)
+    if len(normalized) == 1:
+        return normalized[0]
+    return AllCondition(*normalized)

@@ -160,8 +160,8 @@ Current incremental limitation:
 Condition breakpoints evaluate on each committed `SystemState` snapshot.
 
 ```python
-pause_handle = runner.when(Fault).pause()
-snapshot_handle = runner.when(Fault).snapshot("fault_triggered")
+pause_handle = runner.when(Fault, AutoMode).pause()
+snapshot_handle = runner.when(Fault, AutoMode).snapshot("fault_triggered")
 ```
 
 For advanced callable predicates (for example, `scan_id` checks), use `when_fn(...)`:

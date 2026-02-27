@@ -164,7 +164,7 @@ with Program(strict=False) as logic:
             ],
             current_step=DrumStep,
             completion_flag=DrumDone,
-        ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock)
+        ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 
     with Rung(Running):
         time_drum(

@@ -27,25 +27,32 @@ def guard_oneshot_execution(func: F) -> F:
 
 
 def to_condition(obj: Any) -> Any:
-    """Convert BOOL tags to BitCondition, leaving other condition inputs unchanged."""
-    from pyrung.core.condition import AllCondition, BitCondition
+    """Normalize instruction condition input(s) to a single Condition."""
+    from pyrung.core.condition import BitCondition, Condition, _normalize_and_condition
     from pyrung.core.tag import Tag as TagClass
     from pyrung.core.tag import TagType
 
     if obj is None:
         return None
-    if isinstance(obj, tuple | list):
-        if not obj:
-            raise ValueError("condition group cannot be empty")
-        return AllCondition(*obj)
-    if isinstance(obj, TagClass):
-        if obj.type == TagType.BOOL:
-            return BitCondition(obj)
-        raise TypeError(
-            f"Non-BOOL tag '{obj.name}' cannot be used directly as condition. "
-            "Use comparison operators: tag == value, tag > 0, etc."
-        )
-    return obj
+
+    def _coerce(value: object) -> Condition:
+        if isinstance(value, Condition):
+            return value
+        if isinstance(value, TagClass):
+            if value.type == TagType.BOOL:
+                return BitCondition(value)
+            raise TypeError(
+                f"Non-BOOL tag '{value.name}' cannot be used directly as condition. "
+                "Use comparison operators: tag == value, tag > 0, etc."
+            )
+        raise TypeError(f"Expected Condition or Tag, got {type(value)}")
+
+    return _normalize_and_condition(
+        obj,
+        coerce=_coerce,
+        empty_error="condition requires at least one condition",
+        group_empty_error="condition group cannot be empty",
+    )
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:

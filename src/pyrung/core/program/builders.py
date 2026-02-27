@@ -67,6 +67,15 @@ def _capture_chained_method_source() -> tuple[str | None, int | None]:
     return None, None
 
 
+def _coalesce_condition_args(method_name: str, conditions: tuple[Any, ...]) -> Any:
+    """Return a single condition object from variadic builder arguments."""
+    if not conditions:
+        raise TypeError(f"{method_name}() requires at least one condition")
+    if len(conditions) == 1:
+        return conditions[0]
+    return conditions
+
+
 class _BuilderBase:
     """Shared rung/source bookkeeping for terminal instruction builders."""
 
@@ -124,20 +133,26 @@ class ShiftBuilder(_BuilderBase):
         self._register_required_builder("shift(...).clock(...).reset(...)")
         self._bit_range = bit_range
         self._data_condition = data_condition
-        self._clock_condition: Condition | Tag | None = None
+        self._clock_condition: Any = None
         self._clock_source_file: str | None = None
         self._clock_source_line: int | None = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
 
-    def clock(self, condition: Condition | Tag) -> ShiftBuilder:
+    def clock(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> ShiftBuilder:
         """Set the shift clock trigger condition."""
         self._assert_required_builder_owner("clock")
         self._clock_source_file, self._clock_source_line = _capture_chained_method_source()
-        self._clock_condition = condition
+        self._clock_condition = _coalesce_condition_args("clock", conditions)
         return self
 
-    def reset(self, condition: Condition | Tag) -> BlockRange | IndirectBlockRange:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> BlockRange | IndirectBlockRange:
         """Finalize the shift instruction with required reset condition."""
         self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
@@ -149,7 +164,7 @@ class ShiftBuilder(_BuilderBase):
                 bit_range=self._bit_range,
                 data_condition=self._data_condition,
                 clock_condition=self._clock_condition,
-                reset_condition=condition,
+                reset_condition=_coalesce_condition_args("reset", conditions),
             )
             instr.debug_substeps = (
                 DebugInstructionSubStep(
@@ -302,7 +317,10 @@ class EventDrumBuilder(_DrumBuilderBase):
         self._completion_flag = completion_flag
         self._auto_condition = auto_condition
 
-    def reset(self, condition: Condition | Tag) -> EventDrumBuilder:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> EventDrumBuilder:
         self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         try:
@@ -313,7 +331,7 @@ class EventDrumBuilder(_DrumBuilderBase):
                 current_step=self._current_step,
                 completion_flag=self._completion_flag,
                 auto_condition=self._auto_condition,
-                reset_condition=condition,
+                reset_condition=_coalesce_condition_args("reset", conditions),
             )
             self._instruction = instr
             self._refresh_debug_substeps()
@@ -324,7 +342,12 @@ class EventDrumBuilder(_DrumBuilderBase):
         self._resolve_required_builder()
         return self
 
-    def jump(self, *, condition: Condition | Tag, step: Tag | int) -> EventDrumBuilder:
+    def jump(
+        self,
+        *,
+        condition: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        step: Tag | int,
+    ) -> EventDrumBuilder:
         self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
         self._assert_finalized("jump")
         assert self._instruction is not None
@@ -332,11 +355,14 @@ class EventDrumBuilder(_DrumBuilderBase):
         self._refresh_debug_substeps()
         return self
 
-    def jog(self, condition: Condition | Tag) -> EventDrumBuilder:
+    def jog(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> EventDrumBuilder:
         self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
         self._assert_finalized("jog")
         assert self._instruction is not None
-        self._instruction.set_jog(condition)
+        self._instruction.set_jog(_coalesce_condition_args("jog", conditions))
         self._refresh_debug_substeps()
         return self
 
@@ -370,7 +396,10 @@ class TimeDrumBuilder(_DrumBuilderBase):
         self._completion_flag = completion_flag
         self._auto_condition = auto_condition
 
-    def reset(self, condition: Condition | Tag) -> TimeDrumBuilder:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeDrumBuilder:
         self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
         try:
@@ -383,7 +412,7 @@ class TimeDrumBuilder(_DrumBuilderBase):
                 accumulator=self._accumulator,
                 completion_flag=self._completion_flag,
                 auto_condition=self._auto_condition,
-                reset_condition=condition,
+                reset_condition=_coalesce_condition_args("reset", conditions),
             )
             self._instruction = instr
             self._refresh_debug_substeps()
@@ -394,7 +423,12 @@ class TimeDrumBuilder(_DrumBuilderBase):
         self._resolve_required_builder()
         return self
 
-    def jump(self, *, condition: Condition | Tag, step: Tag | int) -> TimeDrumBuilder:
+    def jump(
+        self,
+        *,
+        condition: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        step: Tag | int,
+    ) -> TimeDrumBuilder:
         self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
         self._assert_finalized("jump")
         assert self._instruction is not None
@@ -402,11 +436,14 @@ class TimeDrumBuilder(_DrumBuilderBase):
         self._refresh_debug_substeps()
         return self
 
-    def jog(self, condition: Condition | Tag) -> TimeDrumBuilder:
+    def jog(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> TimeDrumBuilder:
         self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
         self._assert_finalized("jog")
         assert self._instruction is not None
-        self._instruction.set_jog(condition)
+        self._instruction.set_jog(_coalesce_condition_args("jog", conditions))
         self._refresh_debug_substeps()
         return self
 
@@ -480,14 +517,17 @@ class CountUpBuilder(_BuilderBase):
         self._accumulator = accumulator
         self._preset = preset
         self._up_condition = up_condition  # From rung conditions
-        self._down_condition: Condition | Tag | None = None
-        self._reset_condition: Condition | Tag | None = None
+        self._down_condition: Any = None
+        self._reset_condition: Any = None
         self._down_source_file: str | None = None
         self._down_source_line: int | None = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
 
-    def down(self, condition: Condition | Tag) -> CountUpBuilder:
+    def down(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> CountUpBuilder:
         """Add down trigger (optional).
 
         Creates a bidirectional counter that increments on rung true
@@ -501,10 +541,13 @@ class CountUpBuilder(_BuilderBase):
         """
         self._assert_required_builder_owner("down")
         self._down_source_file, self._down_source_line = _capture_chained_method_source()
-        self._down_condition = condition
+        self._down_condition = _coalesce_condition_args("down", conditions)
         return self
 
-    def reset(self, condition: Condition | Tag) -> Tag:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> Tag:
         """Add reset condition (required).
 
         When reset condition is true, clears both done bit and accumulator.
@@ -517,7 +560,7 @@ class CountUpBuilder(_BuilderBase):
         """
         self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
-        self._reset_condition = condition
+        self._reset_condition = _coalesce_condition_args("reset", conditions)
         try:
             # Now build and add the instruction
             instr = CountUpInstruction(
@@ -587,11 +630,14 @@ class CountDownBuilder(_BuilderBase):
         self._accumulator = accumulator
         self._preset = preset
         self._down_condition = down_condition  # From rung conditions
-        self._reset_condition: Condition | Tag | None = None
+        self._reset_condition: Any = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
 
-    def reset(self, condition: Condition | Tag) -> Tag:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> Tag:
         """Add reset condition (required).
 
         When reset condition is true, loads preset into accumulator
@@ -605,7 +651,7 @@ class CountDownBuilder(_BuilderBase):
         """
         self._assert_required_builder_owner("reset")
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
-        self._reset_condition = condition
+        self._reset_condition = _coalesce_condition_args("reset", conditions)
         try:
             # Now build and add the instruction
             instr = CountDownInstruction(
@@ -734,11 +780,14 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         self._preset = preset
         self._enable_condition = enable_condition
         self._unit = unit
-        self._reset_condition: Condition | Tag | None = None
+        self._reset_condition: Any = None
         self._reset_source_file: str | None = None
         self._reset_source_line: int | None = None
 
-    def reset(self, condition: Condition | Tag) -> Tag:
+    def reset(
+        self,
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    ) -> Tag:
         """Add reset condition (makes timer retentive - RTON).
 
         When reset condition is true, clears both done bit and accumulator.
@@ -750,7 +799,7 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
             The done bit tag.
         """
         self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
-        self._reset_condition = condition
+        self._reset_condition = _coalesce_condition_args("reset", conditions)
         self._finalize()
         return self._done_bit
 

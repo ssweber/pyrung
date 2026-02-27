@@ -58,14 +58,17 @@ state = runner.run(10)    # Run exactly 10 scans
 state = runner.run_for(1.0)   # Advance simulation clock by at least 1 second
 ```
 
-### `run_until(condition)` — run until condition is met
+### `run_until(condition, ...)` — run until condition is met
 
 ```python
 state = runner.run_until(
     ~MotorRunning,
+    AutoMode,
     max_cycles=10000,
 )
 ```
+
+Multiple conditions are combined with implicit AND.
 
 If `max_cycles` is reached before the condition evaluates True, execution stops and the final state is returned.
 
