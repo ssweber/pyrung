@@ -238,6 +238,7 @@ Use expression-first `run_until(...)` when a `Tag`/`Condition` is enough:
 
 ```python
 runner.run_until(~Fault, max_cycles=200)
+runner.run_until(AutoMode & ~Fault & Ready, max_cycles=200)
 ```
 
 Use `run_until_fn(...)` only for advanced callable predicates:

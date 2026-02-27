@@ -58,7 +58,7 @@ state = runner.run(10)    # Run exactly 10 scans
 state = runner.run_for(1.0)   # Advance simulation clock by at least 1 second
 ```
 
-### `run_until(condition, ...)` — run until condition is met
+### `run_until(*conditions, ...)` — run until condition is met
 
 ```python
 state = runner.run_until(
@@ -72,6 +72,14 @@ Multiple conditions are combined with implicit AND.
 
 If `max_cycles` is reached before the condition evaluates True, execution stops and the final state is returned.
 
+Accepted condition input forms:
+
+- single condition: `runner.run_until(Fault)`
+- multiple positional: `runner.run_until(Fault, AutoMode)`
+- grouped/nested tuple/list: `runner.run_until((Fault, AutoMode), Ready)`
+
+Use `run_until_fn(...)` for callable predicates.
+
 ### `run_until_fn(predicate)` — advanced callable predicates
 
 Use `run_until_fn` when the stop condition is not expressible as a `Tag`/`Condition` expression:
@@ -81,6 +89,25 @@ state = runner.run_until_fn(
     lambda s: s.scan_id >= 100,
     max_cycles=10000,
 )
+```
+
+### `when(*conditions)` — condition breakpoints
+
+`when(...)` uses the same condition input forms and implicit AND semantics as `run_until(...)`.
+
+```python
+pause_handle = runner.when(Fault, AutoMode).pause()
+snapshot_handle = runner.when(Fault, AutoMode, Ready).snapshot("fault_ready")
+```
+
+Use `when_fn(...)` for callable predicates.
+
+### `when_fn(predicate)` — callable breakpoints
+
+Use `when_fn(...)` for callable predicates:
+
+```python
+runner.when_fn(lambda s: s.scan_id % 10 == 0).snapshot("every_10_scans")
 ```
 
 ## Mode control and reboot

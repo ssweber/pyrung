@@ -428,7 +428,7 @@ Direction is determined by the range order:
 `event_drum(...)` and `time_drum(...)` are terminal builders.
 
 - `.reset(...)` is required and finalizes the instruction.
-- `.jump(condition=..., step=...)` is optional.
+- `.jump(..., step=...)` is optional.
 - `.jog(...)` is optional.
 
 ### Event Drum (`event_drum`)
@@ -446,7 +446,7 @@ with Rung(Running):
         ],
         current_step=DrumStep,
         completion_flag=DrumDone,
-    ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
+    ).reset(ShiftReset).jump((AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 ```
 
 ### Time Drum (`time_drum`)
@@ -466,12 +466,12 @@ with Rung(Running):
         current_step=DrumStep,
         accumulator=DrumAcc,
         completion_flag=DrumDone,
-    ).reset(ShiftReset).jump(condition=Found, step=2).jog(Start)
+    ).reset(ShiftReset).jump(Found, step=2).jog(Start)
 ```
 
 ### Variadic condition chaining (implicit AND)
 
-Builder condition arguments (for example `.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(condition=...)`, and `.jog(...)`) all accept:
+Builder condition arguments (for example `.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(...)`, and `.jog(...)`) all accept:
 
 - a single condition
 - multiple positional conditions
@@ -482,7 +482,7 @@ All forms normalize to one AND expression.
 ```python
 # Equivalent forms
 event_drum(...).reset(ResetA, ResetB).jog(JogA, JogB)
-event_drum(...).jump(condition=(AutoMode, Found), step=2)
+event_drum(...).jump((AutoMode, Found), step=2)
 ```
 
 `jog(A, B)` is valid and means `A AND B`.
@@ -538,5 +538,3 @@ See the [API Reference](../reference/index.md) for full parameter documentation:
 - [`Tag`](../reference/api/core/tag.md)
 - [`Block` / `InputBlock` / `OutputBlock`](../reference/api/core/memory_block.md)
 - Instructions: [`out`, `latch`, `reset`, `copy`, `calc`, `on_delay`, `count_up`, ...](../reference/api/core/instruction.md)
-
-
