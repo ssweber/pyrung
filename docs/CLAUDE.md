@@ -95,18 +95,17 @@ User-facing execution docs only. Creating a runner, time modes, set_rtc, executi
 
 ## What's left
 
-### Needs new home (displaced from old concepts page, context.md, and old runner guide)
-- **Architecture guide** — Redux model, SystemState, PRecord, 9-phase scan cycle, ScanContext, consumer-driven execution, scan_steps(), scan_steps_debug(), inspect()/inspect_event(), RungTrace model
+### Architecture Guide (new)
+New home for displaced internals. Redux model, SystemState/PRecord, 9-phase scan cycle, ScanContext, consumer-driven execution, source location capture, debug stepping APIs (scan_steps/scan_steps_debug), rung inspection (inspect/inspect_event/RungTrace model).
 
 ### Ladder Logic Guide (rewritten)
-Polish pass. Tightened intro (one-line link to concepts instead of re-explaining Program/Rung). Aligned branch section with concepts page ①②③④⑤ evaluation model + three rules + nested branch example. Added oneshot counting subsection. Removed dead API Reference links. Lowercased section headers, removed admonition syntax, matched tone of other guides. Programs section moved to end as brief reference linking to concepts.
+Polish pass. Tightened intro (one-line link to concepts instead of re-explaining Program/Rung). Aligned branch section with concepts page ①②③④⑤ evaluation model + three rules. Added oneshot counting subsection. Removed dead API Reference links. Lowercased section headers, removed admonition syntax, matched tone of other guides. Programs section moved to end as brief reference linking to concepts.
 
 ### Forces & Debug (rewritten)
 Renamed to just "Forces" — the debug half (history, diff, fork, playhead, inspect, breakpoints, monitors) was fully redundant with runner guide + testing guide and removed. Forces section kept as authoritative reference: force vs patch table, add/remove/clear, context manager with nesting, scan-cycle semantics (pre-logic + post-logic), force+patch interaction, supported types. Tag-first examples throughout.
 
-### Guides to review and rewrite
-Priority order:
-1. **DAP/VS Code Guide** — Low priority. Setup and reference doc, fine as-is. Update when extension ships.
+### DAP/VS Code Guide (polished)
+Light pass. Replaced inline DAP mapping list with table, added link to architecture guide for debug stepping APIs. Content otherwise left as-is (setup/reference doc, pending extension publish).
 
 ### Dialect docs (polished)
 - **Click Dialect** — trimmed per-slot config and nickname file internals, condensed DSL naming section, removed dead API reference links, tag-first examples throughout.

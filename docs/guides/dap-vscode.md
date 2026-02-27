@@ -143,14 +143,16 @@ Use `Watch` for predicate evaluation.
 
 ## DAP to runner mapping
 
-- Step Over / Into / Out + `pyrungStepScan`: `runner.scan_steps_debug()`
-- Continue: adapter continue loop over `scan_steps_debug()`
-- Conditional source breakpoints: adapter expression parser + compiled predicates
-- Monitor callbacks: `runner.monitor(tag, callback)`
-- Snapshot labels: `runner.history.find(label)` / `runner.history.find_all(label)` for states,
-  and `runner.history.find_labeled(label)` / `runner.history.find_all_labeled(label)` for metadata
-  (`scanId`, `timestamp`, `rtcIso`, `rtcOffsetSeconds`)
-- Data breakpoints: monitor-backed change listeners
+| VS Code action | Runner API |
+|---------------|------------|
+| Step Over / Into / Out / `pyrungStepScan` | `runner.scan_steps_debug()` |
+| Continue | Adapter loop over `scan_steps_debug()` |
+| Conditional breakpoints | Adapter expression parser + compiled predicates |
+| Monitor values | `runner.monitor(tag, callback)` |
+| Snapshot labels | `runner.history.find_labeled(label)` |
+| Data breakpoints | Monitor-backed change listeners |
+
+See [Architecture — Debug stepping APIs](architecture.md#debug-stepping-apis) for details on `scan_steps_debug()` and rung inspection.
 
 ## Trace event
 
