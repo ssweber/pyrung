@@ -90,17 +90,23 @@ DSL vocabulary only: scans, tags, rungs, branches (with numbered ①②③④⑤
 ### Testing Guide (rewritten)
 Scenario-driven, tag-first throughout. Sections in escalating complexity: basic assert → timers → RTC/time-of-day (shift changeover example) → edge detection → forces as fixtures → run_until with condition expressions → forking for alternate outcomes → monitors → predicate breakpoints/snapshots → diff → pytest fixtures. All examples use `runner.active()` / `.value` pattern. No lambdas, no string-keyed dicts (except diff). RTC/freezegun section removed in favor of `set_rtc`.
 
+### Runner Guide (rewritten)
+User-facing execution docs only. Creating a runner, time modes, set_rtc, execution methods (step/run/run_for/run_until/run_until_fn), injecting inputs (patch + active()), mode control (stop/reboot/battery), inspecting state, history, playhead, diff, fork, numeric behavior. Debug internals displaced: scan_steps(), scan_steps_debug(), inspect(), inspect_event(), RungTrace → future architecture/DAP docs. Breakpoints/monitors briefly shown, linked to testing guide for patterns.
+
 ## What's left
 
-### Needs new home (displaced from old concepts page, context.md)
-- **Architecture guide** — Redux model, SystemState, PRecord, 9-phase scan cycle, ScanContext, consumer-driven execution
+### Needs new home (displaced from old concepts page, context.md, and old runner guide)
+- **Architecture guide** — Redux model, SystemState, PRecord, 9-phase scan cycle, ScanContext, consumer-driven execution, scan_steps(), scan_steps_debug(), inspect()/inspect_event(), RungTrace model
+
+### Ladder Logic Guide (rewritten)
+Polish pass. Tightened intro (one-line link to concepts instead of re-explaining Program/Rung). Aligned branch section with concepts page ①②③④⑤ evaluation model + three rules + nested branch example. Added oneshot counting subsection. Removed dead API Reference links. Lowercased section headers, removed admonition syntax, matched tone of other guides. Programs section moved to end as brief reference linking to concepts.
+
+### Forces & Debug (rewritten)
+Renamed to just "Forces" — the debug half (history, diff, fork, playhead, inspect, breakpoints, monitors) was fully redundant with runner guide + testing guide and removed. Forces section kept as authoritative reference: force vs patch table, add/remove/clear, context manager with nesting, scan-cycle semantics (pre-logic + post-logic), force+patch interaction, supported types. Tag-first examples throughout.
 
 ### Guides to review and rewrite
 Priority order:
-1. **Runner Guide** — Split. User-facing content (time modes, execution methods, numeric behavior) stays. Move `scan_steps_debug()`, `RungTrace`, `inspect()`, `inspect_event()` to architecture or DAP docs.
-2. **Ladder Logic Guide** — Polish pass. Align branch section with concepts page evaluation model. Tighten intro. Otherwise in decent shape as a reference.
-3. **Forces & Debug** — Reorganize. Forces section is good. History/forking/playhead/breakpoints/monitors overlap with runner guide — deduplicate.
-4. **DAP/VS Code Guide** — Low priority. Setup and reference doc, fine as-is. Update when extension ships.
+1. **DAP/VS Code Guide** — Low priority. Setup and reference doc, fine as-is. Update when extension ships.
 
 ### Dialect docs (not yet reviewed)
 - Click Dialect guide
