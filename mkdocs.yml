@@ -1,6 +1,7 @@
 site_name: pyrung
 site_description: Pythonic PLC simulation engine — write ladder logic in Python, simulate with full debug support.
 repo_url: https://github.com/ssweber/pyrung
+site_url: https://ssweber.github.io/pyrung/
 
 theme:
   name: material
@@ -50,6 +51,20 @@ plugins:
             show_root_toc_entry: false
             show_signature_annotations: true
             show_source: false
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Overview:
+          - index.md
+        Getting Started:
+          - getting-started/*.md
+        Guides:
+          - guides/*.md
+        Dialects:
+          - dialects/*.md
+        API Reference:
+          - reference/index.md
+          - reference/api/*.md
 
 exclude_docs: |
   click_reference/**

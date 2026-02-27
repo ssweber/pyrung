@@ -60,6 +60,7 @@ docs = [
     "mkdocs-material>=9.6.0",
     "mkdocstrings[python]>=0.30.0",
     "mkdocs-gen-files>=0.5.0",
+    "mkdocs-llmstxt>=0.3.0",
 ]
 
 [project.scripts]
@@ -91,12 +92,6 @@ bump = true
 [tool.hatch.build.targets.wheel]
 # The source location for the package.
 packages = ["src/pyrung"]
-
-
-# ---- Settings ----
-
-[tool.uv.sources]
-pyclickplc = { path = "../pyclickplc", editable = true }
 
 
 [tool.ruff]

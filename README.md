@@ -23,6 +23,10 @@ with runner.active():
 
 > **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~19k lines, 1,100+ tests). Not yet on PyPI. API may still change.
 
+Documentation: https://ssweber.github.io/pyrung/
+LLM docs index: https://ssweber.github.io/pyrung/llms.txt
+LLM full context: https://ssweber.github.io/pyrung/llms-full.txt
+
 ## Why?
 
 AutomationDirect CLICK PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
