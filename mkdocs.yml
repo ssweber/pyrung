@@ -77,6 +77,8 @@ not_in_nav: |
   CLAUDE.md
 
 markdown_extensions:
+  - toc:
+      toc_depth: 4
   - admonition
   - attr_list
   - pymdownx.highlight:

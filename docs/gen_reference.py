@@ -25,6 +25,41 @@ class ReferencePage:
     symbols: tuple[str, ...]
 
 
+CLICK_BLOCK_SYMBOLS: tuple[str, ...] = (
+    "pyrung.click.Bit",
+    "pyrung.click.Int2",
+    "pyrung.click.Float",
+    "pyrung.click.Hex",
+    "pyrung.click.Txt",
+    "pyrung.click.x",
+    "pyrung.click.y",
+    "pyrung.click.c",
+    "pyrung.click.t",
+    "pyrung.click.ct",
+    "pyrung.click.sc",
+    "pyrung.click.ds",
+    "pyrung.click.dd",
+    "pyrung.click.dh",
+    "pyrung.click.df",
+    "pyrung.click.xd",
+    "pyrung.click.yd",
+    "pyrung.click.xd0u",
+    "pyrung.click.yd0u",
+    "pyrung.click.td",
+    "pyrung.click.ctd",
+    "pyrung.click.sd",
+    "pyrung.click.txt",
+)
+
+CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
+    "pyrung.click.TagMap",
+    "pyrung.click.ClickDataProvider",
+    "pyrung.click.validate_click_program",
+    "pyrung.click.send",
+    "pyrung.click.receive",
+)
+
+
 PAGES: tuple[ReferencePage, ...] = (
     ReferencePage(
         slug="runtime",
@@ -125,36 +160,9 @@ PAGES: tuple[ReferencePage, ...] = (
         title="Click Dialect API",
         tier="Dialect Surface",
         summary="Click prebuilt blocks, aliases, and validation/communication helpers.",
-        symbols=(
-            "pyrung.click.Bit",
-            "pyrung.click.Int2",
-            "pyrung.click.Float",
-            "pyrung.click.Hex",
-            "pyrung.click.Txt",
-            "pyrung.click.x",
-            "pyrung.click.y",
-            "pyrung.click.c",
-            "pyrung.click.t",
-            "pyrung.click.ct",
-            "pyrung.click.sc",
-            "pyrung.click.ds",
-            "pyrung.click.dd",
-            "pyrung.click.dh",
-            "pyrung.click.df",
-            "pyrung.click.xd",
-            "pyrung.click.yd",
-            "pyrung.click.xd0u",
-            "pyrung.click.yd0u",
-            "pyrung.click.td",
-            "pyrung.click.ctd",
-            "pyrung.click.sd",
-            "pyrung.click.txt",
-            "pyrung.click.TagMap",
-            "pyrung.click.ClickDataProvider",
-            "pyrung.click.validate_click_program",
-            "pyrung.click.send",
-            "pyrung.click.receive",
-        ),
+        # Symbols listed for manifest validation; _write_curated_page renders
+        # this page via grouped mkdocstrings members instead of per-symbol directives.
+        symbols=CLICK_BLOCK_SYMBOLS + CLICK_HELPER_SYMBOLS,
     ),
     ReferencePage(
         slug="circuitpy-dialect",
@@ -227,9 +235,42 @@ def _write_curated_page(page: ReferencePage) -> None:
         page.summary,
         "",
     ]
-    for symbol in page.symbols:
-        lines.append(f"::: {symbol}")
+    if page.slug == "click-dialect":
+        lines.extend(["## Mapping and Runtime Helpers", ""])
+        lines.append("::: pyrung.click")
+        lines.extend(
+            [
+                "    options:",
+                "      show_root_heading: false",
+                "      show_docstring_description: false",
+                "      heading_level: 4",
+                "      show_object_full_path: false",
+                "      members:",
+            ]
+        )
+        for symbol in CLICK_HELPER_SYMBOLS:
+            lines.append(f"        - {symbol.rsplit('.', 1)[1]}")
         lines.append("")
+
+        lines.extend(["## Prebuilt Blocks and Aliases", ""])
+        lines.append("::: pyrung.click")
+        lines.extend(
+            [
+                "    options:",
+                "      show_root_heading: false",
+                "      show_docstring_description: false",
+                "      heading_level: 5",
+                "      show_object_full_path: false",
+                "      members:",
+            ]
+        )
+        for symbol in CLICK_BLOCK_SYMBOLS:
+            lines.append(f"        - {symbol.rsplit('.', 1)[1]}")
+        lines.append("")
+    else:
+        for symbol in page.symbols:
+            lines.append(f"::: {symbol}")
+            lines.append("")
 
     with mkdocs_gen_files.open(doc_rel_path, "w") as fd:
         fd.write("\n".join(lines).rstrip() + "\n")
