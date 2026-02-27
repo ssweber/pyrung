@@ -20,6 +20,7 @@ nav:
       - Core Concepts: getting-started/concepts.md
   - Guides:
       - Ladder Logic Reference: guides/ladder-logic.md
+      - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md
       - Forces: guides/forces-debug.md

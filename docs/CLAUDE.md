@@ -112,6 +112,9 @@ Light pass. Replaced inline DAP mapping list with table, added link to architect
 - **CircuitPython Dialect** — replaced admonition syntax, tag-first active() pattern in simulation example, removed dead API reference links, minor tone alignment.
 - Click Reference (42 pages — left as-is)
 
+### Tag Structures Guide (new)
+Tutorial-style guide covering advanced UDT and block features displaced from old concepts page: UDT naming (singleton vs counted, `numbered=True`), `Field` options (retentive, default), `auto()` sequences, `@named_array` with stride, `.clone()`, `.map_to()`, per-slot block config (`configure_slot`, `configure_range`, `rename_slot`, `default_factory`), `SlotConfig` inspection.
+
 ### API Reference
 Per-slot block config, named_array stride, default_factory, clone, etc. — all displaced from old concepts page, needs a proper reference section.
 
