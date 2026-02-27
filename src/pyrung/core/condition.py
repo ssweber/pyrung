@@ -411,17 +411,14 @@ def _flatten_condition_inputs(
 
     flattened: list[Condition] = []
 
-    def _walk(value: object) -> None:
-        if isinstance(value, tuple | list):
-            if not value:
-                raise ValueError(group_empty_error)
-            for item in value:
-                _walk(item)
-            return
-        flattened.append(coerce(value))
-
     for condition in conditions:
-        _walk(condition)
+        if isinstance(condition, tuple | list):
+            if not condition:
+                raise ValueError(group_empty_error)
+            for item in condition:
+                flattened.append(coerce(item))
+        else:
+            flattened.append(coerce(condition))
     return flattened
 
 

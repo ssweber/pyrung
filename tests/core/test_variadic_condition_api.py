@@ -29,7 +29,7 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
 
     with Program() as logic:
         with Rung(enable):
-            count_up(done, acc, preset=10).down((down_a,), [down_b]).reset((reset_a,), reset_b)
+            count_up(done, acc, preset=10).down(down_a, down_b).reset(reset_a, reset_b)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -68,7 +68,7 @@ def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
 
     with Program() as logic:
         with Rung(data):
-            shift(bits.select(1, 3)).clock((clock_a,), [clock_b]).reset((reset_a,), reset_b)
+            shift(bits.select(1, 3)).clock(clock_a, clock_b).reset(reset_a, reset_b)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -110,7 +110,7 @@ def test_on_delay_reset_accepts_variadic_conditions() -> None:
 
     with Program() as logic:
         with Rung(enable):
-            on_delay(done, acc, preset=100).reset((reset_a,), reset_b)
+            on_delay(done, acc, preset=100).reset(reset_a, reset_b)
 
     runner = PLCRunner(logic)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
@@ -136,7 +136,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
 
     with Program() as logic:
         with Rung(enable):
-            count_down(done, acc, preset=5).reset((reset_a,), [reset_b])
+            count_down(done, acc, preset=5).reset(reset_a, reset_b)
 
     runner = PLCRunner(logic)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
@@ -174,7 +174,7 @@ def test_event_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 pattern=[[1, 0], [0, 1]],
                 current_step=step,
                 completion_flag=done,
-            ).reset((reset_a,), reset_b).jog(jog_a, [jog_b])
+            ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -229,7 +229,7 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset((reset_a,), [reset_b]).jog((jog_a,), jog_b)
+            ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -281,7 +281,7 @@ def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 pattern=[[1, 0], [0, 1]],
                 current_step=step,
                 completion_flag=done,
-            ).reset(reset).jump((jump_a,), jump_b, step=2)
+            ).reset(reset).jump(jump_a, jump_b, step=2)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -326,7 +326,7 @@ def test_time_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset(reset).jump((jump_a,), jump_b, step=2)
+            ).reset(reset).jump(jump_a, jump_b, step=2)
 
     runner = PLCRunner(logic)
     runner.patch(
@@ -355,7 +355,7 @@ def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
     c = Bool("C")
 
     runner = PLCRunner(logic=[])
-    runner.when((a, [b]), c).pause()
+    runner.when((a, b), c).pause()
     runner.patch({"A": True, "B": True, "C": False})
     runner.run(cycles=3)
     assert runner.current_state.scan_id == 3
@@ -366,11 +366,11 @@ def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
 
     runner2 = PLCRunner(logic=[])
     runner2.patch({"A": True, "B": False, "C": True})
-    result = runner2.run_until((a, [b]), c, max_cycles=3)
+    result = runner2.run_until((a, b), c, max_cycles=3)
     assert result.scan_id == 3
 
     runner2.patch({"B": True})
-    result = runner2.run_until((a, [b]), c, max_cycles=5)
+    result = runner2.run_until((a, b), c, max_cycles=5)
     assert result.scan_id == 4
 
 
