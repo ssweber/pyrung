@@ -107,6 +107,7 @@ tags.export_nicknames("motor.csv")  # For Click programming software
 |---|---|
 | [Core Concepts](docs/getting-started/concepts.md) | Scan cycle, SystemState, tags, blocks |
 | [Ladder Logic Guide](docs/guides/ladder-logic.md) | Full DSL reference |
+| [Tag Structures](docs/guides/tag-structures.md) | UDTs, named arrays, cloning, block config |
 | [Runner Guide](docs/guides/runner.md) | Execution, time modes, history, fork |
 | [Testing Guide](docs/guides/testing.md) | Unit testing with deterministic time |
 | [Forces & Debug](docs/guides/forces-debug.md) | Force values, breakpoints, time travel |
