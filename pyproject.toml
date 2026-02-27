@@ -87,6 +87,9 @@ vcs = "git"
 style = "pep440"
 bump = true
 
+[tool.hatch.build.targets.sdist]
+exclude = ["scratchpad"]
+
 [tool.hatch.build.targets.wheel]
 # The source location for the package.
 packages = ["src/pyrung"]
