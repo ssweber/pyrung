@@ -423,6 +423,72 @@ Direction is determined by the range order:
 
 ---
 
+## Drum Sequencers
+
+`event_drum(...)` and `time_drum(...)` are terminal builders.
+
+- `.reset(...)` is required and finalizes the instruction.
+- `.jump(condition=..., step=...)` is optional.
+- `.jog(...)` is optional.
+
+### Event Drum (`event_drum`)
+
+```python
+with Rung(Running):
+    event_drum(
+        outputs=[DrumOut1, DrumOut2, DrumOut3],
+        events=[DrumEvt1, DrumEvt2, DrumEvt3, DrumEvt4],
+        pattern=[
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
+        ],
+        current_step=DrumStep,
+        completion_flag=DrumDone,
+    ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
+```
+
+### Time Drum (`time_drum`)
+
+```python
+with Rung(Running):
+    time_drum(
+        outputs=[DrumOut1, DrumOut2, DrumOut3],
+        presets=[50, DS[1], 75, DS[2]],
+        unit=Tms,
+        pattern=[
+            [1, 0, 0],
+            [0, 1, 0],
+            [0, 0, 1],
+            [1, 1, 0],
+        ],
+        current_step=DrumStep,
+        accumulator=DrumAcc,
+        completion_flag=DrumDone,
+    ).reset(ShiftReset).jump(condition=Found, step=2).jog(Start)
+```
+
+### Variadic condition chaining (implicit AND)
+
+Builder condition arguments (for example `.down(...)`, `.clock(...)`, `.reset(...)`, `.jump(condition=...)`, and `.jog(...)`) all accept:
+
+- a single condition
+- multiple positional conditions
+- tuple/list/nested condition groups
+
+All forms normalize to one AND expression.
+
+```python
+# Equivalent forms
+event_drum(...).reset(ResetA, ResetB).jog(JogA, JogB)
+event_drum(...).jump(condition=(AutoMode, Found), step=2)
+```
+
+`jog(A, B)` is valid and means `A AND B`.
+
+---
+
 ## Branching
 
 `branch()` creates a parallel path within a rung. The branch condition is ANDed with the rung's power rail, not with the main condition path.

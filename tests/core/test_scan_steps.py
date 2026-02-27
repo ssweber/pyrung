@@ -324,7 +324,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
                 pattern=[[1, 0], [0, 1]],
                 current_step=drum_step,
                 completion_flag=drum_done,
-            ).reset(reset).jump(condition=jump, step=drum_step).jog(jog)
+            ).reset(reset).jump(jump, step=drum_step).jog(jog)
 
         with Rung(enable):
             time_drum(
@@ -334,7 +334,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
                 current_step=drum_step,
                 accumulator=drum_acc,
                 completion_flag=drum_done,
-            ).reset(reset).jump(condition=jump, step=drum_step).jog(jog)
+            ).reset(reset).jump(jump, step=drum_step).jog(jog)
 
     runner = PLCRunner(logic)
     runner.patch(

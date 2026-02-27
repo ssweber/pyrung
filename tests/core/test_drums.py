@@ -89,7 +89,7 @@ def test_event_drum_pause_reset_and_disabled_jump_jog_behavior() -> None:
                 ],
                 current_step=step,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=1).jog(jog)
+            ).reset(reset).jump(jump, step=1).jog(jog)
 
     runner = PLCRunner(logic)
     runner.patch({"Enable": True, "Reset": False, "Jump": False, "Jog": False, "E1": False, "E2": False})
@@ -192,7 +192,7 @@ def test_time_drum_precedence_auto_reset_jump_jog() -> None:
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=3).jog(jog)
+            ).reset(reset).jump(jump, step=3).jog(jog)
 
     runner = PLCRunner(logic)
     runner.patch({"Enable": False, "Reset": False, "Jump": False, "Jog": False})
@@ -224,7 +224,7 @@ def test_time_drum_ignores_jump_target_out_of_range() -> None:
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=99)
+            ).reset(reset).jump(jump, step=99)
 
     runner = PLCRunner(logic)
     runner.patch({"Enable": True, "Reset": False, "Jump": False})

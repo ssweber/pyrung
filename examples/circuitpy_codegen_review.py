@@ -164,7 +164,7 @@ with Program(strict=False) as logic:
             ],
             current_step=DrumStep,
             completion_flag=DrumDone,
-        ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
+        ).reset(ShiftReset).jump((AutoMode, Found), step=DrumJumpStep).jog(Clock, Found)
 
     with Rung(Running):
         time_drum(
@@ -179,7 +179,7 @@ with Program(strict=False) as logic:
             current_step=DrumStep,
             accumulator=DrumAcc,
             completion_flag=DrumDone,
-        ).reset(ShiftReset).jump(condition=Found, step=2).jog(Start)
+        ).reset(ShiftReset).jump(Found, step=2).jog(Start)
 
     # Pack/unpack family.
     with Rung(Running):

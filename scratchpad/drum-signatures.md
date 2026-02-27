@@ -18,7 +18,7 @@ with Rung(condition):
         ],
         current_step=DS1,
         completion_flag=C8,
-    ).reset(X002).jump(condition=X003, step=DS2).jog(X004)
+    ).reset(X002).jump(X003, step=DS2).jog(X004)
 
 with Rung(condition):
     time_drum(
@@ -34,4 +34,4 @@ with Rung(condition):
         current_step=DS1,
         accumulator=DS2,
         completion_flag=C8,
-    ).reset(X002).jump(condition=X003, step=DS2).jog(X004)
+    ).reset(X002).jump(X003, step=DS2).jog(X004)

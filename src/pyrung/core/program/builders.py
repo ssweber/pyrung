@@ -344,14 +344,13 @@ class EventDrumBuilder(_DrumBuilderBase):
 
     def jump(
         self,
-        *,
-        condition: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
         step: Tag | int,
     ) -> EventDrumBuilder:
         self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
         self._assert_finalized("jump")
         assert self._instruction is not None
-        self._instruction.set_jump(condition, step)
+        self._instruction.set_jump(_coalesce_condition_args("jump", conditions), step)
         self._refresh_debug_substeps()
         return self
 
@@ -425,14 +424,13 @@ class TimeDrumBuilder(_DrumBuilderBase):
 
     def jump(
         self,
-        *,
-        condition: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
         step: Tag | int,
     ) -> TimeDrumBuilder:
         self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
         self._assert_finalized("jump")
         assert self._instruction is not None
-        self._instruction.set_jump(condition, step)
+        self._instruction.set_jump(_coalesce_condition_args("jump", conditions), step)
         self._refresh_debug_substeps()
         return self
 

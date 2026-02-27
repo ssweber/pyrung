@@ -251,7 +251,7 @@ def test_event_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
                 pattern=[[1, 0], [0, 1]],
                 current_step=step,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+            ).reset(reset).jump(jump, step=step).jog(jog)
 
 
 def test_time_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
@@ -274,4 +274,4 @@ def test_time_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+            ).reset(reset).jump(jump, step=step).jog(jog)

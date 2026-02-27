@@ -261,6 +261,94 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
     assert runner.current_state.tags["Step"] == 1
 
 
+def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump_a = Bool("JumpA")
+    jump_b = Bool("JumpB")
+    step = Int("Step")
+    done = Bool("Done")
+    y1 = Bool("Y1")
+    y2 = Bool("Y2")
+    e1 = Bool("E1")
+    e2 = Bool("E2")
+
+    with Program() as logic:
+        with Rung(enable):
+            event_drum(
+                outputs=[y1, y2],
+                events=[e1, e2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset).jump((jump_a,), jump_b, step=2)
+
+    runner = PLCRunner(logic)
+    runner.patch(
+        {
+            "Enable": True,
+            "Reset": False,
+            "JumpA": False,
+            "JumpB": False,
+            "E1": False,
+            "E2": False,
+        }
+    )
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.patch({"JumpA": True, "JumpB": False})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.patch({"JumpB": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+
+
+def test_time_drum_jump_accepts_variadic_grouped_conditions() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump_a = Bool("JumpA")
+    jump_b = Bool("JumpB")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    y1 = Bool("Y1")
+    y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(enable):
+            time_drum(
+                outputs=[y1, y2],
+                presets=[1000, 1000],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset).jump((jump_a,), jump_b, step=2)
+
+    runner = PLCRunner(logic)
+    runner.patch(
+        {
+            "Enable": True,
+            "Reset": False,
+            "JumpA": False,
+            "JumpB": False,
+        }
+    )
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.patch({"JumpA": True, "JumpB": False})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.patch({"JumpB": True})
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+
+
 def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
     a = Bool("A")
     b = Bool("B")

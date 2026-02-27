@@ -317,7 +317,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             event_reset_line = _line_no() + 1
             event_builder = event_builder.reset(reset_cond)
             event_jump_line = _line_no() + 1
-            event_builder = event_builder.jump(condition=jump, step=drum_step)
+            event_builder = event_builder.jump(jump, step=drum_step)
             event_jog_line = _line_no() + 1
             event_builder.jog(jog)
 
@@ -334,7 +334,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             time_reset_line = _line_no() + 1
             time_builder = time_builder.reset(reset_cond)
             time_jump_line = _line_no() + 1
-            time_builder = time_builder.jump(condition=jump, step=drum_step)
+            time_builder = time_builder.jump(jump, step=drum_step)
             time_jog_line = _line_no() + 1
             time_builder.jog(jog)
 

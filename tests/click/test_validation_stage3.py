@@ -273,7 +273,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
                 pattern=[[1, 0], [0, 1]],
                 current_step=step,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+            ).reset(reset).jump(jump, step=step).jog(jog)
         with Rung(enable):
             time_drum(
                 outputs=[out1, out2],
@@ -282,7 +282,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
                 current_step=step,
                 accumulator=acc,
                 completion_flag=done,
-            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+            ).reset(reset).jump(jump, step=step).jog(jog)
 
     prog = _build_program(logic)
     tag_map = TagMap(

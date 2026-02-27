@@ -466,7 +466,7 @@ class TestInstructionCoverage:
                     pattern=[[1, 0], [0, 1]],
                     current_step=step,
                     completion_flag=done,
-                ).reset(reset_cmd).jump(condition=jump_cmd, step=step).jog(jog_cmd)
+                ).reset(reset_cmd).jump(jump_cmd, step=step).jog(jog_cmd)
             with Rung(enable):
                 time_drum(
                     outputs=[out1, out2, out3, out4],
@@ -480,7 +480,7 @@ class TestInstructionCoverage:
                     current_step=step,
                     accumulator=acc,
                     completion_flag=done,
-                ).reset(reset_cmd).jump(condition=jump_cmd, step=3).jog(jog_cmd)
+                ).reset(reset_cmd).jump(jump_cmd, step=3).jog(jog_cmd)
 
         ctx = _context_for_program(prog, hw)
         step_symbol = ctx.symbol_for_tag(step)
