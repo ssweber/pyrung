@@ -28,12 +28,16 @@ def guard_oneshot_execution(func: F) -> F:
 
 def to_condition(obj: Any) -> Any:
     """Convert BOOL tags to BitCondition, leaving other condition inputs unchanged."""
-    from pyrung.core.condition import BitCondition
+    from pyrung.core.condition import AllCondition, BitCondition
     from pyrung.core.tag import Tag as TagClass
     from pyrung.core.tag import TagType
 
     if obj is None:
         return None
+    if isinstance(obj, tuple | list):
+        if not obj:
+            raise ValueError("condition group cannot be empty")
+        return AllCondition(*obj)
     if isinstance(obj, TagClass):
         if obj.type == TagType.BOOL:
             return BitCondition(obj)
