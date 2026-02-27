@@ -71,33 +71,21 @@ X and Y are sparse banks with non-contiguous valid addresses. `.select()` filter
 x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 ```
 
-### Per-slot runtime policy and naming
+### Per-slot configuration
 
-Pre-built Click blocks can be configured in place with per-slot runtime policy
-for retention/default seed values and canonical slot names.
+Pre-built blocks support per-slot runtime policy for retention, default values, and naming. Configure before first access to a slot:
 
 ```python
-from pyrung.click import ds, td
-
-# Configure before first access to the same slot.
 ds.rename_slot(10, "RecipeStep")
-ds.clear_slot_name(10)
 ds.configure_slot(200, retentive=True, default=123)
 td.configure_range(1, 5, retentive=False, default=0)
 ```
 
-Effective policy precedence:
-
-- `name`: slot rename > generated block name
-- `retentive`: slot override > block default
-- `default`: slot override > block `default_factory(addr)` > type default
-
-If a slot is already materialized (`block[n]` accessed), later `rename_slot`,
-`clear_slot_name`, `configure_*`, or `clear_*` for that slot raise `ValueError`.
+If a slot is already materialized (`block[n]` accessed), later configuration for that slot raises `ValueError`.
 
 ## Type aliases
 
-Click-style constructor aliases are available as convenience alternatives to IEC names:
+Click-style constructor aliases as alternatives to IEC names:
 
 | Click alias | IEC equivalent |
 |-------------|----------------|
@@ -109,21 +97,11 @@ Click-style constructor aliases are available as convenience alternatives to IEC
 
 ## DSL naming philosophy
 
-This DSL follows Click PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context. Every rename has a reason, and the reason is always "the new name is clearer here," never just "Python forced our hand."
-
-### Principles
+This DSL follows Click PLC instruction naming as closely as possible, departing only when a Python conflict exists **and** the replacement name is genuinely better in a Python-hosted context.
 
 1. **Keep the Click name** when it's a clear action verb with no conflict: `out`, `reset`, `fill`, `copy`, `blockcopy`.
-
-2. **Use a domain synonym** when Click's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both replacements are well-understood PLC terminology and arguably more descriptive of what the instruction does.
-
-3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In Click, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit via `with Subfunction("name"):`, so the only use of a return instruction is early exit — and the name should say so.
-
-### Why not trailing underscores?
-
-Names like `math_` or `return_` signal "I wanted the real name but couldn't have it." A DSL should feel like a first-class domain language, not a workaround. Each of our renames stands on its own merits.
-
-### Rename table
+2. **Use a domain synonym** when Click's name shadows a Python builtin or standard library module: `set` → `latch`, `math` → `calc`. Both are well-understood PLC terminology.
+3. **Use clarified intent** when Python's execution model changes the semantics: `return` → `return_early`. In Click, every subroutine needs an explicit `RET`. In this DSL, normal subroutine completion is implicit, so the only use is early exit — and the name should say so.
 
 | Click instruction | pyrung DSL | Reason |
 |-------------------|------------|--------|
@@ -157,8 +135,10 @@ with Program() as logic:
 # Simulate — no mapping needed
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-runner.patch({"StartButton": True})
-runner.step()
+
+with runner.active():
+    StartButton.value = True
+    runner.step()
 ```
 
 ## TagMap — mapping to hardware
@@ -177,8 +157,6 @@ mapping = TagMap({
 ```
 
 ### Method-call syntax
-
-Tags and blocks support `.map_to()` for an alternative style:
 
 ```python
 StartButton.map_to(x[1])
@@ -209,33 +187,17 @@ Load an existing Click nickname CSV:
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv")
-# optional strict mode for dotted UDT grouping:
-mapping_strict = TagMap.from_nickname_file("project.csv", mode="strict")
 ```
 
-- Generic block tag pairs (`<Name>` / `</Name>`) are reconstructed as `Block` objects.
-- Imported `Block` logical index start is inferred from hardware span start:
-  `0` when the block starts at address `0`, otherwise `1`.
-- Optional explicit block-start override:
-  `<Base:block(n)> ... </Base:block(n)>` or `<Base:block(start=n)>`.
-- Structured block names are supported:
-  - UDT fields: `<Base.field>` are grouped into one UDT (`mapping.structures`).
-  - Named arrays: `<Base:named_array(count,stride)>` are reconstructed strictly
-    from `Base{instance}_{field}` nicknames.
-- Structured metadata APIs:
-  - `mapping.structures` -> tuple of structured imports.
-  - `mapping.structure_by_name("Base")` -> one structure or `None`.
-  - `mapping.structure_warnings` -> soft UDT fallback reasons.
-- Dotted UDT grouping mode:
-  - `mode="warn"` (default): per-base fallback to plain blocks +
-    warning.
-  - `mode="strict"`: fail-fast with `ValueError` on the first dotted
-    UDT grouping mismatch.
-- Standalone nicknames become individual `Tag` objects.
-- For block rows, nickname import is strict: each nickname must be non-empty,
-  valid, and unique in the resulting map. Non-representable nicknames fail fast
-  with a `ValueError` that includes memory type/address.
-- Duplicate block definition names are rejected during import.
+The importer reconstructs blocks from paired `<Name>`/`</Name>` markers, infers block start indices from hardware spans, and groups dotted names (`Base.field`) into UDT structures. Standalone nicknames become individual `Tag` objects.
+
+For strict grouping validation, pass `mode="strict"` — this fails fast on dotted UDT grouping mismatches instead of falling back to plain blocks with a warning.
+
+```python
+mapping = TagMap.from_nickname_file("project.csv", mode="strict")
+```
+
+Imported structure metadata is available via `mapping.structures` and `mapping.structure_by_name("Base")`.
 
 ### To nickname file
 
@@ -245,12 +207,7 @@ Export to Click nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-- Mapped tags/blocks emit rows with canonical logical names (`Tag.name`), initial
-  value, and retentive flag.
-- Named-array block markers are exported only when structured metadata exists
-  (for maps produced by `from_nickname_file`), and synthetic boundary rows are
-  emitted if the marker boundary falls on a gap slot.
-- Unmapped tags are omitted.
+Mapped tags and blocks emit rows with canonical logical names, initial values, and retentive flags. Unmapped tags are omitted.
 
 ## Validation
 
@@ -325,13 +282,3 @@ receive(
 ```
 
 Communication runs asynchronously in a background worker pool — the scan loop stays synchronous. The instruction self-gates on the rung condition.
-
-## API Reference
-
-See the [API Reference](../reference/index.md) for full parameter documentation:
-
-- [`TagMap`](../reference/api/click/tag_map.md)
-- [`ClickDataProvider`](../reference/api/click/data_provider.md)
-- [`send` / `receive`](../reference/api/click/send_receive.md)
-- [`validate_click_program`](../reference/api/click/validation.md)
-

@@ -4,7 +4,7 @@
 
 > **Aspirational PoC.** The CircuitPython dialect demonstrates the "write once, simulate and deploy" thesis end-to-end: the same pyrung program runs in Python simulation *and* generates a self-contained CircuitPython `while True` scan loop that runs directly on the hardware. The hardware model (35 modules) and code generator are fully implemented and tested. The P1AM-200 is the natural target: tinkerer-friendly PLC hardware with a CircuitPython runtime, and currently the only PLC-class controller where this kind of codegen is this straightforward.
 
-## Installation / Imports
+## Installation
 
 ```bash
 pip install pyrung
@@ -15,7 +15,7 @@ from pyrung import Bool, Int, Real, PLCRunner, Program, Rung, TimeMode, out, cop
 from pyrung.circuitpy import P1AM, generate_circuitpy, validate_circuitpy_program
 ```
 
-## Hardware Setup — P1AM
+## Hardware setup — P1AM
 
 The [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html) is a base unit with up to 15 slots for [Productivity1000 I/O modules](https://www.automationdirect.com/adc/overview/catalog/programmable_controllers/productivity1000_plcs_(stackable_micro)). Configure hardware with the `P1AM` class:
 
@@ -58,7 +58,7 @@ Type mapping: discrete → `Bool`, analog → `Int`, temperature → `Real`.
 
 [`P1-04PWM`](https://facts-engineering.github.io/modules/P1-04PWM/P1-04PWM.html) (PWM) and [`P1-02HSC`](https://facts-engineering.github.io/modules/P1-02HSC/P1-02HSC.html) (high-speed counter) require a multi-tag channel model and are deferred to v2.
 
-## Writing a CircuitPython Program
+## Writing a CircuitPython program
 
 Programs use the same DSL as any other pyrung dialect — only the hardware setup and export step are dialect-specific.
 
@@ -83,20 +83,20 @@ with Program() as logic:
 # 3. Simulate
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-runner.patch({Button.name: True})
-runner.step()
-assert runner.state.tags[Light.name] is True
+
+with runner.active():
+    Button.value = True
+    runner.step()
+    assert Light.value is True
 
 # 4. Generate deployable CircuitPython code
 source = generate_circuitpy(logic, hw, target_scan_ms=10.0, watchdog_ms=500)
 ```
 
-Simulation is identical to any other pyrung program — `PLCRunner`, `patch()`, `force()`, history, breakpoints, and all debug tools work unchanged.
-
-## Code Generation
+## Code generation
 
 ```python
-source = generate_circuitpy(program, hw, *, target_scan_ms, watchdog_ms=None)
+source = generate_circuitpy(program, hw, target_scan_ms=10.0, watchdog_ms=500)
 ```
 
 | Parameter | Type | Description |
@@ -106,7 +106,7 @@ source = generate_circuitpy(program, hw, *, target_scan_ms, watchdog_ms=None)
 | `target_scan_ms` | `float` | Target scan cycle time in milliseconds (must be > 0) |
 | `watchdog_ms` | `int \| None` | Hardware watchdog timeout in ms, or `None` to disable |
 
-Returns a `str` containing a complete, self-contained CircuitPython source file. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
+Returns a complete, self-contained CircuitPython source file as a string. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
 ### Generated file structure
 
@@ -131,15 +131,13 @@ Tags marked `retentive=True` are automatically persisted to an SD card:
 
 ### SD system command bits
 
-The generated runtime supports the system SD command bits below:
+The generated runtime supports system SD command bits:
 
 - `system.storage.sd.save_cmd` triggers `save_memory()` from ladder logic.
 - `system.storage.sd.delete_all_cmd` removes only retentive files (`/sd/memory.json` and `/sd/_memory.tmp`).
 - `system.storage.sd.eject_cmd` calls `storage.umount("/sd")` and keeps SD unavailable until reboot/remount.
 
 Commands are auto-cleared after servicing and pulse `system.storage.sd.write_status` for that scan. Command-operation failures set `system.storage.sd.error = True` and `system.storage.sd.error_code = 3`.
-
-`system.storage.sd.save_cmd` intentionally has no Click SC relay mapping. `system.storage.sd.copy_system_cmd` is removed.
 
 Example ladder trigger:
 
@@ -167,12 +165,6 @@ for finding in report.errors + report.warnings + report.hints:
     print(f"  {finding.severity}: [{finding.code}] {finding.message}")
 ```
 
-Also accessible as a dialect entry point on `Program`:
-
-```python
-report = program.validate("circuitpy", hw=hw, mode="warn")
-```
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `program` | `Program` | — | Program to validate |
@@ -187,9 +179,9 @@ report = program.validate("circuitpy", hw=hw, mode="warn")
 | `CPY_IO_BLOCK_UNTRACKED` | I/O tag not traceable to a `P1AM` slot | Tag was created outside `hw.slot()` — it won't be wired to physical I/O in generated code |
 | `CPY_TIMER_RESOLUTION` | `on_delay` / `off_delay` with `Tms` timing | Millisecond timer accuracy depends on scan time; effective resolution is one scan |
 
-In `"warn"` mode these produce hints. In `"strict"` mode, `CPY_IO_BLOCK_UNTRACKED` is an error, while `CPY_FUNCTION_CALL_VERIFY` and `CPY_TIMER_RESOLUTION` remain non-blocking advisory hints. `generate_circuitpy()` runs strict validation internally and blocks on validation errors.
+In `"warn"` mode these produce hints. In `"strict"` mode, `CPY_IO_BLOCK_UNTRACKED` is an error, while `CPY_FUNCTION_CALL_VERIFY` and `CPY_TIMER_RESOLUTION` remain advisory hints. `generate_circuitpy()` runs strict validation internally and blocks on validation errors.
 
-## Deploying to Hardware
+## Deploying to hardware
 
 The generated code uses the [CircuitPython P1AM library](https://github.com/facts-engineering/CircuitPython_P1AM). Make sure the library is installed on your P1AM-200 before deploying (see [P1AM-200 getting started guide](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html)).
 
@@ -198,20 +190,12 @@ The generated code uses the [CircuitPython P1AM library](https://github.com/fact
 3. Copy `code.py` to the P1AM-200's CIRCUITPY drive — it runs automatically on boot
 4. Insert an SD card for retentive tag storage (FAT-formatted)
 
-!!! note "Verify embedded functions"
-    If your program uses `FunctionCallInstruction`, the callable's source is embedded verbatim. Ensure it only uses CircuitPython-compatible modules and APIs.
+If your program uses `FunctionCallInstruction`, the callable's source is embedded verbatim. Ensure it only uses CircuitPython-compatible modules and APIs.
 
-## External Resources
+## External resources
 
 - [P1AM-200 documentation](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html) — hardware specs, pinout, getting started
 - [CircuitPython P1AM library](https://github.com/facts-engineering/CircuitPython_P1AM) — the runtime library used by generated code
 - [Productivity1000 I/O module docs](https://facts-engineering.github.io/) — per-module wiring diagrams and specs
 - [P1AM-200 on AutomationDirect](https://www.automationdirect.com/adc/shopping/catalog/programmable_controllers/productivity_open_(arduino-compatible)/controllers_-a-_shields/p1am-200) — ordering and datasheets
 - [CircuitPython documentation](https://docs.circuitpython.org/) — language reference for the target runtime
-
-## API Reference
-
-- [`P1AM`](../reference/api/circuitpy/hardware.md) — hardware model
-- [`MODULE_CATALOG`](../reference/api/circuitpy/catalog.md) — module specifications
-- [`generate_circuitpy`](../reference/api/circuitpy/codegen.md) — code generation
-- [`validate_circuitpy_program`](../reference/api/circuitpy/validation.md) — program validation

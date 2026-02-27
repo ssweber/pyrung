@@ -108,10 +108,10 @@ Renamed to just "Forces" — the debug half (history, diff, fork, playhead, insp
 Priority order:
 1. **DAP/VS Code Guide** — Low priority. Setup and reference doc, fine as-is. Update when extension ships.
 
-### Dialect docs (not yet reviewed)
-- Click Dialect guide
-- CircuitPython Dialect guide
-- Click Reference (42 pages — probably leave as-is)
+### Dialect docs (polished)
+- **Click Dialect** — trimmed per-slot config and nickname file internals, condensed DSL naming section, removed dead API reference links, tag-first examples throughout.
+- **CircuitPython Dialect** — replaced admonition syntax, tag-first active() pattern in simulation example, removed dead API reference links, minor tone alignment.
+- Click Reference (42 pages — left as-is)
 
 ### API Reference
 Per-slot block config, named_array stride, default_factory, clone, etc. — all displaced from old concepts page, needs a proper reference section.
