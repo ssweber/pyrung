@@ -698,7 +698,7 @@ class TestPublicExports:
 
 
 class TestCastingReferenceExamples:
-    """Program-level tests based on docs/click_reference/casting.md examples."""
+    """Program-level tests based on Click PLC casting behavior."""
 
     def test_example1_bypass_sign_priority_via_dh(self):
         """DS=-1 -> DD keeps sign, but DS->DH->DD preserves 0x0000FFFF."""

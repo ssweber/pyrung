@@ -69,7 +69,6 @@ plugins:
           - reference/api/*.md
 
 exclude_docs: |
-  click_reference/**
   internal/**
 
 not_in_nav: |

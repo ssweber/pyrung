@@ -111,4 +111,3 @@ tags.export_nicknames("motor.csv")  # For Click programming software
 | [Runner Guide](docs/guides/runner.md) | Execution, time modes, history, fork |
 | [Testing Guide](docs/guides/testing.md) | Unit testing with deterministic time |
 | [Forces & Debug](docs/guides/forces-debug.md) | Force values, breakpoints, time travel |
-| [Click Reference](docs/click_reference/README.md) | Click PLC instruction reference (42 pages) |

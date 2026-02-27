@@ -26,7 +26,6 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `docs/dialects/click.md` — Click dialect (pre-built blocks, TagMap, nickname files, validation, soft-PLC via ClickDataProvider)
 - `docs/dialects/circuitpy.md` — CircuitPython dialect (P1AM hardware model, module catalog, validation, code generation)
 - `docs/internal/debug-spec.md` — Debug architecture specification
-- `docs/click_reference/` — Click PLC instruction reference (42 files: contacts, coils, timers, counters, copy, calc, shift, search, memory banks, system memory, data types)
 
 ## Build & Development Commands
 
