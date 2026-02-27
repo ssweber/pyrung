@@ -23,9 +23,8 @@ with runner.active():
 
 > **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~26k lines, 1,600+ tests). Not yet on PyPI. API may still change.
 
-Documentation: https://ssweber.github.io/pyrung/
-LLM docs index: https://ssweber.github.io/pyrung/llms.txt
-LLM full context: https://ssweber.github.io/pyrung/llms-full.txt
+- Documentation: https://ssweber.github.io/pyrung/
+- LLM docs index: https://ssweber.github.io/pyrung/llms.txt
 
 ## Why?
 
