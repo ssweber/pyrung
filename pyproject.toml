@@ -7,7 +7,7 @@ Documentation = "https://ssweber.github.io/pyrung/"
 
 [project]
 name = "pyrung"
-description = "Write ladder logic in Python"
+description = "Write ladder logic in Python. Simulate it. Test it. Deploy it -- Currently targets AutomationDirect CLICK PLC and CircuitPython ProductivityOpen P1AM-200."
 authors = [
     { name="ssweber", email="57631333+ssweber@users.noreply.github.com" },
 ]
