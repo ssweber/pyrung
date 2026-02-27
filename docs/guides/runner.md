@@ -67,7 +67,7 @@ Executes one complete scan cycle (all phases) and returns the committed `SystemS
 state = runner.run(cycles=300)
 ```
 
-Runs exactly N scans, unless a [pause breakpoint](forces-debug.md#condition-breakpoints-and-snapshot-labels) fires first. Returns the final state.
+Runs exactly N scans, unless a [pause breakpoint](testing.md#predicate-breakpoints-and-snapshots) fires first. Returns the final state.
 
 ### `run_for(seconds)` — advance by time
 

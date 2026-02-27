@@ -532,7 +532,7 @@ class CountUpBuilder(_BuilderBase):
         and decrements on down condition true.
 
         Args:
-            condition: Condition for decrementing the counter.
+            *conditions: Condition(s) for decrementing the counter.
 
         Returns:
             Self for chaining.
@@ -551,7 +551,7 @@ class CountUpBuilder(_BuilderBase):
         When reset condition is true, clears both done bit and accumulator.
 
         Args:
-            condition: Condition for resetting the counter.
+            *conditions: Condition(s) for resetting the counter.
 
         Returns:
             The done bit tag.
@@ -642,7 +642,7 @@ class CountDownBuilder(_BuilderBase):
         and clears done bit.
 
         Args:
-            condition: Condition for resetting the counter.
+            *conditions: Condition(s) for resetting the counter.
 
         Returns:
             The done bit tag.
@@ -791,7 +791,7 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         When reset condition is true, clears both done bit and accumulator.
 
         Args:
-            condition: Condition for resetting the timer.
+            *conditions: Condition(s) for resetting the timer.
 
         Returns:
             The done bit tag.

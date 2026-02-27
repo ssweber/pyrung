@@ -116,7 +116,7 @@ Timers accumulate across scans. `on_delay` with a 3000 ms preset and a 10 ms sca
 
 ## Next steps
 
-The [full traffic light example](../../examples/traffic_light.py) builds on this with structured tags (`@udt`), car counting with edge detection, and a speed history log using `blockcopy`.
+The [full traffic light example](https://github.com/ssweber/pyrung/blob/main/examples/traffic_light.py) builds on this with structured tags (`@udt`), car counting with edge detection, and a speed history log using `blockcopy`.
 
 From here:
 
