@@ -2,8 +2,8 @@
 
 [project.urls]
 Repository = "https://github.com/ssweber/pyrung"
-# Homepage = "https://..."
-# Documentation = "https://..."
+Homepage = "https://ssweber.github.io/pyrung/"
+Documentation = "https://ssweber.github.io/pyrung/"
 
 [project]
 name = "pyrung"
@@ -20,8 +20,8 @@ dynamic = ["version"]
 # Adjust as needed:
 classifiers = [
     # Adjust as needed:
-    "Development Status :: 1 - Planning",
-    #"Development Status :: 4 - Beta",
+    #"Development Status :: 1 - Planning",
+    "Development Status :: 4 - Beta",
     # "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
@@ -64,8 +64,6 @@ docs = [
 ]
 
 [project.scripts]
-# Add script entry points here:
-pyrung = "pyrung:main"
 pyrung-dap = "pyrung.dap:main"
 
 

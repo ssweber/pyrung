@@ -21,7 +21,7 @@ with runner.active():
     assert Light.value is True
 ```
 
-> **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~19k lines, 1,100+ tests). Not yet on PyPI. API may still change.
+> **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~26k lines, 1,600+ tests). Not yet on PyPI. API may still change.
 
 Documentation: https://ssweber.github.io/pyrung/
 LLM docs index: https://ssweber.github.io/pyrung/llms.txt
@@ -37,7 +37,7 @@ Or don't transpose at all. Run your program as a **soft PLC** to test Modbus sen
 
 ```bash
 # Requires Python 3.11+
-pip install -e .
+uv add pyrung
 ```
 
 ### A motor with start/stop logic

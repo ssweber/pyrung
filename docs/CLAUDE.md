@@ -4,7 +4,7 @@
 
 pyrung is a Python DSL for writing ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. It targets AutomationDirect CLICK PLCs and ProductivityOpen P1AM-200 controllers.
 
-Core engine (~19k lines, 1,100+ tests) with three dialects: core, Click PLC, and CircuitPython. Includes a VS Code DAP debugger. Solo project, not yet on PyPI.
+Core engine (~26k lines, 1,600+ tests) with three dialects: core, Click PLC, and CircuitPython. Includes a VS Code DAP debugger.
 
 ## The pitch
 

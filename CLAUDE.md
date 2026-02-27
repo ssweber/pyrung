@@ -83,7 +83,7 @@ make test                       # Run pytest (ALWAYS use this, not uv run pytest
 
 ## Current Status
 
-Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~19k lines of source and 1,100+ tests covering core, click, dap, and examples.
+Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~26k lines of source and 1,600+ tests covering core, click, dap, and examples.
 
 **Not yet done:** PyPI publishing, stable public API guarantee.
 
