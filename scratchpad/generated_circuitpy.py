@@ -21,9 +21,9 @@ WATCHDOG_MS = 500
 PRINT_SCAN_OVERRUNS = False
 
 _SLOT_MODULES = ['P1-08SIM', 'P1-08TRS']
-_RET_DEFAULTS = {'CalcOut': 0, 'CtdAcc': 0, 'CtuAcc': 0, 'FnOut': 0, 'FoundAddr': 0, 'Idx': 1, 'LoopCount': 3, 'PackedDword': 0, 'PackedWord': 0, 'RTonAcc': 0, 'Source': 0, 'Span': 2, 'TofAcc': 0}
-_RET_TYPES = {'CalcOut': 'INT', 'CtdAcc': 'DINT', 'CtuAcc': 'DINT', 'FnOut': 'INT', 'FoundAddr': 'INT', 'Idx': 'INT', 'LoopCount': 'INT', 'PackedDword': 'DINT', 'PackedWord': 'INT', 'RTonAcc': 'INT', 'Source': 'INT', 'Span': 'INT', 'TofAcc': 'INT'}
-_RET_SCHEMA = "216efd3b898354f5a7f4b0bc588f134b566dd3074192c77d98d618a8cfad5c31"
+_RET_DEFAULTS = {'CalcOut': 0, 'CtdAcc': 0, 'CtuAcc': 0, 'DrumAcc': 0, 'DrumJumpStep': 2, 'DrumStep': 1, 'FnOut': 0, 'FoundAddr': 0, 'Idx': 1, 'LoopCount': 3, 'PackedDword': 0, 'PackedWord': 0, 'RTonAcc': 0, 'Source': 0, 'Span': 2, 'TofAcc': 0}
+_RET_TYPES = {'CalcOut': 'INT', 'CtdAcc': 'DINT', 'CtuAcc': 'DINT', 'DrumAcc': 'INT', 'DrumJumpStep': 'INT', 'DrumStep': 'INT', 'FnOut': 'INT', 'FoundAddr': 'INT', 'Idx': 'INT', 'LoopCount': 'INT', 'PackedDword': 'DINT', 'PackedWord': 'INT', 'RTonAcc': 'INT', 'Source': 'INT', 'Span': 'INT', 'TofAcc': 'INT'}
+_RET_SCHEMA = "64439c8fe36afd07b5150ccbc7639f6360d77a28ad4ebd08c421a725c6999a61"
 
 base = P1AM.Base()
 base.rollCall(_SLOT_MODULES)
@@ -45,6 +45,17 @@ _t_CtdAcc = 0
 _t_CtdDone = False
 _t_CtuAcc = 0
 _t_CtuDone = False
+_t_DrumAcc = 0
+_t_DrumDone = False
+_t_DrumEvt1 = False
+_t_DrumEvt2 = False
+_t_DrumEvt3 = False
+_t_DrumEvt4 = False
+_t_DrumJumpStep = 2
+_t_DrumOut1 = False
+_t_DrumOut2 = False
+_t_DrumOut3 = False
+_t_DrumStep = 1
 _t_Enable = False
 _t_FnOut = 0
 _t_Found = False
@@ -113,7 +124,7 @@ def _mount_sd():
         print(f"Retentive storage unavailable: {exc}")
 
 def load_memory():
-    global _t_CalcOut, _t_CtdAcc, _t_CtuAcc, _t_FnOut, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_Source, _t_Span, _t_TofAcc, _sd_write_status, _sd_error, _sd_error_code
+    global _t_CalcOut, _t_CtdAcc, _t_CtuAcc, _t_DrumAcc, _t_DrumJumpStep, _t_DrumStep, _t_FnOut, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_Source, _t_Span, _t_TofAcc, _sd_write_status, _sd_error, _sd_error_code
     if not _sd_available:
         print("Retentive load skipped: SD unavailable")
         return
@@ -156,6 +167,24 @@ def load_memory():
     if isinstance(_entry, dict) and _entry.get("type") == "DINT":
         try:
             _t_CtuAcc = max(-2147483648, min(2147483647, int(_entry.get("value", _t_CtuAcc))))
+        except Exception:
+            pass
+    _entry = values.get("DrumAcc")
+    if isinstance(_entry, dict) and _entry.get("type") == "INT":
+        try:
+            _t_DrumAcc = max(-32768, min(32767, int(_entry.get("value", _t_DrumAcc))))
+        except Exception:
+            pass
+    _entry = values.get("DrumJumpStep")
+    if isinstance(_entry, dict) and _entry.get("type") == "INT":
+        try:
+            _t_DrumJumpStep = max(-32768, min(32767, int(_entry.get("value", _t_DrumJumpStep))))
+        except Exception:
+            pass
+    _entry = values.get("DrumStep")
+    if isinstance(_entry, dict) and _entry.get("type") == "INT":
+        try:
+            _t_DrumStep = max(-32768, min(32767, int(_entry.get("value", _t_DrumStep))))
         except Exception:
             pass
     _entry = values.get("FnOut")
@@ -223,7 +252,7 @@ def load_memory():
     _sd_write_status = False
 
 def save_memory():
-    global _t_CalcOut, _t_CtdAcc, _t_CtuAcc, _t_FnOut, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_Source, _t_Span, _t_TofAcc, _sd_write_status, _sd_error, _sd_error_code
+    global _t_CalcOut, _t_CtdAcc, _t_CtuAcc, _t_DrumAcc, _t_DrumJumpStep, _t_DrumStep, _t_FnOut, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_Source, _t_Span, _t_TofAcc, _sd_write_status, _sd_error, _sd_error_code
     if not _sd_available:
         return
     _sd_write_status = True
@@ -234,6 +263,12 @@ def save_memory():
         values["CtdAcc"] = {"type": "DINT", "value": _t_CtdAcc}
     if _t_CtuAcc != _RET_DEFAULTS["CtuAcc"]:
         values["CtuAcc"] = {"type": "DINT", "value": _t_CtuAcc}
+    if _t_DrumAcc != _RET_DEFAULTS["DrumAcc"]:
+        values["DrumAcc"] = {"type": "INT", "value": _t_DrumAcc}
+    if _t_DrumJumpStep != _RET_DEFAULTS["DrumJumpStep"]:
+        values["DrumJumpStep"] = {"type": "INT", "value": _t_DrumJumpStep}
+    if _t_DrumStep != _RET_DEFAULTS["DrumStep"]:
+        values["DrumStep"] = {"type": "INT", "value": _t_DrumStep}
     if _t_FnOut != _RET_DEFAULTS["FnOut"]:
         values["FnOut"] = {"type": "INT", "value": _t_FnOut}
     if _t_FoundAddr != _RET_DEFAULTS["FoundAddr"]:
@@ -417,17 +452,17 @@ _fn_plus_offset = plus_offset
 
 def _sub_service():
     global _b_DD, _b_DS, _t_Abort, _t_FnOut, _t_Found, _t_Idx, _t_Running
-    _rung_17_enabled = bool(_t_Abort)
-    if _rung_17_enabled:
+    _rung_19_enabled = bool(_t_Abort)
+    if _rung_19_enabled:
         return
-    _rung_18_enabled = (bool(_t_Running) and bool(_t_Found))
-    if _rung_18_enabled:
+    _rung_20_enabled = (bool(_t_Running) and bool(_t_Found))
+    if _rung_20_enabled:
         _b_DS[9] = _store_copy_value_to_type(_b_DD[_resolve_index_b_DD(int(_t_Idx))], "INT")
-    if _rung_18_enabled:
+    if _rung_20_enabled:
         _b_DS[10] = _store_copy_value_to_type((_t_FnOut + 1), "INT")
 
 def _run_main_rungs():
-    global _b_BITS, _b_DD, _b_DS, _b_TXT, _b_WORDS, _mem, _prev, _t_Abort, _t_AutoMode, _t_CalcOut, _t_Clock, _t_CtdAcc, _t_CtdDone, _t_CtuAcc, _t_CtuDone, _t_Enable, _t_FnOut, _t_Found, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_RTonDone, _t_Running, _t_ShiftReset, _t_Source, _t_Span, _t_Start, _t_StepDone, _t_Stop, _t_TofAcc, _t_TofDone, _t__forloop_idx, _t_storage_sd_delete_all_cmd, _t_storage_sd_eject_cmd, _t_storage_sd_save_cmd
+    global _b_BITS, _b_DD, _b_DS, _b_TXT, _b_WORDS, _mem, _prev, _t_Abort, _t_AutoMode, _t_CalcOut, _t_Clock, _t_CtdAcc, _t_CtdDone, _t_CtuAcc, _t_CtuDone, _t_DrumAcc, _t_DrumDone, _t_DrumEvt1, _t_DrumEvt2, _t_DrumEvt3, _t_DrumEvt4, _t_DrumJumpStep, _t_DrumOut1, _t_DrumOut2, _t_DrumOut3, _t_DrumStep, _t_Enable, _t_FnOut, _t_Found, _t_FoundAddr, _t_Idx, _t_LoopCount, _t_PackedDword, _t_PackedWord, _t_RTonAcc, _t_RTonDone, _t_Running, _t_ShiftReset, _t_Source, _t_Span, _t_Start, _t_StepDone, _t_Stop, _t_TofAcc, _t_TofDone, _t__forloop_idx, _t_storage_sd_delete_all_cmd, _t_storage_sd_eject_cmd, _t_storage_sd_save_cmd
     _rung_1_enabled = (bool(_t_Enable) or _rise(bool(_t_Start), bool(_prev.get("Start", False))) or _fall(bool(_t_Stop), bool(_prev.get("Stop", False))))
     if _rung_1_enabled:
         _t_Running = True
@@ -605,7 +640,162 @@ def _run_main_rungs():
             _b_BITS[_idx] = False
     _mem['_shift_prev_clock:i1'] = _clock_curr
     _rung_10_enabled = bool(_t_Running)
-    if _rung_10_enabled:
+    _enabled = bool(_rung_10_enabled)
+    _step_raw = int(_t_DrumStep)
+    _step = _step_raw
+    _step_changed = False
+    if _enabled and ((_step < 1) or (_step > 4)):
+        _step = 1
+        _t_DrumStep = 1
+        _step_changed = True
+    elif (_step < 1) or (_step > 4):
+        _step = 1
+    _jump_curr = bool((bool(_t_AutoMode) and bool(_t_Found)))
+    _jump_prev = bool(_mem.get('_drum_jump_prev:i2', False))
+    _jump_edge = _jump_curr and (not _jump_prev)
+    _jog_curr = bool(bool(_t_Clock))
+    _jog_prev = bool(_mem.get('_drum_jog_prev:i2', False))
+    _jog_edge = _jog_curr and (not _jog_prev)
+    _reset_active = bool(bool(_t_ShiftReset))
+    if _enabled:
+        if _step == 1:
+            _event_curr = bool(bool(_t_DrumEvt1))
+        elif _step == 2:
+            _event_curr = bool(bool(_t_DrumEvt2))
+        elif _step == 3:
+            _event_curr = bool(bool(_t_DrumEvt3))
+        elif _step == 4:
+            _event_curr = bool(bool(_t_DrumEvt4))
+        _last_step = int(_mem.get('_drum_last_step:i2', 0))
+        _event_ready = bool(_mem.get('_drum_event_ready:i2', True))
+        _event_prev = bool(_mem.get('_drum_event_prev:i2', False))
+        if (_last_step != _step) or _step_changed:
+            _event_ready = (not _event_curr)
+            _event_prev = _event_curr
+        elif (not _event_ready) and (not _event_curr):
+            _event_ready = True
+        if _event_ready and _event_curr and (not _event_prev):
+            if _step < 4:
+                _step += 1
+                _t_DrumStep = _step
+                _step_changed = True
+            else:
+                _t_DrumDone = True
+    if _reset_active:
+        _step = 1
+        _step_changed = True
+        _t_DrumStep = 1
+        _t_DrumDone = False
+    if _enabled and _jump_edge:
+        _target = int(_t_DrumJumpStep)
+        if 1 <= _target <= 4:
+            _step_changed = _step_changed or (_step != _target)
+            _step = _target
+            _t_DrumStep = _step
+    if _enabled and _jog_edge and (_step < 4):
+        _step += 1
+        _step_changed = True
+        _t_DrumStep = _step
+    if _enabled or _reset_active:
+        _row = ((True, False, False), (False, True, False), (False, False, True), (True, True, False))[_step - 1]
+        _t_DrumOut1 = bool(_row[0])
+        _t_DrumOut2 = bool(_row[1])
+        _t_DrumOut3 = bool(_row[2])
+    if _step == 1:
+        _event_curr_final = bool(bool(_t_DrumEvt1))
+    elif _step == 2:
+        _event_curr_final = bool(bool(_t_DrumEvt2))
+    elif _step == 3:
+        _event_curr_final = bool(bool(_t_DrumEvt3))
+    elif _step == 4:
+        _event_curr_final = bool(bool(_t_DrumEvt4))
+    _event_ready_final = bool(_mem.get('_drum_event_ready:i2', True))
+    if _step_changed:
+        _event_ready_final = (not _event_curr_final)
+    elif (not _event_ready_final) and (not _event_curr_final):
+        _event_ready_final = True
+    _mem['_drum_event_ready:i2'] = _event_ready_final
+    _mem['_drum_event_prev:i2'] = _event_curr_final
+    _mem['_drum_last_step:i2'] = _step
+    _mem['_drum_jump_prev:i2'] = _jump_curr
+    _mem['_drum_jog_prev:i2'] = _jog_curr
+    _rung_11_enabled = bool(_t_Running)
+    _enabled = bool(_rung_11_enabled)
+    _step_raw = int(_t_DrumStep)
+    _step = _step_raw
+    _step_changed = False
+    _reset_step_data = False
+    if _enabled and ((_step < 1) or (_step > 4)):
+        _step = 1
+        _step_changed = True
+        _reset_step_data = True
+        _t_DrumStep = 1
+    elif (_step < 1) or (_step > 4):
+        _step = 1
+    _acc = int(_t_DrumAcc)
+    _frac = float(_mem.get('_drum_time_frac:i3', 0.0))
+    _jump_curr = bool(bool(_t_Found))
+    _jump_prev = bool(_mem.get('_drum_jump_prev:i3', False))
+    _jump_edge = _jump_curr and (not _jump_prev)
+    _jog_curr = bool(bool(_t_Start))
+    _jog_prev = bool(_mem.get('_drum_jog_prev:i3', False))
+    _jog_edge = _jog_curr and (not _jog_prev)
+    _reset_active = bool(bool(_t_ShiftReset))
+    if _enabled:
+        _dt = float(_mem.get('_dt', 0.0))
+        _dt_units = ((_dt * 1000.0) + _frac)
+        _int_units = int(_dt_units)
+        _frac = _dt_units - _int_units
+        _acc = min(_acc + _int_units, 32767)
+        if _step == 1:
+            _preset = int(50)
+        elif _step == 2:
+            _preset = int(_b_DS[0])
+        elif _step == 3:
+            _preset = int(75)
+        elif _step == 4:
+            _preset = int(_b_DS[1])
+        if _acc >= _preset:
+            if _step < 4:
+                _step += 1
+                _step_changed = True
+                _reset_step_data = True
+                _t_DrumStep = _step
+            else:
+                _t_DrumDone = True
+    if _reset_active:
+        _step = 1
+        _step_changed = True
+        _reset_step_data = True
+        _t_DrumStep = 1
+        _t_DrumDone = False
+    if _enabled and _jump_edge:
+        _target = int(2)
+        if 1 <= _target <= 4:
+            _step_changed = _step_changed or (_step != _target)
+            _step = _target
+            _reset_step_data = True
+            _t_DrumStep = _step
+    if _enabled and _jog_edge and (_step < 4):
+        _step += 1
+        _step_changed = True
+        _reset_step_data = True
+        _t_DrumStep = _step
+    if _reset_step_data:
+        _acc = 0
+        _frac = 0.0
+    if _enabled or _reset_active:
+        _row = ((True, False, False), (False, True, False), (False, False, True), (True, True, False))[_step - 1]
+        _t_DrumOut1 = bool(_row[0])
+        _t_DrumOut2 = bool(_row[1])
+        _t_DrumOut3 = bool(_row[2])
+    if _enabled or _reset_active or _step_changed or _reset_step_data:
+        _t_DrumAcc = _acc
+        _mem['_drum_time_frac:i3'] = _frac
+    _mem['_drum_jump_prev:i3'] = _jump_curr
+    _mem['_drum_jog_prev:i3'] = _jog_curr
+    _rung_12_enabled = bool(_t_Running)
+    if _rung_12_enabled:
         _packbits_1_src_1_indices = range(0, 16)
         _packed = 0
         for _bit_index, _src_idx in enumerate(_packbits_1_src_1_indices):
@@ -613,14 +803,14 @@ def _run_main_rungs():
                 _packed |= (1 << _bit_index)
         _packed_value = _wrap_int(int(_packed), 16, True)
         _t_PackedWord = _packed_value
-    if _rung_10_enabled:
+    if _rung_12_enabled:
         _packwords_1_src_1_indices = range(0, 2)
         _lo_value = int(_b_WORDS[_packwords_1_src_1_indices[0]])
         _hi_value = int(_b_WORDS[_packwords_1_src_1_indices[1]])
         _packed = ((_hi_value << 16) | (_lo_value & 0xFFFF))
         _packed_value = _wrap_int(int(_packed), 32, True)
         _t_PackedDword = _packed_value
-    if _rung_10_enabled:
+    if _rung_12_enabled:
         _packtext_1_src_1_indices = range(0, 8)
         _text = ''.join(str(_b_TXT[_idx]) for _idx in _packtext_1_src_1_indices)
         _text = _text.strip()
@@ -630,20 +820,20 @@ def _run_main_rungs():
             _t_PackedDword = _packed_value
         except (TypeError, ValueError, OverflowError):
             pass
-    if _rung_10_enabled:
+    if _rung_12_enabled:
         _unpackbits_1_dst_1_indices = range(0, 32)
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
         for _bit_index, _dst_idx in enumerate(_unpackbits_1_dst_1_indices):
             _b_BITS[_dst_idx] = bool((_bits >> _bit_index) & 1)
-    if _rung_10_enabled:
+    if _rung_12_enabled:
         _unpackwords_1_dst_1_indices = range(0, 2)
         _bits = (int(_t_PackedDword) & 0xFFFFFFFF)
         _lo_word = (_bits & 0xFFFF)
         _hi_word = ((_bits >> 16) & 0xFFFF)
         _b_WORDS[_unpackwords_1_dst_1_indices[0]] = _wrap_int(_lo_word, 16, True)
         _b_WORDS[_unpackwords_1_dst_1_indices[1]] = _wrap_int(_hi_word, 16, True)
-    _rung_11_enabled = bool(_t_Running) and bool(_t_AutoMode)
-    if _rung_11_enabled:
+    _rung_13_enabled = bool(_t_Running) and bool(_t_AutoMode)
+    if _rung_13_enabled:
         _fn_result_1 = _fn_plus_offset(offset=5, value=_t_CalcOut)
         if _fn_result_1 is None:
             raise TypeError("run_function: 'plus_offset' returned None but outs were declared")
@@ -652,7 +842,7 @@ def _run_main_rungs():
                 f"run_function: 'plus_offset' missing key 'result'; got {sorted(_fn_result_1)}"
             )
         _t_FnOut = _store_copy_value_to_type(_fn_result_1['result'], "INT")
-    _fn_result_2 = _fn_gated_scale(_rung_11_enabled, factor=2, value=_t_FnOut)
+    _fn_result_2 = _fn_gated_scale(_rung_13_enabled, factor=2, value=_t_FnOut)
     if _fn_result_2 is None:
         raise TypeError("run_enabled_function: 'gated_scale' returned None but outs were declared")
     if 'result' not in _fn_result_2:
@@ -660,44 +850,44 @@ def _run_main_rungs():
             f"run_enabled_function: 'gated_scale' missing key 'result'; got {sorted(_fn_result_2)}"
         )
     _t_FnOut = _store_copy_value_to_type(_fn_result_2['result'], "INT")
-    if not (_rung_11_enabled):
-        _mem['_oneshot:i2'] = False
-    elif not bool(_mem.get('_oneshot:i2', False)):
+    if not (_rung_13_enabled):
+        _mem['_oneshot:i4'] = False
+    elif not bool(_mem.get('_oneshot:i4', False)):
         _iterations = max(0, int(_t_LoopCount))
         for _for_i in range(_iterations):
             _t__forloop_idx = _for_i
             _b_DD[_resolve_index_b_DD(int((_t__forloop_idx + 1)))] = _store_copy_value_to_type((_t__forloop_idx + _t_Idx), "INT")
-        _mem['_oneshot:i2'] = True
-    if _rung_11_enabled:
-        _sub_service()
-    _rung_12_enabled = bool(_t_Running)
-    _rung_12_branch_0 = (_rung_12_enabled and (bool(_t_AutoMode)))
-    _rung_12_branch_1 = (_rung_12_enabled and (bool(_t_Found) and bool(_t_CtuDone)))
-    if _rung_12_enabled:
-        _b_DS[13] = _store_copy_value_to_type(_t_Idx, "INT")
-    if _rung_12_branch_0:
-        _b_DS[11] = _store_copy_value_to_type(_t_FnOut, "INT")
-    if _rung_12_branch_1:
-        _b_DS[12] = _store_copy_value_to_type((_t_FoundAddr + 1), "INT")
-    if _rung_12_enabled:
-        _b_DS[14] = _store_copy_value_to_type((_t_Span + _t_Idx), "INT")
-    _rung_13_enabled = (_b_DD[_resolve_index_b_DD(int(_t_Idx))] > 0)
+        _mem['_oneshot:i4'] = True
     if _rung_13_enabled:
+        _sub_service()
+    _rung_14_enabled = bool(_t_Running)
+    _rung_14_branch_0 = (_rung_14_enabled and (bool(_t_AutoMode)))
+    _rung_14_branch_1 = (_rung_14_enabled and (bool(_t_Found) and bool(_t_CtuDone)))
+    if _rung_14_enabled:
+        _b_DS[13] = _store_copy_value_to_type(_t_Idx, "INT")
+    if _rung_14_branch_0:
+        _b_DS[11] = _store_copy_value_to_type(_t_FnOut, "INT")
+    if _rung_14_branch_1:
+        _b_DS[12] = _store_copy_value_to_type((_t_FoundAddr + 1), "INT")
+    if _rung_14_enabled:
+        _b_DS[14] = _store_copy_value_to_type((_t_Span + _t_Idx), "INT")
+    _rung_15_enabled = (_b_DD[_resolve_index_b_DD(int(_t_Idx))] > 0)
+    if _rung_15_enabled:
         _t_StepDone = True
     else:
         _t_StepDone = False
-    _rung_14_enabled = (bool(_t_AutoMode) or bool(_t_Found))
-    if _rung_14_enabled:
+    _rung_16_enabled = (bool(_t_AutoMode) or bool(_t_Found))
+    if _rung_16_enabled:
         _t_storage_sd_save_cmd = True
     else:
         _t_storage_sd_save_cmd = False
-    _rung_15_enabled = bool(_t_Abort)
-    if _rung_15_enabled:
+    _rung_17_enabled = bool(_t_Abort)
+    if _rung_17_enabled:
         _t_storage_sd_delete_all_cmd = True
     else:
         _t_storage_sd_delete_all_cmd = False
-    _rung_16_enabled = bool(_t_Stop)
-    if _rung_16_enabled:
+    _rung_18_enabled = bool(_t_Stop)
+    if _rung_18_enabled:
         _t_storage_sd_eject_cmd = True
     else:
         _t_storage_sd_eject_cmd = False

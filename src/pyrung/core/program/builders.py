@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core._source import (
@@ -15,9 +15,11 @@ from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
     DebugInstructionSubStep,
+    EventDrumInstruction,
     OffDelayInstruction,
     OnDelayInstruction,
     ShiftInstruction,
+    TimeDrumInstruction,
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag
@@ -200,6 +202,259 @@ def shift(bit_range: BlockRange | IndirectBlockRange) -> ShiftBuilder:
 
     data_condition, source_file, source_line = _capture_rung_condition_and_source("shift")
     return ShiftBuilder(bit_range, data_condition, source_file, source_line)
+
+
+class _DrumBuilderBase(_BuilderBase):
+    """Base builder for drum instructions with required reset and optional jump/jog."""
+
+    def __init__(
+        self,
+        *,
+        func_name: str,
+        descriptor: str,
+        source_file: str | None,
+        source_line: int | None,
+    ) -> None:
+        super().__init__(func_name=func_name, source_file=source_file, source_line=source_line)
+        self._register_required_builder(descriptor)
+        self._instruction: EventDrumInstruction | TimeDrumInstruction | None = None
+        self._reset_source_file: str | None = None
+        self._reset_source_line: int | None = None
+        self._jump_source_file: str | None = None
+        self._jump_source_line: int | None = None
+        self._jog_source_file: str | None = None
+        self._jog_source_line: int | None = None
+
+    def _assert_finalized(self, method_name: str) -> None:
+        if self._instruction is None:
+            raise RuntimeError(f"{method_name}() requires calling reset(...) first.")
+
+    def _build_debug_substeps(self) -> tuple[DebugInstructionSubStep, ...]:
+        self._assert_finalized("_build_debug_substeps")
+        assert self._instruction is not None
+
+        substeps: list[DebugInstructionSubStep] = [
+            DebugInstructionSubStep(
+                instruction_kind="Auto",
+                source_file=self._source_file,
+                source_line=self._source_line,
+                eval_mode="enabled",
+                expression="Auto",
+            ),
+            DebugInstructionSubStep(
+                instruction_kind="Reset",
+                source_file=self._reset_source_file or self._source_file,
+                source_line=self._reset_source_line or self._source_line,
+                eval_mode="condition",
+                condition=self._instruction.reset_condition,
+            ),
+        ]
+        if self._instruction.jump_condition is not None:
+            substeps.append(
+                DebugInstructionSubStep(
+                    instruction_kind="Jump",
+                    source_file=self._jump_source_file or self._source_file,
+                    source_line=self._jump_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=self._instruction.jump_condition,
+                )
+            )
+        if self._instruction.jog_condition is not None:
+            substeps.append(
+                DebugInstructionSubStep(
+                    instruction_kind="Jog",
+                    source_file=self._jog_source_file or self._source_file,
+                    source_line=self._jog_source_line or self._source_line,
+                    eval_mode="condition",
+                    condition=self._instruction.jog_condition,
+                )
+            )
+        return tuple(substeps)
+
+    def _refresh_debug_substeps(self) -> None:
+        self._assert_finalized("_refresh_debug_substeps")
+        assert self._instruction is not None
+        self._instruction.debug_substeps = self._build_debug_substeps()
+
+
+class EventDrumBuilder(_DrumBuilderBase):
+    def __init__(
+        self,
+        outputs: Sequence[Tag],
+        events: Sequence[Condition | Tag],
+        pattern: Sequence[Sequence[bool | int]],
+        current_step: Tag,
+        completion_flag: Tag,
+        auto_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
+        super().__init__(
+            func_name="event_drum",
+            descriptor="event_drum(...).reset(...)",
+            source_file=source_file,
+            source_line=source_line,
+        )
+        self._outputs = outputs
+        self._events = events
+        self._pattern = pattern
+        self._current_step = current_step
+        self._completion_flag = completion_flag
+        self._auto_condition = auto_condition
+
+    def reset(self, condition: Condition | Tag) -> EventDrumBuilder:
+        self._assert_required_builder_owner("reset")
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
+        try:
+            instr = EventDrumInstruction(
+                outputs=self._outputs,
+                events=self._events,
+                pattern=self._pattern,
+                current_step=self._current_step,
+                completion_flag=self._completion_flag,
+                auto_condition=self._auto_condition,
+                reset_condition=condition,
+            )
+            self._instruction = instr
+            self._refresh_debug_substeps()
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
+        return self
+
+    def jump(self, *, condition: Condition | Tag, step: Tag | int) -> EventDrumBuilder:
+        self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
+        self._assert_finalized("jump")
+        assert self._instruction is not None
+        self._instruction.set_jump(condition, step)
+        self._refresh_debug_substeps()
+        return self
+
+    def jog(self, condition: Condition | Tag) -> EventDrumBuilder:
+        self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
+        self._assert_finalized("jog")
+        assert self._instruction is not None
+        self._instruction.set_jog(condition)
+        self._refresh_debug_substeps()
+        return self
+
+
+class TimeDrumBuilder(_DrumBuilderBase):
+    def __init__(
+        self,
+        outputs: Sequence[Tag],
+        presets: Sequence[Tag | int],
+        unit: TimeUnit,
+        pattern: Sequence[Sequence[bool | int]],
+        current_step: Tag,
+        accumulator: Tag,
+        completion_flag: Tag,
+        auto_condition: Any,
+        source_file: str | None = None,
+        source_line: int | None = None,
+    ) -> None:
+        super().__init__(
+            func_name="time_drum",
+            descriptor="time_drum(...).reset(...)",
+            source_file=source_file,
+            source_line=source_line,
+        )
+        self._outputs = outputs
+        self._presets = presets
+        self._unit = unit
+        self._pattern = pattern
+        self._current_step = current_step
+        self._accumulator = accumulator
+        self._completion_flag = completion_flag
+        self._auto_condition = auto_condition
+
+    def reset(self, condition: Condition | Tag) -> TimeDrumBuilder:
+        self._assert_required_builder_owner("reset")
+        self._reset_source_file, self._reset_source_line = _capture_chained_method_source()
+        try:
+            instr = TimeDrumInstruction(
+                outputs=self._outputs,
+                presets=self._presets,
+                unit=self._unit,
+                pattern=self._pattern,
+                current_step=self._current_step,
+                accumulator=self._accumulator,
+                completion_flag=self._completion_flag,
+                auto_condition=self._auto_condition,
+                reset_condition=condition,
+            )
+            self._instruction = instr
+            self._refresh_debug_substeps()
+            self._append_instruction(instr)
+        except Exception:
+            self._resolve_required_builder()
+            raise
+        self._resolve_required_builder()
+        return self
+
+    def jump(self, *, condition: Condition | Tag, step: Tag | int) -> TimeDrumBuilder:
+        self._jump_source_file, self._jump_source_line = _capture_chained_method_source()
+        self._assert_finalized("jump")
+        assert self._instruction is not None
+        self._instruction.set_jump(condition, step)
+        self._refresh_debug_substeps()
+        return self
+
+    def jog(self, condition: Condition | Tag) -> TimeDrumBuilder:
+        self._jog_source_file, self._jog_source_line = _capture_chained_method_source()
+        self._assert_finalized("jog")
+        assert self._instruction is not None
+        self._instruction.set_jog(condition)
+        self._refresh_debug_substeps()
+        return self
+
+
+def event_drum(
+    *,
+    outputs: Sequence[Tag],
+    events: Sequence[Condition | Tag],
+    pattern: Sequence[Sequence[bool | int]],
+    current_step: Tag,
+    completion_flag: Tag,
+) -> EventDrumBuilder:
+    auto_condition, source_file, source_line = _capture_rung_condition_and_source("event_drum")
+    return EventDrumBuilder(
+        outputs,
+        events,
+        pattern,
+        current_step,
+        completion_flag,
+        auto_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
+
+
+def time_drum(
+    *,
+    outputs: Sequence[Tag],
+    presets: Sequence[Tag | int],
+    unit: TimeUnit = TimeUnit.Tms,
+    pattern: Sequence[Sequence[bool | int]],
+    current_step: Tag,
+    accumulator: Tag,
+    completion_flag: Tag,
+) -> TimeDrumBuilder:
+    auto_condition, source_file, source_line = _capture_rung_condition_and_source("time_drum")
+    return TimeDrumBuilder(
+        outputs,
+        presets,
+        unit,
+        pattern,
+        current_step,
+        accumulator,
+        completion_flag,
+        auto_condition,
+        source_file=source_file,
+        source_line=source_line,
+    )
 
 
 class CountUpBuilder(_BuilderBase):

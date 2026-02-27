@@ -11,10 +11,12 @@ from pyrung.core import (
     branch,
     count_down,
     count_up,
+    event_drum,
     off_delay,
     on_delay,
     out,
     shift,
+    time_drum,
 )
 
 
@@ -38,6 +40,45 @@ def test_count_down_missing_reset_raises() -> None:
         with Program():
             with Rung(enable):
                 count_down(done, acc, preset=5)
+
+
+def test_event_drum_missing_reset_raises() -> None:
+    enable = Bool("Enable")
+    step = Int("Step")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    event1 = Bool("Event1")
+
+    with pytest.raises(RuntimeError, match="event_drum"):
+        with Program():
+            with Rung(enable):
+                event_drum(
+                    outputs=[out1],
+                    events=[event1],
+                    pattern=[[1]],
+                    current_step=step,
+                    completion_flag=done,
+                )
+
+
+def test_time_drum_missing_reset_raises() -> None:
+    enable = Bool("Enable")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+
+    with pytest.raises(RuntimeError, match="time_drum"):
+        with Program():
+            with Rung(enable):
+                time_drum(
+                    outputs=[out1],
+                    presets=[100],
+                    pattern=[[1]],
+                    current_step=step,
+                    accumulator=acc,
+                    completion_flag=done,
+                )
 
 
 def test_shift_missing_reset_raises() -> None:
@@ -188,3 +229,49 @@ def test_rton_is_terminal_in_same_flow() -> None:
             with Rung(enable):
                 on_delay(done, acc, preset=5).reset(reset)
                 out(light)
+
+
+def test_event_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    jog = Bool("Jog")
+    step = Int("Step")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    out2 = Bool("Out2")
+    event1 = Bool("Event1")
+    event2 = Bool("Event2")
+
+    with Program():
+        with Rung(enable):
+            event_drum(
+                outputs=[out1, out2],
+                events=[event1, event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+
+
+def test_time_drum_chain_can_finalize_with_reset_then_jump_and_jog() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    jog = Bool("Jog")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    out2 = Bool("Out2")
+
+    with Program():
+        with Rung(enable):
+            time_drum(
+                outputs=[out1, out2],
+                presets=[100, 100],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset).jump(condition=jump, step=step).jog(jog)

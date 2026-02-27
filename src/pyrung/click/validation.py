@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyclickplc.addresses import parse_address
 
+from pyrung.core.condition import Condition
 from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import Tag
-from pyrung.core.validation.walker import ProgramLocation, walk_program
+from pyrung.core.validation.walker import ProgramLocation, _condition_children, walk_program
 
 if TYPE_CHECKING:
     from pyrung.click.profile import HardwareProfile
@@ -49,6 +50,7 @@ CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
 CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
+CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED = "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED"
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,11 @@ _R6_WRITE_TARGETS: frozenset[tuple[str, str]] = frozenset(
         ("UnpackToBitsInstruction", "bit_block"),
         ("UnpackToWordsInstruction", "word_block"),
         ("PackTextInstruction", "dest"),
+        ("EventDrumInstruction", "current_step"),
+        ("EventDrumInstruction", "completion_flag"),
+        ("TimeDrumInstruction", "current_step"),
+        ("TimeDrumInstruction", "accumulator"),
+        ("TimeDrumInstruction", "completion_flag"),
     }
 )
 
@@ -116,6 +123,13 @@ _R7_ROLE_FIELDS: dict[tuple[str, str], str] = {
     ("CountDownInstruction", "done_bit"): "counter_done_bit",
     ("CountDownInstruction", "accumulator"): "counter_accumulator",
     ("CountDownInstruction", "preset"): "counter_preset",
+    ("EventDrumInstruction", "current_step"): "drum_current_step",
+    ("EventDrumInstruction", "completion_flag"): "drum_completion_flag",
+    ("EventDrumInstruction", "jump_step"): "drum_jump_step",
+    ("TimeDrumInstruction", "current_step"): "drum_current_step",
+    ("TimeDrumInstruction", "accumulator"): "drum_accumulator",
+    ("TimeDrumInstruction", "completion_flag"): "drum_completion_flag",
+    ("TimeDrumInstruction", "jump_step"): "drum_jump_step",
 }
 
 _R8_COPY_FIELDS: dict[str, tuple[str, str, str]] = {
@@ -728,7 +742,7 @@ def _evaluate_r7(
             continue
 
         value = getattr(instruction, field_name)
-        if field_name == "preset" and not isinstance(value, Tag):
+        if field_name in {"preset", "jump_step"} and not isinstance(value, Tag):
             continue
 
         location = _instruction_location(base_location, f"instruction.{field_name}")
@@ -855,6 +869,141 @@ def _evaluate_pack_text(
     return findings
 
 
+def _iter_condition_tags(root: Any) -> tuple[Tag, ...]:
+    found: list[Tag] = []
+    seen_values: set[int] = set()
+    seen_tags: set[int] = set()
+
+    def walk(value: Any) -> None:
+        value_id = id(value)
+        if value_id in seen_values:
+            return
+        seen_values.add(value_id)
+
+        if isinstance(value, Tag):
+            tag_id = id(value)
+            if tag_id not in seen_tags:
+                seen_tags.add(tag_id)
+                found.append(value)
+            return
+
+        if isinstance(value, Condition):
+            for _, child in _condition_children(value):
+                walk(child)
+            return
+
+    walk(root)
+    return tuple(found)
+
+
+def _evaluate_drums(
+    instruction: Any,
+    base_location: ProgramLocation,
+    tag_map: TagMap,
+    profile: HardwareProfile,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    instruction_type = type(instruction).__name__
+    if instruction_type not in {"EventDrumInstruction", "TimeDrumInstruction"}:
+        return []
+
+    findings: list[ClickFinding] = []
+
+    def check_role(
+        *,
+        value: Any,
+        role: str,
+        location: ProgramLocation,
+        unresolved_reason: str,
+    ) -> None:
+        resolution = _resolve_operand_slots(value, tag_map)
+        if resolution.unresolved:
+            findings.append(_unresolved_finding(location, mode, unresolved_reason))
+            return
+        for slot in resolution.slots:
+            if not profile.valid_for_role(slot.memory_type, role):
+                location_text = _format_location(location)
+                findings.append(
+                    ClickFinding(
+                        code=CLK_BANK_WRONG_ROLE,
+                        severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
+                        message=(
+                            f"Bank {_bank_label(slot)} is invalid for role {role} "
+                            f"at {location_text}."
+                        ),
+                        location=location_text,
+                    )
+                )
+
+    outputs = getattr(instruction, "outputs", ())
+    for idx, output in enumerate(outputs):
+        location = _instruction_location(base_location, f"instruction.outputs[{idx}]")
+        resolution = _resolve_operand_slots(output, tag_map)
+        if resolution.unresolved:
+            findings.append(_unresolved_finding(location, mode, "output bank unresolved"))
+            continue
+        for slot in resolution.slots:
+            if not profile.is_writable(slot.memory_type, slot.address):
+                location_text = _format_location(location)
+                findings.append(
+                    ClickFinding(
+                        code=CLK_BANK_NOT_WRITABLE,
+                        severity=_route_severity(CLK_BANK_NOT_WRITABLE, mode),
+                        message=(
+                            f"Write target {_bank_label(slot)} is not writable for Click "
+                            f"at {location_text}."
+                        ),
+                        location=location_text,
+                    )
+                )
+            if not profile.valid_for_role(slot.memory_type, "drum_output_bit"):
+                location_text = _format_location(location)
+                findings.append(
+                    ClickFinding(
+                        code=CLK_BANK_WRONG_ROLE,
+                        severity=_route_severity(CLK_BANK_WRONG_ROLE, mode),
+                        message=(
+                            "Bank "
+                            f"{_bank_label(slot)} is invalid for role drum_output_bit at {location_text}."
+                        ),
+                        location=location_text,
+                    )
+                )
+
+    if instruction_type == "EventDrumInstruction":
+        events = getattr(instruction, "events", ())
+        for idx, event_condition in enumerate(events):
+            event_location = _instruction_location(base_location, f"instruction.events[{idx}]")
+            event_tags = _iter_condition_tags(event_condition)
+            for event_tag in event_tags:
+                check_role(
+                    value=event_tag,
+                    role="drum_event_condition",
+                    location=event_location,
+                    unresolved_reason="event condition bank unresolved",
+                )
+
+    if instruction_type == "TimeDrumInstruction":
+        presets = getattr(instruction, "presets", ())
+        for idx, preset in enumerate(presets):
+            if isinstance(preset, Tag):
+                location = _instruction_location(base_location, f"instruction.presets[{idx}]")
+                location_text = _format_location(location)
+                findings.append(
+                    ClickFinding(
+                        code=CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
+                        severity=_route_severity(CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED, mode),
+                        message=(
+                            "time_drum preset must be a literal integer for Click portability "
+                            f"at {location_text}."
+                        ),
+                        location=location_text,
+                    )
+                )
+
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -894,6 +1043,9 @@ def validate_click_program(
             findings.extend(_evaluate_r7(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_r8(instruction, base_location, tag_map, active_profile, mode))
             findings.extend(_evaluate_pack_text(instruction, base_location, tag_map, mode))
+            findings.extend(
+                _evaluate_drums(instruction, base_location, tag_map, active_profile, mode)
+            )
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []

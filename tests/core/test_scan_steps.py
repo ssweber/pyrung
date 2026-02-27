@@ -17,11 +17,13 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    event_drum,
     on_delay,
     out,
     return_early,
     shift,
     subroutine,
+    time_drum,
 )
 
 
@@ -291,6 +293,15 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
     down_acc = Int("DownAcc")
     timer_done = Bool("TimerDone")
     timer_acc = Int("TimerAcc")
+    drum_step = Int("DrumStep")
+    drum_acc = Int("DrumAcc")
+    drum_done = Bool("DrumDone")
+    drum_out1 = Bool("DrumOut1")
+    drum_out2 = Bool("DrumOut2")
+    drum_event1 = Bool("DrumEvent1")
+    drum_event2 = Bool("DrumEvent2")
+    jump = Bool("Jump")
+    jog = Bool("Jog")
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as logic:
@@ -306,8 +317,38 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
         with Rung(enable):
             shift(bits.select(1, 4)).clock(clock).reset(reset)
 
+        with Rung(enable):
+            event_drum(
+                outputs=[drum_out1, drum_out2],
+                events=[drum_event1, drum_event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                completion_flag=drum_done,
+            ).reset(reset).jump(condition=jump, step=drum_step).jog(jog)
+
+        with Rung(enable):
+            time_drum(
+                outputs=[drum_out1, drum_out2],
+                presets=[50, 50],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                accumulator=drum_acc,
+                completion_flag=drum_done,
+            ).reset(reset).jump(condition=jump, step=drum_step).jog(jog)
+
     runner = PLCRunner(logic)
-    runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
+    runner.patch(
+        {
+            "Enable": True,
+            "Down": True,
+            "Reset": False,
+            "Clock": True,
+            "DrumEvent1": False,
+            "DrumEvent2": False,
+            "Jump": False,
+            "Jog": False,
+        }
+    )
     instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
 
     assert [step.instruction_kind for step in instruction_steps] == [
@@ -321,6 +362,14 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
         "Data",
         "Clock",
         "Reset",
+        "Auto",
+        "Reset",
+        "Jump",
+        "Jog",
+        "Auto",
+        "Reset",
+        "Jump",
+        "Jog",
     ]
 
     for step in instruction_steps:

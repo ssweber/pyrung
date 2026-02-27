@@ -12,14 +12,18 @@ Provides DSL syntax for building PLC programs:
 from .builders import (
     CountDownBuilder,
     CountUpBuilder,
+    EventDrumBuilder,
     OffDelayBuilder,
     OnDelayBuilder,
     ShiftBuilder,
+    TimeDrumBuilder,
     count_down,
     count_up,
+    event_drum,
     off_delay,
     on_delay,
     shift,
+    time_drum,
 )
 from .conditions import (
     all_of,
@@ -105,14 +109,18 @@ __all__ = [
     # Builders & Terminal Instructions
     "CountDownBuilder",
     "CountUpBuilder",
+    "EventDrumBuilder",
     "OffDelayBuilder",
     "OnDelayBuilder",
     "ShiftBuilder",
+    "TimeDrumBuilder",
     "count_down",
     "count_up",
+    "event_drum",
     "off_delay",
     "on_delay",
     "shift",
+    "time_drum",
     # Validation & Types
     "DialectValidator",
     "ForbiddenControlFlowError",

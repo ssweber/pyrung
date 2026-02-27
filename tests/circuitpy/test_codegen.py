@@ -40,6 +40,7 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    event_drum,
     fill,
     forloop,
     lro,
@@ -56,6 +57,7 @@ from pyrung.core import (
     shift,
     sqrt,
     subroutine,
+    time_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -438,6 +440,82 @@ class TestInstructionCoverage:
         for line in key_lines:
             assert ":i" in line
             assert ".py:" not in line
+
+    def test_event_and_time_drum_codegen_keys_and_precedence_smoke(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        enable = Bool("Enable", default=True)
+        reset_cmd = Bool("ResetCmd", default=True)
+        jump_cmd = Bool("JumpCmd", default=True)
+        jog_cmd = Bool("JogCmd", default=True)
+        step = Int("Step")
+        acc = Int("Acc")
+        done = Bool("Done")
+        event1 = Bool("Event1")
+        event2 = Bool("Event2")
+        out1 = Bool("Out1")
+        out2 = Bool("Out2")
+        out3 = Bool("Out3")
+        out4 = Bool("Out4")
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                event_drum(
+                    outputs=[out1, out2],
+                    events=[event1, event2],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset_cmd).jump(condition=jump_cmd, step=step).jog(jog_cmd)
+            with Rung(enable):
+                time_drum(
+                    outputs=[out1, out2, out3, out4],
+                    presets=[0, 0, 0, 0],
+                    pattern=[
+                        [1, 0, 0, 0],
+                        [0, 1, 0, 0],
+                        [0, 0, 1, 0],
+                        [0, 0, 0, 1],
+                    ],
+                    current_step=step,
+                    accumulator=acc,
+                    completion_flag=done,
+                ).reset(reset_cmd).jump(condition=jump_cmd, step=3).jog(jog_cmd)
+
+        ctx = _context_for_program(prog, hw)
+        step_symbol = ctx.symbol_for_tag(step)
+        acc_symbol = ctx.symbol_for_tag(acc)
+        out4_symbol = ctx.symbol_for_tag(out4)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+
+        assert "_drum_event_prev:i" in source_code
+        assert "_drum_time_frac:i" in source_code
+        assert "_drum_jump_prev:i" in source_code
+        assert "_drum_jog_prev:i" in source_code
+
+        class StubBase:
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                return None
+
+            def readAnalog(self, slot, ch_num):
+                return 0
+
+            def writeAnalog(self, value, slot, ch_num):
+                return None
+
+            def readTemperature(self, slot, ch_num):
+                return 0.0
+
+        namespace = _run_single_scan_source(source_code, monkeypatch, StubBase())
+        assert namespace[step_symbol] == 4
+        assert namespace[acc_symbol] == 0
+        assert namespace[out4_symbol] is True
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()

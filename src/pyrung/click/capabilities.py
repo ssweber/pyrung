@@ -18,6 +18,12 @@ InstructionRole = Literal[
     "counter_done_bit",
     "counter_accumulator",
     "counter_preset",
+    "drum_output_bit",
+    "drum_current_step",
+    "drum_completion_flag",
+    "drum_accumulator",
+    "drum_jump_step",
+    "drum_event_condition",
     "copy_pointer",
 ]
 
@@ -107,6 +113,12 @@ INSTRUCTION_ROLE_COMPATIBILITY: dict[InstructionRole, frozenset[str]] = {
     "counter_done_bit": frozenset({"CT"}),
     "counter_accumulator": frozenset({"CTD"}),
     "counter_preset": frozenset({"DS", "DD"}),
+    "drum_output_bit": frozenset({"Y", "C"}),
+    "drum_current_step": frozenset({"DS"}),
+    "drum_completion_flag": frozenset({"C"}),
+    "drum_accumulator": frozenset({"TD"}),
+    "drum_jump_step": frozenset({"DS"}),
+    "drum_event_condition": frozenset({"X", "Y", "C", "T", "CT", "SC"}),
     "copy_pointer": frozenset({"DS"}),
 }
 

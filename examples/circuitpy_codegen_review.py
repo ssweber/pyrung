@@ -6,6 +6,7 @@ inspect one generated file that includes:
 - inline expressions in calc/copy
 - control-flow (branch, call/subroutine/return_early, forloop)
 - timers/counters
+- event/time drum instructions
 - block/search/shift/pack/unpack instructions
 - function call embedding (run_function/run_enabled_function)
 """
@@ -27,6 +28,7 @@ from pyrung import (
     copy,
     count_down,
     count_up,
+    event_drum,
     fall,
     fill,
     forloop,
@@ -46,6 +48,7 @@ from pyrung import (
     shift,
     subroutine,
     system,
+    time_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -82,6 +85,19 @@ FnOut = Int("FnOut")
 FoundAddr = Int("FoundAddr")
 PackedWord = Int("PackedWord")
 PackedDword = Dint("PackedDword")
+
+# Drum tags
+DrumStep = Int("DrumStep", default=1)
+DrumJumpStep = Int("DrumJumpStep", default=2)
+DrumAcc = Int("DrumAcc")
+DrumDone = Bool("DrumDone")
+DrumEvt1 = Bool("DrumEvt1")
+DrumEvt2 = Bool("DrumEvt2")
+DrumEvt3 = Bool("DrumEvt3")
+DrumEvt4 = Bool("DrumEvt4")
+DrumOut1 = Bool("DrumOut1")
+DrumOut2 = Bool("DrumOut2")
+DrumOut3 = Bool("DrumOut3")
 
 # Internal memory blocks
 DS = Block("DS", TagType.INT, 1, 20)
@@ -134,6 +150,37 @@ with Program(strict=False) as logic:
     # Shift is terminal, so keep it on its own rung.
     with Rung(Running):
         shift(BITS.select(1, 8)).clock(Clock).reset(ShiftReset)
+
+    # Drums are terminal too, so each is on its own rung.
+    with Rung(Running):
+        event_drum(
+            outputs=[DrumOut1, DrumOut2, DrumOut3],
+            events=[DrumEvt1, DrumEvt2, DrumEvt3, DrumEvt4],
+            pattern=[
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 1, 0],
+            ],
+            current_step=DrumStep,
+            completion_flag=DrumDone,
+        ).reset(ShiftReset).jump(condition=(AutoMode, Found), step=DrumJumpStep).jog(Clock)
+
+    with Rung(Running):
+        time_drum(
+            outputs=[DrumOut1, DrumOut2, DrumOut3],
+            presets=[50, DS[1], 75, DS[2]],
+            pattern=[
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, 1, 0],
+            ],
+            current_step=DrumStep,
+            accumulator=DrumAcc,
+            completion_flag=DrumDone,
+        ).reset(ShiftReset).jump(condition=Found, step=2).jog(Start)
+
     # Pack/unpack family.
     with Rung(Running):
         pack_bits(BITS.select(1, 16), PackedWord)

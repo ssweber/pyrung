@@ -54,6 +54,7 @@ from pyrung.core.program import (
     copy,
     count_down,
     count_up,
+    event_drum,
     fall,
     fill,
     forloop,
@@ -73,6 +74,7 @@ from pyrung.core.program import (
     search,
     shift,
     subroutine,
+    time_drum,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -173,10 +175,12 @@ __all__ = [
     "return_early",
     "count_up",
     "count_down",
+    "event_drum",
     "search",
     "shift",
     "on_delay",
     "off_delay",
+    "time_drum",
     # Conditions
     "rise",
     "fall",

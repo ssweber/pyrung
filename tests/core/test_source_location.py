@@ -21,12 +21,14 @@ from pyrung.core import (
     copy,
     count_down,
     count_up,
+    event_drum,
     forloop,
     latch,
     on_delay,
     out,
     rise,
     shift,
+    time_drum,
 )
 from pyrung.core.instruction import ForLoopInstruction
 
@@ -110,6 +112,13 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     cd_acc = Int("CountDownAcc")
     timer_done = Bool("TimerDone")
     timer_acc = Int("TimerAcc")
+    drum_step = Int("DrumStep")
+    drum_acc = Int("DrumAcc")
+    drum_done = Bool("DrumDone")
+    drum_out1 = Bool("DrumOut1")
+    drum_out2 = Bool("DrumOut2")
+    drum_event1 = Bool("DrumEvent1")
+    drum_event2 = Bool("DrumEvent2")
     clock = Bool("Clock")
     bits = Block("C", TagType.BOOL, 1, 8)
 
@@ -142,6 +151,27 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
             shift_line = _line_no() + 1
             shift(bits.select(1, 4)).clock(clock).reset(reset_cond)
 
+        with Rung(enable):
+            event_drum_line = _line_no() + 1
+            event_drum(
+                outputs=[drum_out1, drum_out2],
+                events=[drum_event1, drum_event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                completion_flag=drum_done,
+            ).reset(reset_cond)
+
+        with Rung(enable):
+            time_drum_line = _line_no() + 1
+            time_drum(
+                outputs=[drum_out1, drum_out2],
+                presets=[100, 100],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                accumulator=drum_acc,
+                completion_flag=drum_done,
+            ).reset(reset_cond)
+
     branch_rung = prog.rungs[0]._branches[0]
     assert branch_rung.source_line == branch_line
     assert branch_rung.end_line == branch_end_line
@@ -166,6 +196,14 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     shift_instr = prog.rungs[5]._instructions[0]
     assert type(shift_instr).__name__ == "ShiftInstruction"
     assert shift_instr.source_line == shift_line
+
+    event_drum_instr = prog.rungs[6]._instructions[0]
+    assert type(event_drum_instr).__name__ == "EventDrumInstruction"
+    assert event_drum_instr.source_line == event_drum_line
+
+    time_drum_instr = prog.rungs[7]._instructions[0]
+    assert type(time_drum_instr).__name__ == "TimeDrumInstruction"
+    assert time_drum_instr.source_line == time_drum_line
 
 
 def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
@@ -227,6 +265,15 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     down_acc = Int("DownAcc")
     timer_done = Bool("TimerDone")
     timer_acc = Int("TimerAcc")
+    drum_step = Int("DrumStep")
+    drum_acc = Int("DrumAcc")
+    drum_done = Bool("DrumDone")
+    drum_out1 = Bool("DrumOut1")
+    drum_out2 = Bool("DrumOut2")
+    drum_event1 = Bool("DrumEvent1")
+    drum_event2 = Bool("DrumEvent2")
+    jump = Bool("Jump")
+    jog = Bool("Jog")
     bits = Block("C", TagType.BOOL, 1, 8)
 
     with Program(strict=False) as prog:
@@ -257,6 +304,39 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
             shift_builder = shift_builder.clock(clock)
             shift_reset_line = _line_no() + 1
             shift_builder.reset(reset_cond)
+
+        with Rung(enable):
+            event_line = _line_no() + 1
+            event_builder = event_drum(
+                outputs=[drum_out1, drum_out2],
+                events=[drum_event1, drum_event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                completion_flag=drum_done,
+            )
+            event_reset_line = _line_no() + 1
+            event_builder = event_builder.reset(reset_cond)
+            event_jump_line = _line_no() + 1
+            event_builder = event_builder.jump(condition=jump, step=drum_step)
+            event_jog_line = _line_no() + 1
+            event_builder.jog(jog)
+
+        with Rung(enable):
+            time_line = _line_no() + 1
+            time_builder = time_drum(
+                outputs=[drum_out1, drum_out2],
+                presets=[100, 100],
+                pattern=[[1, 0], [0, 1]],
+                current_step=drum_step,
+                accumulator=drum_acc,
+                completion_flag=drum_done,
+            )
+            time_reset_line = _line_no() + 1
+            time_builder = time_builder.reset(reset_cond)
+            time_jump_line = _line_no() + 1
+            time_builder = time_builder.jump(condition=jump, step=drum_step)
+            time_jog_line = _line_no() + 1
+            time_builder.jog(jog)
 
     cu_instr = prog.rungs[0]._instructions[0]
     assert cu_instr.debug_substeps is not None
@@ -306,6 +386,36 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
         shift_reset_line,
     ]
 
+    event_instr = prog.rungs[4]._instructions[0]
+    assert event_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in event_instr.debug_substeps] == [
+        "Auto",
+        "Reset",
+        "Jump",
+        "Jog",
+    ]
+    assert [step.source_line for step in event_instr.debug_substeps] == [
+        event_line,
+        event_reset_line,
+        event_jump_line,
+        event_jog_line,
+    ]
+
+    time_instr = prog.rungs[5]._instructions[0]
+    assert time_instr.debug_substeps is not None
+    assert [step.instruction_kind for step in time_instr.debug_substeps] == [
+        "Auto",
+        "Reset",
+        "Jump",
+        "Jog",
+    ]
+    assert [step.source_line for step in time_instr.debug_substeps] == [
+        time_line,
+        time_reset_line,
+        time_jump_line,
+        time_jog_line,
+    ]
+
     runner = PLCRunner(prog)
     runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
     instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
@@ -320,4 +430,12 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
         shift_line,
         shift_clock_line,
         shift_reset_line,
+        event_line,
+        event_reset_line,
+        event_jump_line,
+        event_jog_line,
+        time_line,
+        time_reset_line,
+        time_jump_line,
+        time_jog_line,
     ]

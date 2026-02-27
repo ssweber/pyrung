@@ -2,20 +2,31 @@
 
 from __future__ import annotations
 
-from pyrung.click import TagMap, c, ds, sc, t, td, txt, x, y
+from pyrung.click import TagMap, c, dd, ds, sc, t, td, txt, x, y
 from pyrung.click import validation as click_validation
 from pyrung.click.validation import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
-from pyrung.core import Bool, Int, as_value
-from pyrung.core.program import Program, Rung, copy, forloop, on_delay, out, pack_text
+from pyrung.core import Bool, Dint, Int, as_value
+from pyrung.core.program import (
+    Program,
+    Rung,
+    copy,
+    event_drum,
+    forloop,
+    on_delay,
+    out,
+    pack_text,
+    time_drum,
+)
 
 
 def _build_program(fn):
@@ -239,3 +250,141 @@ def test_wrapped_copy_source_keeps_copy_context_rules():
     report = validate_click_program(prog, tag_map, mode="warn")
     codes = _codes(report)
     assert "CLK_PTR_CONTEXT_ONLY_COPY" not in codes
+
+
+def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    jog = Bool("Jog")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    out2 = Bool("Out2")
+    event1 = Bool("Event1")
+    event2 = Bool("Event2")
+
+    def logic():
+        with Rung(enable):
+            event_drum(
+                outputs=[out1, out2],
+                events=[event1, event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+        with Rung(enable):
+            time_drum(
+                outputs=[out1, out2],
+                presets=[100, 200],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset).jump(condition=jump, step=step).jog(jog)
+
+    prog = _build_program(logic)
+    tag_map = TagMap(
+        [
+            enable.map_to(x[1]),
+            reset.map_to(x[2]),
+            jump.map_to(x[3]),
+            jog.map_to(x[4]),
+            out1.map_to(y[1]),
+            out2.map_to(c[1]),
+            event1.map_to(x[5]),
+            event2.map_to(sc[50]),
+            step.map_to(ds[1]),
+            acc.map_to(td[1]),
+            done.map_to(c[2]),
+        ],
+        include_system=False,
+    )
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    codes = _codes(report)
+    assert CLK_BANK_WRONG_ROLE not in codes
+    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in codes
+
+
+def test_drum_stage3_wrong_role_failures_are_reported():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    step = Dint("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+
+    def logic():
+        with Rung(enable):
+            event_drum(
+                outputs=[out1],
+                events=[step > 0],
+                pattern=[[1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset)
+        with Rung(enable):
+            time_drum(
+                outputs=[out1],
+                presets=[100],
+                pattern=[[1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset)
+
+    prog = _build_program(logic)
+    tag_map = TagMap(
+        [
+            enable.map_to(x[1]),
+            reset.map_to(x[2]),
+            out1.map_to(x[3]),  # invalid drum output role
+            step.map_to(dd[1]),  # invalid current_step role
+            acc.map_to(ds[3]),  # invalid accumulator role
+            done.map_to(y[1]),  # invalid completion role
+        ],
+        include_system=False,
+    )
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_BANK_WRONG_ROLE in _codes(report)
+
+
+def test_time_drum_non_literal_preset_reports_literal_required():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    preset_tag = Int("PresetTag")
+
+    def logic():
+        with Rung(enable):
+            time_drum(
+                outputs=[out1],
+                presets=[preset_tag],
+                pattern=[[1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset)
+
+    prog = _build_program(logic)
+    tag_map = TagMap(
+        [
+            enable.map_to(x[1]),
+            reset.map_to(x[2]),
+            out1.map_to(y[1]),
+            step.map_to(ds[1]),
+            acc.map_to(td[1]),
+            done.map_to(c[1]),
+            preset_tag.map_to(ds[2]),
+        ],
+        include_system=False,
+    )
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED in _codes(report)

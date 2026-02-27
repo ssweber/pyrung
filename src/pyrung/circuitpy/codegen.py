@@ -72,6 +72,7 @@ from pyrung.core.instruction import (
     CountDownInstruction,
     CountUpInstruction,
     EnabledFunctionCallInstruction,
+    EventDrumInstruction,
     FillInstruction,
     ForLoopInstruction,
     FunctionCallInstruction,
@@ -86,6 +87,7 @@ from pyrung.core.instruction import (
     ReturnInstruction,
     SearchInstruction,
     ShiftInstruction,
+    TimeDrumInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
@@ -736,6 +738,10 @@ def compile_instruction(
         return _compile_search_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, ShiftInstruction):
         return _compile_shift_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, EventDrumInstruction):
+        return _compile_event_drum_instruction(instr, enabled_expr, ctx, indent)
+    if isinstance(instr, TimeDrumInstruction):
+        return _compile_time_drum_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, PackBitsInstruction):
         return _compile_pack_bits_instruction(instr, enabled_expr, ctx, indent)
     if isinstance(instr, PackWordsInstruction):
@@ -2501,6 +2507,336 @@ def _compile_shift_instruction(
         f"        {range_symbol}[_idx] = False",
         f"_mem[{key!r}] = _clock_curr",
     ]
+    return [" " * indent + line for line in lines]
+
+
+def _compile_step_selector_lines(
+    *,
+    step_var: str,
+    target_var: str,
+    value_exprs: list[str],
+) -> list[str]:
+    lines: list[str] = []
+    for idx, expr in enumerate(value_exprs, start=1):
+        branch = "if" if idx == 1 else "elif"
+        lines.append(f"{branch} {step_var} == {idx}:")
+        lines.append(f"    {target_var} = {expr}")
+    return lines
+
+
+def _compile_event_drum_instruction(
+    instr: EventDrumInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    if ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
+
+    step_symbol = ctx.symbol_for_tag(instr.current_step)
+    completion_symbol = ctx.symbol_for_tag(instr.completion_flag)
+    output_symbols = [ctx.symbol_for_tag(tag) for tag in instr.outputs]
+    pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
+    step_count = len(instr.pattern)
+    key_base = ctx.state_key_for(instr)
+    event_prev_key = f"_drum_event_prev:{key_base}"
+    event_ready_key = f"_drum_event_ready:{key_base}"
+    last_step_key = f"_drum_last_step:{key_base}"
+    jump_prev_key = f"_drum_jump_prev:{key_base}"
+    jog_prev_key = f"_drum_jog_prev:{key_base}"
+
+    event_exprs = [f"bool({compile_condition(cond, ctx)})" for cond in instr.events]
+    reset_expr = compile_condition(instr.reset_condition, ctx)
+
+    lines: list[str] = [
+        f"_enabled = bool({enabled_expr})",
+        f"_step_raw = int({step_symbol})",
+        "_step = _step_raw",
+        "_step_changed = False",
+        f"if _enabled and ((_step < 1) or (_step > {step_count})):",
+        "    _step = 1",
+        f"    {step_symbol} = 1",
+        "    _step_changed = True",
+        f"elif (_step < 1) or (_step > {step_count}):",
+        "    _step = 1",
+    ]
+
+    if instr.jump_condition is not None:
+        jump_expr = compile_condition(instr.jump_condition, ctx)
+        lines.extend(
+            [
+                f"_jump_curr = bool({jump_expr})",
+                f"_jump_prev = bool(_mem.get({jump_prev_key!r}, False))",
+                "_jump_edge = _jump_curr and (not _jump_prev)",
+            ]
+        )
+    else:
+        lines.extend(["_jump_curr = False", "_jump_edge = False"])
+
+    if instr.jog_condition is not None:
+        jog_expr = compile_condition(instr.jog_condition, ctx)
+        lines.extend(
+            [
+                f"_jog_curr = bool({jog_expr})",
+                f"_jog_prev = bool(_mem.get({jog_prev_key!r}, False))",
+                "_jog_edge = _jog_curr and (not _jog_prev)",
+            ]
+        )
+    else:
+        lines.extend(["_jog_curr = False", "_jog_edge = False"])
+
+    lines.append(f"_reset_active = bool({reset_expr})")
+    lines.append("if _enabled:")
+    lines.extend(
+        _indent_body(
+            [
+                *_compile_step_selector_lines(
+                    step_var="_step",
+                    target_var="_event_curr",
+                    value_exprs=event_exprs,
+                ),
+                f"_last_step = int(_mem.get({last_step_key!r}, 0))",
+                f"_event_ready = bool(_mem.get({event_ready_key!r}, True))",
+                f"_event_prev = bool(_mem.get({event_prev_key!r}, False))",
+                "if (_last_step != _step) or _step_changed:",
+                "    _event_ready = (not _event_curr)",
+                "    _event_prev = _event_curr",
+                "elif (not _event_ready) and (not _event_curr):",
+                "    _event_ready = True",
+                "if _event_ready and _event_curr and (not _event_prev):",
+                f"    if _step < {step_count}:",
+                "        _step += 1",
+                f"        {step_symbol} = _step",
+                "        _step_changed = True",
+                "    else:",
+                f"        {completion_symbol} = True",
+            ],
+            4,
+        )
+    )
+
+    lines.extend(
+        [
+            "if _reset_active:",
+            "    _step = 1",
+            "    _step_changed = True",
+            f"    {step_symbol} = 1",
+            f"    {completion_symbol} = False",
+        ]
+    )
+
+    if instr.jump_condition is not None and instr.jump_step is not None:
+        jump_step_expr = _compile_value(instr.jump_step, ctx)
+        lines.extend(
+            [
+                "if _enabled and _jump_edge:",
+                f"    _target = int({jump_step_expr})",
+                f"    if 1 <= _target <= {step_count}:",
+                "        _step_changed = _step_changed or (_step != _target)",
+                "        _step = _target",
+                f"        {step_symbol} = _step",
+            ]
+        )
+
+    if instr.jog_condition is not None:
+        lines.extend(
+            [
+                f"if _enabled and _jog_edge and (_step < {step_count}):",
+                "    _step += 1",
+                "    _step_changed = True",
+                f"    {step_symbol} = _step",
+            ]
+        )
+
+    lines.extend(
+        [
+            "if _enabled or _reset_active:",
+            f"    _row = {pattern_literal}[_step - 1]",
+        ]
+    )
+    for idx, output_symbol in enumerate(output_symbols):
+        lines.append(f"    {output_symbol} = bool(_row[{idx}])")
+
+    lines.extend(
+        [
+            *_compile_step_selector_lines(
+                step_var="_step",
+                target_var="_event_curr_final",
+                value_exprs=event_exprs,
+            ),
+            f"_event_ready_final = bool(_mem.get({event_ready_key!r}, True))",
+            "if _step_changed:",
+            "    _event_ready_final = (not _event_curr_final)",
+            "elif (not _event_ready_final) and (not _event_curr_final):",
+            "    _event_ready_final = True",
+            f"_mem[{event_ready_key!r}] = _event_ready_final",
+            f"_mem[{event_prev_key!r}] = _event_curr_final",
+            f"_mem[{last_step_key!r}] = _step",
+        ]
+    )
+    if instr.jump_condition is not None:
+        lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
+    if instr.jog_condition is not None:
+        lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
+
+    return [" " * indent + line for line in lines]
+
+
+def _compile_time_drum_instruction(
+    instr: TimeDrumInstruction,
+    enabled_expr: str,
+    ctx: CodegenContext,
+    indent: int,
+) -> list[str]:
+    if ctx._current_function is not None:
+        ctx.mark_function_global(ctx._current_function, "_mem")
+
+    step_symbol = ctx.symbol_for_tag(instr.current_step)
+    completion_symbol = ctx.symbol_for_tag(instr.completion_flag)
+    accumulator_symbol = ctx.symbol_for_tag(instr.accumulator)
+    output_symbols = [ctx.symbol_for_tag(tag) for tag in instr.outputs]
+    pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
+    step_count = len(instr.pattern)
+    key_base = ctx.state_key_for(instr)
+    frac_key = f"_drum_time_frac:{key_base}"
+    jump_prev_key = f"_drum_jump_prev:{key_base}"
+    jog_prev_key = f"_drum_jog_prev:{key_base}"
+    max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
+
+    preset_exprs = [f"int({_compile_value(preset, ctx)})" for preset in instr.presets]
+    reset_expr = compile_condition(instr.reset_condition, ctx)
+    unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
+
+    lines: list[str] = [
+        f"_enabled = bool({enabled_expr})",
+        f"_step_raw = int({step_symbol})",
+        "_step = _step_raw",
+        "_step_changed = False",
+        "_reset_step_data = False",
+        f"if _enabled and ((_step < 1) or (_step > {step_count})):",
+        "    _step = 1",
+        "    _step_changed = True",
+        "    _reset_step_data = True",
+        f"    {step_symbol} = 1",
+        f"elif (_step < 1) or (_step > {step_count}):",
+        "    _step = 1",
+        f"_acc = int({accumulator_symbol})",
+        f"_frac = float(_mem.get({frac_key!r}, 0.0))",
+    ]
+
+    if instr.jump_condition is not None:
+        jump_expr = compile_condition(instr.jump_condition, ctx)
+        lines.extend(
+            [
+                f"_jump_curr = bool({jump_expr})",
+                f"_jump_prev = bool(_mem.get({jump_prev_key!r}, False))",
+                "_jump_edge = _jump_curr and (not _jump_prev)",
+            ]
+        )
+    else:
+        lines.extend(["_jump_curr = False", "_jump_edge = False"])
+
+    if instr.jog_condition is not None:
+        jog_expr = compile_condition(instr.jog_condition, ctx)
+        lines.extend(
+            [
+                f"_jog_curr = bool({jog_expr})",
+                f"_jog_prev = bool(_mem.get({jog_prev_key!r}, False))",
+                "_jog_edge = _jog_curr and (not _jog_prev)",
+            ]
+        )
+    else:
+        lines.extend(["_jog_curr = False", "_jog_edge = False"])
+
+    lines.append(f"_reset_active = bool({reset_expr})")
+    lines.append("if _enabled:")
+    lines.extend(
+        _indent_body(
+            [
+                "_dt = float(_mem.get('_dt', 0.0))",
+                f"_dt_units = {unit_expr}",
+                "_int_units = int(_dt_units)",
+                "_frac = _dt_units - _int_units",
+                f"_acc = min(_acc + _int_units, {max_acc})",
+                *_compile_step_selector_lines(
+                    step_var="_step",
+                    target_var="_preset",
+                    value_exprs=preset_exprs,
+                ),
+                "if _acc >= _preset:",
+                f"    if _step < {step_count}:",
+                "        _step += 1",
+                "        _step_changed = True",
+                "        _reset_step_data = True",
+                f"        {step_symbol} = _step",
+                "    else:",
+                f"        {completion_symbol} = True",
+            ],
+            4,
+        )
+    )
+
+    lines.extend(
+        [
+            "if _reset_active:",
+            "    _step = 1",
+            "    _step_changed = True",
+            "    _reset_step_data = True",
+            f"    {step_symbol} = 1",
+            f"    {completion_symbol} = False",
+        ]
+    )
+
+    if instr.jump_condition is not None and instr.jump_step is not None:
+        jump_step_expr = _compile_value(instr.jump_step, ctx)
+        lines.extend(
+            [
+                "if _enabled and _jump_edge:",
+                f"    _target = int({jump_step_expr})",
+                f"    if 1 <= _target <= {step_count}:",
+                "        _step_changed = _step_changed or (_step != _target)",
+                "        _step = _target",
+                "        _reset_step_data = True",
+                f"        {step_symbol} = _step",
+            ]
+        )
+
+    if instr.jog_condition is not None:
+        lines.extend(
+            [
+                f"if _enabled and _jog_edge and (_step < {step_count}):",
+                "    _step += 1",
+                "    _step_changed = True",
+                "    _reset_step_data = True",
+                f"    {step_symbol} = _step",
+            ]
+        )
+
+    lines.extend(
+        [
+            "if _reset_step_data:",
+            "    _acc = 0",
+            "    _frac = 0.0",
+            "if _enabled or _reset_active:",
+            f"    _row = {pattern_literal}[_step - 1]",
+        ]
+    )
+    for idx, output_symbol in enumerate(output_symbols):
+        lines.append(f"    {output_symbol} = bool(_row[{idx}])")
+
+    lines.extend(
+        [
+            "if _enabled or _reset_active or _step_changed or _reset_step_data:",
+            f"    {accumulator_symbol} = _acc",
+            f"    _mem[{frac_key!r}] = _frac",
+        ]
+    )
+
+    if instr.jump_condition is not None:
+        lines.append(f"_mem[{jump_prev_key!r}] = _jump_curr")
+    if instr.jog_condition is not None:
+        lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
+
     return [" " * indent + line for line in lines]
 
 

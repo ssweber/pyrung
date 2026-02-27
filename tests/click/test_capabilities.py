@@ -75,6 +75,12 @@ def test_is_writable_sd_subset():
         ("counter_done_bit", "CT", "C"),
         ("counter_accumulator", "CTD", "DD"),
         ("counter_preset", "DD", "TD"),
+        ("drum_output_bit", "Y", "DS"),
+        ("drum_current_step", "DS", "DD"),
+        ("drum_completion_flag", "C", "Y"),
+        ("drum_accumulator", "TD", "DS"),
+        ("drum_jump_step", "DS", "DD"),
+        ("drum_event_condition", "X", "DS"),
         ("copy_pointer", "DS", "DD"),
     ],
 )
@@ -140,6 +146,7 @@ def test_compare_constant_compatibility(bank: str, const_kind: CompareConstantKi
 def test_lookup_tables_exported():
     assert "single" in COPY_COMPATIBILITY
     assert "timer_done_bit" in INSTRUCTION_ROLE_COMPATIBILITY
+    assert "drum_output_bit" in INSTRUCTION_ROLE_COMPATIBILITY
     assert ("DS", "DD") in COMPARE_COMPATIBILITY
     assert "DS" in COMPARE_CONSTANT_COMPATIBILITY
 
