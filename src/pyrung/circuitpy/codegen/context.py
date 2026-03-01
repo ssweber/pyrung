@@ -8,8 +8,17 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.circuitpy.codegen._constants import (
+    _BOARD_LED_TAG,
+    _BOARD_NEOPIXEL_B_TAG,
+    _BOARD_NEOPIXEL_G_TAG,
+    _BOARD_NEOPIXEL_R_TAG,
+    _BOARD_SAVE_MEMORY_CMD_TAG,
+    _BOARD_SWITCH_TAG,
+)
 from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.condition import (
     Condition,
     FallingEdgeCondition,
@@ -85,6 +94,12 @@ class CodegenContext:
     tag_block_addresses: dict[str, tuple[int, int]] = field(default_factory=dict)
     used_indirect_blocks: set[int] = field(default_factory=set)
     function_symbols_by_obj: dict[int, str] = field(default_factory=dict)
+    runstop: RunStopConfig | None = None
+    board_tag_names: set[str] = field(default_factory=set)
+    uses_board_switch: bool = False
+    uses_board_led: bool = False
+    uses_board_neopixel: bool = False
+    uses_board_save_memory_cmd: bool = False
     _current_function: str | None = None
     _name_counters: dict[str, int] = field(default_factory=dict)
     _state_key_counter: int = 0
@@ -247,6 +262,7 @@ class CodegenContext:
         for sub_name in self.subroutine_names:
             for rung in self.program.subroutines[sub_name]:
                 walk_rung(rung)
+        self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
         self.retentive_tags = {
@@ -366,6 +382,11 @@ class CodegenContext:
             return None
         return self.symbol_for_tag(tag)
 
+    def ensure_tag_referenced(self, tag: Tag) -> None:
+        self.referenced_tags.setdefault(tag.name, tag)
+        self._associate_tag_with_known_block(tag)
+        self._refresh_board_usage()
+
     def register_function_source(self, fn: Any) -> str:
         key = id(fn)
         existing = self.function_symbols_by_obj.get(key)
@@ -434,3 +455,25 @@ class CodegenContext:
                 if cached_tag is tag:
                     self.tag_block_addresses[tag.name] = (binding.block_id, addr)
                     return
+
+    def _refresh_board_usage(self) -> None:
+        names = set(self.referenced_tags)
+        self.board_tag_names = {
+            name
+            for name in names
+            if name
+            in {
+                _BOARD_SWITCH_TAG,
+                _BOARD_LED_TAG,
+                _BOARD_NEOPIXEL_R_TAG,
+                _BOARD_NEOPIXEL_G_TAG,
+                _BOARD_NEOPIXEL_B_TAG,
+                _BOARD_SAVE_MEMORY_CMD_TAG,
+            }
+        }
+        self.uses_board_switch = _BOARD_SWITCH_TAG in names
+        self.uses_board_led = _BOARD_LED_TAG in names
+        self.uses_board_save_memory_cmd = _BOARD_SAVE_MEMORY_CMD_TAG in names
+        self.uses_board_neopixel = bool(
+            {_BOARD_NEOPIXEL_R_TAG, _BOARD_NEOPIXEL_G_TAG, _BOARD_NEOPIXEL_B_TAG} & names
+        )

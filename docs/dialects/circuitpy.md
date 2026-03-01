@@ -12,7 +12,7 @@ pip install pyrung
 
 ```python
 from pyrung import Bool, Int, Real, PLCRunner, Program, Rung, TimeMode, out, copy, rise
-from pyrung.circuitpy import P1AM, generate_circuitpy, validate_circuitpy_program
+from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy, validate_circuitpy_program
 ```
 
 ## Hardware setup — P1AM
@@ -96,7 +96,13 @@ source = generate_circuitpy(logic, hw, target_scan_ms=10.0, watchdog_ms=500)
 ## Code generation
 
 ```python
-source = generate_circuitpy(program, hw, target_scan_ms=10.0, watchdog_ms=500)
+source = generate_circuitpy(
+    program,
+    hw,
+    target_scan_ms=10.0,
+    watchdog_ms=500,
+    runstop=RunStopConfig(),
+)
 ```
 
 | Parameter | Type | Description |
@@ -105,6 +111,7 @@ source = generate_circuitpy(program, hw, target_scan_ms=10.0, watchdog_ms=500)
 | `hw` | `P1AM` | Hardware configuration |
 | `target_scan_ms` | `float` | Target scan cycle time in milliseconds (must be > 0) |
 | `watchdog_ms` | `int \| None` | Hardware watchdog timeout in ms, or `None` to disable |
+| `runstop` | `RunStopConfig \| None` | Optional board-switch RUN/STOP mapping with debounce |
 
 Returns a complete, self-contained CircuitPython source file as a string. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
@@ -133,7 +140,7 @@ Tags marked `retentive=True` are automatically persisted to an SD card:
 
 The generated runtime supports system SD command bits:
 
-- `system.storage.sd.save_cmd` triggers `save_memory()` from ladder logic.
+- `board.save_memory_cmd` triggers `save_memory()` from ladder logic.
 - `system.storage.sd.delete_all_cmd` removes only retentive files (`/sd/memory.json` and `/sd/_memory.tmp`).
 - `system.storage.sd.eject_cmd` calls `storage.umount("/sd")` and keeps SD unavailable until reboot/remount.
 
@@ -144,8 +151,29 @@ Example ladder trigger:
 ```python
 with Program() as logic:
     with Rung(Bool("PersistNow")):
-        out(system.storage.sd.save_cmd)
+        out(board.save_memory_cmd)
 ```
+
+## Onboard board model
+
+`pyrung.circuitpy` exposes first-class onboard peripheral tags:
+
+- `board.switch` (`InputTag`, BOOL)
+- `board.led` (`OutputTag`, BOOL)
+- `board.neopixel.r/g/b` (`OutputTag`, INT channels, clamped 0..255 in generated writes)
+- `board.save_memory_cmd` (`OutputTag`, BOOL save trigger)
+
+These board tags can be used even when no slots are configured (zero-slot code generation).
+
+## Optional RUN/STOP mapping
+
+Pass `RunStopConfig(...)` to `generate_circuitpy()` to map `board.switch` to runtime RUN/STOP mode:
+
+- debounced switch sampling (`debounce_ms`, default `30`)
+- `run_when_high` polarity control
+- optional exposure of `sys.mode_run` and `sys.cmd_mode_stop` (`expose_mode_tags=True`)
+- STOP skips rung execution and forces physical outputs off each scan
+- STOP->RUN resets non-retentive runtime state while preserving retentive values
 
 ### Watchdog
 

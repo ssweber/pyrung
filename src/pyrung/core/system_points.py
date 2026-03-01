@@ -82,7 +82,6 @@ class FirmwareNamespace:
 
 @dataclass(frozen=True)
 class StorageSdNamespace:
-    save_cmd: Tag
     eject_cmd: Tag
     delete_all_cmd: Tag
     ready: Tag
@@ -169,7 +168,6 @@ system = SystemNamespaces(
     ),
     storage=StorageNamespace(
         sd=StorageSdNamespace(
-            save_cmd=Bool("storage.sd.save_cmd"),
             eject_cmd=Bool("storage.sd.eject_cmd"),
             delete_all_cmd=Bool("storage.sd.delete_all_cmd"),
             ready=Bool("storage.sd.ready"),
@@ -201,7 +199,6 @@ WRITABLE_SYSTEM_TAG_NAMES = frozenset(
         system.rtc.apply_time.name,
         system.sys.cmd_mode_stop.name,
         system.sys.cmd_watchdog_reset.name,
-        system.storage.sd.save_cmd.name,
         system.storage.sd.eject_cmd.name,
         system.storage.sd.delete_all_cmd.name,
     }
@@ -472,7 +469,6 @@ class SystemPointRuntime:
 
     def _process_storage_sd_commands(self, ctx: ScanContext) -> None:
         command_names = (
-            system.storage.sd.save_cmd.name,
             system.storage.sd.eject_cmd.name,
             system.storage.sd.delete_all_cmd.name,
         )

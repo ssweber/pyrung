@@ -63,9 +63,6 @@ _SD_ERROR_TAG = "storage.sd.error"
 _SD_ERROR_CODE_TAG = "storage.sd.error_code"
 
 
-_SD_SAVE_CMD_TAG = "storage.sd.save_cmd"
-
-
 _SD_EJECT_CMD_TAG = "storage.sd.eject_cmd"
 
 
@@ -73,6 +70,30 @@ _SD_DELETE_ALL_CMD_TAG = "storage.sd.delete_all_cmd"
 
 
 _FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
+
+
+_SYS_MODE_RUN_TAG = "sys.mode_run"
+
+
+_SYS_CMD_MODE_STOP_TAG = "sys.cmd_mode_stop"
+
+
+_BOARD_SWITCH_TAG = "board.switch"
+
+
+_BOARD_LED_TAG = "board.led"
+
+
+_BOARD_NEOPIXEL_R_TAG = "board.neopixel.r"
+
+
+_BOARD_NEOPIXEL_G_TAG = "board.neopixel.g"
+
+
+_BOARD_NEOPIXEL_B_TAG = "board.neopixel.b"
+
+
+_BOARD_SAVE_MEMORY_CMD_TAG = "board.save_memory_cmd"
 
 
 _SD_MOUNT_ERROR = 1

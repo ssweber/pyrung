@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from pyrung.circuitpy import P1AM, generate_circuitpy
+from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy
 from pyrung.circuitpy.codegen import (
     CodegenContext,
     compile_condition,
@@ -125,15 +125,45 @@ def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
 def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict[str, object]:
     single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
+    class _StubDigitalInOut:
+        def __init__(self, pin: object):
+            self.pin = pin
+            self.direction = None
+            self.pull = None
+            self.value = False
+
+    class _StubNeoPixel:
+        def __init__(self, pin: object, count: int, auto_write: bool = True):
+            self.pin = pin
+            self.count = count
+            self.auto_write = auto_write
+            self._pixels = [(0, 0, 0)] * count
+
+        def __setitem__(self, index: int, value: tuple[int, int, int]) -> None:
+            self._pixels[index] = value
+
+        def __getitem__(self, index: int) -> tuple[int, int, int]:
+            return self._pixels[index]
+
     board_mod = _stub_module(
         "board",
         SD_SCK=object(),
         SD_MOSI=object(),
         SD_MISO=object(),
         SD_CS=object(),
+        SWITCH=object(),
+        LED=object(),
+        NEOPIXEL=object(),
     )
     busio_mod = _stub_module("busio", SPI=lambda *args, **kwargs: object())
     sdcardio_mod = _stub_module("sdcardio", SDCard=lambda *args, **kwargs: object())
+    digitalio_mod = _stub_module(
+        "digitalio",
+        DigitalInOut=_StubDigitalInOut,
+        Direction=types.SimpleNamespace(INPUT=object(), OUTPUT=object()),
+        Pull=types.SimpleNamespace(UP=object(), DOWN=object()),
+    )
+    neopixel_mod = _stub_module("neopixel", NeoPixel=_StubNeoPixel)
     storage_mod = _stub_module(
         "storage",
         VfsFat=lambda *_args, **_kwargs: object(),
@@ -145,6 +175,8 @@ def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict
     monkeypatch.setitem(sys.modules, "board", board_mod)
     monkeypatch.setitem(sys.modules, "busio", busio_mod)
     monkeypatch.setitem(sys.modules, "sdcardio", sdcardio_mod)
+    monkeypatch.setitem(sys.modules, "digitalio", digitalio_mod)
+    monkeypatch.setitem(sys.modules, "neopixel", neopixel_mod)
     monkeypatch.setitem(sys.modules, "storage", storage_mod)
     monkeypatch.setitem(sys.modules, "P1AM", p1am_mod)
     monkeypatch.setitem(sys.modules, "microcontroller", microcontroller_mod)
@@ -170,6 +202,8 @@ class TestGenerateCircuitPyAPI:
             generate_circuitpy(prog, hw, target_scan_ms=math.inf)
         with pytest.raises(TypeError, match="watchdog_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="runstop"):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # type: ignore[arg-type]
 
     def test_rejects_empty_and_non_contiguous_slots(self):
         empty_hw = P1AM()
@@ -182,6 +216,16 @@ class TestGenerateCircuitPyAPI:
         hw.slot(3, "P1-08TRS")
         with pytest.raises(ValueError, match="contiguous"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0)
+
+    def test_allows_zero_slot_codegen_when_board_tags_are_used(self):
+        hw = P1AM()
+        with Program(strict=False) as prog:
+            with Rung(board.switch):
+                out(board.led)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "base.rollCall(_SLOT_MODULES)" in source_code
+        assert "_SLOT_MODULES = []" in source_code
+        assert "import digitalio" in source_code
 
     def test_function_call_requires_inspectable_source(self):
         hw = P1AM()
@@ -574,7 +618,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         with Program(strict=False) as prog:
             with Rung(all_of(Bool("Enable"), system.storage.sd.ready)):
                 copy(5, step)
-                out(system.storage.sd.save_cmd)
+                out(board.save_memory_cmd)
                 out(system.storage.sd.eject_cmd)
                 out(system.storage.sd.delete_all_cmd)
 
@@ -590,7 +634,8 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "_sd_error_code = 3" in source_code
         assert "_service_sd_commands()" in source_code
         assert "save_memory()" in source_code
-        assert "_t_storage_sd_save_cmd" in source_code
+        assert "storage.sd.save_cmd" not in source_code
+        assert "_t_board_save_memory_cmd" in source_code
         assert "_t_storage_sd_eject_cmd" in source_code
         assert 'storage.umount("/sd")' in source_code
         assert "_sd_available = False" in source_code
@@ -676,6 +721,136 @@ class TestIOMappingAndBranching:
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
         assert branch_idx < a_idx < b_idx < c_idx
+
+
+class TestBoardPeripheralsAndRunStop:
+    def test_board_peripheral_codegen_emits_wiring_and_neopixel_clamp(self):
+        hw = P1AM()
+        with Program(strict=False) as prog:
+            with Rung(board.switch):
+                out(board.led)
+            with Rung(Bool("Enable", default=True)):
+                copy(999, board.neopixel.r)
+                copy(-3, board.neopixel.g)
+                copy(128, board.neopixel.b)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "import digitalio" in source_code
+        assert "_board_switch_io = digitalio.DigitalInOut(board.SWITCH)" in source_code
+        assert "_board_led_io = digitalio.DigitalInOut(board.LED)" in source_code
+        assert "import neopixel" in source_code
+        assert "_board_pixel = neopixel.NeoPixel(board.NEOPIXEL, 1, auto_write=True)" in source_code
+        assert "_board_pixel[0] = (_pixel_r, _pixel_g, _pixel_b)" in source_code
+        assert "max(0, min(255, int(" in source_code
+
+    def test_runstop_emits_mapping_and_mode_tag_support(self):
+        hw, di, do = _basic_hw()
+        with Program(strict=False) as prog:
+            with Rung(di[1]):
+                out(do[1])
+
+        source_code = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=15),
+        )
+        assert "_runstop_initialized = False" in source_code
+        assert "_runstop_debounced" in source_code
+        assert "_reset_for_run_transition()" in source_code
+        assert "_force_outputs_off()" in source_code
+        assert "_t_sys_mode_run" in source_code
+        assert "_t_sys_cmd_mode_stop" in source_code
+        assert "if bool(_t_sys_cmd_mode_stop):" in source_code
+
+    def test_runstop_stop_mode_forces_outputs_off(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        outputs = hw.slot(2, "P1-08TRS")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                out(outputs[1])
+
+        source = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=0, run_when_high=True),
+        )
+
+        class StubBase:
+            def __init__(self):
+                self.discrete_writes: list[tuple[int, int]] = []
+
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                self.discrete_writes.append((slot, value))
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        stub_base = StubBase()
+        namespace = _run_single_scan_source(source, monkeypatch, stub_base)
+        assert stub_base.discrete_writes[-1] == (2, 0)
+        out_block_symbol = _context_for_program(prog, hw).symbol_for_block(outputs)
+        out_values = _namespace_list(namespace, out_block_symbol)
+        assert out_values[0] is False
+
+    def test_runstop_run_when_high_false_keeps_runtime_in_run(self, monkeypatch):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        outputs = hw.slot(2, "P1-08TRS")
+        enable = Bool("Enable", default=True)
+
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                out(outputs[1])
+
+        source = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            runstop=RunStopConfig(debounce_ms=0, run_when_high=False),
+        )
+
+        class StubBase:
+            def __init__(self):
+                self.discrete_writes: list[tuple[int, int]] = []
+
+            def rollCall(self, modules):
+                return None
+
+            def readDiscrete(self, slot):
+                return 0
+
+            def writeDiscrete(self, value, slot):
+                self.discrete_writes.append((slot, value))
+
+            def readAnalog(self, slot, ch):
+                return 0
+
+            def writeAnalog(self, value, slot, ch):
+                return None
+
+            def readTemperature(self, slot, ch):
+                return 0.0
+
+        stub_base = StubBase()
+        _run_single_scan_source(source, monkeypatch, stub_base)
+        assert stub_base.discrete_writes[-1] == (2, 1)
 
 
 class TestCopyModifierCodegen:

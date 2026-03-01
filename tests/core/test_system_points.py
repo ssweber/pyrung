@@ -37,7 +37,6 @@ def test_system_namespace_shape_and_names():
     assert system.fault.division_error.name == "fault.division_error"
     assert system.rtc.apply_time.name == "rtc.apply_time"
     assert system.firmware.main_ver_low.name == "firmware.main_ver_low"
-    assert system.storage.sd.save_cmd.name == "storage.sd.save_cmd"
     assert system.storage.sd.eject_cmd.name == "storage.sd.eject_cmd"
     assert system.storage.sd.delete_all_cmd.name == "storage.sd.delete_all_cmd"
     assert system.storage.sd.ready.name == "storage.sd.ready"
@@ -287,20 +286,17 @@ def test_storage_sd_commands_auto_clear_and_pulse_write_status():
     runner = PLCRunner(logic=[])
     runner.patch(
         {
-            system.storage.sd.save_cmd.name: True,
             system.storage.sd.eject_cmd.name: True,
             system.storage.sd.delete_all_cmd.name: True,
         }
     )
 
     runner.step()
-    assert runner.current_state.tags[system.storage.sd.save_cmd.name] is True
     assert runner.current_state.tags[system.storage.sd.eject_cmd.name] is True
     assert runner.current_state.tags[system.storage.sd.delete_all_cmd.name] is True
     assert _resolved(runner, system.storage.sd.write_status.name) is False
 
     runner.step()
-    assert runner.current_state.tags[system.storage.sd.save_cmd.name] is False
     assert runner.current_state.tags[system.storage.sd.eject_cmd.name] is False
     assert runner.current_state.tags[system.storage.sd.delete_all_cmd.name] is False
     assert _resolved(runner, system.storage.sd.write_status.name) is True

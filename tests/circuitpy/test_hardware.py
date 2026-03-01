@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.circuitpy import MAX_SLOTS, P1AM
+from pyrung.circuitpy import MAX_SLOTS, P1AM, RunStopConfig, board
 from pyrung.circuitpy.catalog import MODULE_CATALOG, ModuleDirection
 from pyrung.core import (
     InputBlock,
@@ -397,3 +397,31 @@ class TestIntegration:
         # No tag name collisions
         names = {di[1].name, do[1].name, ai[1].name, ao[1].name}
         assert len(names) == 4
+
+
+class TestP1AMBoardModel:
+    def test_board_namespace_has_expected_tag_names(self):
+        assert board.switch.name == "board.switch"
+        assert board.led.name == "board.led"
+        assert board.neopixel.r.name == "board.neopixel.r"
+        assert board.neopixel.g.name == "board.neopixel.g"
+        assert board.neopixel.b.name == "board.neopixel.b"
+        assert board.save_memory_cmd.name == "board.save_memory_cmd"
+
+    def test_board_tag_types_are_correct(self):
+        assert board.switch.type is TagType.BOOL
+        assert board.led.type is TagType.BOOL
+        assert board.neopixel.r.type is TagType.INT
+        assert board.neopixel.g.type is TagType.INT
+        assert board.neopixel.b.type is TagType.INT
+        assert board.save_memory_cmd.type is TagType.BOOL
+
+    def test_runstop_config_defaults_and_validation(self):
+        cfg = RunStopConfig()
+        assert cfg.source == "board.switch"
+        assert cfg.run_when_high is True
+        assert cfg.debounce_ms == 30
+        assert cfg.expose_mode_tags is True
+
+        with pytest.raises(ValueError, match="source"):
+            RunStopConfig(source="board.led")  # type: ignore[arg-type]

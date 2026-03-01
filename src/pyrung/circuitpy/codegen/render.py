@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from pyrung.circuitpy.codegen._constants import (
+    _BOARD_LED_TAG,
+    _BOARD_NEOPIXEL_B_TAG,
+    _BOARD_NEOPIXEL_G_TAG,
+    _BOARD_NEOPIXEL_R_TAG,
+    _BOARD_SAVE_MEMORY_CMD_TAG,
+    _BOARD_SWITCH_TAG,
     _DINT_MAX,
     _DINT_MIN,
     _HELPER_ORDER,
@@ -15,9 +21,10 @@ from pyrung.circuitpy.codegen._constants import (
     _SD_LOAD_ERROR,
     _SD_MOUNT_ERROR,
     _SD_READY_TAG,
-    _SD_SAVE_CMD_TAG,
     _SD_SAVE_ERROR,
     _SD_WRITE_STATUS_TAG,
+    _SYS_CMD_MODE_STOP_TAG,
+    _SYS_MODE_RUN_TAG,
     _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
@@ -31,12 +38,61 @@ from pyrung.circuitpy.codegen.compile import _load_cast_expr, compile_rung
 from pyrung.circuitpy.codegen.context import CodegenContext
 
 
+def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
+    if tag_name == _BOARD_SWITCH_TAG:
+        return True
+    block_info = ctx.tag_block_addresses.get(tag_name)
+    if block_info is None:
+        return False
+    block_id, _ = block_info
+    binding = ctx.block_bindings.get(block_id)
+    if binding is None:
+        return False
+    return binding.direction == "input"
+
+
+def _render_run_transition_reset_lines(ctx: CodegenContext) -> list[str]:
+    lines: list[str] = []
+    for tag_name in sorted(ctx.referenced_tags):
+        tag = ctx.referenced_tags[tag_name]
+        if tag.retentive:
+            continue
+        if _tag_is_input_endpoint(ctx, tag_name):
+            continue
+        lines.append(f"    {ctx.symbol_for_tag(tag)} = {repr(tag.default)}")
+    return lines
+
+
+def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
+    lines: list[str] = []
+    for binding in sorted(
+        ctx.block_bindings.values(), key=lambda b: (ctx.block_symbols[b.block_id], b.block_id)
+    ):
+        if binding.direction != "output":
+            continue
+        symbol = ctx.block_symbols[binding.block_id]
+        default = _TYPE_DEFAULTS[binding.tag_type]
+        size = binding.end - binding.start + 1
+        lines.append(f"    for _i in range({size}):")
+        lines.append(f"        {symbol}[_i] = {repr(default)}")
+    led_symbol = ctx.symbol_if_referenced(_BOARD_LED_TAG)
+    if led_symbol is not None:
+        lines.append(f"    {led_symbol} = False")
+    for channel_tag in (_BOARD_NEOPIXEL_R_TAG, _BOARD_NEOPIXEL_G_TAG, _BOARD_NEOPIXEL_B_TAG):
+        channel_symbol = ctx.symbol_if_referenced(channel_tag)
+        if channel_symbol is not None:
+            lines.append(f"    {channel_symbol} = 0")
+    return lines
+
+
 def _render_code(ctx: CodegenContext) -> str:
     main_fn_lines = _render_main_function(ctx)
     sub_fn_lines = _render_subroutine_functions(ctx)
     io_lines = _render_io_helpers(ctx)
     helper_lines = _render_helper_section(ctx)
     function_source_lines = _render_embedded_functions(ctx)
+    needs_digitalio = ctx.uses_board_switch or ctx.uses_board_led
+    needs_neopixel = ctx.uses_board_neopixel
 
     lines: list[str] = []
 
@@ -56,6 +112,14 @@ def _render_code(ctx: CodegenContext) -> str:
             "import sdcardio",
             "import storage",
             "",
+        ]
+    )
+    if needs_digitalio:
+        lines.extend(["import digitalio", ""])
+    if needs_neopixel:
+        lines.extend(["import neopixel", ""])
+    lines.extend(
+        [
             "try:",
             "    import microcontroller",
             "except ImportError:",
@@ -87,6 +151,31 @@ def _render_code(ctx: CodegenContext) -> str:
             "",
         ]
     )
+    if needs_digitalio:
+        if ctx.uses_board_switch:
+            lines.extend(
+                [
+                    "_board_switch_io = digitalio.DigitalInOut(board.SWITCH)",
+                    "_board_switch_io.direction = digitalio.Direction.INPUT",
+                ]
+            )
+        if ctx.uses_board_led:
+            lines.extend(
+                [
+                    "_board_led_io = digitalio.DigitalInOut(board.LED)",
+                    "_board_led_io.direction = digitalio.Direction.OUTPUT",
+                    "_board_led_io.value = False",
+                ]
+            )
+        lines.append("")
+    if needs_neopixel:
+        lines.extend(
+            [
+                "_board_pixel = neopixel.NeoPixel(board.NEOPIXEL, 1, auto_write=True)",
+                "_board_pixel[0] = (0, 0, 0)",
+                "",
+            ]
+        )
 
     # 4) watchdog API binding + startup config
     if ctx.watchdog_ms is not None:
@@ -148,6 +237,17 @@ def _render_code(ctx: CodegenContext) -> str:
             "",
         ]
     )
+    if ctx.runstop is not None:
+        lines.extend(
+            [
+                "_mode_run = True",
+                "_runstop_initialized = False",
+                "_runstop_raw = False",
+                "_runstop_debounced = False",
+                "_runstop_last_change_ts = 0.0",
+                "",
+            ]
+        )
 
     # 7) SD mount + load memory startup call
     ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
@@ -354,6 +454,44 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
         "    _sd_write_status = True",
         "",
     ]
+    if ctx.runstop is not None:
+        scalar_symbols = [ctx.symbol_table[name] for name in sorted(ctx.scalar_tags)]
+        reset_lines = _render_run_transition_reset_lines(ctx)
+        reset_globals = sorted(
+            {
+                "_mem",
+                "_prev",
+                "_sd_save_cmd",
+                "_sd_eject_cmd",
+                "_sd_delete_all_cmd",
+                *scalar_symbols,
+            }
+        )
+        lines.append("def _reset_for_run_transition():")
+        lines.append(f"    global {', '.join(reset_globals)}")
+        lines.extend(
+            [
+                "    _mem = {}",
+                "    _prev = {}",
+                "    _sd_save_cmd = False",
+                "    _sd_eject_cmd = False",
+                "    _sd_delete_all_cmd = False",
+            ]
+        )
+        if reset_lines:
+            lines.extend(reset_lines)
+        else:
+            lines.append("    pass")
+        lines.append("")
+
+        lines.append("def _force_outputs_off():")
+        if scalar_symbols:
+            lines.append(f"    global {', '.join(sorted(set(scalar_symbols)))}")
+        output_clear_lines = _render_stop_output_clear_lines(ctx)
+        if output_clear_lines:
+            lines.extend(output_clear_lines)
+        lines.append("    _write_outputs()")
+        lines.append("")
 
     for binding in sorted(
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
@@ -669,6 +807,9 @@ def _render_io_helpers(ctx: CodegenContext) -> list[str]:
                 read_body.append(
                     f"    {symbol}[{index}] = float(base.readTemperature({slot.slot_number}, {ch}))"
                 )
+    board_switch_symbol = ctx.symbol_if_referenced(_BOARD_SWITCH_TAG)
+    if board_switch_symbol is not None:
+        read_body.append(f"    {board_switch_symbol} = bool(_board_switch_io.value)")
     ctx.set_current_function(None)
     lines.append(f"def {read_fn}():")
     read_globals = _global_line(ctx.globals_for_function(read_fn), indent=4)
@@ -703,6 +844,25 @@ def _render_io_helpers(ctx: CodegenContext) -> list[str]:
                 write_body.append(
                     f"    base.writeAnalog(int({symbol}[{index}]), {slot.slot_number}, {ch})"
                 )
+    board_led_symbol = ctx.symbol_if_referenced(_BOARD_LED_TAG)
+    if board_led_symbol is not None:
+        write_body.append(f"    _board_led_io.value = bool({board_led_symbol})")
+
+    np_r_symbol = ctx.symbol_if_referenced(_BOARD_NEOPIXEL_R_TAG)
+    np_g_symbol = ctx.symbol_if_referenced(_BOARD_NEOPIXEL_G_TAG)
+    np_b_symbol = ctx.symbol_if_referenced(_BOARD_NEOPIXEL_B_TAG)
+    if np_r_symbol is not None or np_g_symbol is not None or np_b_symbol is not None:
+        r_expr = np_r_symbol if np_r_symbol is not None else "0"
+        g_expr = np_g_symbol if np_g_symbol is not None else "0"
+        b_expr = np_b_symbol if np_b_symbol is not None else "0"
+        write_body.extend(
+            [
+                f"    _pixel_r = max(0, min(255, int({r_expr})))",
+                f"    _pixel_g = max(0, min(255, int({g_expr})))",
+                f"    _pixel_b = max(0, min(255, int({b_expr})))",
+                "    _board_pixel[0] = (_pixel_r, _pixel_g, _pixel_b)",
+            ]
+        )
     ctx.set_current_function(None)
     lines.append(f"def {write_fn}():")
     write_globals = _global_line(ctx.globals_for_function(write_fn), indent=4)
@@ -721,9 +881,14 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
     sd_write_symbol = ctx.symbol_if_referenced(_SD_WRITE_STATUS_TAG)
     sd_error_symbol = ctx.symbol_if_referenced(_SD_ERROR_TAG)
     sd_error_code_symbol = ctx.symbol_if_referenced(_SD_ERROR_CODE_TAG)
-    sd_save_symbol = ctx.symbol_if_referenced(_SD_SAVE_CMD_TAG)
+    sd_save_symbol = ctx.symbol_if_referenced(_BOARD_SAVE_MEMORY_CMD_TAG)
     sd_eject_symbol = ctx.symbol_if_referenced(_SD_EJECT_CMD_TAG)
     sd_delete_symbol = ctx.symbol_if_referenced(_SD_DELETE_ALL_CMD_TAG)
+    runstop_source_symbol = (
+        ctx.symbol_if_referenced(ctx.runstop.source) if ctx.runstop is not None else None
+    )
+    mode_run_symbol = ctx.symbol_if_referenced(_SYS_MODE_RUN_TAG)
+    cmd_mode_stop_symbol = ctx.symbol_if_referenced(_SYS_CMD_MODE_STOP_TAG)
 
     lines = [
         "while True:",
@@ -766,11 +931,68 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
     lines.extend(
         [
             "    _read_inputs()",
-            "    _run_main_rungs()",
-            "    _write_outputs()",
-            "",
         ]
     )
+    if ctx.runstop is not None:
+        if runstop_source_symbol is None:
+            raise RuntimeError("RunStopConfig source tag was not referenced")
+        lines.extend(
+            [
+                f"    _runstop_sample = bool({runstop_source_symbol})",
+                "    if not _runstop_initialized:",
+                "        _runstop_raw = _runstop_sample",
+                "        _runstop_debounced = _runstop_sample",
+                "        _runstop_last_change_ts = scan_start",
+                "        _runstop_initialized = True",
+                "    elif _runstop_sample != _runstop_raw:",
+                "        _runstop_raw = _runstop_sample",
+                "        _runstop_last_change_ts = scan_start",
+                f"    elif ((scan_start - _runstop_last_change_ts) * 1000.0) >= {ctx.runstop.debounce_ms}:",
+                "        _runstop_debounced = _runstop_raw",
+                "",
+            ]
+        )
+        if ctx.runstop.run_when_high:
+            lines.append("    _desired_run = bool(_runstop_debounced)")
+        else:
+            lines.append("    _desired_run = (not bool(_runstop_debounced))")
+        if ctx.runstop.expose_mode_tags and cmd_mode_stop_symbol is not None:
+            lines.extend(
+                [
+                    f"    if bool({cmd_mode_stop_symbol}):",
+                    "        _desired_run = False",
+                    f"        {cmd_mode_stop_symbol} = False",
+                ]
+            )
+        lines.extend(
+            [
+                "    if _desired_run != _mode_run:",
+                "        if _desired_run:",
+                "            _reset_for_run_transition()",
+                "        _mode_run = _desired_run",
+            ]
+        )
+        if ctx.runstop.expose_mode_tags and mode_run_symbol is not None:
+            lines.append(f"    {mode_run_symbol} = bool(_mode_run)")
+        lines.extend(
+            [
+                "    if _mode_run:",
+                "        _run_main_rungs()",
+                "        _write_outputs()",
+                "    else:",
+                "        _force_outputs_off()",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "    _run_main_rungs()",
+                "    _write_outputs()",
+                "",
+            ]
+        )
+
     for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]
         lines.append(f'    _prev["{tag_name}"] = {ctx.symbol_for_tag(tag)}')

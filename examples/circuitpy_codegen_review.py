@@ -52,6 +52,7 @@ from pyrung import (
     unpack_to_bits,
     unpack_to_words,
 )
+from pyrung.circuitpy import board
 
 # BOOL control/state tags
 Enable = Bool("Enable")
@@ -214,7 +215,7 @@ with Program(strict=False) as logic:
     with Rung(DD[Idx] > 0):
         out(StepDone)
     with Rung(AutoMode | Found):
-        out(system.storage.sd.save_cmd)
+        out(board.save_memory_cmd)
     with Rung(Abort):
         out(system.storage.sd.delete_all_cmd)
     with Rung(Stop):

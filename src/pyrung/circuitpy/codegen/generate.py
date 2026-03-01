@@ -7,8 +7,10 @@ import math as _math
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render import _render_code
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import validate_circuitpy_program
 from pyrung.core.program import Program
+from pyrung.core.system_points import system
 
 
 def generate_circuitpy(
@@ -17,6 +19,7 @@ def generate_circuitpy(
     *,
     target_scan_ms: float,
     watchdog_ms: int | None = None,
+    runstop: RunStopConfig | None = None,
 ) -> str:
     if not isinstance(program, Program):
         raise TypeError(f"program must be Program, got {type(program).__name__}")
@@ -33,23 +36,8 @@ def generate_circuitpy(
             raise TypeError(f"watchdog_ms must be int or None, got {type(watchdog_ms).__name__}")
         if watchdog_ms < 0:
             raise ValueError("watchdog_ms must be >= 0")
-
-    if not hw._slots:
-        raise ValueError("P1AM hardware config must include at least one configured slot")
-
-    slot_numbers = sorted(hw._slots)
-    expected = list(range(1, slot_numbers[-1] + 1))
-    if slot_numbers != expected:
-        raise ValueError(
-            "Configured slots must be contiguous from 1..N for v1 roll-call generation"
-        )
-
-    report = validate_circuitpy_program(program, hw=hw, mode="strict")
-    if report.errors:
-        lines = [f"{len(report.errors)} error(s)."]
-        for err in report.errors:
-            lines.append(f"{err.code} @ {err.location}: {err.message}")
-        raise ValueError("\n".join(lines))
+    if runstop is not None and not isinstance(runstop, RunStopConfig):
+        raise TypeError(f"runstop must be RunStopConfig or None, got {type(runstop).__name__}")
 
     ctx = CodegenContext(
         program=program,
@@ -59,6 +47,33 @@ def generate_circuitpy(
     )
     ctx.collect_hw_bindings()
     ctx.collect_program_references()
+    ctx.runstop = runstop
+    if runstop is not None:
+        ctx.ensure_tag_referenced(board.switch)
+        if runstop.expose_mode_tags:
+            ctx.ensure_tag_referenced(system.sys.mode_run)
+            ctx.ensure_tag_referenced(system.sys.cmd_mode_stop)
+
+    if not hw._slots and not ctx.board_tag_names:
+        raise ValueError(
+            "P1AM hardware config must include at least one configured slot or referenced board tags"
+        )
+
+    if hw._slots:
+        slot_numbers = sorted(hw._slots)
+        expected = list(range(1, slot_numbers[-1] + 1))
+        if slot_numbers != expected:
+            raise ValueError(
+                "Configured slots must be contiguous from 1..N for v1 roll-call generation"
+            )
+
+    report = validate_circuitpy_program(program, hw=hw, mode="strict")
+    if report.errors:
+        lines = [f"{len(report.errors)} error(s)."]
+        for err in report.errors:
+            lines.append(f"{err.code} @ {err.location}: {err.message}")
+        raise ValueError("\n".join(lines))
+
     ctx.collect_retentive_tags()
     ctx.assign_symbols()
 

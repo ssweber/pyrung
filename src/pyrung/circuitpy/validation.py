@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.p1am import is_board_tag
 from pyrung.core.condition import Condition
 from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.expression import Expression
@@ -236,6 +237,8 @@ def _evaluate_function_call(
 
 
 def _tag_is_tracked_by_hw(tag: Tag, hw_blocks: set[int]) -> bool:
+    if is_board_tag(tag):
+        return True
     for block_id in hw_blocks:
         block = _BLOCK_REGISTRY.get(block_id)
         if block is None:

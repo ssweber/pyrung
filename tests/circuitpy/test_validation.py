@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.circuitpy import P1AM, validate_circuitpy_program
+from pyrung.circuitpy import P1AM, board, validate_circuitpy_program
 from pyrung.circuitpy.validation import (
     CPY_FUNCTION_CALL_VERIFY,
     CPY_IO_BLOCK_UNTRACKED,
@@ -144,6 +144,18 @@ class TestIOBlockTracked:
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
 
+        assert CPY_IO_BLOCK_UNTRACKED not in _finding_codes(report)
+
+    def test_board_io_tags_are_treated_as_tracked_hardware(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+
+        def logic():
+            with Rung(board.switch):
+                out(board.led)
+
+        prog = _build_program(logic)
+        report = validate_circuitpy_program(prog, hw=hw, mode="warn")
         assert CPY_IO_BLOCK_UNTRACKED not in _finding_codes(report)
 
 
