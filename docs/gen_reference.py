@@ -53,6 +53,8 @@ CLICK_BLOCK_SYMBOLS: tuple[str, ...] = (
 
 CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.TagMap",
+    "pyrung.click.LadderBundle",
+    "pyrung.click.LadderExportError",
     "pyrung.click.ClickDataProvider",
     "pyrung.click.validate_click_program",
     "pyrung.click.send",

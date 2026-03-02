@@ -230,6 +230,14 @@ Common findings:
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
+## Ladder CSV export contract
+
+`TagMap.to_ladder(program)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+
+For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see:
+
+- [Click Ladder CSV Contract](click-ladder-csv.md)
+
 ## ClickDataProvider — soft PLC
 
 `ClickDataProvider` implements the `pyclickplc` `DataProvider` protocol, bridging pyrung's `SystemState` to a Modbus TCP server. This lets pyrung act as a soft PLC accessible from Click Programming Software or any Modbus client.

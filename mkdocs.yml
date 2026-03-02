@@ -28,6 +28,7 @@ nav:
       - DAP Debugger in VS Code: guides/dap-vscode.md
   - Dialects:
       - Click PLC: dialects/click.md
+      - Click Ladder CSV Contract: dialects/click-ladder-csv.md
       - CircuitPython: dialects/circuitpy.md
   - API Reference:
       - Overview: reference/index.md
