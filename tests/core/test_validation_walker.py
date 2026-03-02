@@ -7,13 +7,16 @@ from pyrung.core import (
     Block,
     Bool,
     Dint,
+    InputBlock,
     Int,
+    OutputBlock,
     Program,
     Rung,
     TagType,
     branch,
     calc,
     copy,
+    immediate,
     out,
     run_enabled_function,
     run_function,
@@ -582,3 +585,39 @@ class TestCopyModifierAndPackTextFacts:
         assert dest.value_kind == "tag"
         assert allow_ws.value_kind == "literal"
         assert allow_ws.summary == "True"
+
+
+class TestImmediateWrapperFacts:
+    def test_immediate_contact_emits_wrapper_and_child_tag(self):
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        Y = Bool("Y")
+
+        with Program() as prog:
+            with Rung(X[1].immediate):
+                out(Y)
+
+        facts = walk_program(prog)
+        wrapped = _first(facts, "condition.tag")
+        child = _first(facts, "condition.tag.value")
+
+        assert wrapped.value_kind == "immediate_ref"
+        assert wrapped.metadata["wrapped_value_kind"] == "tag"
+        assert child.value_kind == "tag"
+        assert child.metadata["tag_name"] == "X1"
+
+    def test_immediate_coil_range_emits_wrapper_and_child_range(self):
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 8)
+
+        with Program() as prog:
+            with Rung(X[1]):
+                out(immediate(Y.select(1, 2)))
+
+        facts = walk_program(prog)
+        wrapped = _first(facts, "instruction.target")
+        child = _first(facts, "instruction.target.value")
+
+        assert wrapped.value_kind == "immediate_ref"
+        assert wrapped.metadata["wrapped_value_kind"] == "block_range"
+        assert child.value_kind == "block_range"
+        assert child.metadata["block_name"] == "Y"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 
 from .base import Instruction, OneShotMixin
 from .resolvers import (
@@ -24,7 +24,11 @@ class OutInstruction(OneShotMixin, Instruction):
 
     INERT_WHEN_DISABLED = False
 
-    def __init__(self, target: Tag | BlockRange | IndirectBlockRange, oneshot: bool = False):
+    def __init__(
+        self,
+        target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+        oneshot: bool = False,
+    ):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
 
@@ -49,7 +53,7 @@ class LatchInstruction(Instruction):
     not reset when the rung goes false.
     """
 
-    def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
+    def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -65,7 +69,7 @@ class ResetInstruction(Instruction):
     Sets the target to its default value (False for bits, 0 for ints).
     """
 
-    def __init__(self, target: Tag | BlockRange | IndirectBlockRange):
+    def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

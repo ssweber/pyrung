@@ -14,7 +14,7 @@ from pyclickplc.addresses import parse_address
 from pyrung.core.condition import Condition
 from pyrung.core.copy_modifiers import CopyModifier
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation, _condition_children, walk_program
 
 if TYPE_CHECKING:
@@ -51,6 +51,10 @@ CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
 CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
 CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED = "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED"
+CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
+CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
+CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
+CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
 
 
 @dataclass(frozen=True)
@@ -232,9 +236,9 @@ def _resolve_pointer_memory_type(pointer_name: str, tag_map: TagMap) -> str | No
 # ---------------------------------------------------------------------------
 
 
-def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
+def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> str:
     """Build a context-aware suggestion string for a finding code."""
-    meta = fact.metadata
+    meta = {} if fact is None else fact.metadata
 
     if code == CLK_PTR_CONTEXT_ONLY_COPY:
         block_name = str(meta.get("block_name", ""))
@@ -330,6 +334,20 @@ def _build_suggestion(code: str, fact: OperandFact, tag_map: TagMap) -> str:
             "Replace run_function/run_enabled_function with Click-portable instructions "
             "(copy/calc/timer/counter/send/receive)."
         )
+
+    if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
+        return (
+            "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
+        )
+
+    if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
+        return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
+
+    if code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y:
+        return "Map immediate coil targets to Y bank addresses only."
+
+    if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
+        return "Map immediate-wrapped coil ranges to contiguous Y addresses (Ynnn..Ymmm)."
 
     return ""
 
@@ -471,6 +489,204 @@ def _evaluate_fact(
 
 
 # ---------------------------------------------------------------------------
+# Immediate wrapper rules
+# ---------------------------------------------------------------------------
+
+
+def _location_key(
+    location: ProgramLocation,
+) -> tuple[str, str | None, int, tuple[int, ...], int | None, str | None]:
+    return (
+        location.scope,
+        location.subroutine,
+        location.rung_index,
+        location.branch_path,
+        location.instruction_index,
+        location.instruction_type,
+    )
+
+
+def _evaluate_immediate_coil_target(
+    immediate_ref: ImmediateRef,
+    location: ProgramLocation,
+    tag_map: TagMap,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    wrapped = immediate_ref.value
+    findings: list[ClickFinding] = []
+    location_text = _format_location(location)
+    slots: list[_ResolvedSlot] = []
+
+    if isinstance(wrapped, Tag):
+        resolved = _resolve_direct_tag(wrapped, tag_map)
+        if resolved is None:
+            return [
+                _unresolved_finding(
+                    location,
+                    mode,
+                    "immediate coil target mapping missing or ambiguous",
+                )
+            ]
+        slots = [resolved]
+    elif isinstance(wrapped, BlockRange):
+        for tag in wrapped.tags():
+            resolved = _resolve_direct_tag(tag, tag_map)
+            if resolved is None:
+                return [
+                    _unresolved_finding(
+                        location,
+                        mode,
+                        "immediate coil range mapping missing or ambiguous",
+                    )
+                ]
+            slots.append(resolved)
+    else:
+        findings.append(
+            ClickFinding(
+                code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
+                severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
+                message=(
+                    f"Immediate wrapper must wrap Tag or BlockRange at {location_text}, "
+                    f"got {type(wrapped).__name__}."
+                ),
+                location=location_text,
+                suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, None, tag_map),
+            )
+        )
+        return findings
+
+    non_y_slots = [slot for slot in slots if slot.memory_type != "Y"]
+    if non_y_slots:
+        findings.append(
+            ClickFinding(
+                code=CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+                severity=_route_severity(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, mode),
+                message=(
+                    f"Immediate coil target must resolve to Y bank at {location_text}, "
+                    f"found {', '.join(_bank_label(slot) for slot in _unique_slots(non_y_slots))}."
+                ),
+                location=location_text,
+                suggestion=_build_suggestion(CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y, None, tag_map),
+            )
+        )
+
+    if isinstance(wrapped, BlockRange) and len(slots) > 1:
+        addresses = [slot.address for slot in slots]
+        if any(address is None for address in addresses):
+            findings.append(_unresolved_finding(location, mode, "immediate range address unresolved"))
+        else:
+            numeric_addresses = [int(address) for address in addresses if address is not None]
+            contiguous = all(
+                numeric_addresses[idx] + 1 == numeric_addresses[idx + 1]
+                for idx in range(len(numeric_addresses) - 1)
+            )
+            if not contiguous:
+                findings.append(
+                    ClickFinding(
+                        code=CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
+                        severity=_route_severity(CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, mode),
+                        message=(
+                            "Immediate coil range must map to contiguous addresses "
+                            f"at {location_text}."
+                        ),
+                        location=location_text,
+                        suggestion=_build_suggestion(
+                            CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS, None, tag_map
+                        ),
+                    )
+                )
+
+    return findings
+
+
+def _evaluate_immediate_usage(
+    facts: tuple[OperandFact, ...],
+    instruction_sites: list[tuple[Any, ProgramLocation]],
+    tag_map: TagMap,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
+    condition_types: dict[
+        tuple[tuple[str, str | None, int, tuple[int, ...], int | None, str | None], str], str
+    ] = {}
+    instructions_by_site: dict[
+        tuple[str, str | None, int, tuple[int, ...], int | None, str | None], Any
+    ] = {}
+
+    for fact in facts:
+        if fact.value_kind != "condition":
+            continue
+        condition_type = fact.metadata.get("condition_type")
+        if not isinstance(condition_type, str):
+            continue
+        condition_types[(_location_key(fact.location), fact.location.arg_path)] = condition_type
+
+    for instruction, location in instruction_sites:
+        instructions_by_site[_location_key(location)] = instruction
+
+    for fact in facts:
+        if fact.value_kind != "immediate_ref":
+            continue
+
+        loc = fact.location
+        location_text = _format_location(loc)
+        site_key = _location_key(loc)
+
+        if loc.instruction_index is None:
+            parent_path = loc.arg_path.rsplit(".", 1)[0] if "." in loc.arg_path else ""
+            condition_type = condition_types.get((site_key, parent_path))
+
+            if condition_type in {"BitCondition", "NormallyClosedCondition"}:
+                continue
+            if condition_type in {"RisingEdgeCondition", "FallingEdgeCondition"}:
+                findings.append(
+                    ClickFinding(
+                        code=CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
+                        severity=_route_severity(CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED, mode),
+                        message=f"Immediate edge contact is not allowed at {location_text}.",
+                        location=location_text,
+                        suggestion=_build_suggestion(
+                            CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED, fact, tag_map
+                        ),
+                    )
+                )
+                continue
+
+            findings.append(
+                ClickFinding(
+                    code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
+                    severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
+                    message=f"Immediate wrapper is not allowed at {location_text}.",
+                    location=location_text,
+                    suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, fact, tag_map),
+                )
+            )
+            continue
+
+        if (
+            loc.instruction_type in {"OutInstruction", "LatchInstruction", "ResetInstruction"}
+            and loc.arg_path == "instruction.target"
+        ):
+            instruction = instructions_by_site.get(site_key)
+            target = getattr(instruction, "target", None)
+            if isinstance(target, ImmediateRef):
+                findings.extend(_evaluate_immediate_coil_target(target, loc, tag_map, mode))
+            continue
+
+        findings.append(
+            ClickFinding(
+                code=CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
+                severity=_route_severity(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, mode),
+                message=f"Immediate wrapper is not allowed at {location_text}.",
+                location=location_text,
+                suggestion=_build_suggestion(CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED, fact, tag_map),
+            )
+        )
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
 # Function-call portability rule
 # ---------------------------------------------------------------------------
 
@@ -567,6 +783,9 @@ def _unique_slots(slots: list[_ResolvedSlot]) -> tuple[_ResolvedSlot, ...]:
 
 
 def _resolve_operand_slots(value: Any, tag_map: TagMap) -> _OperandResolution:
+    if isinstance(value, ImmediateRef):
+        return _resolve_operand_slots(value.value, tag_map)
+
     if isinstance(value, CopyModifier):
         return _resolve_operand_slots(value.source, tag_map)
 
@@ -887,6 +1106,10 @@ def _iter_condition_tags(root: Any) -> tuple[Tag, ...]:
                 found.append(value)
             return
 
+        if isinstance(value, ImmediateRef):
+            walk(value.value)
+            return
+
         if isinstance(value, Condition):
             for _, child in _condition_children(value):
                 walk(child)
@@ -1017,12 +1240,14 @@ def validate_click_program(
 ) -> ClickValidationReport:
     """Validate a Program against Click portability rules."""
     facts = walk_program(program)
+    instruction_sites = _iter_instruction_sites(program)
 
     findings: list[ClickFinding] = []
     for fact in facts.operands:
         findings.extend(_evaluate_fact(fact, tag_map, mode))
 
-    instruction_sites = _iter_instruction_sites(program)
+    findings.extend(_evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode))
+
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
 

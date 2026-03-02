@@ -501,7 +501,45 @@ class ImmediateRef:
     directly, bypassing the scan-cycle image table.
     """
 
-    tag: Tag
+    value: Tag | BlockRange
+
+    def __post_init__(self) -> None:
+        from pyrung.core.memory_block import BlockRange
+
+        if not isinstance(self.value, Tag | BlockRange):
+            raise TypeError(
+                "ImmediateRef value must be Tag or BlockRange, "
+                f"got {type(self.value).__name__}."
+            )
+
+    @property
+    def tag(self) -> Tag:
+        """Backward-compatible alias for tag-wrapped immediate operands."""
+        if isinstance(self.value, Tag):
+            return self.value
+        raise TypeError("ImmediateRef.tag is only available when value wraps a Tag.")
+
+    def __invert__(self) -> Condition:
+        """Create a normally-closed immediate contact condition."""
+        from pyrung.core.condition import NormallyClosedCondition
+
+        cond = NormallyClosedCondition(self)
+        cond.source_file, cond.source_line = _capture_source(depth=2)
+        return cond
+
+
+def immediate(value: Tag | BlockRange | ImmediateRef) -> ImmediateRef:
+    """Wrap a tag or block range as an immediate operand."""
+    from pyrung.core.memory_block import BlockRange
+
+    if isinstance(value, ImmediateRef):
+        return value
+    if isinstance(value, Tag | BlockRange):
+        return ImmediateRef(value)
+    raise TypeError(
+        "immediate() expects Tag, BlockRange, or ImmediateRef, "
+        f"got {type(value).__name__}."
+    )
 
 
 @dataclass(frozen=True)

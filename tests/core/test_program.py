@@ -89,6 +89,55 @@ class TestRungDSL:
         assert state.tags["C2"] is False
         assert state.tags["C3"] is False
 
+    def test_rung_with_immediate_contact(self):
+        """Rung accepts immediate contact wrappers for BOOL tags."""
+        from pyrung.core import InputBlock, OutputBlock
+        from pyrung.core.program import Program, Rung, out
+
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 8)
+
+        with Program() as prog:
+            with Rung(X[1].immediate):
+                out(Y[1])
+
+        state = SystemState().with_tags({"X1": True, "Y1": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["Y1"] is True
+
+    def test_out_accepts_immediate_tag_wrapper(self):
+        """out(immediate(tag)) executes with core pass-through semantics."""
+        from pyrung.core import InputBlock, OutputBlock, immediate
+        from pyrung.core.program import Program, Rung, out
+
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 8)
+
+        with Program() as prog:
+            with Rung(X[1]):
+                out(immediate(Y[1]))
+
+        state = SystemState().with_tags({"X1": True, "Y1": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["Y1"] is True
+
+    def test_out_accepts_immediate_block_range_wrapper(self):
+        """out(immediate(.select())) executes as a normal OUT range in core runtime."""
+        from pyrung.core import InputBlock, OutputBlock, immediate
+        from pyrung.core.program import Program, Rung, out
+
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        Y = OutputBlock("Y", TagType.BOOL, 1, 8)
+
+        with Program() as prog:
+            with Rung(X[1]):
+                out(immediate(Y.select(1, 2)))
+
+        state = SystemState().with_tags({"X1": True, "Y1": False, "Y2": False})
+        state = evaluate_rung(prog.rungs[0], state)
+        assert state.tags["Y1"] is True
+        assert state.tags["Y2"] is True
+
     def test_rung_with_latch(self):
         """latch() adds LATCH instruction."""
         from pyrung.core.program import Program, Rung, latch

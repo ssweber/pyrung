@@ -62,7 +62,7 @@ from pyrung.core.expression import (
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
@@ -127,6 +127,14 @@ class LadderExportError(RuntimeError):
     """Raised when strict ladder export prevalidation or lowering fails."""
 
     def __init__(self, issues: list[Issue] | tuple[Issue, ...]):
+        def _safe_int(value: Any) -> int | None:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
         normalized: list[Issue] = []
         for issue in issues:
             normalized.append(
@@ -138,11 +146,7 @@ class LadderExportError(RuntimeError):
                         if issue.get("source_file") is None
                         else str(issue.get("source_file"))
                     ),
-                    "source_line": (
-                        None
-                        if issue.get("source_line") is None
-                        else int(issue.get("source_line"))  # type: ignore[arg-type]
-                    ),
+                    "source_line": _safe_int(issue.get("source_line")),
                 }
             )
         self.issues: tuple[Issue, ...] = tuple(normalized)
@@ -1073,15 +1077,28 @@ class _LadderExporter:
 
     def _condition_leaf_token(self, condition: Condition, *, path: str) -> str:
         if isinstance(condition, BitCondition):
-            return self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition)
+            return self._render_contact_token(condition.tag, path=f"{path}.tag", source=condition)
         if isinstance(condition, NormallyClosedCondition):
-            return f"~{self._resolve_tag(condition.tag, path=f'{path}.tag', source=condition)}"
+            token = self._render_contact_token(condition.tag, path=f"{path}.tag", source=condition)
+            return f"~{token}"
         if isinstance(condition, RisingEdgeCondition):
+            if isinstance(condition.tag, ImmediateRef):
+                self._raise_issue(
+                    path=f"{path}.tag",
+                    message="Immediate edge contacts are not supported in Click ladder export.",
+                    source=condition,
+                )
             return self._fn(
                 "rise",
                 self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition),
             )
         if isinstance(condition, FallingEdgeCondition):
+            if isinstance(condition.tag, ImmediateRef):
+                self._raise_issue(
+                    path=f"{path}.tag",
+                    message="Immediate edge contacts are not supported in Click ladder export.",
+                    source=condition,
+                )
             return self._fn(
                 "fall",
                 self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition),
@@ -1166,18 +1183,36 @@ class _LadderExporter:
         if instruction_type == "OutInstruction":
             return self._fn(
                 "out",
-                self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+                self._render_operand(
+                    instruction.target,
+                    path=f"{path}.target",
+                    source=instruction,
+                    allow_immediate=True,
+                    immediate_context="coil",
+                ),
                 oneshot,
             )
         if instruction_type == "LatchInstruction":
             return self._fn(
                 "latch",
-                self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+                self._render_operand(
+                    instruction.target,
+                    path=f"{path}.target",
+                    source=instruction,
+                    allow_immediate=True,
+                    immediate_context="coil",
+                ),
             )
         if instruction_type == "ResetInstruction":
             return self._fn(
                 "reset",
-                self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+                self._render_operand(
+                    instruction.target,
+                    path=f"{path}.target",
+                    source=instruction,
+                    allow_immediate=True,
+                    immediate_context="coil",
+                ),
             )
         if instruction_type == "CopyInstruction":
             return self._fn(
@@ -1528,7 +1563,28 @@ class _LadderExporter:
             )
         return self._render_operand(value, path=path, source=source)
 
-    def _render_operand(self, value: Any, *, path: str, source: Any) -> str:
+    def _render_operand(
+        self,
+        value: Any,
+        *,
+        path: str,
+        source: Any,
+        allow_immediate: bool = False,
+        immediate_context: str = "",
+    ) -> str:
+        if isinstance(value, ImmediateRef):
+            if not allow_immediate:
+                self._raise_issue(
+                    path=path,
+                    message="Immediate wrapper is not supported in this Click export context.",
+                    source=source,
+                )
+            return self._render_immediate_operand(
+                value,
+                path=path,
+                source=source,
+                context=immediate_context,
+            )
         if isinstance(value, Tag):
             return self._resolve_tag(value, path=path, source=source)
         if isinstance(value, BlockRange):
@@ -1566,6 +1622,96 @@ class _LadderExporter:
         self._raise_issue(
             path=path,
             message=f"Unsupported operand type: {type(value).__name__}.",
+            source=source,
+        )
+
+    def _render_contact_token(self, value: Any, *, path: str, source: Any) -> str:
+        return self._render_operand(
+            value,
+            path=path,
+            source=source,
+            allow_immediate=True,
+            immediate_context="contact",
+        )
+
+    def _render_immediate_operand(
+        self,
+        immediate_ref: ImmediateRef,
+        *,
+        path: str,
+        source: Any,
+        context: str,
+    ) -> str:
+        wrapped = immediate_ref.value
+
+        if context == "contact":
+            if not isinstance(wrapped, Tag):
+                self._raise_issue(
+                    path=path,
+                    message="Immediate contact requires a Tag operand.",
+                    source=source,
+                )
+            return self._fn(
+                "immediate",
+                self._resolve_tag(wrapped, path=f"{path}.value", source=source),
+            )
+
+        if context == "coil":
+            if isinstance(wrapped, Tag):
+                address = self._resolve_tag(wrapped, path=f"{path}.value", source=source)
+                parsed = _parse_display_address(address)
+                if parsed is None or parsed[0] != "Y":
+                    self._raise_issue(
+                        path=path,
+                        message="Immediate coil target must resolve to Y bank.",
+                        source=source,
+                    )
+                return self._fn("immediate", address)
+
+            if isinstance(wrapped, BlockRange):
+                tags = wrapped.tags()
+                addresses = [
+                    self._resolve_tag(tag, path=f"{path}.value[{idx}]", source=source)
+                    for idx, tag in enumerate(tags)
+                ]
+                if not addresses:
+                    self._raise_issue(
+                        path=path,
+                        message="Immediate coil range cannot be empty.",
+                        source=source,
+                    )
+                for address in addresses:
+                    parsed = _parse_display_address(address)
+                    if parsed is None or parsed[0] != "Y":
+                        self._raise_issue(
+                            path=path,
+                            message="Immediate coil targets must resolve to Y bank.",
+                            source=source,
+                        )
+                compact = _compact_contiguous_range(addresses)
+                if compact is None:
+                    self._raise_issue(
+                        path=path,
+                        message=(
+                            "Immediate-wrapped coil ranges must map to contiguous "
+                            "addresses for Click export."
+                        ),
+                        source=source,
+                    )
+                return self._fn("immediate", compact)
+
+            self._raise_issue(
+                path=path,
+                message=(
+                    "Immediate coil operand must wrap Tag or BlockRange, "
+                    f"got {type(wrapped).__name__}."
+                ),
+                source=source,
+            )
+
+        self._raise_issue(
+            path=path,
+            message=f"Unknown immediate render context: {context!r}.",
             source=source,
         )
 

@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 
 from .conversions import (
     _as_single_ascii_char,
@@ -42,6 +42,9 @@ def resolve_tag_or_value_ctx(
     from pyrung.core.memory_block import IndirectExprRef
     from pyrung.core.memory_block import IndirectRef as IndirectRefType
 
+    # Check for immediate wrapper first.
+    if isinstance(source, ImmediateRef):
+        return resolve_tag_or_value_ctx(source.value, ctx)
     # Check for Expression first (includes TagExpr)
     if isinstance(source, Expression):
         return source.evaluate(ctx)
@@ -60,7 +63,9 @@ def resolve_tag_or_value_ctx(
     return source
 
 
-def resolve_tag_ctx(target: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> Tag:
+def resolve_tag_ctx(
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef, ctx: ScanContext
+) -> Tag:
     """Resolve target to a concrete Tag (handling indirect) using ScanContext.
 
     Args:
@@ -80,11 +85,20 @@ def resolve_tag_ctx(target: Tag | IndirectRef | IndirectExprRef, ctx: ScanContex
     # Check for IndirectRef
     if isinstance(target, IndirectRefType):
         return target.resolve_ctx(ctx)
+    if isinstance(target, ImmediateRef):
+        if not isinstance(target.value, Tag):
+            raise TypeError(
+                "Immediate wrapper target must wrap a Tag in this context, "
+                f"got {type(target.value).__name__}."
+            )
+        return target.value
     # Regular Tag
     return target
 
 
-def resolve_tag_name_ctx(target: Tag | IndirectRef | IndirectExprRef, ctx: ScanContext) -> str:
+def resolve_tag_name_ctx(
+    target: Tag | IndirectRef | IndirectExprRef | ImmediateRef, ctx: ScanContext
+) -> str:
     """Resolve tag to its name (handling indirect) using ScanContext.
 
     Args:
@@ -114,6 +128,9 @@ def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> BlockRange:
     """Resolve a BlockRange or IndirectBlockRange to a concrete BlockRange."""
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
+    if isinstance(block_range, ImmediateRef):
+        block_range = block_range.value
+
     if isinstance(block_range, IndirectBlockRange):
         block_range = block_range.resolve_ctx(ctx)
 
@@ -126,7 +143,7 @@ def resolve_block_range_ctx(block_range: Any, ctx: ScanContext) -> BlockRange:
 
 
 def resolve_coil_targets_ctx(
-    target: Tag | BlockRange | IndirectBlockRange, ctx: ScanContext
+    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef, ctx: ScanContext
 ) -> list[Tag]:
     """Resolve a coil target to one or more concrete Tags.
 
@@ -137,11 +154,16 @@ def resolve_coil_targets_ctx(
     """
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
+    if isinstance(target, ImmediateRef):
+        return resolve_coil_targets_ctx(target.value, ctx)
     if isinstance(target, Tag):
         return [target]
     if isinstance(target, (BlockRange, IndirectBlockRange)):
         return resolve_block_range_tags_ctx(target, ctx)
-    raise TypeError(f"Expected Tag, BlockRange, or IndirectBlockRange, got {type(target).__name__}")
+    raise TypeError(
+        "Expected Tag, BlockRange, IndirectBlockRange, or immediate(...) wrapper, "
+        f"got {type(target).__name__}"
+    )
 
 
 def _set_fault_out_of_range(ctx: ScanContext) -> None:

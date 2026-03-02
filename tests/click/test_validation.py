@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from pyrung.click import TagMap, dd, ds
+from pyrung.click import TagMap, c, dd, ds, x, y
 from pyrung.click.validation import (
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
+    CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
+    CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED,
+    CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED,
+    CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS,
     CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED,
     CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED,
     CLK_PTR_CONTEXT_ONLY_COPY,
@@ -16,8 +20,18 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Bool, Tag, TagType, as_value
-from pyrung.core.program import Program, Rung, calc, copy, out, run_enabled_function, run_function
+from pyrung.core import Block, Bool, Tag, TagType, as_value, immediate
+from pyrung.core.program import (
+    Program,
+    Rung,
+    calc,
+    copy,
+    out,
+    reset,
+    rise,
+    run_enabled_function,
+    run_function,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -736,3 +750,109 @@ class TestWrappedCopySources:
         report = validate_click_program(prog, tag_map, mode="warn")
         codes = _finding_codes(report)
         assert CLK_PTR_CONTEXT_ONLY_COPY not in codes
+
+
+class TestImmediateValidation:
+    def test_out_immediate_tag_has_no_immediate_findings(self):
+        Start = Bool("Start")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(Start):
+                out(immediate(Coil))
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Start.map_to(x[1]), Coil.map_to(y[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        codes = _finding_codes(report)
+        assert CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED not in codes
+        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y not in codes
+
+    def test_out_immediate_contiguous_range_has_no_immediate_findings(self):
+        Start = Bool("Start")
+        Coils = Block("Coils", TagType.BOOL, 1, 4)
+
+        def logic():
+            with Rung(Start):
+                out(immediate(Coils.select(1, 4)))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Start.map_to(x[1]), Coils.map_to(y.select(1, 4))],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        codes = _finding_codes(report)
+        assert CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS not in codes
+        assert CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y not in codes
+
+    def test_immediate_non_contiguous_range_is_error(self):
+        Start = Bool("Start")
+        Coils = Block("Coils", TagType.BOOL, 1, 4)
+
+        def logic():
+            with Rung(Start):
+                out(immediate(Coils.select(1, 4)))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [
+                Start.map_to(x[1]),
+                Coils[1].map_to(y[1]),
+                Coils[2].map_to(y[3]),
+                Coils[3].map_to(y[4]),
+                Coils[4].map_to(y[6]),
+            ],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS for f in report.errors)
+
+    def test_immediate_in_copy_is_error(self):
+        Start = Bool("Start")
+        Source = Bool("Source")
+        Dest = Bool("Dest")
+
+        def logic():
+            with Rung(Start):
+                copy(immediate(Source), Dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Start.map_to(x[1]), Source.map_to(x[2]), Dest.map_to(c[1])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED for f in report.errors)
+
+    def test_immediate_edge_contact_is_error(self):
+        Start = Bool("Start")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(rise(immediate(Start))):
+                out(Coil)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Start.map_to(x[1]), Coil.map_to(y[1])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED for f in report.errors)
+
+    def test_immediate_coil_target_outside_y_is_error(self):
+        Start = Bool("Start")
+        Coil = Bool("Coil")
+
+        def logic():
+            with Rung(Start):
+                reset(immediate(Coil))
+
+        prog = _build_program(logic)
+        tag_map = TagMap([Start.map_to(x[1]), Coil.map_to(c[2])], include_system=False)
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y for f in report.errors)

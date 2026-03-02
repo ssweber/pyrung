@@ -14,12 +14,25 @@ from pyrung.core._source import _capture_source
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import IndirectRef
-    from pyrung.core.tag import Tag
+    from pyrung.core.tag import ImmediateRef, Tag
 
 
-ConditionTerm: TypeAlias = "Condition | Tag"
+ConditionTerm: TypeAlias = "Condition | Tag | ImmediateRef"
 ConditionGroup: TypeAlias = "tuple[ConditionTerm, ...] | list[ConditionTerm]"
 ConditionInput: TypeAlias = "ConditionTerm | ConditionGroup"
+
+
+def _contact_tag(value: Tag | ImmediateRef) -> Tag:
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    if isinstance(value, ImmediateRef):
+        if not isinstance(value.value, Tag):
+            raise TypeError(
+                "Immediate contact operand must wrap a Tag. "
+                f"Got {type(value.value).__name__}."
+            )
+        return value.value
+    return value
 
 
 class Condition(ABC):
@@ -223,11 +236,12 @@ class BitCondition(Condition):
     This is the default condition when a BOOL tag is used directly in a Rung.
     """
 
-    def __init__(self, tag: Tag):
+    def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        return bool(ctx.get_tag(self.tag.name, False))
+        tag = _contact_tag(self.tag)
+        return bool(ctx.get_tag(tag.name, False))
 
 
 class IntTruthyCondition(Condition):
@@ -246,11 +260,12 @@ class NormallyClosedCondition(Condition):
     The inverse of BitCondition.
     """
 
-    def __init__(self, tag: Tag):
+    def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        return not bool(ctx.get_tag(self.tag.name, False))
+        tag = _contact_tag(self.tag)
+        return not bool(ctx.get_tag(tag.name, False))
 
 
 class RisingEdgeCondition(Condition):
@@ -259,12 +274,13 @@ class RisingEdgeCondition(Condition):
     Reads previous value from state.memory["_prev:{tag.name}"].
     """
 
-    def __init__(self, tag: Tag):
+    def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        current = bool(ctx.get_tag(self.tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{self.tag.name}", False))
+        tag = _contact_tag(self.tag)
+        current = bool(ctx.get_tag(tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         return current and not previous
 
 
@@ -274,12 +290,13 @@ class FallingEdgeCondition(Condition):
     Reads previous value from state.memory["_prev:{tag.name}"].
     """
 
-    def __init__(self, tag: Tag):
+    def __init__(self, tag: Tag | ImmediateRef):
         self.tag = tag
 
     def evaluate(self, ctx: ScanContext) -> bool:
-        current = bool(ctx.get_tag(self.tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{self.tag.name}", False))
+        tag = _contact_tag(self.tag)
+        current = bool(ctx.get_tag(tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         return not current and previous
 
 
@@ -385,7 +402,20 @@ class IndirectCompareGe(Condition):
 
 def _as_condition(cond: object) -> Condition:
     """Normalize a Tag/Condition into a concrete Condition."""
-    from pyrung.core.tag import Tag, TagType
+    from pyrung.core.tag import ImmediateRef, Tag, TagType
+
+    if isinstance(cond, ImmediateRef):
+        wrapped = cond.value
+        if not isinstance(wrapped, Tag):
+            raise TypeError(
+                "Immediate contact requires a Tag operand. "
+                f"Got {type(wrapped).__name__}."
+            )
+        if wrapped.type != TagType.BOOL:
+            raise TypeError(
+                f"Immediate contact Tag '{wrapped.name}' must be BOOL, got {wrapped.type.name}."
+            )
+        return BitCondition(cond)
 
     if isinstance(cond, Tag):
         if cond.type == TagType.BOOL:

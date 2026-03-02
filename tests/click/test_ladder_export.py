@@ -6,8 +6,24 @@ from pathlib import Path
 
 import pytest
 
-from pyrung.click import LadderExportError, TagMap, c, ct, ctd, dd, ds, receive, sc, send, t, td, txt, x, y
-from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, any_of
+from pyrung.click import (
+    LadderExportError,
+    TagMap,
+    c,
+    ct,
+    ctd,
+    dd,
+    ds,
+    receive,
+    sc,
+    send,
+    t,
+    td,
+    txt,
+    x,
+    y,
+)
+from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, any_of, immediate
 from pyrung.core.program import (
     blockcopy,
     branch,
@@ -24,8 +40,8 @@ from pyrung.core.program import (
     on_delay,
     out,
     pack_bits,
-    pack_words,
     pack_text,
+    pack_words,
     reset,
     return_early,
     search,
@@ -217,6 +233,57 @@ def test_multiple_instruction_rows_share_powered_path():
         _row("", ["", "", "+"], "latch(Y002)"),
         _row("", ["", "", "-"], "reset(Y003)"),
     )
+
+
+def test_immediate_contact_and_coils_render_canonical_tokens():
+    Start = Bool("Start")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+    Y3 = Bool("Y3")
+
+    with Program() as logic:
+        with Rung(immediate(Start)):
+            out(immediate(Y1))
+            latch(immediate(Y2))
+            reset(immediate(Y3))
+
+    mapping = TagMap(
+        {
+            Start: x[1],
+            Y1: y[1],
+            Y2: y[2],
+            Y3: y[3],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["immediate(X001)", "T"], "out(immediate(Y001),0)"),
+        _row("", ["", "+"], "latch(immediate(Y002))"),
+        _row("", ["", "-"], "reset(immediate(Y003))"),
+    )
+
+
+def test_immediate_contiguous_range_renders_compact_token():
+    Start = Bool("Start")
+    Outputs = Block("Outputs", TagType.BOOL, 1, 4)
+
+    with Program() as logic:
+        with Rung(Start):
+            out(immediate(Outputs.select(1, 4)))
+
+    mapping = TagMap(
+        {
+            Start: x[1],
+            Outputs: y.select(1, 4),
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows[1][-1] == "out(immediate(Y001..Y004),0)"
 
 
 def test_vertical_wire_stack_for_three_or_branches():
@@ -578,6 +645,57 @@ def test_precheck_and_issue_payload():
     issue = exc_info.value.issues[0]
     assert "main.rung[0]" in str(issue["path"])
     assert issue["source_file"] is None
+
+
+def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
+    Start = Bool("Start")
+    Outputs = Block("Outputs", TagType.BOOL, 1, 4)
+
+    with Program() as logic:
+        with Rung(Start):
+            out(immediate(Outputs.select(1, 4)))
+
+    mapping = TagMap(
+        {
+            Start: x[1],
+            Outputs[1]: y[1],
+            Outputs[2]: y[3],
+            Outputs[3]: y[4],
+            Outputs[4]: y[6],
+        },
+        include_system=False,
+    )
+
+    with pytest.raises(LadderExportError) as exc_info:
+        mapping.to_ladder(logic)
+
+    issue = exc_info.value.issues[0]
+    assert "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS" in str(issue["message"])
+
+
+def test_immediate_in_copy_fails_with_context_diagnostic():
+    Enable = Bool("Enable")
+    Source = Bool("Source")
+    Dest = Int("Dest")
+
+    with Program() as logic:
+        with Rung(Enable):
+            copy(immediate(Source), Dest)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Source: x[2],
+            Dest: ds[1],
+        },
+        include_system=False,
+    )
+
+    with pytest.raises(LadderExportError) as exc_info:
+        mapping.to_ladder(logic)
+
+    issue = exc_info.value.issues[0]
+    assert "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED" in str(issue["message"])
 
 
 def test_nested_subroutine_call_issue_includes_source_location():

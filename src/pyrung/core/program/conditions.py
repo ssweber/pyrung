@@ -12,7 +12,7 @@ from pyrung.core.condition import (
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 
 ConditionType = TypeVar("ConditionType", bound=Condition)
 
@@ -38,7 +38,7 @@ def _make_condition(
     return condition
 
 
-def rise(tag: Tag) -> RisingEdgeCondition:
+def rise(tag: Tag | ImmediateRef) -> RisingEdgeCondition:
     """Rising edge contact (RE).
 
     True only on 0->1 transition. Requires PLCRunner to track previous values.
@@ -50,7 +50,7 @@ def rise(tag: Tag) -> RisingEdgeCondition:
     return _make_condition(RisingEdgeCondition, tag)
 
 
-def fall(tag: Tag) -> FallingEdgeCondition:
+def fall(tag: Tag | ImmediateRef) -> FallingEdgeCondition:
     """Falling edge contact (FE).
 
     True only on 1->0 transition. Requires PLCRunner to track previous values.
@@ -63,7 +63,7 @@ def fall(tag: Tag) -> FallingEdgeCondition:
 
 
 def any_of(
-    *conditions: Condition | Tag,
+    *conditions: Condition | Tag | ImmediateRef,
 ) -> AnyCondition:
     """OR condition - true when any sub-condition is true.
 
@@ -96,7 +96,11 @@ def any_of(
 
 
 def all_of(
-    *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+    *conditions: Condition
+    | Tag
+    | ImmediateRef
+    | tuple[Condition | Tag | ImmediateRef, ...]
+    | list[Condition | Tag | ImmediateRef],
 ) -> AllCondition:
     """AND condition - true when all sub-conditions are true.
 

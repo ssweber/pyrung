@@ -251,6 +251,22 @@ class TestImmediateRef:
         ref = ImmediateRef(tag)
         assert ref.tag is tag
 
+    def test_immediate_helper_wraps_tag(self):
+        from pyrung.core import InputBlock, TagType, immediate
+
+        X = InputBlock("X", TagType.BOOL, 1, 8)
+        tag = X[1]
+        ref = immediate(tag)
+        assert ref.tag is tag
+
+    def test_immediate_helper_wraps_block_range(self):
+        from pyrung.core import OutputBlock, TagType, immediate
+
+        Y = OutputBlock("Y", TagType.BOOL, 1, 8)
+        target = Y.select(1, 4)
+        ref = immediate(target)
+        assert ref.value == target
+
     def test_plain_tag_no_immediate(self):
         """Plain Tag does NOT have .immediate."""
         from pyrung.core.tag import Tag

@@ -27,7 +27,7 @@ from pyrung.core.instruction import (
     UnpackToWordsInstruction,
 )
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .context import Program, SubroutineFunc, _require_rung_context
 
@@ -35,13 +35,18 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
 
 
-def _iter_coil_tags(target: Tag | BlockRange) -> list[Tag]:
+def _iter_coil_tags(target: Tag | BlockRange | ImmediateRef) -> list[Tag]:
     """Normalize a coil target to concrete tags."""
+    if isinstance(target, ImmediateRef):
+        return _iter_coil_tags(target.value)
     if isinstance(target, Tag):
         return [target]
     if isinstance(target, BlockRange):
         return target.tags()
-    raise TypeError(f"Expected Tag or BlockRange from .select(), got {type(target).__name__}")
+    raise TypeError(
+        "Expected Tag, BlockRange from .select(), or immediate(...) wrapper, "
+        f"got {type(target).__name__}."
+    )
 
 
 def _attach_instruction(
@@ -122,7 +127,7 @@ def _validate_function_call(
         raise TypeError(f"{func_name}() outs must be a dict, got {type(outs).__name__}")
 
 
-def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
+def out(target: Tag | BlockRange | ImmediateRef, oneshot: bool = False) -> Tag | BlockRange | ImmediateRef:
     """Output coil instruction (OUT).
 
     Sets target to True when rung is true.
@@ -139,7 +144,7 @@ def out(target: Tag | BlockRange, oneshot: bool = False) -> Tag | BlockRange:
     return target
 
 
-def latch(target: Tag | BlockRange) -> Tag | BlockRange:
+def latch(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | ImmediateRef:
     """Latch/Set instruction (SET).
 
     Sets target to True. Unlike OUT, does NOT reset when rung goes false.
@@ -156,7 +161,7 @@ def latch(target: Tag | BlockRange) -> Tag | BlockRange:
     return target
 
 
-def reset(target: Tag | BlockRange) -> Tag | BlockRange:
+def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | ImmediateRef:
     """Reset/Unlatch instruction (RST).
 
     Sets target to its default value (False for bits, 0 for ints).

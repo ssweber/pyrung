@@ -206,12 +206,34 @@ Pin tokens:
   - `as_binary(source)`
   - `as_text(source,suppress_zero,pad,exponential,termination_code)`
 
-## Immediate (`.immediate`) handling
+## Immediate handling
 
-`ImmediateRef` is not part of this CSV contract and is not emitted as a token.
+Immediate operands are supported only in strict, explicit contexts.
 
-- In rung conditions, `.immediate` is rejected earlier by the DSL (`Rung(...)` expects `Condition` or `Tag`).
-- In instruction operands, `.immediate` reaches export as an unsupported operand and raises `LadderExportError`.
+Allowed condition-cell forms:
+
+- `immediate(X001)`
+- `~immediate(X001)`
+
+Allowed AF token forms:
+
+- `out(immediate(Y001),0)`
+- `latch(immediate(Y001))`
+- `reset(immediate(Y001))`
+- `out(immediate(Y001..Y004),0)` (contiguous mapped range only)
+
+Rules:
+
+- `Tag.immediate` and `immediate(...)` wrapper style are both supported.
+- Immediate is allowed only for:
+  - direct rung contacts (normal and negated), and
+  - `out(...)`, `latch(...)`, `reset(...)` target operands.
+- Immediate is not allowed in:
+  - edge contacts (`rise(...)`, `fall(...)`),
+  - non-coil instruction operands (`copy`, `calc`, `search`, etc.).
+- Immediate coil targets must resolve to `Y` bank addresses.
+- Immediate-wrapped ranges must resolve to one contiguous address span to emit compact `BANKstart..BANKend` form.
+  - Non-contiguous mappings fail strict validation/export with explicit diagnostics.
 
 ## Strict validation and failure mode
 

@@ -94,6 +94,7 @@ from pyrung.core.tag import (
     Tag,
     TagType,
     Word,
+    immediate,
 )
 from pyrung.core.time_mode import TimeMode, TimeUnit
 
@@ -137,6 +138,7 @@ __all__ = [
     "InputTag",
     "OutputTag",
     "ImmediateRef",
+    "immediate",
     # Memory blocks
     "Block",
     "InputBlock",

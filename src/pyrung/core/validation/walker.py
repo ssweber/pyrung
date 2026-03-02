@@ -51,7 +51,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -62,6 +62,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 ValueKind = Literal[
+    "immediate_ref",
     "tag",
     "indirect_ref",
     "indirect_expr_ref",
@@ -203,7 +204,35 @@ def _classify_value(
     """
     from pyrung.core.expression import format_expr
 
-    # 1. IndirectExprRef (before IndirectRef — both are dataclasses, no subclass)
+    # 1. ImmediateRef wrapper
+    if isinstance(obj, ImmediateRef):
+        wrapped = obj.value
+        metadata: dict[str, str | int | bool] = {
+            "wrapped_type": type(wrapped).__name__,
+            "wrapped_value_kind": (
+                "tag" if isinstance(wrapped, Tag) else "block_range" if isinstance(wrapped, BlockRange) else "unknown"
+            ),
+        }
+        if isinstance(wrapped, Tag):
+            metadata["tag_name"] = wrapped.name
+            metadata["tag_type"] = wrapped.type.name
+            summary = f"ImmediateRef(Tag({wrapped.name}:{wrapped.type.name}))"
+        elif isinstance(wrapped, BlockRange):
+            summary = f"ImmediateRef(BlockRange({wrapped.block.name}[{wrapped.start}:{wrapped.end}]))"
+            metadata["block_name"] = wrapped.block.name
+            metadata["start"] = wrapped.start
+            metadata["end"] = wrapped.end
+        else:
+            summary = f"ImmediateRef({type(wrapped).__name__})"
+
+        return (
+            "immediate_ref",
+            type(obj).__name__,
+            summary,
+            metadata,
+        )
+
+    # 2. IndirectExprRef (before IndirectRef — both are dataclasses, no subclass)
     if isinstance(obj, IndirectExprRef):
         return (
             "indirect_expr_ref",
@@ -216,7 +245,7 @@ def _classify_value(
             },
         )
 
-    # 2. IndirectRef
+    # 3. IndirectRef
     if isinstance(obj, IndirectRef):
         return (
             "indirect_ref",
@@ -225,7 +254,7 @@ def _classify_value(
             {"block_name": obj.block.name, "pointer_name": obj.pointer.name},
         )
 
-    # 3. Expression
+    # 4. Expression
     if isinstance(obj, Expression):
         return (
             "expression",
@@ -234,7 +263,7 @@ def _classify_value(
             {"expr_type": type(obj).__name__, "expr_dsl": format_expr(obj)},
         )
 
-    # 4. IndirectBlockRange (before BlockRange)
+    # 5. IndirectBlockRange (before BlockRange)
     if isinstance(obj, IndirectBlockRange):
         return (
             "indirect_block_range",
@@ -243,7 +272,7 @@ def _classify_value(
             {"block_name": obj.block.name},
         )
 
-    # 5. BlockRange
+    # 6. BlockRange
     if isinstance(obj, BlockRange):
         return (
             "block_range",
@@ -252,7 +281,7 @@ def _classify_value(
             {"block_name": obj.block.name, "start": obj.start, "end": obj.end},
         )
 
-    # 6. Condition (and recurse — handled by caller)
+    # 7. Condition (and recurse — handled by caller)
     if isinstance(obj, Condition):
         return (
             "condition",
@@ -261,7 +290,7 @@ def _classify_value(
             {"condition_type": type(obj).__name__},
         )
 
-    # 7. CopyModifier wrapper
+    # 8. CopyModifier wrapper
     if isinstance(obj, CopyModifier):
         metadata: dict[str, str | int | bool] = {"mode": obj.mode}
         if obj.mode == "text":
@@ -275,7 +304,7 @@ def _classify_value(
             metadata,
         )
 
-    # 8. Tag
+    # 9. Tag
     if isinstance(obj, Tag):
         return (
             "tag",
@@ -284,7 +313,7 @@ def _classify_value(
             {"tag_name": obj.name, "tag_type": obj.type.name},
         )
 
-    # 9. Literal scalars (bool before int since bool is subclass of int)
+    # 10. Literal scalars (bool before int since bool is subclass of int)
     if isinstance(obj, bool):
         return ("literal", "bool", repr(obj), {})
     if obj is None:
@@ -292,7 +321,7 @@ def _classify_value(
     if isinstance(obj, (int, float, str)):
         return ("literal", type(obj).__name__, repr(obj), {})
 
-    # 10. Enum values
+    # 11. Enum values
     if isinstance(obj, Enum):
         return (
             "literal",
@@ -301,7 +330,7 @@ def _classify_value(
             {"enum_value": obj.name},
         )
 
-    # 11. Unknown
+    # 12. Unknown
     return (
         "unknown",
         type(obj).__name__,
@@ -646,6 +675,18 @@ class _Walker:
                 instr_idx,
                 instr_type,
                 f"{arg_path}.source",
+            )
+
+        if kind == "immediate_ref" and isinstance(obj, ImmediateRef):
+            self._walk_value(
+                obj.value,
+                scope,
+                subroutine,
+                rung_index,
+                branch_path,
+                instr_idx,
+                instr_type,
+                f"{arg_path}.value",
             )
 
 
