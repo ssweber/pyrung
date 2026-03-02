@@ -50,9 +50,10 @@ Rows:
 ```csv
 marker,A,B,C,D,...,AE,AF
 R,X001,T,Ready,-,...,-,out(Y001,0)
-,X002,-,Ready,-,...,-,
+,X002,-,-,...,-,
 ```
 Rule: split column uses vertical stack `T` (top), `+` (middle), `-` (last).
+Rule: in OR expansion, only the top branch row carries downstream trailing terms; continuation branch rows end at the split/merge wire marker.
 
 3. Multiple instructions in one rung (shared powered path)
 Source:
@@ -74,6 +75,8 @@ Only first row is `R`; subsequent instruction rows are continuations.
 ## Instruction Lowering Scope
 1. Support all current Click-portable instruction families in v1:
 `out/latch/reset/copy/blockcopy/fill/calc/search/pack/unpack/on_delay/off_delay/count_up/count_down/shift/event_drum/time_drum/send/receive/call/for/next/return`.
+   - `pack` token forms: `pack_bits`, `pack_words`, `pack_text`.
+   - `unpack` token forms: `unpack_to_bits`, `unpack_to_words`.
 2. Builder side conditions use continuation dot pins: `.reset()`, `.down()`, `.clock()`, `.jump(step)`, `.jog()`.
 3. `call` token is quoted: `call("name")`.
 4. `forloop` lowers to `for(count,oneshot)` row, `R` body rows, and closing `R` `next()` row.

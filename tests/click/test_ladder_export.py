@@ -6,22 +6,34 @@ from pathlib import Path
 
 import pytest
 
-from pyrung.click import LadderExportError, TagMap, c, ct, ctd, ds, txt, x, y
+from pyrung.click import LadderExportError, TagMap, c, ct, ctd, dd, ds, receive, sc, send, t, td, txt, x, y
 from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, any_of
 from pyrung.core.program import (
+    blockcopy,
     branch,
     calc,
     call,
     copy,
+    count_down,
     count_up,
+    event_drum,
+    fill,
     forloop,
     latch,
+    off_delay,
+    on_delay,
     out,
+    pack_bits,
+    pack_words,
     pack_text,
     reset,
     return_early,
     search,
+    shift,
     subroutine,
+    time_drum,
+    unpack_to_bits,
+    unpack_to_words,
 )
 
 
@@ -302,8 +314,10 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
 
     mapping = TagMap({Start: x[1], SubOut: y[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
+    main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert [name for name, _ in bundle.subroutine_rows] == ["alpha", "beta-two"]
+    assert main_tokens == ['call("beta-two")', 'call("alpha")']
     alpha_rows = dict(bundle.subroutine_rows)["alpha"]
     beta_rows = dict(bundle.subroutine_rows)["beta-two"]
     assert alpha_rows[-1][-1] == "return()"
@@ -361,6 +375,191 @@ def test_tokens_include_explicit_defaults_and_oneshot():
     assert any(",decimal,0)" in token for token in tokens if token.startswith("calc("))
     assert any(token.startswith("search(") and token.endswith(",0,0)") for token in tokens)
     assert any(token.startswith("pack_text(") and token.endswith(",0,0)") for token in tokens)
+
+
+def test_tokens_cover_remaining_instruction_families_and_pin_rows():
+    Enable = Bool("Enable")
+
+    SrcBlock = Block("SrcBlock", TagType.INT, 1, 3)
+    DstBlock = Block("DstBlock", TagType.INT, 1, 3)
+    Bits = Block("Bits", TagType.BOOL, 1, 32)
+    Words = Block("Words", TagType.INT, 1, 2)
+    DWord = Dint("DWord")
+
+    TonDone = Bool("TonDone")
+    TonAcc = Int("TonAcc")
+    TonReset = Bool("TonReset")
+    TofDone = Bool("TofDone")
+    TofAcc = Int("TofAcc")
+
+    CdDone = Bool("CdDone")
+    CdAcc = Dint("CdAcc")
+    CdReset = Bool("CdReset")
+
+    ShiftClock = Bool("ShiftClock")
+    ShiftReset = Bool("ShiftReset")
+
+    DrumReset = Bool("DrumReset")
+    DrumJump = Bool("DrumJump")
+    DrumJog = Bool("DrumJog")
+    DrumStep = Int("DrumStep")
+    DrumAcc = Int("DrumAcc")
+    DrumDone = Bool("DrumDone")
+    DrumOut1 = Bool("DrumOut1")
+    DrumOut2 = Bool("DrumOut2")
+    Event1 = Bool("Event1")
+    Event2 = Bool("Event2")
+
+    SendSource = Int("SendSource")
+    SendBusy = Bool("SendBusy")
+    SendSuccess = Bool("SendSuccess")
+    SendError = Bool("SendError")
+    SendEx = Int("SendEx")
+    RecvDest = Int("RecvDest")
+    RecvBusy = Bool("RecvBusy")
+    RecvSuccess = Bool("RecvSuccess")
+    RecvError = Bool("RecvError")
+    RecvEx = Int("RecvEx")
+
+    with Program() as logic:
+        with Rung(Enable):
+            blockcopy(SrcBlock.select(1, 3), DstBlock.select(1, 3), oneshot=True)
+        with Rung(Enable):
+            fill(7, DstBlock.select(1, 3), oneshot=True)
+        with Rung(Enable):
+            pack_bits(Bits.select(1, 16), DWord, oneshot=True)
+        with Rung(Enable):
+            pack_words(Words.select(1, 2), DWord, oneshot=True)
+        with Rung(Enable):
+            unpack_to_bits(DWord, Bits.select(1, 32), oneshot=True)
+        with Rung(Enable):
+            unpack_to_words(DWord, Words.select(1, 2), oneshot=True)
+        with Rung(Enable):
+            on_delay(TonDone, TonAcc, preset=100).reset(TonReset)
+        with Rung(Enable):
+            off_delay(TofDone, TofAcc, preset=50)
+        with Rung(Enable):
+            count_down(CdDone, CdAcc, preset=9).reset(CdReset)
+        with Rung(Enable):
+            shift(Bits.select(1, 8)).clock(ShiftClock).reset(ShiftReset)
+        with Rung(Enable):
+            event_drum(
+                outputs=[DrumOut1, DrumOut2],
+                events=[Event1, Event2],
+                pattern=[[1, 0], [0, 1]],
+                current_step=DrumStep,
+                completion_flag=DrumDone,
+            ).reset(DrumReset).jump(DrumJump, step=DrumStep).jog(DrumJog)
+        with Rung(Enable):
+            time_drum(
+                outputs=[DrumOut1, DrumOut2],
+                presets=[100, 200],
+                pattern=[[1, 0], [0, 1]],
+                current_step=DrumStep,
+                accumulator=DrumAcc,
+                completion_flag=DrumDone,
+            ).reset(DrumReset).jump(DrumJump, step=DrumStep).jog(DrumJog)
+        with Rung(Enable):
+            send(
+                host="127.0.0.1",
+                port=502,
+                remote_start="DS1",
+                source=SendSource,
+                sending=SendBusy,
+                success=SendSuccess,
+                error=SendError,
+                exception_response=SendEx,
+                device_id=3,
+                count=1,
+            )
+        with Rung(Enable):
+            receive(
+                host="127.0.0.1",
+                port=502,
+                remote_start="DS2",
+                dest=RecvDest,
+                receiving=RecvBusy,
+                success=RecvSuccess,
+                error=RecvError,
+                exception_response=RecvEx,
+                device_id=4,
+                count=1,
+            )
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            SrcBlock: ds.select(100, 102),
+            DstBlock: ds.select(200, 202),
+            Bits: c.select(10, 41),
+            Words: ds.select(300, 301),
+            DWord: dd[1],
+            TonDone: t[1],
+            TonAcc: td[1],
+            TonReset: x[2],
+            TofDone: t[2],
+            TofAcc: td[2],
+            CdDone: ct[3],
+            CdAcc: ctd[3],
+            CdReset: x[3],
+            ShiftClock: x[4],
+            ShiftReset: x[5],
+            DrumReset: x[6],
+            DrumJump: x[7],
+            DrumJog: x[8],
+            DrumStep: ds[10],
+            DrumAcc: td[10],
+            DrumDone: c[2],
+            DrumOut1: y[1],
+            DrumOut2: c[1],
+            Event1: x[9],
+            Event2: sc[50],
+            SendSource: ds[20],
+            SendBusy: c[3],
+            SendSuccess: c[4],
+            SendError: c[5],
+            SendEx: ds[21],
+            RecvDest: ds[22],
+            RecvBusy: c[6],
+            RecvSuccess: c[7],
+            RecvError: c[8],
+            RecvEx: ds[23],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+
+    assert tokens == [
+        "blockcopy(DS100..DS102,DS200..DS202,1)",
+        "fill(7,DS200..DS202,1)",
+        "pack_bits(C10..C25,DD1,1)",
+        "pack_words(DS300..DS301,DD1,1)",
+        "unpack_to_bits(DD1,C10..C41,1)",
+        "unpack_to_words(DD1,DS300..DS301,1)",
+        "on_delay(T1,TD1,100,Tms,1)",
+        ".reset()",
+        "off_delay(T2,TD2,50,Tms)",
+        "count_down(CT3,CTD3,9)",
+        ".reset()",
+        "shift(C10..C17)",
+        ".clock()",
+        ".reset()",
+        "event_drum([Y001,C1],[X009,SC50],[[1,0],[0,1]],DS10,C2)",
+        ".reset()",
+        ".jump(DS10)",
+        ".jog()",
+        "time_drum([Y001,C1],[100,200],Tms,[[1,0],[0,1]],DS10,TD10,C2)",
+        ".reset()",
+        ".jump(DS10)",
+        ".jog()",
+        'send("127.0.0.1",502,"DS1",DS20,C3,C4,C5,DS21,3,1)',
+        'receive("127.0.0.1",502,"DS2",DS22,C6,C7,C8,DS23,4,1)',
+    ]
+
+    assert ".clock()" in tokens
+    assert ".jump(DS10)" in tokens
+    assert ".jog()" in tokens
 
 
 def test_precheck_and_issue_payload():
