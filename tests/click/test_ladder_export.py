@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 import pytest
@@ -395,6 +396,76 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
     assert (out_dir / "main.csv").exists()
     assert (out_dir / "sub_alpha.csv").exists()
     assert (out_dir / "sub_beta_two.csv").exists()
+
+
+def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
+    Enable = Bool("Enable")
+    Chars = Block("Chars", TagType.CHAR, 1, 4)
+    Result = Int("Result")
+    Found = Bool("Found")
+
+    with Program() as logic:
+        with Rung(Enable):
+            search("==", 'sub"name', Chars.select(1, 4), Result, Found)
+        with Rung(Enable):
+            search("==", "normal", Chars.select(1, 4), Result, Found)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Chars: txt.select(1, 4),
+            Result: ds[1],
+            Found: c[1],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+
+    assert 'search("==","sub""name",TXT1..TXT4,DS1,C1,0,0)' in tokens
+    assert 'search("==","normal",TXT1..TXT4,DS1,C1,0,0)' in tokens
+    assert all('\\"' not in token for token in tokens)
+
+
+def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_path: Path):
+    Enable = Bool("Enable")
+    Chars = Block("Chars", TagType.CHAR, 1, 4)
+    Result = Int("Result")
+    Found = Bool("Found")
+
+    with Program() as logic:
+        with Rung(Enable):
+            search("==", 'sub"name', Chars.select(1, 4), Result, Found)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Chars: txt.select(1, 4),
+            Result: ds[1],
+            Found: c[1],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    expected = 'search("==","sub""name",TXT1..TXT4,DS1,C1,0,0)'
+    assert bundle.main_rows[1][-1] == expected
+
+    out_dir = tmp_path / "ladder"
+    bundle.write(out_dir)
+
+    raw_csv = (out_dir / "main.csv").read_text(encoding="utf-8")
+    assert '\\"' not in raw_csv
+
+    with (out_dir / "main.csv").open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+
+    af_token = rows[1][-1]
+    assert af_token == expected
+    assert '\\"' not in af_token
+
+    value_literal = af_token[len('search("==",') :].split(",TXT1..TXT4", maxsplit=1)[0]
+    assert value_literal == '"sub""name"'
+    assert value_literal[1:-1].replace('""', '"') == 'sub"name'
 
 
 def test_tokens_include_explicit_defaults_and_oneshot():

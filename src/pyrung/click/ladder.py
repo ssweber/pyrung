@@ -1940,7 +1940,7 @@ class _LadderExporter:
 
 
 def _quote(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    escaped = value.replace('"', '""')
     return f'"{escaped}"'
 
 

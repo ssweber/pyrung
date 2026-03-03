@@ -1359,6 +1359,24 @@ class TestBranch:
 class TestSubroutineAndCall:
     """Test subroutine() and call() for modular program structure."""
 
+    def test_subroutine_name_rejects_double_quote(self):
+        from pyrung.core.program import Program, subroutine
+
+        with Program():
+            with pytest.raises(ValueError, match="must not contain"):
+                with subroutine('bad"name'):
+                    pass
+
+    def test_call_rejects_subroutine_name_with_double_quote(self):
+        from pyrung.core.program import Program, Rung, call
+
+        Button = Bool("Button")
+
+        with pytest.raises(ValueError, match="must not contain"):
+            with Program():
+                with Rung(Button):
+                    call('bad"name')
+
     def test_subroutine_defined_and_called(self):
         """Subroutine is defined and executed when called."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
@@ -1567,6 +1585,18 @@ class TestSubroutineAndCall:
 
 class TestSubroutineDecorator:
     """Test @subroutine('name') decorator syntax."""
+
+    def test_decorator_subroutine_name_rejects_double_quote(self):
+        from pyrung.core.program import Rung, out, subroutine
+
+        Light = Bool("Light")
+
+        with pytest.raises(ValueError, match="must not contain"):
+
+            @subroutine('bad"name')
+            def bad_sub():
+                with Rung():
+                    out(Light)
 
     def test_decorator_subroutine_defined_and_called(self):
         """Decorated subroutine is auto-registered and executed when called."""

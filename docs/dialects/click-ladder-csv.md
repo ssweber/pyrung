@@ -140,7 +140,7 @@ All tokens are compact canonical function-style strings:
 String rendering:
 
 - Strings are double-quoted.
-- Internal `\` and `"` are escaped as `\\` and `\"`.
+- Internal `"` is escaped as `""` (doubled quote). No backslash escaping.
 
 Boolean rendering:
 
@@ -181,6 +181,7 @@ Producer may emit:
 - `send("host",port,"remote_start",source,sending,success,error,exception_response,device_id,count)`
 - `receive("host",port,"remote_start",dest,receiving,success,error,exception_response,device_id,count)`
 - `call("subroutine_name")`
+  - Subroutine names must not contain `"`.
 - `return()`
 - `for(count,oneshot)`
 - `next()`

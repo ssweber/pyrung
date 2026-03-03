@@ -29,7 +29,7 @@ from pyrung.core.instruction import (
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
-from .context import Program, SubroutineFunc, _require_rung_context
+from .context import Program, SubroutineFunc, _require_rung_context, _validate_subroutine_name
 
 if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
@@ -428,6 +428,7 @@ def call(target: str | SubroutineFunc) -> None:
             target._register(prog)
     else:
         name = target
+    name = _validate_subroutine_name(name)
 
     _attach_instruction(ctx, CallInstruction(name, prog), source_file, source_line)
 

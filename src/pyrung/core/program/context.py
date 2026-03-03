@@ -79,6 +79,12 @@ def _set_scope_end_line(
     )
 
 
+def _validate_subroutine_name(name: str) -> str:
+    if '"' in name:
+        raise ValueError('Subroutine name must not contain ".')
+    return name
+
+
 class Program:
     """Container for PLC logic (rungs and subroutines).
 
@@ -124,6 +130,7 @@ class Program:
 
     def start_subroutine(self, name: str) -> None:
         """Start defining a subroutine."""
+        _validate_subroutine_name(name)
         self._current_subroutine = name
         self.subroutines[name] = []
 
@@ -298,7 +305,7 @@ class Subroutine:
     """
 
     def __init__(self, name: str, *, strict: bool = True) -> None:
-        self._name = name
+        self._name = _validate_subroutine_name(name)
         self._strict = strict
 
     def __enter__(self) -> Subroutine:
