@@ -1299,10 +1299,11 @@ class TestCalcInstruction:
         MaskA = Word("MaskA")
         Result = Word("Result")
         # 0xFFFF + 1 = 0x10000 → wraps to 0
-        instr = CalcInstruction(MaskA + 1, Result, mode="hex")
+        instr = CalcInstruction(MaskA + 1, Result)
 
         state = SystemState().with_tags({"MaskA": 0xFFFF})
         new_state = execute(instr, state)
+        assert instr.mode == "hex"
         assert new_state.tags["Result"] == 0
 
     def test_math_hex_mode_no_sign_extension(self):
@@ -1313,11 +1314,38 @@ class TestCalcInstruction:
         MaskA = Word("MaskA")
         Result = Word("Result")
         # -1 in hex mode → 0xFFFF = 65535
-        instr = CalcInstruction(MaskA - 2, Result, mode="hex")
+        instr = CalcInstruction(MaskA - 2, Result)
 
         state = SystemState().with_tags({"MaskA": 1})
         new_state = execute(instr, state)
+        assert instr.mode == "hex"
         assert new_state.tags["Result"] == 65535
+
+    def test_math_mixed_tag_families_fall_back_to_decimal_mode(self):
+        from pyrung.core.instruction import CalcInstruction
+        from pyrung.core.tag import Word
+
+        MaskA = Word("MaskA")
+        Delta = Int("Delta")
+        Result = Int("Result")
+        instr = CalcInstruction(MaskA + Delta, Result)
+
+        state = SystemState().with_tags({"MaskA": 1, "Delta": -2})
+        new_state = execute(instr, state)
+
+        assert instr.mode == "decimal"
+        assert instr.mode_inference.mixed_families is True
+        assert new_state.tags["Result"] == -1
+
+    def test_math_constructor_rejects_mode_keyword(self):
+        from pyrung.core.instruction import CalcInstruction
+        from pyrung.core.tag import Word
+
+        MaskA = Word("MaskA")
+        Result = Word("Result")
+
+        with pytest.raises(TypeError):
+            CalcInstruction(MaskA + 1, Result, mode="hex")
 
     def test_math_literal_expression(self):
         """MATH works with literal values."""

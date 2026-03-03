@@ -203,7 +203,7 @@ unpack_to_words(DD[1], DS.select(1, 2))    # Unpack DINT into two INTs
 ```python
 calc(DS[1] + DS[2], DS[3])              # DS3 = DS1 + DS2 (wraps to INT range)
 calc(DS[1] * 2, DS[3], oneshot=True)    # One-shot: execute once per rung rising edge
-calc(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
+calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 ```
 
 **Math wraps** — overflow truncates to the destination type's bit width (modular arithmetic). This differs from `copy()` which clamps.
@@ -221,12 +221,16 @@ calc(DS[1] | DS[2], DS[3], mode="hex")  # Unsigned 16-bit bitwise OR
 - Division by zero produces result = 0 and sets the system fault flag.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 
-### Math modes
+### Mode inference
 
-| Mode | Operand treatment |
-|------|-------------------|
-| `"decimal"` (default) | Signed arithmetic |
-| `"hex"` | Unsigned 16-bit arithmetic (0x0000–0xFFFF wrap) |
+`calc()` infers arithmetic mode from referenced tag types (including destination):
+
+| Family | Inferred mode |
+|--------|----------------|
+| WORD-only | `"hex"` (unsigned 16-bit wrap) |
+| Any non-WORD present | `"decimal"` (signed arithmetic) |
+
+For Click portability, do not mix WORD and non-WORD math in the same `calc()` expression. Click validation reports `CLK_CALC_MODE_MIXED` for mixed-family expressions.
 
 ---
 

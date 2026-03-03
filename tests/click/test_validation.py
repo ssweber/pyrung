@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pyrung.click import TagMap, c, dd, ds, x, y
+from pyrung.click import TagMap, c, dd, dh, ds, x, y
 from pyrung.click.validation import (
+    CLK_CALC_MODE_MIXED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -314,6 +315,86 @@ class TestExpressionInMath:
             if f.code == CLK_EXPR_ONLY_IN_CALC
         ]
         assert expr_findings == []
+
+
+class TestCalcModeMixedValidation:
+    def test_warn_mode_gives_hint_for_mixed_family_calc(self):
+        a = Tag("A", TagType.INT)
+        h = Tag("H", TagType.WORD)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a + h, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), h.map_to(dh[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_MODE_MIXED for f in report.hints)
+
+    def test_strict_mode_gives_error_for_mixed_family_calc(self):
+        a = Tag("A", TagType.INT)
+        h = Tag("H", TagType.WORD)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a + h, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), h.map_to(dh[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_MODE_MIXED for f in report.errors)
+
+    def test_decimal_family_calc_has_no_mixed_mode_finding(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.DINT)
+        dest = Tag("Dest", TagType.DINT)
+
+        def logic():
+            with Rung():
+                calc(a + b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(dd[1]), dest.map_to(dd[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_MODE_MIXED
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_hex_family_calc_has_no_mixed_mode_finding(self):
+        h1 = Tag("H1", TagType.WORD)
+        h2 = Tag("H2", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(h1 | h2, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [h1.map_to(dh[1]), h2.map_to(dh[2]), dest.map_to(dh[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_MODE_MIXED
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
 
 
 class TestTildeExpressionPortability:

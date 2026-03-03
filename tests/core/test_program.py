@@ -947,14 +947,25 @@ class TestCopyAndMathReferenceExamples:
 
         with Program() as prog:
             with Rung(Enable):
-                calc(rsh(DH[1], 1), DH[2], mode="hex")
-                calc(rro(DH[1], 1), DH[3], mode="hex")
+                calc(rsh(DH[1], 1), DH[2])
+                calc(rro(DH[1], 1), DH[3])
 
         state = SystemState().with_tags({"Enable": True, "DH1": 0x45B1})
         new_state = evaluate_program(prog, state)
 
         assert new_state.tags["DH2"] == 0x22D8
         assert new_state.tags["DH3"] == 0xA2D8
+
+    def test_calc_dsl_rejects_mode_keyword(self):
+        from pyrung.core.program import Program, Rung, calc
+
+        Enable = Bool("Enable")
+        Result = Int("Result")
+
+        with Program() as prog:
+            with pytest.raises(TypeError):
+                with Rung(Enable):
+                    calc(1 + 2, Result, mode="decimal")
 
 
 class TestClickPrebuiltProgramIntegration:

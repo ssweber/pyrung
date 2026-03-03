@@ -320,7 +320,7 @@ def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None
     )
 
 
-def calc(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal") -> Tag:
+def calc(expression: Any, dest: Tag, oneshot: bool = False) -> Tag:
     """Calc instruction.
 
     Evaluates an expression and stores the result in dest, with
@@ -329,23 +329,22 @@ def calc(expression: Any, dest: Tag, oneshot: bool = False, mode: str = "decimal
     Key differences from copy():
     - Truncates result to destination tag's type width
     - Division by zero produces 0 (not infinity)
-    - Supports "decimal" (signed) and "hex" (unsigned 16-bit) modes
+    - Infers decimal/hex behavior from referenced tag types
 
     Example:
         with Rung(Enable):
             calc(DS1 * DS2 + DS3, Result)
-            calc(MaskA & MaskB, MaskResult, mode="hex")
+            calc(MaskA & MaskB, MaskResult)
 
     Args:
         expression: Expression, Tag, or literal to evaluate.
         dest: Destination tag (type determines truncation width).
         oneshot: If True, execute only once per rung activation.
-        mode: "decimal" (signed arithmetic) or "hex" (unsigned 16-bit wrap).
 
     Returns:
         The dest tag.
     """
-    _add_instruction("calc", CalcInstruction, expression, dest, oneshot, mode)
+    _add_instruction("calc", CalcInstruction, expression, dest, oneshot)
     return dest
 
 

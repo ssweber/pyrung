@@ -411,7 +411,7 @@ class TestInstructionCoverage:
                 count_down(done_dn, acc_dn, preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
                 copy(40000, source)
-                calc(source + 1, calc_out, mode="decimal")
+                calc(source + 1, calc_out)
                 blockcopy(ds.select(1, 3), dd.select(1, 3))
                 fill(7, dd.select(idx, idx + 2))
 

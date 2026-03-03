@@ -60,6 +60,7 @@ from pyrung.core.expression import (
     TagExpr,
     XorExpr,
 )
+from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung
 from pyrung.core.tag import ImmediateRef, Tag
@@ -1236,6 +1237,7 @@ class _LadderExporter:
                 oneshot,
             )
         if instruction_type == "CalcInstruction":
+            mode = infer_calc_mode(instruction.expression, instruction.dest).mode
             return self._fn(
                 "calc",
                 self._render_operand(
@@ -1244,7 +1246,7 @@ class _LadderExporter:
                     source=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                str(instruction.mode),
+                str(mode),
                 oneshot,
             )
         if instruction_type == "SearchInstruction":

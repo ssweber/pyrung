@@ -13,6 +13,7 @@ from pyclickplc.addresses import parse_address
 
 from pyrung.core.condition import Condition
 from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.instruction.calc import infer_calc_mode
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation, _condition_children, walk_program
@@ -43,6 +44,7 @@ CLK_INT_TRUTHINESS_EXPLICIT_COMPARE_REQUIRED = "CLK_INT_TRUTHINESS_EXPLICIT_COMP
 CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
 CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
+CLK_CALC_MODE_MIXED = "CLK_CALC_MODE_MIXED"
 
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
@@ -333,6 +335,12 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         return (
             "Replace run_function/run_enabled_function with Click-portable instructions "
             "(copy/calc/timer/counter/send/receive)."
+        )
+
+    if code == CLK_CALC_MODE_MIXED:
+        return (
+            "Split mixed calc math into separate decimal and WORD-only calc() steps, "
+            "or convert through an intermediate tag so each calc() stays one family."
         )
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
@@ -694,26 +702,47 @@ def _evaluate_immediate_usage(
 def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
+    findings: list[ClickFinding] = []
     instruction_type = type(instruction).__name__
-    if instruction_type not in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
-        return []
+    if instruction_type == "CalcInstruction":
+        mode_info = infer_calc_mode(instruction.expression, instruction.dest)
+        if mode_info.mixed_families:
+            location = _instruction_location(base_location, "instruction.expression")
+            location_text = _format_location(location)
+            findings.append(
+                ClickFinding(
+                    code=CLK_CALC_MODE_MIXED,
+                    severity=_route_severity(CLK_CALC_MODE_MIXED, mode),
+                    message=(
+                        "calc() mixes WORD (hex-family) and non-WORD (decimal-family) operands "
+                        f"at {location_text}."
+                    ),
+                    location=location_text,
+                    suggestion=(
+                        "Split mixed calc math into separate decimal and WORD-only calc() steps, "
+                        "or convert through an intermediate tag so each calc() stays one family."
+                    ),
+                )
+            )
 
-    location_text = _format_location(base_location)
-    return [
-        ClickFinding(
-            code=CLK_FUNCTION_CALL_NOT_PORTABLE,
-            severity=_route_severity(CLK_FUNCTION_CALL_NOT_PORTABLE, mode),
-            message=(
-                f"{instruction_type} is not Click-portable at {location_text}. "
-                "Click execution cannot run arbitrary Python callables."
-            ),
-            location=location_text,
-            suggestion=(
-                "Replace run_function/run_enabled_function with Click-portable instructions "
-                "(copy/calc/timer/counter/send/receive)."
-            ),
+    if instruction_type in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
+        location_text = _format_location(base_location)
+        findings.append(
+            ClickFinding(
+                code=CLK_FUNCTION_CALL_NOT_PORTABLE,
+                severity=_route_severity(CLK_FUNCTION_CALL_NOT_PORTABLE, mode),
+                message=(
+                    f"{instruction_type} is not Click-portable at {location_text}. "
+                    "Click execution cannot run arbitrary Python callables."
+                ),
+                location=location_text,
+                suggestion=(
+                    "Replace run_function/run_enabled_function with Click-portable instructions "
+                    "(copy/calc/timer/counter/send/receive)."
+                ),
+            )
         )
-    ]
+    return findings
 
 
 # ---------------------------------------------------------------------------

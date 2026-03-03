@@ -14,6 +14,7 @@ from pyrung.click import (
     ct,
     ctd,
     dd,
+    dh,
     ds,
     receive,
     sc,
@@ -513,6 +514,57 @@ def test_tokens_include_explicit_defaults_and_oneshot():
     assert any(",decimal,0)" in token for token in tokens if token.startswith("calc("))
     assert any(token.startswith("search(") and token.endswith(",0,0)") for token in tokens)
     assert any(token.startswith("pack_text(") and token.endswith(",0,0)") for token in tokens)
+
+
+def test_calc_hex_token_uses_inferred_hex_mode():
+    Enable = Bool("Enable")
+    H1 = Block("H1", TagType.WORD, 1, 1)
+    H2 = Block("H2", TagType.WORD, 1, 1)
+    Dest = Block("Dest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(H1[1] | H2[1], Dest[1])
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            H1[1]: dh[1],
+            H2[1]: dh[2],
+            Dest[1]: dh[3],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+
+    assert any(",hex,0)" in token for token in tokens if token.startswith("calc("))
+
+
+def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
+    Enable = Bool("Enable")
+    A = Int("A")
+    H = Block("H", TagType.WORD, 1, 1)
+    Dest = Int("Dest")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(A + H[1], Dest)
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            A: ds[1],
+            H[1]: dh[1],
+            Dest: ds[2],
+        },
+        include_system=False,
+    )
+
+    with pytest.raises(LadderExportError) as exc_info:
+        mapping.to_ladder(logic)
+
+    assert any("CLK_CALC_MODE_MIXED" in str(issue["message"]) for issue in exc_info.value.issues)
 
 
 def test_tokens_cover_remaining_instruction_families_and_pin_rows():
