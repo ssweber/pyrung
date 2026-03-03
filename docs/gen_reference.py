@@ -151,6 +151,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.fall",
             "pyrung.all_of",
             "pyrung.any_of",
+            "pyrung.immediate",
             "pyrung.as_value",
             "pyrung.as_ascii",
             "pyrung.as_text",
