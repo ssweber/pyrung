@@ -762,7 +762,7 @@ class _LadderExporter:
         row_cells = list(row)
         cell_index = split_col + 1
         existing = row_cells[cell_index]
-        if existing not in {"", "-", "T", "+"}:
+        if existing not in {"", "-", "T"}:
             self._raise_issue(
                 path=path,
                 message=(
@@ -1953,11 +1953,9 @@ def _bool_bit(value: bool) -> str:
 def _vertical_marker(*, index: int, total: int) -> str:
     if total <= 1:
         return "-"
-    if index == 0:
+    if index < total - 1:
         return "T"
-    if index == total - 1:
-        return "-"
-    return "+"
+    return "-"
 
 
 def _compact_contiguous_range(addresses: list[str]) -> str | None:

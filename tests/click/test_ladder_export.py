@@ -167,7 +167,7 @@ def test_multiple_branches_stack_vertical_markers():
     bundle = mapping.to_ladder(logic)
 
     assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "+"
+    assert bundle.main_rows[2][2] == "T"
     assert bundle.main_rows[3][2] == "-"
     assert bundle.main_rows[2][3] == "X002"
     assert bundle.main_rows[3][3] == "X003"
@@ -199,7 +199,7 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T"], "out(Y001,0)"),
-        _row("", ["", "+", "X002"], "out(Y002,0)"),
+        _row("", ["", "T", "X002"], "out(Y002,0)"),
         _row("", ["", "-"], "out(Y003,0)"),
     )
 
@@ -232,7 +232,7 @@ def test_multiple_instruction_rows_share_powered_path():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "X002", "T"], "out(Y001,0)"),
-        _row("", ["", "", "+"], "latch(Y002)"),
+        _row("", ["", "", "T"], "latch(Y002)"),
         _row("", ["", "", "-"], "reset(Y003)"),
     )
 
@@ -263,7 +263,7 @@ def test_immediate_contact_and_coils_render_canonical_tokens():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["immediate(X001)", "T"], "out(immediate(Y001),0)"),
-        _row("", ["", "+"], "latch(immediate(Y002))"),
+        _row("", ["", "T"], "latch(immediate(Y002))"),
         _row("", ["", "-"], "reset(immediate(Y003))"),
     )
 
@@ -306,7 +306,7 @@ def test_vertical_wire_stack_for_three_or_branches():
     bundle = mapping.to_ladder(logic)
 
     assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "+"
+    assert bundle.main_rows[2][2] == "T"
     assert bundle.main_rows[3][2] == "-"
     assert bundle.main_rows[2][3] == "-"
     assert bundle.main_rows[3][3] == "-"

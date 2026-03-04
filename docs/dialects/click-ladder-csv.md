@@ -69,12 +69,13 @@ Cells can contain:
 - Edge contacts: `rise(X001)`, `fall(X001)`
 - Comparison terms (for example `DS1!=0`, `DS1==5`, `DS1<DS2`)
 - Wiring symbols:
-  - `-` horizontal wire
-  - `T` top of vertical stack
-  - `+` middle vertical pass-through
+  - `-` horizontal-only wire
+  - `T` horizontal + vertical-down wire
+  - `|` vertical-only wire (reserved; currently not emitted because exporter does not output empty vertical-only rows yet)
 - Blank (`""`) empty cell
 
 No shorthand markers (`->`, `...`) are emitted.
+No explicit `+` topology token is emitted in v1.
 
 ## OR / branch wiring semantics
 
@@ -82,7 +83,7 @@ No shorthand markers (`->`, `...`) are emitted.
 
 For OR-expanded condition terms:
 
-- Split/merge marker column uses vertical stack markers `T`, `+`, `-`.
+- Split/merge marker column uses `T` on non-final stacked rows and `-` on the final stacked row.
 - Only the top OR branch row carries trailing downstream condition terms.
 - Lower OR continuation rows end at split/merge marker (with wire fill where applicable).
 
@@ -91,7 +92,7 @@ For OR-expanded condition terms:
 Branch rows are continuation rows with normal instruction tokens in `AF`.
 
 - Branch-local conditions are offset to the right of the parent split column.
-- Parent split column is wired with `T/+/-` across parent + branch entry rows.
+- Parent split column is wired with `T` on non-final stacked rows and `-` on the final stacked row across parent + branch entry rows.
 - Nested branches are not emitted (export error).
 
 ## Multi-output rung semantics
@@ -99,7 +100,7 @@ Branch rows are continuation rows with normal instruction tokens in `AF`.
 If one condition path has multiple output instructions, exporter emits stacked continuation rows:
 
 - First row `marker = R`, then blank marker rows
-- Split column uses `T/+/-`
+- Split column uses `T` on non-final stacked rows and `-` on the final stacked row
 - Each row has one `AF` token
 
 ## Builder pin continuation rows
@@ -193,6 +194,11 @@ Pin tokens:
 - `.clock()`
 - `.jump(step)`
 - `.jog()`
+
+Click supports additional instruction placeholders that pyrung does not currently emit:
+
+- Empty instruction placeholder: `,:,...`
+- NOP instruction placeholder: `,:,NOP`
 
 ## Operand normalization notes
 
