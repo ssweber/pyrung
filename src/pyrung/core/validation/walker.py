@@ -210,7 +210,11 @@ def _classify_value(
         metadata: dict[str, str | int | bool] = {
             "wrapped_type": type(wrapped).__name__,
             "wrapped_value_kind": (
-                "tag" if isinstance(wrapped, Tag) else "block_range" if isinstance(wrapped, BlockRange) else "unknown"
+                "tag"
+                if isinstance(wrapped, Tag)
+                else "block_range"
+                if isinstance(wrapped, BlockRange)
+                else "unknown"
             ),
         }
         if isinstance(wrapped, Tag):
@@ -218,7 +222,9 @@ def _classify_value(
             metadata["tag_type"] = wrapped.type.name
             summary = f"ImmediateRef(Tag({wrapped.name}:{wrapped.type.name}))"
         elif isinstance(wrapped, BlockRange):
-            summary = f"ImmediateRef(BlockRange({wrapped.block.name}[{wrapped.start}:{wrapped.end}]))"
+            summary = (
+                f"ImmediateRef(BlockRange({wrapped.block.name}[{wrapped.start}:{wrapped.end}]))"
+            )
             metadata["block_name"] = wrapped.block.name
             metadata["start"] = wrapped.start
             metadata["end"] = wrapped.end

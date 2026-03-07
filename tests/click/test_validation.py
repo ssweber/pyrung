@@ -371,8 +371,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_MODE_MIXED
-            for f in (*report.errors, *report.warnings, *report.hints)
+            f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
         )
 
     def test_hex_family_calc_has_no_mixed_mode_finding(self):
@@ -392,8 +391,7 @@ class TestCalcModeMixedValidation:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
-            f.code == CLK_CALC_MODE_MIXED
-            for f in (*report.errors, *report.warnings, *report.hints)
+            f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
         )
 
 

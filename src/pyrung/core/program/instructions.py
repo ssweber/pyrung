@@ -127,7 +127,9 @@ def _validate_function_call(
         raise TypeError(f"{func_name}() outs must be a dict, got {type(outs).__name__}")
 
 
-def out(target: Tag | BlockRange | ImmediateRef, oneshot: bool = False) -> Tag | BlockRange | ImmediateRef:
+def out(
+    target: Tag | BlockRange | ImmediateRef, oneshot: bool = False
+) -> Tag | BlockRange | ImmediateRef:
     """Output coil instruction (OUT).
 
     Sets target to True when rung is true.

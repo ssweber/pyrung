@@ -344,9 +344,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         )
 
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
-        return (
-            "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
-        )
+        return "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
 
     if code == CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED:
         return "Use rise(tag)/fall(tag) without immediate(...), or use a plain immediate contact."
@@ -581,7 +579,9 @@ def _evaluate_immediate_coil_target(
     if isinstance(wrapped, BlockRange) and len(slots) > 1:
         addresses = [slot.address for slot in slots]
         if any(address is None for address in addresses):
-            findings.append(_unresolved_finding(location, mode, "immediate range address unresolved"))
+            findings.append(
+                _unresolved_finding(location, mode, "immediate range address unresolved")
+            )
         else:
             numeric_addresses = [int(address) for address in addresses if address is not None]
             contiguous = all(

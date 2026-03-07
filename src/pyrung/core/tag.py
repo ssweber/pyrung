@@ -508,8 +508,7 @@ class ImmediateRef:
 
         if not isinstance(self.value, Tag | BlockRange):
             raise TypeError(
-                "ImmediateRef value must be Tag or BlockRange, "
-                f"got {type(self.value).__name__}."
+                f"ImmediateRef value must be Tag or BlockRange, got {type(self.value).__name__}."
             )
 
     @property
@@ -537,8 +536,7 @@ def immediate(value: Tag | BlockRange | ImmediateRef) -> ImmediateRef:
     if isinstance(value, Tag | BlockRange):
         return ImmediateRef(value)
     raise TypeError(
-        "immediate() expects Tag, BlockRange, or ImmediateRef, "
-        f"got {type(value).__name__}."
+        f"immediate() expects Tag, BlockRange, or ImmediateRef, got {type(value).__name__}."
     )
 
 

@@ -28,8 +28,7 @@ def _contact_tag(value: Tag | ImmediateRef) -> Tag:
     if isinstance(value, ImmediateRef):
         if not isinstance(value.value, Tag):
             raise TypeError(
-                "Immediate contact operand must wrap a Tag. "
-                f"Got {type(value.value).__name__}."
+                f"Immediate contact operand must wrap a Tag. Got {type(value.value).__name__}."
             )
         return value.value
     return value
@@ -408,8 +407,7 @@ def _as_condition(cond: object) -> Condition:
         wrapped = cond.value
         if not isinstance(wrapped, Tag):
             raise TypeError(
-                "Immediate contact requires a Tag operand. "
-                f"Got {type(wrapped).__name__}."
+                f"Immediate contact requires a Tag operand. Got {type(wrapped).__name__}."
             )
         if wrapped.type != TagType.BOOL:
             raise TypeError(
