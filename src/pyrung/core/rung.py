@@ -53,6 +53,7 @@ class Rung:
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
+        self.comment: str | None = None
 
         for cond in conditions:
             self._conditions.append(_as_condition(cond))

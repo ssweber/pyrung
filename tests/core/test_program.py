@@ -621,6 +621,43 @@ class TestStrictDslControlFlowGuard:
         assert calls == ["seen"]
         assert len(logic.rungs) == 1
 
+    def test_context_manager_allows_rung_comment_assignment(self):
+        from pyrung.core.program import Program, Rung, out
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Enable) as r:
+                r.comment = "Turn on light."
+                out(Light)
+
+        assert logic.rungs[0].comment == "Turn on light."
+
+    def test_context_manager_rejects_non_rung_comment_assignment(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program
+
+        class Dummy:
+            comment = ""
+
+        dummy = Dummy()
+
+        with pytest.raises(ForbiddenControlFlowError, match="assignment"):
+            with Program():
+                dummy.comment = "mutated"
+
+    def test_context_manager_rejects_forbidden_expr_in_comment_assignment(self):
+        from pyrung.core.program import ForbiddenControlFlowError, Program, Rung, out
+
+        Enable = Bool("Enable")
+        Light = Bool("Light")
+
+        with pytest.raises(ForbiddenControlFlowError, match="if/elif/else"):
+            with Program():
+                with Rung(Enable) as r:
+                    r.comment = "on" if True else "off"
+                    out(Light)
+
     def test_program_strict_false_opt_out(self):
         from pyrung.core.program import Program, Rung, out
 

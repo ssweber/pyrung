@@ -58,7 +58,9 @@ from pyrung.core.program import (
 def _header() -> tuple[str, ...]:
     return (
         "marker",
-        *tuple([chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]),
+        *tuple(
+            [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+        ),
         "AF",
     )
 
@@ -846,3 +848,100 @@ def test_nested_subroutine_call_issue_includes_source_location():
     assert "subroutine[outer]" in str(issue["path"])
     assert issue["source_file"] is not None
     assert issue["source_line"] is not None
+
+
+# --- Rung comment rows ---
+
+
+def test_comment_single_line():
+    A = Bool("A")
+    B = Bool("B")
+
+    with Program() as logic:
+        with Rung(A) as r:
+            r.comment = "Turn on B when A is true."
+            out(B)
+
+    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows == (
+        _header(),
+        ("#", "Turn on B when A is true."),
+        _row("R", ["X001"], "out(Y001,0)"),
+    )
+
+
+def test_comment_multi_line():
+    A = Bool("A")
+    B = Bool("B")
+
+    with Program() as logic:
+        with Rung(A) as r:
+            r.comment = "Line one.\nLine two."
+            out(B)
+
+    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows == (
+        _header(),
+        ("#", "Line one."),
+        ("#", "Line two."),
+        _row("R", ["X001"], "out(Y001,0)"),
+    )
+
+
+def test_no_comment_no_extra_rows():
+    A = Bool("A")
+    B = Bool("B")
+
+    with Program() as logic:
+        with Rung(A):
+            out(B)
+
+    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001"], "out(Y001,0)"),
+    )
+
+
+def test_comment_with_branches():
+    A = Bool("A")
+    Mode = Bool("Mode")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(A) as r:
+            r.comment = "Branching rung."
+            with branch(Mode):
+                out(Y1)
+            with branch(~Mode):
+                out(Y2)
+
+    mapping = TagMap({A: x[1], Mode: c[1], Y1: y[1], Y2: y[2]}, include_system=False)
+    bundle = mapping.to_ladder(logic)
+
+    # Comment row should be first, before the R row
+    assert bundle.main_rows[1] == ("#", "Branching rung.")
+    assert bundle.main_rows[2][0] == "R"
+
+
+def test_comment_not_emitted_for_empty_branches():
+    A = Bool("A")
+    Mode = Bool("Mode")
+
+    with Program() as logic:
+        with Rung(A) as r:
+            r.comment = "No rows should be emitted."
+            with branch(Mode):
+                pass
+
+    mapping = TagMap({A: x[1], Mode: c[1]}, include_system=False)
+    bundle = mapping.to_ladder(logic)
+
+    assert bundle.main_rows == (_header(),)

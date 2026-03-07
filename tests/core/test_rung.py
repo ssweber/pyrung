@@ -4,7 +4,9 @@ Rungs evaluate conditions and execute instructions.
 They are pure functions: evaluate(state) -> new_state.
 """
 
-from pyrung.core import Bool, Int, SystemState
+import pytest
+
+from pyrung.core import Bool, Int, Program, Rung, SystemState
 from tests.conftest import evaluate_rung
 
 
@@ -573,3 +575,100 @@ class TestRungWithBitwiseAnd:
         state = SystemState().with_tags({"Ready": True, "Auto": False, "Light": False})
         new_state = evaluate_rung(rung, state)
         assert new_state.tags["Light"] is False
+
+
+class TestRungComment:
+    """Test rung comment property via context manager."""
+
+    def test_comment_default_is_none(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+
+        assert logic.rungs[0].comment is None
+
+    def test_comment_set_and_get(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button) as r:
+                r.comment = "Initialize the light system."
+                out(Light)
+
+        assert logic.rungs[0].comment == "Initialize the light system."
+
+    def test_comment_strips_whitespace(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button) as r:
+                r.comment = "  padded text  "
+                out(Light)
+
+        assert logic.rungs[0].comment == "padded text"
+
+    def test_comment_dedents_triple_quoted(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button) as r:
+                r.comment = """
+                    Line one.
+                    Line two.
+                """
+                out(Light)
+
+        assert logic.rungs[0].comment == "Line one.\nLine two."
+
+    def test_comment_exceeding_max_length_raises(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program():
+            with Rung(Button) as r:
+                with pytest.raises(ValueError, match="1400"):
+                    r.comment = "x" * 1401
+                out(Light)
+
+    def test_comment_at_max_length_is_accepted(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button) as r:
+                r.comment = "x" * 1400
+                out(Light)
+
+        assert len(logic.rungs[0].comment) == 1400
+
+    def test_comment_set_to_none(self):
+        from pyrung.core.program import out
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(Button) as r:
+                r.comment = "something"
+                r.comment = None
+                out(Light)
+
+        assert logic.rungs[0].comment is None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import textwrap
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -232,6 +233,23 @@ class Rung:
                     condition.source_line = condition_arg_lines[idx]
                 else:
                     condition.source_line = source_line
+
+    _MAX_COMMENT_LENGTH = 1400
+
+    @property
+    def comment(self) -> str | None:
+        """Rung comment (max 1400 chars)."""
+        return self._rung.comment
+
+    @comment.setter
+    def comment(self, value: str | None) -> None:
+        if value is not None:
+            value = textwrap.dedent(value).strip()
+            if len(value) > self._MAX_COMMENT_LENGTH:
+                raise ValueError(
+                    f"Rung comment is {len(value)} chars, max is {self._MAX_COMMENT_LENGTH}."
+                )
+        self._rung.comment = value
 
     def _set_pending_required_builder(self, builder: object, descriptor: str) -> None:
         pending = self._pending_required_builder

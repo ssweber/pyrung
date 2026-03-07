@@ -60,6 +60,24 @@ Rung segmentation rule for consumers:
 
 - A rung starts at each row with `marker == "R"` and continues until the next `R` or EOF.
 
+## Comment rows
+
+Comment rows appear directly above the `R` row of the rung they annotate:
+
+- `marker` = `#`
+- Column `A` = comment text for that line
+- No additional columns
+
+Multi-line comments emit one `#` row per line. Example:
+
+```csv
+#,Initialize the light system.
+#,Activates when Button is pressed.
+R,X001,-,-,...,-,out(Y001,0)
+```
+
+Comment rows are metadata — consumers may ignore them or display them as rung annotations.
+
 ## Condition grid cell vocabulary (`A..AE`)
 
 Cells can contain:

@@ -143,9 +143,7 @@ class LadderExportError(RuntimeError):
                     "path": str(issue.get("path", "")),
                     "message": str(issue.get("message", "")),
                     "source_file": (
-                        None
-                        if issue.get("source_file") is None
-                        else str(issue.get("source_file"))
+                        None if issue.get("source_file") is None else str(issue.get("source_file"))
                     ),
                     "source_line": _safe_int(issue.get("source_line")),
                 }
@@ -153,9 +151,7 @@ class LadderExportError(RuntimeError):
         self.issues: tuple[Issue, ...] = tuple(normalized)
 
         if self.issues:
-            preview = "; ".join(
-                f"{issue['path']}: {issue['message']}" for issue in self.issues[:3]
-            )
+            preview = "; ".join(f"{issue['path']}: {issue['message']}" for issue in self.issues[:3])
             if len(self.issues) > 3:
                 preview += f" (+{len(self.issues) - 3} more)"
         else:
@@ -302,9 +298,7 @@ class _LadderExporter:
             return
 
         for child_index, child_instruction in enumerate(getattr(instruction, "instructions", ())):
-            child_path = (
-                f"{path}.instruction[{child_index}]({type(child_instruction).__name__})"
-            )
+            child_path = f"{path}.instruction[{child_index}]({type(child_instruction).__name__})"
             self._assert_no_nested_subroutine_calls_in_instruction(
                 child_instruction,
                 path=child_path,
@@ -327,11 +321,21 @@ class _LadderExporter:
             rows.extend(self._render_rung(rung, path=base_path))
         return rows
 
+    @staticmethod
+    def _comment_rows(rung: Rung) -> list[tuple[str, ...]]:
+        if rung.comment is None:
+            return []
+        return [("#", line) for line in rung.comment.splitlines()]
+
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         if not rung._instructions and not rung._branches:
             return []
 
-        if any(type(instruction).__name__ == "ForLoopInstruction" for instruction in rung._instructions):
+        comment_rows = self._comment_rows(rung)
+
+        if any(
+            type(instruction).__name__ == "ForLoopInstruction" for instruction in rung._instructions
+        ):
             if len(rung._instructions) != 1 or rung._branches:
                 self._raise_issue(
                     path=f"{path}.instruction",
@@ -342,7 +346,7 @@ class _LadderExporter:
                     ),
                     source=rung,
                 )
-            return self._render_forloop_instruction(
+            return comment_rows + self._render_forloop_instruction(
                 instruction=rung._instructions[0],
                 conditions=rung._conditions,
                 path=f"{path}.instruction[0](ForLoopInstruction)",
@@ -360,11 +364,14 @@ class _LadderExporter:
             )
 
         if rung._branches:
-            return self._render_rung_with_branches(
+            branch_rows = self._render_rung_with_branches(
                 rung,
                 condition_rows=condition_rows,
                 path=path,
             )
+            if not branch_rows:
+                return []
+            return comment_rows + branch_rows
 
         output_rows: list[tuple[str, ...]]
         pin_rows: list[tuple[str, ...]]
@@ -384,7 +391,7 @@ class _LadderExporter:
             )
             pin_rows = []
 
-        rows = output_rows
+        rows = comment_rows + output_rows
         rows.extend(pin_rows)
         return rows
 
@@ -620,7 +627,10 @@ class _LadderExporter:
                 message="Nested branch(...) export is not supported in Click ladder v1.",
                 source=branch,
             )
-        if any(type(instruction).__name__ == "ForLoopInstruction" for instruction in branch._instructions):
+        if any(
+            type(instruction).__name__ == "ForLoopInstruction"
+            for instruction in branch._instructions
+        ):
             self._raise_issue(
                 path=f"{path}.instruction",
                 message="forloop() is not supported inside branch(...) in Click ladder v1 export.",
@@ -1163,7 +1173,9 @@ class _LadderExporter:
                     ExprCompareGe,
                 ),
             ):
-                left = self._render_expression(condition.left, path=f"{path}.left", source=condition)
+                left = self._render_expression(
+                    condition.left, path=f"{path}.left", source=condition
+                )
                 right = self._render_expression(
                     condition.right,
                     path=f"{path}.right",
@@ -1467,7 +1479,9 @@ class _LadderExporter:
                 _quote(instruction._host),
                 str(instruction._port),
                 _quote(remote_start),
-                self._render_operand(instruction._source, path=f"{path}.source", source=instruction),
+                self._render_operand(
+                    instruction._source, path=f"{path}.source", source=instruction
+                ),
                 self._render_operand(
                     instruction._sending,
                     path=f"{path}.sending",
@@ -1757,7 +1771,9 @@ class _LadderExporter:
             )
         if type(expression) in _UNARY_PREFIX:
             prefix = _UNARY_PREFIX[type(expression)]
-            inner = self._render_expression(expression.operand, path=f"{path}.operand", source=source)
+            inner = self._render_expression(
+                expression.operand, path=f"{path}.operand", source=source
+            )
             if isinstance(expression.operand, _BINARY_EXPR_TYPES):
                 return f"{prefix}({inner})"
             return f"{prefix}{inner}"
@@ -1779,19 +1795,27 @@ class _LadderExporter:
     def _render_condition_sequence(self, values: tuple[Any, ...], *, path: str, source: Any) -> str:
         rendered: list[str] = []
         for index, value in enumerate(values):
-            rendered.append(self._render_condition_inline(value, path=f"{path}[{index}]", source=source))
+            rendered.append(
+                self._render_condition_inline(value, path=f"{path}[{index}]", source=source)
+            )
         return f"[{','.join(rendered)}]"
 
     def _render_condition_inline(self, value: Any, *, path: str, source: Any) -> str:
         if isinstance(value, AllCondition):
             return self._fn(
                 "all",
-                *(self._render_condition_inline(c, path=path, source=source) for c in value.conditions),
+                *(
+                    self._render_condition_inline(c, path=path, source=source)
+                    for c in value.conditions
+                ),
             )
         if isinstance(value, AnyCondition):
             return self._fn(
                 "any",
-                *(self._render_condition_inline(c, path=path, source=source) for c in value.conditions),
+                *(
+                    self._render_condition_inline(c, path=path, source=source)
+                    for c in value.conditions
+                ),
             )
         if isinstance(value, Condition):
             return self._condition_leaf_token(value, path=path)

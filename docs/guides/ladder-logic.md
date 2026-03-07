@@ -521,3 +521,26 @@ def logic():
 ```
 
 Both produce a `Program` you pass to `PLCRunner`. See [Core Concepts — Programs](../getting-started/concepts.md#programs) for details.
+
+## Rung comments
+
+Attach a comment to a rung using the `as` variable:
+
+```python
+with Rung(Button) as r:
+    r.comment = "Initialize the light system."
+    out(Light)
+```
+
+Multi-line comments use triple-quoted strings (automatically dedented and stripped):
+
+```python
+with Rung(Button) as r:
+    r.comment = """
+        This rung controls the main light.
+        It activates when Button is pressed.
+    """
+    out(Light)
+```
+
+Comments are limited to 1400 characters. Exceeding this raises `ValueError`.

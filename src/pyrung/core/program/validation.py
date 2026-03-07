@@ -180,12 +180,47 @@ def _check_expression_tree(
             )
 
 
+_RUNG_SETTABLE_PROPERTIES: frozenset[str] = frozenset({"comment"})
+
+
+def _is_rung_context_expr(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if isinstance(node.func, ast.Name):
+        return node.func.id == "Rung"
+    return isinstance(node.func, ast.Attribute) and node.func.attr == "Rung"
+
+
+def _rung_aliases_from_with(node: ast.With) -> frozenset[str]:
+    aliases: set[str] = set()
+    for item in node.items:
+        if _is_rung_context_expr(item.context_expr) and isinstance(item.optional_vars, ast.Name):
+            aliases.add(item.optional_vars.id)
+    return frozenset(aliases)
+
+
+def _is_rung_property_assign(node: ast.AST, *, allowed_rung_aliases: frozenset[str]) -> bool:
+    """Allow ``r.comment = ...`` inside strict DSL scopes."""
+    if not isinstance(node, ast.Assign):
+        return False
+    if len(node.targets) != 1:
+        return False
+    target = node.targets[0]
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr in _RUNG_SETTABLE_PROPERTIES
+        and isinstance(target.value, ast.Name)
+        and target.value.id in allowed_rung_aliases
+    )
+
+
 def _check_statement_list(
     statements: list[ast.stmt],
     *,
     filename: str,
     line_offset: int,
     opt_out_hint: str,
+    allowed_rung_aliases: frozenset[str] = frozenset(),
 ) -> None:
     for statement in statements:
         if isinstance(statement, ast.Pass):
@@ -224,6 +259,16 @@ def _check_statement_list(
                     )
             _check_statement_list(
                 statement.body,
+                filename=filename,
+                line_offset=line_offset,
+                opt_out_hint=opt_out_hint,
+                allowed_rung_aliases=allowed_rung_aliases | _rung_aliases_from_with(statement),
+            )
+            continue
+
+        if _is_rung_property_assign(statement, allowed_rung_aliases=allowed_rung_aliases):
+            _check_expression_tree(
+                statement.value,
                 filename=filename,
                 line_offset=line_offset,
                 opt_out_hint=opt_out_hint,
