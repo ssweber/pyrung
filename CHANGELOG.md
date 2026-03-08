@@ -8,6 +8,11 @@
 - CircuitPython save trigger moved to onboard board model tag `board.save_memory_cmd` (`from pyrung.circuitpy import board`).
 - `generate_circuitpy(...)` now supports optional RUN/STOP board-switch mapping via `runstop=RunStopConfig(...)` and supports board-only (zero-slot) codegen when board tags are referenced.
 - `calc(...)` and `CalcInstruction(...)` no longer accept a public `mode=` argument; mode is inferred from referenced tag families.
+- `send()`/`receive()` now use `ModbusTarget` dataclass instead of inline `host`/`port`/`device_id` keyword arguments.
+
+### New features
+
+- CircuitPython Modbus TCP codegen — `generate_circuitpy()` accepts `modbus_server=ModbusServerConfig(...)` and/or `modbus_client=ModbusClientConfig(...)` to generate a Modbus TCP server, client, or both for the P1AM-200 via P1AM-ETH. Register layout matches a real Click PLC. Client send/receive generates a non-blocking state machine (one step per scan).
 
 ### Migration
 
@@ -15,6 +20,8 @@
 - Replace `calc(..., mode="hex")` with WORD-only calc expressions (hex will be inferred).
 - Replace `calc(..., mode="decimal")` with `calc(...)` (decimal is inferred whenever any non-WORD tag is involved).
 - For Click portability, split mixed WORD/non-WORD math into separate `calc()` steps to avoid `CLK_CALC_MODE_MIXED`.
+- Replace `send(host="...", port=502, device_id=1, remote_start=..., source=...)` with `send(target=ModbusTarget("name", "host"), remote_start=..., source=...)`.
+- Replace `receive(host="...", port=502, device_id=1, remote_start=..., dest=...)` with `receive(target=ModbusTarget("name", "host"), remote_start=..., dest=...)`.
 
 ## v0.1.0
 
