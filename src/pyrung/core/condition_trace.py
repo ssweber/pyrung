@@ -37,7 +37,7 @@ from pyrung.core.expression import (
     Expression,
 )
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-from pyrung.core.tag import Tag
+from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.trace_formatter import TraceFormatter
 
 _DIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
@@ -75,6 +75,12 @@ class ConditionTraceEngine:
     @staticmethod
     def _detail(name: str, value: Any) -> dict[str, Any]:
         return {"name": name, "value": value}
+
+    @staticmethod
+    def _contact_tag(condition_tag: Tag | ImmediateRef) -> Tag:
+        if isinstance(condition_tag, ImmediateRef):
+            return condition_tag.tag
+        return condition_tag
 
     @staticmethod
     def _resolve_operand(value: Any, ctx: ScanContext) -> Any:
@@ -128,8 +134,9 @@ class ConditionTraceEngine:
 
     @_evaluate.register
     def _(self, condition: BitCondition, ctx: ScanContext) -> tuple[bool, list[dict[str, Any]]]:
-        value = bool(ctx.get_tag(condition.tag.name, False))
-        return value, [self._detail("tag", condition.tag.name), self._detail("value", value)]
+        tag = self._contact_tag(condition.tag)
+        value = bool(ctx.get_tag(tag.name, False))
+        return value, [self._detail("tag", tag.name), self._detail("value", value)]
 
     @_evaluate.register
     def _(
@@ -143,19 +150,21 @@ class ConditionTraceEngine:
     def _(
         self, condition: NormallyClosedCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
-        raw = bool(ctx.get_tag(condition.tag.name, False))
+        tag = self._contact_tag(condition.tag)
+        raw = bool(ctx.get_tag(tag.name, False))
         value = not raw
-        return value, [self._detail("tag", condition.tag.name), self._detail("value", raw)]
+        return value, [self._detail("tag", tag.name), self._detail("value", raw)]
 
     @_evaluate.register
     def _(
         self, condition: RisingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
-        current = bool(ctx.get_tag(condition.tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
+        tag = self._contact_tag(condition.tag)
+        current = bool(ctx.get_tag(tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         value = current and not previous
         return value, [
-            self._detail("tag", condition.tag.name),
+            self._detail("tag", tag.name),
             self._detail("current", current),
             self._detail("previous", previous),
         ]
@@ -164,11 +173,12 @@ class ConditionTraceEngine:
     def _(
         self, condition: FallingEdgeCondition, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
-        current = bool(ctx.get_tag(condition.tag.name, False))
-        previous = bool(ctx.get_memory(f"_prev:{condition.tag.name}", False))
+        tag = self._contact_tag(condition.tag)
+        current = bool(ctx.get_tag(tag.name, False))
+        previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         value = (not current) and previous
         return value, [
-            self._detail("tag", condition.tag.name),
+            self._detail("tag", tag.name),
             self._detail("current", current),
             self._detail("previous", previous),
         ]
@@ -299,7 +309,7 @@ class ConditionTraceEngine:
 
     @_expression.register
     def _(self, condition: BitCondition) -> str:
-        return condition.tag.name
+        return self._contact_tag(condition.tag).name
 
     @_expression.register
     def _(self, condition: IntTruthyCondition) -> str:
@@ -307,15 +317,15 @@ class ConditionTraceEngine:
 
     @_expression.register
     def _(self, condition: NormallyClosedCondition) -> str:
-        return f"!{condition.tag.name}"
+        return f"!{self._contact_tag(condition.tag).name}"
 
     @_expression.register
     def _(self, condition: RisingEdgeCondition) -> str:
-        return f"rise({condition.tag.name})"
+        return f"rise({self._contact_tag(condition.tag).name})"
 
     @_expression.register
     def _(self, condition: FallingEdgeCondition) -> str:
-        return f"fall({condition.tag.name})"
+        return f"fall({self._contact_tag(condition.tag).name})"
 
     @_expression.register(CompareEq)
     @_expression.register(CompareNe)

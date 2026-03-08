@@ -12,7 +12,7 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 if TYPE_CHECKING:
     from pyrung.circuitpy.codegen.context import CodegenContext
@@ -84,7 +84,12 @@ def _first_defined_name(source: str) -> str | None:
     return None
 
 
-def _coil_target_default(target: Tag | BlockRange | IndirectBlockRange, ctx: CodegenContext) -> str:
+def _coil_target_default(
+    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+    ctx: CodegenContext,
+) -> str:
+    if isinstance(target, ImmediateRef):
+        return _coil_target_default(target.value, ctx)
     if isinstance(target, Tag):
         return repr(target.default)
     binding = ctx.block_bindings[id(target.block)]

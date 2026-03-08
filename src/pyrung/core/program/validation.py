@@ -6,7 +6,7 @@ import textwrap
 import warnings
 from collections.abc import Callable
 from types import FrameType
-from typing import Any
+from typing import Any, TypeGuard
 
 
 class ForbiddenControlFlowError(RuntimeError):
@@ -199,7 +199,9 @@ def _rung_aliases_from_with(node: ast.With) -> frozenset[str]:
     return frozenset(aliases)
 
 
-def _is_rung_property_assign(node: ast.AST, *, allowed_rung_aliases: frozenset[str]) -> bool:
+def _is_rung_property_assign(
+    node: ast.AST, *, allowed_rung_aliases: frozenset[str]
+) -> TypeGuard[ast.Assign]:
     """Allow ``r.comment = ...`` inside strict DSL scopes."""
     if not isinstance(node, ast.Assign):
         return False

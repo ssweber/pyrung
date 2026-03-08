@@ -11,7 +11,7 @@ from pyrung.core._source import (
     _capture_with_end_line,
 )
 from pyrung.core.condition import (
-    Condition,
+    ConditionTerm,
 )
 from pyrung.core.instruction import (
     ForLoopInstruction,
@@ -213,7 +213,7 @@ class Rung:
             copy(1, Step, oneshot=True)
     """
 
-    def __init__(self, *conditions: Condition | Tag) -> None:
+    def __init__(self, *conditions: ConditionTerm) -> None:
         source_file, source_line = _capture_source(depth=2)
         self._rung = RungLogic(*conditions, source_file=source_file, source_line=source_line)
         self._pending_required_builder: tuple[int, str] | None = None
@@ -503,7 +503,7 @@ class Branch:
 
     def __init__(
         self,
-        *conditions: Condition | Tag,
+        *conditions: ConditionTerm,
         source_file: str | None = None,
         source_line: int | None = None,
     ) -> None:
@@ -586,7 +586,7 @@ class Branch:
             self._parent_ctx._rung.add_branch(self._branch_rung)
 
 
-def branch(*conditions: Condition | Tag) -> Branch:
+def branch(*conditions: ConditionTerm) -> Branch:
     """Create a parallel branch within a rung.
 
     A branch executes when both the parent rung conditions AND

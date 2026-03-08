@@ -657,6 +657,7 @@ class TestRungComment:
                 r.comment = "x" * 1400
                 out(Light)
 
+        assert logic.rungs[0].comment is not None
         assert len(logic.rungs[0].comment) == 1400
 
     def test_comment_set_to_none(self):

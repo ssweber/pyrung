@@ -1,10 +1,12 @@
 """Tests for Program context manager and full integration.
 
 This tests the DSL syntax:
-    with Program() as logic:
-        with Rung(condition):
-            out(target)
+        with Program() as logic:
+            with Rung(condition):
+                out(target)
 """
+
+from typing import Any, cast
 
 import pytest
 
@@ -998,11 +1000,12 @@ class TestCopyAndMathReferenceExamples:
 
         Enable = Bool("Enable")
         Result = Int("Result")
+        calc_fn = cast(Any, calc)
 
-        with Program() as prog:
+        with Program():
             with pytest.raises(TypeError):
                 with Rung(Enable):
-                    calc(1 + 2, Result, mode="decimal")
+                    calc_fn(1 + 2, Result, mode="decimal")
 
 
 class TestClickPrebuiltProgramIntegration:

@@ -6,7 +6,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from pyrung.core.condition import (
     AllCondition,
@@ -1093,26 +1093,26 @@ class _LadderExporter:
             token = self._render_contact_token(condition.tag, path=f"{path}.tag", source=condition)
             return f"~{token}"
         if isinstance(condition, RisingEdgeCondition):
-            if isinstance(condition.tag, ImmediateRef):
-                self._raise_issue(
-                    path=f"{path}.tag",
-                    message="Immediate edge contacts are not supported in Click ladder export.",
-                    source=condition,
-                )
+            tag = self._require_non_immediate_tag(
+                condition.tag,
+                path=f"{path}.tag",
+                source=condition,
+                message="Immediate edge contacts are not supported in Click ladder export.",
+            )
             return self._fn(
                 "rise",
-                self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition),
+                self._resolve_tag(tag, path=f"{path}.tag", source=condition),
             )
         if isinstance(condition, FallingEdgeCondition):
-            if isinstance(condition.tag, ImmediateRef):
-                self._raise_issue(
-                    path=f"{path}.tag",
-                    message="Immediate edge contacts are not supported in Click ladder export.",
-                    source=condition,
-                )
+            tag = self._require_non_immediate_tag(
+                condition.tag,
+                path=f"{path}.tag",
+                source=condition,
+                message="Immediate edge contacts are not supported in Click ladder export.",
+            )
             return self._fn(
                 "fall",
-                self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition),
+                self._resolve_tag(tag, path=f"{path}.tag", source=condition),
             )
         if isinstance(condition, IntTruthyCondition):
             left = self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition)
@@ -1661,15 +1661,15 @@ class _LadderExporter:
         wrapped = immediate_ref.value
 
         if context == "contact":
-            if not isinstance(wrapped, Tag):
-                self._raise_issue(
-                    path=path,
-                    message="Immediate contact requires a Tag operand.",
-                    source=source,
-                )
+            tag = self._require_tag(
+                wrapped,
+                path=path,
+                source=source,
+                message="Immediate contact requires a Tag operand.",
+            )
             return self._fn(
                 "immediate",
-                self._resolve_tag(wrapped, path=f"{path}.value", source=source),
+                self._resolve_tag(tag, path=f"{path}.value", source=source),
             )
 
         if context == "coil":
@@ -1714,6 +1714,7 @@ class _LadderExporter:
                         ),
                         source=source,
                     )
+                assert compact is not None
                 return self._fn("immediate", compact)
 
             self._raise_issue(
@@ -1769,7 +1770,7 @@ class _LadderExporter:
                 "abs",
                 self._render_expression(expression.operand, path=f"{path}.operand", source=source),
             )
-        if type(expression) in _UNARY_PREFIX:
+        if isinstance(expression, (NegExpr, PosExpr, InvertExpr)):
             prefix = _UNARY_PREFIX[type(expression)]
             inner = self._render_expression(
                 expression.operand, path=f"{path}.operand", source=source
@@ -1777,7 +1778,23 @@ class _LadderExporter:
             if isinstance(expression.operand, _BINARY_EXPR_TYPES):
                 return f"{prefix}({inner})"
             return f"{prefix}{inner}"
-        if type(expression) in _BINARY_OP_SYMBOL:
+        if isinstance(
+            expression,
+            (
+                AddExpr,
+                SubExpr,
+                MulExpr,
+                DivExpr,
+                FloorDivExpr,
+                ModExpr,
+                PowExpr,
+                AndExpr,
+                OrExpr,
+                XorExpr,
+                LShiftExpr,
+                RShiftExpr,
+            ),
+        ):
             symbol = _BINARY_OP_SYMBOL[type(expression)]
             left = self._render_expression(expression.left, path=f"{path}.left", source=source)
             right = self._render_expression(expression.right, path=f"{path}.right", source=source)
@@ -1860,6 +1877,7 @@ class _LadderExporter:
                 message=f"Indirect block {indirect.block.name!r} is not mapped in TagMap.",
                 source=source,
             )
+        assert entry is not None
 
         try:
             offset = self._tag_map.offset_for(entry.logical)
@@ -1882,12 +1900,30 @@ class _LadderExporter:
                 message=f"Unable to parse hardware bank from {hardware_addr!r}.",
                 source=source,
             )
+        assert bank_match is not None
         bank = bank_match.group(1)
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
         if offset == 0:
             return f"{bank}[{pointer}]"
         sign = "+" if offset > 0 else "-"
         return f"{bank}[{pointer}{sign}{abs(offset)}]"
+
+    def _require_tag(self, value: Any, *, path: str, source: Any, message: str) -> Tag:
+        if not isinstance(value, Tag):
+            self._raise_issue(path=path, message=message, source=source)
+        return value
+
+    def _require_non_immediate_tag(
+        self,
+        value: Tag | ImmediateRef,
+        *,
+        path: str,
+        source: Any,
+        message: str,
+    ) -> Tag:
+        if isinstance(value, ImmediateRef):
+            self._raise_issue(path=path, message=message, source=source)
+        return self._require_tag(value, path=path, source=source, message=message)
 
     def _resolve_tag(self, tag: Tag, *, path: str, source: Any) -> str:
         try:
@@ -1952,7 +1988,7 @@ class _LadderExporter:
             return f"{name}()"
         return f"{name}({','.join(args)})"
 
-    def _raise_issue(self, *, path: str, message: str, source: Any) -> None:
+    def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn:
         source_file = getattr(source, "source_file", None) if source is not None else None
         source_line = getattr(source, "source_line", None) if source is not None else None
         raise _RenderError(

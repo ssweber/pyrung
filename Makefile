@@ -4,9 +4,9 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-integration upgrade build clean docs-serve docs-build docs-check
+.PHONY: default install lint test test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check
 
-default: install lint test
+default: install verify
 
 install:
 	uv sync --all-extras --dev
@@ -20,6 +20,8 @@ test:
 test-integration:
 	uv run pytest -m integration
 
+verify: lint test docs-check
+
 upgrade:
 	uv sync --upgrade
 
@@ -29,7 +31,10 @@ build:
 docs-serve:
 	uv run --group docs mkdocs serve
 
-docs-build:
+docs-clean:
+	$(RM_SITE)
+
+docs-build: docs-clean
 	uv run --group docs mkdocs build --strict
 
 docs-check: docs-build
@@ -48,10 +53,12 @@ endif
 ifeq ($(WINDOWS),1)
 	# Windows commands
 	RM = powershell -Command "Remove-Item -Recurse -Force"
+	RM_SITE = powershell -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
 	FIND_PYCACHE = powershell -Command "Get-ChildItem -Path . -Filter '__pycache__' -Recurse -Directory | Remove-Item -Recurse -Force"
 else
     # Unix commands
     RM = rm -rf
+    RM_SITE = rm -rf site/
     FIND_PYCACHE = find . -type d -name "__pycache__" -exec rm -rf {} +
 endif
 

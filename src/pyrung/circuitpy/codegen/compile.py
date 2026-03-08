@@ -111,8 +111,14 @@ from pyrung.core.memory_block import (
     IndirectRef,
 )
 from pyrung.core.rung import Rung as LogicRung
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
+
+
+def _contact_tag_name(tag: Tag | ImmediateRef) -> str:
+    if isinstance(tag, ImmediateRef):
+        return tag.tag.name
+    return tag.name
 
 
 def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
@@ -146,13 +152,13 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_prev")
         tag_expr = ctx.symbol_for_tag(cond.tag)
-        return f'_rise(bool({tag_expr}), bool(_prev.get("{cond.tag.name}", False)))'
+        return f'_rise(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
     if isinstance(cond, FallingEdgeCondition):
         ctx.mark_helper("_fall")
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_prev")
         tag_expr = ctx.symbol_for_tag(cond.tag)
-        return f'_fall(bool({tag_expr}), bool(_prev.get("{cond.tag.name}", False)))'
+        return f'_fall(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
     if isinstance(cond, IndirectCompareEq):
         return f"({_compile_indirect_value(cond.indirect_ref, ctx)} == {_compile_value(cond.value, ctx)})"
     if isinstance(cond, IndirectCompareNe):
@@ -2210,12 +2216,14 @@ def _load_cast_expr(value_expr: str, tag_type: str) -> str:
 
 
 def _compile_target_write_lines(
-    target: Tag | BlockRange | IndirectBlockRange,
+    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
     value_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
     sp = " " * indent
+    if isinstance(target, ImmediateRef):
+        return _compile_target_write_lines(target.value, value_expr, ctx, indent)
     if isinstance(target, Tag):
         return [f"{sp}{ctx.symbol_for_tag(target)} = {value_expr}"]
 

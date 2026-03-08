@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING
 from pyrung.core._source import _capture_call_end_line
 from pyrung.core.condition import (
     Condition,
+    ConditionTerm,
     _as_condition,
 )
-from pyrung.core.tag import Tag
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -31,7 +31,7 @@ class Rung:
 
     def __init__(
         self,
-        *conditions: Condition | Tag,
+        *conditions: ConditionTerm,
         source_file: str | None = None,
         source_line: int | None = None,
         end_line: int | None = None,

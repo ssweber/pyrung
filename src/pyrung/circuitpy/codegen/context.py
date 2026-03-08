@@ -39,7 +39,7 @@ from pyrung.core.memory_block import (
 )
 from pyrung.core.program import Program
 from pyrung.core.rung import Rung as LogicRung
-from pyrung.core.tag import Tag, TagType
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import _INSTRUCTION_FIELDS, _condition_children
 
 
@@ -311,7 +311,9 @@ class CodegenContext:
     def globals_for_function(self, fn_name: str) -> list[str]:
         return sorted(self.function_globals.get(fn_name, set()))
 
-    def symbol_for_tag(self, tag: Tag) -> str:
+    def symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
+        if isinstance(tag, ImmediateRef):
+            tag = tag.tag
         block_info = self.tag_block_addresses.get(tag.name)
         if block_info is not None:
             block_id, addr = block_info
