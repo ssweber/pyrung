@@ -9,14 +9,14 @@ from typing import cast
 
 import pytest
 
-from pyrung.circuitpy import ModbusServerConfig, P1AM, RunStopConfig, board, generate_circuitpy
-from pyrung.click import TagMap, c
+from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, board, generate_circuitpy
 from pyrung.circuitpy.codegen import (
     CodegenContext,
     compile_condition,
     compile_expression,
     compile_rung,
 )
+from pyrung.click import TagMap, c
 from pyrung.core import (
     Block,
     Bool,
@@ -220,7 +220,9 @@ def _run_single_scan_source(
     )
     neopixel_mod = _stub_module("neopixel", NeoPixel=_StubNeoPixel)
     adafruit_wiznet5k_mod = _stub_module("adafruit_wiznet5k")
-    adafruit_wiznet5k_core_mod = _stub_module("adafruit_wiznet5k.adafruit_wiznet5k", WIZNET5K=_StubWiznet5k)
+    adafruit_wiznet5k_core_mod = _stub_module(
+        "adafruit_wiznet5k.adafruit_wiznet5k", WIZNET5K=_StubWiznet5k
+    )
     adafruit_wiznet5k_socket_mod = _stub_module(
         "adafruit_wiznet5k.adafruit_wiznet5k_socket",
         AF_INET=2,

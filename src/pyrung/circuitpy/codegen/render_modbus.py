@@ -8,12 +8,9 @@ from typing import Any
 from pyclickplc.banks import BANKS, DataType
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
-from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
-from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core.system_points import system
-from pyrung.core.tag import TagType
-
 
 _SYSTEM_SLOT_BY_HARDWARE = {slot.hardware.name: slot for slot in SYSTEM_CLICK_SLOTS}
 _WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "XD", "YD", "SD"}
@@ -345,7 +342,9 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         elif slot.data_type == DataType.HEX:
             read_lines = [f"(int({slot.symbol}) & 0xFFFF)"]
         elif slot.data_type == DataType.INT2:
-            read_lines = [f"struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[int(reg_pos)]"]
+            read_lines = [
+                f"struct.unpack('<HH', struct.pack('<i', int({slot.symbol})))[int(reg_pos)]"
+            ]
         elif slot.data_type == DataType.FLOAT:
             read_lines = [
                 f"struct.unpack('<HH', struct.pack('<f', float({slot.symbol})))[int(reg_pos)]"
@@ -354,10 +353,24 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             pair_index = (slot.index - 1) // 2 * 2 + 1
             low_name = f"{slot.bank}{pair_index}"
             high_name = f"{slot.bank}{pair_index + 1}"
-            low_slot = next((item for item in reg_slots if item.bank == slot.bank and item.index == pair_index), None)
-            high_slot = next((item for item in reg_slots if item.bank == slot.bank and item.index == pair_index + 1), None)
-            low_expr = f"ord({low_slot.symbol}) if {low_slot is not None} and {low_slot.symbol} else 0"
-            high_expr = f"ord({high_slot.symbol}) if {high_slot is not None} and {high_slot.symbol} else 0"
+            low_slot = next(
+                (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
+                None,
+            )
+            high_slot = next(
+                (
+                    item
+                    for item in reg_slots
+                    if item.bank == slot.bank and item.index == pair_index + 1
+                ),
+                None,
+            )
+            low_expr = (
+                f"ord({low_slot.symbol}) if {low_slot is not None} and {low_slot.symbol} else 0"
+            )
+            high_expr = (
+                f"ord({high_slot.symbol}) if {high_slot is not None} and {high_slot.symbol} else 0"
+            )
             read_lines = [f"(({low_expr}) & 0xFF) | ((({high_expr}) & 0xFF) << 8)"]
         else:
             continue
@@ -412,9 +425,16 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             )
         elif slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
-            low_slot = next((item for item in reg_slots if item.bank == slot.bank and item.index == pair_index), None)
+            low_slot = next(
+                (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
+                None,
+            )
             high_slot = next(
-                (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index + 1),
+                (
+                    item
+                    for item in reg_slots
+                    if item.bank == slot.bank and item.index == pair_index + 1
+                ),
                 None,
             )
             lines.extend(
@@ -587,7 +607,7 @@ def _render_modbus_server(ctx: CodegenContext) -> list[str]:
         return []
     server = ctx.modbus_server
     return [
-        f"_mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)",
+        "_mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)",
         "_mb_server.bind(('', %d))" % server.port,
         f"_mb_server.listen({server.max_clients})",
         "_mb_server.settimeout(0)",
@@ -682,7 +702,7 @@ def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
         if spec.function_code == 5:
             pdu_lines = [
                 f"    _values = {spec.var_name}_values()",
-                f"    _raw = 0xFF00 if bool(_values[0]) else 0x0000",
+                "    _raw = 0xFF00 if bool(_values[0]) else 0x0000",
                 f"    _pdu = struct.pack('>BHH', {spec.function_code}, {spec.modbus_start}, _raw)",
             ]
         elif spec.function_code == 15:
@@ -944,9 +964,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             ]
         )
 
-    lines.append(
-        "_mb_client_jobs = [%s]" % ", ".join(spec.var_name for spec in specs)
-    )
+    lines.append("_mb_client_jobs = [%s]" % ", ".join(spec.var_name for spec in specs))
     lines.extend(
         [
             "",

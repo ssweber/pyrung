@@ -1466,73 +1466,59 @@ class _LadderExporter:
                     source=instruction,
                 ),
             )
-        if instruction_type == "_ClickSendInstruction":
-            explicit_count = self._explicit_count(
-                operand=instruction._source,
-                configured_count=instruction._count,
-                path=f"{path}.count",
-                source=instruction,
-            )
-            remote_start = f"{instruction._bank}{instruction._start}"
+        if instruction_type == "ModbusSendInstruction":
+            count = len(instruction.addresses)
+            remote_start = f"{instruction.bank}{instruction.start}"
+            target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "send",
-                _quote(instruction._host),
-                str(instruction._port),
+                target_expr,
                 _quote(remote_start),
+                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_operand(
-                    instruction._source, path=f"{path}.source", source=instruction
-                ),
-                self._render_operand(
-                    instruction._sending,
+                    instruction.sending,
                     path=f"{path}.sending",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction._success,
+                    instruction.success,
                     path=f"{path}.success",
                     source=instruction,
                 ),
-                self._render_operand(instruction._error, path=f"{path}.error", source=instruction),
+                self._render_operand(instruction.error, path=f"{path}.error", source=instruction),
                 self._render_operand(
-                    instruction._exception_response,
+                    instruction.exception_response,
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                str(instruction._device_id),
-                str(explicit_count),
+                str(count),
             )
-        if instruction_type == "_ClickReceiveInstruction":
-            explicit_count = self._explicit_count(
-                operand=instruction._dest,
-                configured_count=instruction._count,
-                path=f"{path}.count",
-                source=instruction,
-            )
-            remote_start = f"{instruction._bank}{instruction._start}"
+        if instruction_type == "ModbusReceiveInstruction":
+            count = len(instruction.addresses)
+            remote_start = f"{instruction.bank}{instruction.start}"
+            target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "receive",
-                _quote(instruction._host),
-                str(instruction._port),
+                target_expr,
                 _quote(remote_start),
-                self._render_operand(instruction._dest, path=f"{path}.dest", source=instruction),
+                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 self._render_operand(
-                    instruction._receiving,
+                    instruction.receiving,
                     path=f"{path}.receiving",
                     source=instruction,
                 ),
                 self._render_operand(
-                    instruction._success,
+                    instruction.success,
                     path=f"{path}.success",
                     source=instruction,
                 ),
-                self._render_operand(instruction._error, path=f"{path}.error", source=instruction),
+                self._render_operand(instruction.error, path=f"{path}.error", source=instruction),
                 self._render_operand(
-                    instruction._exception_response,
+                    instruction.exception_response,
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                str(instruction._device_id),
-                str(explicit_count),
+                str(count),
             )
         if instruction_type == "CallInstruction":
             return self._fn("call", _quote(str(instruction.subroutine_name)))
@@ -2013,6 +1999,22 @@ class _LadderExporter:
                 "source_line": source_line,
             }
         )
+
+
+def _render_modbus_target(instruction: object) -> str:
+    """Render a ModbusTarget(...) constructor for the ladder export."""
+    name = getattr(instruction, "target_name", "")
+    host = getattr(instruction, "host", None)
+    if host is None:
+        return _quote(name)
+    port = getattr(instruction, "port", 502)
+    device_id = getattr(instruction, "device_id", 1)
+    parts = [_quote(name), _quote(host)]
+    if port != 502 or device_id != 1:
+        parts.append(str(port))
+    if device_id != 1:
+        parts.append(str(device_id))
+    return f"ModbusTarget({','.join(parts)})"
 
 
 def _quote(value: str) -> str:

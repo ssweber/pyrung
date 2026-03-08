@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
-def _validate_port(port: int, *, field_name: str) -> None:
-    if not isinstance(port, int):
-        raise TypeError(f"{field_name} must be int, got {type(port).__name__}")
-    if port < 1 or port > 65535:
-        raise ValueError(f"{field_name} must be in 1..65535")
+from pyrung.click.send_receive import ModbusTarget
 
 
 @dataclass(frozen=True)
@@ -28,39 +23,14 @@ class ModbusServerConfig:
                 raise TypeError(f"{field_name} must be str, got {type(value).__name__}")
             if not value:
                 raise ValueError(f"{field_name} must not be empty")
-        _validate_port(self.port, field_name="port")
+        if not isinstance(self.port, int):
+            raise TypeError(f"port must be int, got {type(self.port).__name__}")
+        if self.port < 1 or self.port > 65535:
+            raise ValueError("port must be in 1..65535")
         if not isinstance(self.max_clients, int):
             raise TypeError(f"max_clients must be int, got {type(self.max_clients).__name__}")
         if self.max_clients < 1 or self.max_clients > 7:
             raise ValueError("max_clients must be in 1..7")
-
-
-@dataclass(frozen=True)
-class ModbusTarget:
-    name: str
-    ip: str
-    port: int = 502
-    device_id: int = 1
-    timeout_ms: int = 1000
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.name, str):
-            raise TypeError(f"name must be str, got {type(self.name).__name__}")
-        if not self.name:
-            raise ValueError("name must not be empty")
-        if not isinstance(self.ip, str):
-            raise TypeError(f"ip must be str, got {type(self.ip).__name__}")
-        if not self.ip:
-            raise ValueError("ip must not be empty")
-        _validate_port(self.port, field_name="port")
-        if not isinstance(self.device_id, int):
-            raise TypeError(f"device_id must be int, got {type(self.device_id).__name__}")
-        if self.device_id < 0 or self.device_id > 255:
-            raise ValueError("device_id must be in 0..255")
-        if not isinstance(self.timeout_ms, int):
-            raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
-        if self.timeout_ms <= 0:
-            raise ValueError("timeout_ms must be > 0")
 
 
 @dataclass(frozen=True)

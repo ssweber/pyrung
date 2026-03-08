@@ -8,7 +8,6 @@ import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
-from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.codegen._constants import (
     _BOARD_LED_TAG,
     _BOARD_NEOPIXEL_B_TAG,
@@ -19,6 +18,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.condition import (
     Condition,
@@ -133,9 +133,7 @@ class CodegenContext:
     _state_key_counter: int = 0
     _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
-    modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(
-        default_factory=dict
-    )
+    modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()

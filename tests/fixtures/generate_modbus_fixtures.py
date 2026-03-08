@@ -6,8 +6,8 @@ import json
 import struct
 from pathlib import Path
 
-from pymodbus.constants import ExcCodes
 from pyclickplc.server import MemoryDataProvider, _ClickDeviceContext
+from pymodbus.constants import ExcCodes
 
 
 def _mbap(tid: int, pdu: bytes, uid: int = 1) -> bytes:

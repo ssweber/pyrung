@@ -1,7 +1,10 @@
-"""CLICK Modbus send/receive DSL instructions.
+"""Modbus TCP send/receive DSL instructions.
 
-These instructions are CLICK-address aware and execute asynchronous Modbus TCP
-requests in a background worker so scan execution remains synchronous.
+These instructions are Click-address aware.  When constructed with a
+``ModbusTarget`` (which carries host/port/device_id), the instruction
+performs live asynchronous Modbus I/O during simulation.  When constructed
+with a plain target-name string, the instruction is inert during simulation
+and exists only for code generation (CircuitPython).
 """
 
 from __future__ import annotations
@@ -9,13 +12,14 @@ from __future__ import annotations
 import asyncio
 import re
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyclickplc import ClickClient
 from pyclickplc.addresses import format_address_display, parse_address
 from pyclickplc.banks import BANKS
 
+from pyrung.core._source import _capture_source
 from pyrung.core.instruction import (
     Instruction,
     resolve_block_range_tags_ctx,
@@ -27,11 +31,53 @@ from pyrung.core.program.context import _require_rung_context
 from pyrung.core.tag import Tag, TagType
 
 if TYPE_CHECKING:
-    from pyrung.core.condition import Condition
     from pyrung.core.context import ScanContext
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pyrung-click-modbus")
 _DEFAULT_TIMEOUT_SECONDS = 1
+
+
+# ---------------------------------------------------------------------------
+# ModbusTarget — connection details for a remote PLC
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModbusTarget:
+    """Connection details for a remote Modbus TCP device."""
+
+    name: str
+    ip: str
+    port: int = 502
+    device_id: int = 1
+    timeout_ms: int = 1000
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str):
+            raise TypeError(f"name must be str, got {type(self.name).__name__}")
+        if not self.name:
+            raise ValueError("name must not be empty")
+        if not isinstance(self.ip, str):
+            raise TypeError(f"ip must be str, got {type(self.ip).__name__}")
+        if not self.ip:
+            raise ValueError("ip must not be empty")
+        if not isinstance(self.port, int):
+            raise TypeError(f"port must be int, got {type(self.port).__name__}")
+        if self.port < 1 or self.port > 65535:
+            raise ValueError("port must be in 1..65535")
+        if not isinstance(self.device_id, int):
+            raise TypeError(f"device_id must be int, got {type(self.device_id).__name__}")
+        if self.device_id < 0 or self.device_id > 255:
+            raise ValueError("device_id must be in 0..255")
+        if not isinstance(self.timeout_ms, int):
+            raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
+        if self.timeout_ms <= 0:
+            raise ValueError("timeout_ms must be > 0")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _is_valid_index(bank: str, index: int) -> bool:
@@ -45,7 +91,7 @@ def _range_end_for_count(bank: str, start: int, count: int) -> int:
     return _addresses_for_count(bank, start, count)[-1]
 
 
-def _addresses_for_count(bank: str, start: int, count: int) -> list[int]:
+def _addresses_for_count(bank: str, start: int, count: int) -> tuple[int, ...]:
     if count <= 0:
         raise ValueError("count must be >= 1")
 
@@ -59,7 +105,7 @@ def _addresses_for_count(bank: str, start: int, count: int) -> list[int]:
             raise ValueError(
                 f"{bank} range overflow: start {start}, count {count} exceeds {cfg.max_addr}"
             )
-        return list(range(start, end + 1))
+        return tuple(range(start, end + 1))
 
     addresses = [start]
     current = start
@@ -72,7 +118,7 @@ def _addresses_for_count(bank: str, start: int, count: int) -> list[int]:
                 f"{bank} range overflow: start {start}, count {count} exceeds valid addresses"
             )
         addresses.append(current)
-    return addresses
+    return tuple(addresses)
 
 
 def _contiguous_runs(addresses: tuple[int, ...]) -> list[tuple[int, int, int]]:
@@ -96,6 +142,16 @@ def _normalize_operand_tags(operand: Tag | BlockRange, ctx: ScanContext) -> list
     if isinstance(operand, Tag):
         return [resolve_tag_ctx(operand, ctx)]
     return resolve_block_range_tags_ctx(operand, ctx)
+
+
+def _normalize_operand_count(operand: Tag | BlockRange, count: int | None) -> int:
+    expected = 1 if isinstance(operand, Tag) else len(tuple(operand.addresses))
+    effective = expected if count is None else count
+    if effective != expected:
+        raise ValueError(
+            f"count mismatch: operand resolves to {expected} tag(s) but count={effective}"
+        )
+    return expected
 
 
 def _status_clear_tags(
@@ -127,6 +183,11 @@ def _validate_status_tags(
         raise TypeError(f"exception_response tag '{exception_response.name}' must be INT or DINT")
 
 
+# ---------------------------------------------------------------------------
+# Async Modbus backend (used only for live simulation)
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class _RequestResult:
     ok: bool
@@ -146,8 +207,8 @@ def _submit_send_request(
     port: int,
     device_id: int,
     bank: str,
-    addresses: list[int],
-    values: list[Any],
+    addresses: tuple[int, ...],
+    values: tuple[Any, ...],
 ) -> Future[_RequestResult]:
     return _EXECUTOR.submit(
         _run_send_request,
@@ -155,8 +216,8 @@ def _submit_send_request(
         port,
         device_id,
         bank,
-        tuple(addresses),
-        tuple(values),
+        addresses,
+        values,
     )
 
 
@@ -276,93 +337,80 @@ def _discard_pending_request(pending: _PendingRequest | None) -> None:
     pending.future.cancel()
 
 
-class _ClickSendInstruction(Instruction):
-    def __init__(
-        self,
-        *,
-        host: str,
-        port: int,
-        remote_start: str,
-        source: Tag | BlockRange,
-        sending: Tag,
-        success: Tag,
-        error: Tag,
-        exception_response: Tag,
-        device_id: int = 1,
-        count: int | None = None,
-        enable_condition: Condition | None = None,
-    ) -> None:
-        _validate_status_tags(
-            busy=sending,
-            success=success,
-            error=error,
-            exception_response=exception_response,
-            busy_name="sending",
-        )
+# ---------------------------------------------------------------------------
+# Instruction classes
+# ---------------------------------------------------------------------------
 
-        bank, start = parse_address(remote_start)
-        self._bank = bank
-        self._start = start
-        self._host = host
-        self._port = port
-        self._source = source
-        self._sending = sending
-        self._success = success
-        self._error = error
-        self._exception_response = exception_response
-        self._device_id = device_id
-        self._count = count
-        self._enable_condition = enable_condition
-        self._pending: _PendingRequest | None = None
+
+@dataclass
+class ModbusSendInstruction(Instruction):
+    """Modbus TCP send (write to remote PLC).
+
+    When ``host`` is set, ``execute()`` performs live asynchronous Modbus I/O.
+    When ``host`` is None, ``execute()`` is a simulation-inert placeholder
+    for code generation.
+    """
+
+    target_name: str
+    bank: str
+    start: int
+    addresses: tuple[int, ...]
+    source: Tag | BlockRange
+    sending: Tag
+    success: Tag
+    error: Tag
+    exception_response: Tag
+    host: str | None = None
+    port: int = 502
+    device_id: int = 1
+    timeout_s: float = 1.0
+    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
 
-    def _clear_status(self, ctx: ScanContext) -> None:
-        ctx.set_tags(
-            _status_clear_tags(self._sending, self._success, self._error, self._exception_response)
-        )
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
-            _discard_pending_request(self._pending)
-            self._pending = None
-            self._clear_status(ctx)
+            if self.host is not None:
+                _discard_pending_request(self._pending)
+                self._pending = None
+            ctx.set_tags(
+                _status_clear_tags(self.sending, self.success, self.error, self.exception_response)
+            )
             return
 
+        # Inert mode — codegen placeholder
+        if self.host is None:
+            return
+
+        # Live Modbus I/O
         if self._pending is None:
-            source_tags = _normalize_operand_tags(self._source, ctx)
-            expected_count = len(source_tags)
-            count = expected_count if self._count is None else self._count
-            if count != expected_count:
-                raise ValueError(
-                    f"send() count mismatch: source has {expected_count} tags but count={count}"
-                )
-
-            addresses = _addresses_for_count(self._bank, self._start, count)
-
+            source_tags = _normalize_operand_tags(self.source, ctx)
             values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
             self._pending = _PendingRequest(
                 future=_submit_send_request(
-                    host=self._host,
-                    port=self._port,
-                    device_id=self._device_id,
-                    bank=self._bank,
-                    addresses=addresses,
-                    values=values,
+                    host=self.host,
+                    port=self.port,
+                    device_id=self.device_id,
+                    bank=self.bank,
+                    addresses=self.addresses,
+                    values=tuple(values),
                 )
             )
             ctx.set_tags(
                 {
-                    self._sending.name: True,
-                    self._success.name: False,
-                    self._error.name: False,
-                    self._exception_response.name: 0,
+                    self.sending.name: True,
+                    self.success.name: False,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
                 }
             )
             return
 
-        ctx.set_tag(self._sending.name, True)
+        ctx.set_tag(self.sending.name, True)
         if not self._pending.future.done():
             return
 
@@ -375,115 +423,96 @@ class _ClickSendInstruction(Instruction):
         if result.ok:
             ctx.set_tags(
                 {
-                    self._sending.name: False,
-                    self._success.name: True,
-                    self._error.name: False,
-                    self._exception_response.name: 0,
+                    self.sending.name: False,
+                    self.success.name: True,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
                 }
             )
         else:
             ctx.set_tags(
                 {
-                    self._sending.name: False,
-                    self._success.name: False,
-                    self._error.name: True,
-                    self._exception_response.name: int(result.exception_code),
+                    self.sending.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
                 }
             )
 
-    def is_inert_when_disabled(self) -> bool:
-        return False
 
+@dataclass
+class ModbusReceiveInstruction(Instruction):
+    """Modbus TCP receive (read from remote PLC).
 
-class _ClickReceiveInstruction(Instruction):
-    def __init__(
-        self,
-        *,
-        host: str,
-        port: int,
-        remote_start: str,
-        dest: Tag | BlockRange,
-        receiving: Tag,
-        success: Tag,
-        error: Tag,
-        exception_response: Tag,
-        device_id: int = 1,
-        count: int | None = None,
-        enable_condition: Condition | None = None,
-    ) -> None:
-        _validate_status_tags(
-            busy=receiving,
-            success=success,
-            error=error,
-            exception_response=exception_response,
-            busy_name="receiving",
-        )
+    When ``host`` is set, ``execute()`` performs live asynchronous Modbus I/O.
+    When ``host`` is None, ``execute()`` is a simulation-inert placeholder
+    for code generation.
+    """
 
-        bank, start = parse_address(remote_start)
-        self._bank = bank
-        self._start = start
-        self._host = host
-        self._port = port
-        self._dest = dest
-        self._receiving = receiving
-        self._success = success
-        self._error = error
-        self._exception_response = exception_response
-        self._device_id = device_id
-        self._count = count
-        self._enable_condition = enable_condition
-        self._pending: _PendingRequest | None = None
+    target_name: str
+    bank: str
+    start: int
+    addresses: tuple[int, ...]
+    dest: Tag | BlockRange
+    receiving: Tag
+    success: Tag
+    error: Tag
+    exception_response: Tag
+    host: str | None = None
+    port: int = 502
+    device_id: int = 1
+    timeout_s: float = 1.0
+    _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
 
     def always_execute(self) -> bool:
         return True
 
-    def _clear_status(self, ctx: ScanContext) -> None:
-        ctx.set_tags(
-            _status_clear_tags(
-                self._receiving, self._success, self._error, self._exception_response
-            )
-        )
+    def is_inert_when_disabled(self) -> bool:
+        return False
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
-            _discard_pending_request(self._pending)
-            self._pending = None
-            self._clear_status(ctx)
+            if self.host is not None:
+                _discard_pending_request(self._pending)
+                self._pending = None
+            ctx.set_tags(
+                _status_clear_tags(
+                    self.receiving, self.success, self.error, self.exception_response
+                )
+            )
             return
 
-        if self._pending is None:
-            dest_tags = _normalize_operand_tags(self._dest, ctx)
-            expected_count = len(dest_tags)
-            count = expected_count if self._count is None else self._count
-            if count != expected_count:
-                raise ValueError(
-                    f"receive() count mismatch: destination has {expected_count} tags but count={count}"
-                )
+        # Inert mode — codegen placeholder
+        if self.host is None:
+            return
 
-            end = _range_end_for_count(self._bank, self._start, count)
+        # Live Modbus I/O
+        if self._pending is None:
+            dest_tags = _normalize_operand_tags(self.dest, ctx)
+            end = self.addresses[-1]
 
             self._pending = _PendingRequest(
                 future=_submit_receive_request(
-                    host=self._host,
-                    port=self._port,
-                    device_id=self._device_id,
-                    bank=self._bank,
-                    start=self._start,
+                    host=self.host,
+                    port=self.port,
+                    device_id=self.device_id,
+                    bank=self.bank,
+                    start=self.start,
                     end=end,
                 ),
                 target_tags=dest_tags,
             )
             ctx.set_tags(
                 {
-                    self._receiving.name: True,
-                    self._success.name: False,
-                    self._error.name: False,
-                    self._exception_response.name: 0,
+                    self.receiving.name: True,
+                    self.success.name: False,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
                 }
             )
             return
 
-        ctx.set_tag(self._receiving.name, True)
+        ctx.set_tag(self.receiving.name, True)
         if not self._pending.future.done():
             return
 
@@ -497,10 +526,10 @@ class _ClickReceiveInstruction(Instruction):
         if not result.ok:
             ctx.set_tags(
                 {
-                    self._receiving.name: False,
-                    self._success.name: False,
-                    self._error.name: True,
-                    self._exception_response.name: int(result.exception_code),
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
                 }
             )
             return
@@ -508,10 +537,10 @@ class _ClickReceiveInstruction(Instruction):
         if len(result.values) != len(target_tags):
             ctx.set_tags(
                 {
-                    self._receiving.name: False,
-                    self._success.name: False,
-                    self._error.name: True,
-                    self._exception_response.name: 0,
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: 0,
                 }
             )
             return
@@ -520,80 +549,154 @@ class _ClickReceiveInstruction(Instruction):
             tag.name: _store_copy_value_to_tag_type(value, tag)
             for tag, value in zip(target_tags, result.values, strict=True)
         }
-        updates[self._receiving.name] = False
-        updates[self._success.name] = True
-        updates[self._error.name] = False
-        updates[self._exception_response.name] = 0
+        updates[self.receiving.name] = False
+        updates[self.success.name] = True
+        updates[self.error.name] = False
+        updates[self.exception_response.name] = 0
         ctx.set_tags(updates)
 
-    def is_inert_when_disabled(self) -> bool:
-        return False
+
+# ---------------------------------------------------------------------------
+# Public DSL functions
+# ---------------------------------------------------------------------------
 
 
 def send(
     *,
-    host: str,
-    port: int,
+    target: str | ModbusTarget,
     remote_start: str,
     source: Tag | BlockRange,
     sending: Tag,
     success: Tag,
     error: Tag,
     exception_response: Tag,
-    device_id: int = 1,
     count: int | None = None,
 ) -> None:
-    """CLICK send instruction (Modbus TCP client write)."""
-    ctx = _require_rung_context("send")
-    enable_condition = ctx._rung._get_combined_condition()
-    ctx._rung.add_instruction(
-        _ClickSendInstruction(
-            host=host,
-            port=port,
-            remote_start=remote_start,
-            source=source,
-            sending=sending,
-            success=success,
-            error=error,
-            exception_response=exception_response,
-            device_id=device_id,
-            count=count,
-            enable_condition=enable_condition,
-        )
+    """Modbus TCP send instruction (write local values to a remote PLC).
+
+    ``target`` may be a :class:`ModbusTarget` (live simulation) or a plain
+    string name (codegen placeholder, resolved at code-generation time via
+    ``ModbusClientConfig``).
+    """
+    _validate_status_tags(
+        busy=sending,
+        success=success,
+        error=error,
+        exception_response=exception_response,
+        busy_name="sending",
     )
+    if isinstance(target, ModbusTarget):
+        target_name = target.name
+        host: str | None = target.ip
+        port = target.port
+        device_id = target.device_id
+        timeout_s = target.timeout_ms / 1000.0
+    elif isinstance(target, str):
+        if not target:
+            raise TypeError("target must be a non-empty string or ModbusTarget")
+        target_name = target
+        host = None
+        port = 502
+        device_id = 1
+        timeout_s = 1.0
+    else:
+        raise TypeError(f"target must be str or ModbusTarget, got {type(target).__name__}")
+
+    if not isinstance(source, (Tag, BlockRange)):
+        raise TypeError(f"source must be Tag or BlockRange, got {type(source).__name__}")
+
+    bank, start_addr = parse_address(remote_start)
+    effective_count = _normalize_operand_count(source, count)
+    addresses = _addresses_for_count(bank, start_addr, effective_count)
+
+    ctx = _require_rung_context("send")
+    source_file, source_line = _capture_source(depth=2)
+    instr = ModbusSendInstruction(
+        target_name=target_name,
+        bank=bank,
+        start=start_addr,
+        addresses=addresses,
+        source=source,
+        sending=sending,
+        success=success,
+        error=error,
+        exception_response=exception_response,
+        host=host,
+        port=port,
+        device_id=device_id,
+        timeout_s=timeout_s,
+    )
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
 def receive(
     *,
-    host: str,
-    port: int,
+    target: str | ModbusTarget,
     remote_start: str,
     dest: Tag | BlockRange,
     receiving: Tag,
     success: Tag,
     error: Tag,
     exception_response: Tag,
-    device_id: int = 1,
     count: int | None = None,
 ) -> None:
-    """CLICK receive instruction (Modbus TCP client read)."""
-    ctx = _require_rung_context("receive")
-    enable_condition = ctx._rung._get_combined_condition()
-    ctx._rung.add_instruction(
-        _ClickReceiveInstruction(
-            host=host,
-            port=port,
-            remote_start=remote_start,
-            dest=dest,
-            receiving=receiving,
-            success=success,
-            error=error,
-            exception_response=exception_response,
-            device_id=device_id,
-            count=count,
-            enable_condition=enable_condition,
-        )
+    """Modbus TCP receive instruction (read remote PLC values into local tags).
+
+    ``target`` may be a :class:`ModbusTarget` (live simulation) or a plain
+    string name (codegen placeholder, resolved at code-generation time via
+    ``ModbusClientConfig``).
+    """
+    _validate_status_tags(
+        busy=receiving,
+        success=success,
+        error=error,
+        exception_response=exception_response,
+        busy_name="receiving",
     )
+    if isinstance(target, ModbusTarget):
+        target_name = target.name
+        host: str | None = target.ip
+        port = target.port
+        device_id = target.device_id
+        timeout_s = target.timeout_ms / 1000.0
+    elif isinstance(target, str):
+        if not target:
+            raise TypeError("target must be a non-empty string or ModbusTarget")
+        target_name = target
+        host = None
+        port = 502
+        device_id = 1
+        timeout_s = 1.0
+    else:
+        raise TypeError(f"target must be str or ModbusTarget, got {type(target).__name__}")
+
+    if not isinstance(dest, (Tag, BlockRange)):
+        raise TypeError(f"dest must be Tag or BlockRange, got {type(dest).__name__}")
+
+    bank, start_addr = parse_address(remote_start)
+    effective_count = _normalize_operand_count(dest, count)
+    addresses = _addresses_for_count(bank, start_addr, effective_count)
+
+    ctx = _require_rung_context("receive")
+    source_file, source_line = _capture_source(depth=2)
+    instr = ModbusReceiveInstruction(
+        target_name=target_name,
+        bank=bank,
+        start=start_addr,
+        addresses=addresses,
+        dest=dest,
+        receiving=receiving,
+        success=success,
+        error=error,
+        exception_response=exception_response,
+        host=host,
+        port=port,
+        device_id=device_id,
+        timeout_s=timeout_s,
+    )
+    instr.source_file, instr.source_line = source_file, source_line
+    ctx._rung.add_instruction(instr)
 
 
-__all__ = ["send", "receive"]
+__all__ = ["ModbusReceiveInstruction", "ModbusSendInstruction", "ModbusTarget", "receive", "send"]

@@ -11,7 +11,19 @@ from dataclasses import dataclass
 import pytest
 from pyclickplc.server import ClickServer
 
-from pyrung.click import ClickDataProvider, TagMap, c, dd, df, dh, ds, receive, send, txt
+from pyrung.click import (
+    ClickDataProvider,
+    ModbusTarget,
+    TagMap,
+    c,
+    dd,
+    df,
+    dh,
+    ds,
+    receive,
+    send,
+    txt,
+)
 from pyrung.core import (
     Block,
     Bool,
@@ -121,11 +133,12 @@ def _build_node_a(port_b: int) -> _NodeConfig:
         "recv_int": _status("A_RecvInt", busy_kind="Receiving"),
     }
 
+    node_b = ModbusTarget("node_b", "127.0.0.1", port=port_b)
+
     with Program() as logic:
         with Rung(enable):
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="C101",
                 source=a_bool_src.select(1, 3),
                 sending=statuses["send_bool"].busy,
@@ -134,8 +147,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_bool"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="DS101",
                 source=a_int_src.select(1, 2),
                 sending=statuses["send_int"].busy,
@@ -144,8 +156,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_int"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="DD101",
                 source=a_dint_src,
                 sending=statuses["send_dint"].busy,
@@ -154,8 +165,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_dint"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="DF101",
                 source=a_real_src,
                 sending=statuses["send_real"].busy,
@@ -164,8 +174,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_real"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="DH101",
                 source=a_word_src,
                 sending=statuses["send_word"].busy,
@@ -174,8 +183,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_word"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="TXT101",
                 source=a_char_src,
                 sending=statuses["send_char"].busy,
@@ -184,8 +192,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["send_char"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="C201",
                 dest=a_bool_rx.select(1, 2),
                 receiving=statuses["recv_bool"].busy,
@@ -194,8 +201,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
                 exception_response=statuses["recv_bool"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_b,
+                target=node_b,
                 remote_start="DS201",
                 dest=a_int_rx.select(1, 2),
                 receiving=statuses["recv_int"].busy,
@@ -267,11 +273,12 @@ def _build_node_b(port_a: int) -> _NodeConfig:
         "send_int": _status("B_SendInt", busy_kind="Sending"),
     }
 
+    node_a = ModbusTarget("node_a", "127.0.0.1", port=port_a)
+
     with Program() as logic:
         with Rung(enable):
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="C1",
                 dest=b_bool_rx.select(1, 3),
                 receiving=statuses["recv_bool"].busy,
@@ -280,8 +287,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_bool"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="DS1",
                 dest=b_int_rx.select(1, 2),
                 receiving=statuses["recv_int"].busy,
@@ -290,8 +296,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_int"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="DD1",
                 dest=b_dint_rx,
                 receiving=statuses["recv_dint"].busy,
@@ -300,8 +305,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_dint"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="DF1",
                 dest=b_real_rx,
                 receiving=statuses["recv_real"].busy,
@@ -310,8 +314,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_real"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="DH1",
                 dest=b_word_rx,
                 receiving=statuses["recv_word"].busy,
@@ -320,8 +323,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_word"].exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="TXT1",
                 dest=b_char_rx,
                 receiving=statuses["recv_char"].busy,
@@ -330,8 +332,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["recv_char"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="C301",
                 source=b_bool_src.select(1, 2),
                 sending=statuses["send_bool"].busy,
@@ -340,8 +341,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
                 exception_response=statuses["send_bool"].exception,
             )
             send(
-                host="127.0.0.1",
-                port=port_a,
+                target=node_a,
                 remote_start="DS301",
                 source=b_int_src.select(1, 2),
                 sending=statuses["send_int"].busy,
@@ -409,11 +409,12 @@ def _build_outage_node_a(port_b: int) -> _OutageNodeAConfig:
     send_value = 314
     recv_sentinel = -999
 
+    target_b = ModbusTarget("node_b", "127.0.0.1", port=port_b)
+
     with Program() as logic:
         with Rung(enable):
             send(
-                host="127.0.0.1",
-                port=port_b,
+                target=target_b,
                 remote_start="DS101",
                 source=send_source,
                 sending=send_status.busy,
@@ -422,8 +423,7 @@ def _build_outage_node_a(port_b: int) -> _OutageNodeAConfig:
                 exception_response=send_status.exception,
             )
             receive(
-                host="127.0.0.1",
-                port=port_b,
+                target=target_b,
                 remote_start="DS201",
                 dest=recv_dest,
                 receiving=recv_status.busy,

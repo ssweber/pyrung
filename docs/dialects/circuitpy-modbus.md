@@ -60,11 +60,8 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 
 ```python
 from pyrung import Bool, Int, Block, Program, Rung, TagType
-from pyrung.circuitpy import (
-    ModbusClientConfig, ModbusTarget, P1AM,
-    generate_circuitpy, send, receive,
-)
-from pyrung.click import TagMap
+from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
+from pyrung.click import ModbusTarget, TagMap, send, receive
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")

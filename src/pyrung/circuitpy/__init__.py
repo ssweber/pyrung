@@ -33,7 +33,6 @@ from pyrung.circuitpy.modbus import (
     ModbusTarget,
 )
 from pyrung.circuitpy.p1am import RunStopConfig, board
-from pyrung.circuitpy.send_receive import receive, send
 from pyrung.circuitpy.validation import (
     CircuitPyFinding,
     CircuitPyValidationReport,
@@ -70,7 +69,5 @@ __all__ = [
     "ValidationMode",
     "board",
     "generate_circuitpy",
-    "receive",
-    "send",
     "validate_circuitpy_program",
 ]

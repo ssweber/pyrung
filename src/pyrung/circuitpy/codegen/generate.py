@@ -5,7 +5,6 @@ from __future__ import annotations
 import math as _math
 from typing import Literal
 
-from pyrung.click.tag_map import TagMap
 from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render import _render_code
@@ -13,6 +12,7 @@ from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import validate_circuitpy_program
+from pyrung.click.tag_map import TagMap
 from pyrung.core.memory_block import Block
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
@@ -67,9 +67,7 @@ def generate_circuitpy(
     if tag_map is not None and not isinstance(tag_map, TagMap):
         raise TypeError(f"tag_map must be TagMap or None, got {type(tag_map).__name__}")
     if mapped_tag_scope not in {"referenced_only", "all_mapped"}:
-        raise ValueError(
-            "mapped_tag_scope must be 'referenced_only' or 'all_mapped'"
-        )
+        raise ValueError("mapped_tag_scope must be 'referenced_only' or 'all_mapped'")
     if (modbus_server is not None or modbus_client is not None) and tag_map is None:
         raise ValueError("tag_map is required when modbus_server or modbus_client is enabled")
 

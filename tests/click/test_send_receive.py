@@ -6,7 +6,11 @@ from concurrent.futures import Future
 
 import pytest
 
+from pyrung.click.send_receive import ModbusTarget
 from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType
+
+_TARGET = ModbusTarget("test", "127.0.0.1", port=502, device_id=1)
+_TARGET_17 = ModbusTarget("test17", "127.0.0.1", port=502, device_id=17)
 
 
 def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPatch):
@@ -31,15 +35,13 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
     with Program() as logic:
         with Rung(Enable):
             click_send_receive.send(
-                host="127.0.0.1",
-                port=502,
+                target=_TARGET_17,
                 remote_start="DS1",
                 source=Source,
                 sending=Sending,
                 success=Success,
                 error=Error,
                 exception_response=ExCode,
-                device_id=17,
             )
 
     runner = PLCRunner(logic=logic)
@@ -99,15 +101,13 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
     with Program() as logic:
         with Rung(Enable):
             click_send_receive.send(
-                host="127.0.0.1",
-                port=502,
+                target=_TARGET,
                 remote_start="DS1",
                 source=Source,
                 sending=Sending,
                 success=Success,
                 error=Error,
                 exception_response=ExCode,
-                device_id=1,
             )
 
     runner = PLCRunner(logic=logic)
@@ -154,15 +154,13 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
     with Program() as logic:
         with Rung(Enable):
             click_send_receive.receive(
-                host="127.0.0.1",
-                port=502,
+                target=ModbusTarget("test3", "127.0.0.1", port=502, device_id=3),
                 remote_start="DS1",
                 dest=Local.select(1, 2),
                 receiving=Receiving,
                 success=Success,
                 error=Error,
                 exception_response=ExCode,
-                device_id=3,
             )
 
     runner = PLCRunner(logic=logic)
@@ -203,15 +201,13 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
     with Program() as logic:
         with Rung(Enable):
             click_send_receive.receive(
-                host="127.0.0.1",
-                port=502,
+                target=_TARGET,
                 remote_start="DS1",
                 dest=Dest,
                 receiving=Receiving,
                 success=Success,
                 error=Error,
                 exception_response=ExCode,
-                device_id=1,
             )
 
     runner = PLCRunner(logic=logic)
@@ -238,25 +234,19 @@ def test_send_count_mismatch_raises():
     Error = Bool("Error")
     ExCode = Int("ExCode")
 
-    with Program() as logic:
-        with Rung(Enable):
-            click_send_receive.send(
-                host="127.0.0.1",
-                port=502,
-                remote_start="DS1",
-                source=Source,
-                sending=Sending,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-                device_id=1,
-                count=2,
-            )
-
-    runner = PLCRunner(logic=logic)
-    runner.patch({"Enable": True, "Source": 1})
     with pytest.raises(ValueError, match="count mismatch"):
-        runner.step()
+        with Program():
+            with Rung(Enable):
+                click_send_receive.send(
+                    target=_TARGET,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                    count=2,
+                )
 
 
 def test_receive_count_mismatch_raises():
@@ -269,25 +259,19 @@ def test_receive_count_mismatch_raises():
     Error = Bool("Error")
     ExCode = Int("ExCode")
 
-    with Program() as logic:
-        with Rung(Enable):
-            click_send_receive.receive(
-                host="127.0.0.1",
-                port=502,
-                remote_start="DS1",
-                dest=Dest,
-                receiving=Receiving,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-                device_id=1,
-                count=2,
-            )
-
-    runner = PLCRunner(logic=logic)
-    runner.patch({"Enable": True})
     with pytest.raises(ValueError, match="count mismatch"):
-        runner.step()
+        with Program():
+            with Rung(Enable):
+                click_send_receive.receive(
+                    target=_TARGET,
+                    remote_start="DS1",
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                    count=2,
+                )
 
 
 def test_receive_validates_status_tag_types():
@@ -304,15 +288,13 @@ def test_receive_validates_status_tag_types():
         with Rung(Enable):
             with pytest.raises(TypeError, match="must be BOOL"):
                 click_send_receive.receive(
-                    host="127.0.0.1",
-                    port=502,
+                    target=_TARGET,
                     remote_start="DS1",
                     dest=Dest,
                     receiving=BadReceiving,
                     success=Success,
                     error=Error,
                     exception_response=ExCode,
-                    device_id=1,
                 )
 
 
@@ -330,15 +312,13 @@ def test_receive_validates_exception_response_type():
         with Rung(Enable):
             with pytest.raises(TypeError, match="must be INT or DINT"):
                 click_send_receive.receive(
-                    host="127.0.0.1",
-                    port=502,
+                    target=_TARGET,
                     remote_start="DS1",
                     dest=Dest,
                     receiving=Receiving,
                     success=Success,
                     error=Error,
                     exception_response=BadExCode,
-                    device_id=1,
                 )
 
 
@@ -371,7 +351,7 @@ def test_run_send_request_sparse_writes_are_split_by_gap(monkeypatch: pytest.Mon
         502,
         1,
         "X",
-        tuple(addresses),
+        addresses,
         values,
     )
 

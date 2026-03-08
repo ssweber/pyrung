@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
+
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
     _DINT_MIN,
@@ -29,9 +31,9 @@ from pyrung.circuitpy.codegen.context import (
     ModbusClientJobSpec,
     ModbusClientSymbolSpec,
 )
-from pyrung.circuitpy.send_receive import (
-    CircuitPyReceiveInstruction,
-    CircuitPySendInstruction,
+from pyrung.click.send_receive import (
+    ModbusReceiveInstruction,
+    ModbusSendInstruction,
 )
 from pyrung.core.condition import (
     AllCondition,
@@ -121,7 +123,6 @@ from pyrung.core.memory_block import (
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.time_mode import TimeUnit
-from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
 
 def _contact_tag_name(tag: Tag | ImmediateRef) -> str:
@@ -339,9 +340,9 @@ def compile_instruction(
         return _compile_return_instruction(enabled_expr, indent)
     if isinstance(instr, ForLoopInstruction):
         return _compile_for_loop_instruction(instr, enabled_expr, ctx, indent)
-    if isinstance(instr, CircuitPySendInstruction):
+    if isinstance(instr, ModbusSendInstruction):
         return _compile_modbus_send_instruction(instr, enabled_expr, ctx, indent)
-    if isinstance(instr, CircuitPyReceiveInstruction):
+    if isinstance(instr, ModbusReceiveInstruction):
         return _compile_modbus_receive_instruction(instr, enabled_expr, ctx, indent)
 
     loc = _source_location(instr)
@@ -371,7 +372,7 @@ def _modbus_client_operand_tags(operand: Tag | BlockRange) -> tuple[Tag, ...]:
 
 
 def _modbus_client_spec_for_instruction(
-    instr: CircuitPySendInstruction | CircuitPyReceiveInstruction,
+    instr: ModbusSendInstruction | ModbusReceiveInstruction,
     ctx: CodegenContext,
 ) -> ModbusClientJobSpec:
     existing = ctx.modbus_client_specs_by_instruction.get(id(instr))
@@ -383,30 +384,46 @@ def _modbus_client_spec_for_instruction(
         )
 
     targets = {target.name: target for target in ctx.modbus_client.targets}
-    if instr.target not in targets:
-        raise ValueError(f"Unknown Modbus client target: {instr.target!r}")
+    if instr.target_name not in targets:
+        raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
 
     mapping = MODBUS_MAPPINGS[instr.bank]
     modbus_start, _ = plc_to_modbus(instr.bank, instr.addresses[0])
     modbus_last, modbus_last_width = plc_to_modbus(instr.bank, instr.addresses[-1])
     modbus_quantity = (modbus_last + modbus_last_width) - modbus_start
     item_tags = _modbus_client_operand_tags(
-        instr.source if isinstance(instr, CircuitPySendInstruction) else instr.dest
+        instr.source if isinstance(instr, ModbusSendInstruction) else instr.dest
     )
     item_specs = tuple(_modbus_client_symbol_spec(tag, ctx) for tag in item_tags)
-    if isinstance(instr, CircuitPySendInstruction):
-        function_code = 5 if mapping.is_coil and len(instr.addresses) == 1 else 15 if mapping.is_coil else 6 if modbus_quantity == 1 else 16
+    if isinstance(instr, ModbusSendInstruction):
+        function_code = (
+            5
+            if mapping.is_coil and len(instr.addresses) == 1
+            else 15
+            if mapping.is_coil
+            else 6
+            if modbus_quantity == 1
+            else 16
+        )
         busy_tag = instr.sending
     else:
-        function_code = 2 if mapping.is_coil and 2 in mapping.function_codes else 1 if mapping.is_coil else 4 if 4 in mapping.function_codes else 3
+        function_code = (
+            2
+            if mapping.is_coil and 2 in mapping.function_codes
+            else 1
+            if mapping.is_coil
+            else 4
+            if 4 in mapping.function_codes
+            else 3
+        )
         busy_tag = instr.receiving
         ctx.mark_helper("_store_copy_value_to_type")
 
     state_key = ctx.state_key_for(instr)
     spec = ModbusClientJobSpec(
         var_name=f"_mb_client_{state_key}",
-        kind="send" if isinstance(instr, CircuitPySendInstruction) else "receive",
-        target_name=instr.target,
+        kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
+        target_name=instr.target_name,
         bank=instr.bank,
         modbus_start=modbus_start,
         modbus_quantity=modbus_quantity,
@@ -424,7 +441,7 @@ def _modbus_client_spec_for_instruction(
 
 
 def _compile_modbus_send_instruction(
-    instr: CircuitPySendInstruction,
+    instr: ModbusSendInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
@@ -432,11 +449,11 @@ def _compile_modbus_send_instruction(
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, spec.var_name)
-    return [f"{' ' * indent}{spec.var_name}[\"enabled\"] = bool({enabled_expr})"]
+    return [f'{" " * indent}{spec.var_name}["enabled"] = bool({enabled_expr})']
 
 
 def _compile_modbus_receive_instruction(
-    instr: CircuitPyReceiveInstruction,
+    instr: ModbusReceiveInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
@@ -444,7 +461,7 @@ def _compile_modbus_receive_instruction(
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, spec.var_name)
-    return [f"{' ' * indent}{spec.var_name}[\"enabled\"] = bool({enabled_expr})"]
+    return [f'{" " * indent}{spec.var_name}["enabled"] = bool({enabled_expr})']
 
 
 def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int = 0) -> list[str]:

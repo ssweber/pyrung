@@ -9,6 +9,7 @@ import pytest
 
 from pyrung.click import (
     LadderExportError,
+    ModbusTarget,
     TagMap,
     c,
     ct,
@@ -653,28 +654,24 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
             ).reset(DrumReset).jump(DrumJump, step=DrumStep).jog(DrumJog)
         with Rung(Enable):
             send(
-                host="127.0.0.1",
-                port=502,
+                target=ModbusTarget("plc1", "127.0.0.1", port=502, device_id=3),
                 remote_start="DS1",
                 source=SendSource,
                 sending=SendBusy,
                 success=SendSuccess,
                 error=SendError,
                 exception_response=SendEx,
-                device_id=3,
                 count=1,
             )
         with Rung(Enable):
             receive(
-                host="127.0.0.1",
-                port=502,
+                target=ModbusTarget("plc2", "127.0.0.1", port=502, device_id=4),
                 remote_start="DS2",
                 dest=RecvDest,
                 receiving=RecvBusy,
                 success=RecvSuccess,
                 error=RecvError,
                 exception_response=RecvEx,
-                device_id=4,
                 count=1,
             )
 
@@ -745,8 +742,8 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         ".reset()",
         ".jump(DS10)",
         ".jog()",
-        'send("127.0.0.1",502,"DS1",DS20,C3,C4,C5,DS21,3,1)',
-        'receive("127.0.0.1",502,"DS2",DS22,C6,C7,C8,DS23,4,1)',
+        'send(ModbusTarget("plc1","127.0.0.1",502,3),"DS1",DS20,C3,C4,C5,DS21,1)',
+        'receive(ModbusTarget("plc2","127.0.0.1",502,4),"DS2",DS22,C6,C7,C8,DS23,1)',
     ]
 
     assert ".clock()" in tokens

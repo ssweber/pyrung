@@ -6,18 +6,14 @@ import json
 import struct
 from pathlib import Path
 
-import pytest
-import pyrung.circuitpy.send_receive as circuitpy_send_receive
-
 from pyrung import Block, Bool, Int, Program, Rung, TagType
 from pyrung.circuitpy import (
+    P1AM,
     ModbusClientConfig,
     ModbusServerConfig,
-    ModbusTarget,
-    P1AM,
     generate_circuitpy,
 )
-from pyrung.click import TagMap, c, ds, x, y
+from pyrung.click import ModbusTarget, TagMap, c, ds, receive, send, x, y
 from tests.circuitpy.test_codegen import _run_single_scan_source
 
 
@@ -396,7 +392,7 @@ def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypat
 
     with Program(strict=False) as prog:
         with Rung(enable):
-            circuitpy_send_receive.send(
+            send(
                 target="peer",
                 remote_start="DS1",
                 source=source,
@@ -465,7 +461,9 @@ def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypat
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
     )
     job_name = next(
-        name for name, value in namespace.items() if name.startswith("_mb_client_i") and isinstance(value, dict)
+        name
+        for name, value in namespace.items()
+        if name.startswith("_mb_client_i") and isinstance(value, dict)
     )
     job = namespace[job_name]
     assert isinstance(job, dict)
@@ -501,7 +499,7 @@ def test_modbus_client_connect_would_block_keeps_request_in_flight(monkeypatch):
 
     with Program(strict=False) as prog:
         with Rung(enable):
-            circuitpy_send_receive.send(
+            send(
                 target="peer",
                 remote_start="DS1",
                 source=source,
@@ -559,7 +557,9 @@ def test_modbus_client_connect_would_block_keeps_request_in_flight(monkeypatch):
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
     )
     job_name = next(
-        name for name, value in namespace.items() if name.startswith("_mb_client_i") and isinstance(value, dict)
+        name
+        for name, value in namespace.items()
+        if name.startswith("_mb_client_i") and isinstance(value, dict)
     )
     job = namespace[job_name]
     assert isinstance(job, dict)
@@ -583,7 +583,7 @@ def test_modbus_client_receive_codegen_applies_response(monkeypatch):
 
     with Program(strict=False) as prog:
         with Rung(enable):
-            circuitpy_send_receive.receive(
+            receive(
                 target="peer",
                 remote_start="DS1",
                 dest=dest,
@@ -648,7 +648,9 @@ def test_modbus_client_receive_codegen_applies_response(monkeypatch):
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
     )
     job_name = next(
-        name for name, value in namespace.items() if name.startswith("_mb_client_i") and isinstance(value, dict)
+        name
+        for name, value in namespace.items()
+        if name.startswith("_mb_client_i") and isinstance(value, dict)
     )
     job = namespace[job_name]
     assert isinstance(job, dict)
