@@ -6,7 +6,7 @@ import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from pyrung.core.condition import (
     AllCondition,
@@ -67,7 +67,7 @@ from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
-    from pyrung.click.tag_map import TagMap
+    from pyrung.click.tag_map import TagMap, _BlockEntry
     from pyrung.core.program import Program
 
 _CONDITION_COLS = 31
@@ -1705,16 +1705,15 @@ class _LadderExporter:
                             source=source,
                         )
                 compact = _compact_contiguous_range(addresses)
-                if compact is None:
-                    self._raise_issue(
-                        path=path,
-                        message=(
-                            "Immediate-wrapped coil ranges must map to contiguous "
-                            "addresses for Click export."
-                        ),
-                        source=source,
-                    )
-                assert compact is not None
+                compact = self._require_compact_range(
+                    compact,
+                    path=path,
+                    source=source,
+                    message=(
+                        "Immediate-wrapped coil ranges must map to contiguous "
+                        "addresses for Click export."
+                    ),
+                )
                 return self._fn("immediate", compact)
 
             self._raise_issue(
@@ -1870,14 +1869,7 @@ class _LadderExporter:
         return f"[{','.join(addresses)}]"
 
     def _render_indirect_ref(self, indirect: IndirectRef, *, path: str, source: Any) -> str:
-        entry = self._tag_map.block_entry_by_name(indirect.block.name)
-        if entry is None:
-            self._raise_issue(
-                path=path,
-                message=f"Indirect block {indirect.block.name!r} is not mapped in TagMap.",
-                source=source,
-            )
-        assert entry is not None
+        entry = self._require_block_entry(indirect.block.name, path=path, source=source)
 
         try:
             offset = self._tag_map.offset_for(entry.logical)
@@ -1893,20 +1885,42 @@ class _LadderExporter:
 
         sample_logical = entry.logical_addresses[0]
         hardware_addr = self._tag_map.resolve(entry.logical, sample_logical)
-        bank_match = re.match(r"([A-Za-z]+)", hardware_addr)
-        if bank_match is None:
+        parsed_hardware = _parse_display_address(hardware_addr)
+        if not isinstance(parsed_hardware, tuple):
             self._raise_issue(
                 path=path,
                 message=f"Unable to parse hardware bank from {hardware_addr!r}.",
                 source=source,
             )
-        assert bank_match is not None
-        bank = bank_match.group(1)
+        parsed_address = cast(tuple[str, int], parsed_hardware)
+        bank, _ = parsed_address
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
         if offset == 0:
             return f"{bank}[{pointer}]"
         sign = "+" if offset > 0 else "-"
         return f"{bank}[{pointer}{sign}{abs(offset)}]"
+
+    def _require_block_entry(self, block_name: str, *, path: str, source: Any) -> _BlockEntry:
+        entry: _BlockEntry | None = self._tag_map.block_entry_by_name(block_name)
+        if entry is None:
+            self._raise_issue(
+                path=path,
+                message=f"Indirect block {block_name!r} is not mapped in TagMap.",
+                source=source,
+            )
+        return cast("_BlockEntry", entry)
+
+    def _require_compact_range(
+        self,
+        compact: str | None,
+        *,
+        path: str,
+        source: Any,
+        message: str,
+    ) -> str:
+        if not isinstance(compact, str):
+            self._raise_issue(path=path, message=message, source=source)
+        return cast(str, compact)
 
     def _require_tag(self, value: Any, *, path: str, source: Any, message: str) -> Tag:
         if not isinstance(value, Tag):

@@ -6,8 +6,6 @@ This tests the DSL syntax:
                 out(target)
 """
 
-from typing import Any, cast
-
 import pytest
 
 from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Real, SystemState, TagType
@@ -1000,12 +998,11 @@ class TestCopyAndMathReferenceExamples:
 
         Enable = Bool("Enable")
         Result = Int("Result")
-        calc_fn = cast(Any, calc)
 
         with Program():
             with pytest.raises(TypeError):
                 with Rung(Enable):
-                    calc_fn(1 + 2, Result, mode="decimal")
+                    calc(1 + 2, Result, mode="decimal")  # type: ignore[unknown-argument]
 
 
 class TestClickPrebuiltProgramIntegration:

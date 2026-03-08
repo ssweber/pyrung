@@ -5,7 +5,6 @@ They return a new state, never mutating the input.
 """
 
 import struct
-from typing import Any, cast
 
 import pytest
 
@@ -1344,10 +1343,9 @@ class TestCalcInstruction:
 
         MaskA = Word("MaskA")
         Result = Word("Result")
-        calc_ctor = cast(Any, CalcInstruction)
 
         with pytest.raises(TypeError):
-            calc_ctor(MaskA + 1, Result, mode="hex")
+            CalcInstruction(MaskA + 1, Result, mode="hex")  # type: ignore[unknown-argument]
 
     def test_math_literal_expression(self):
         """MATH works with literal values."""
