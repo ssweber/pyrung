@@ -1,0 +1,37 @@
+[
+  {
+    "name": "read_c1",
+    "request_hex": "000100000006010140000001",
+    "response_hex": "00010000000401010101"
+  },
+  {
+    "name": "read_ds1",
+    "request_hex": "000200000006010300000001",
+    "response_hex": "0002000000050103020007"
+  },
+  {
+    "name": "read_valid_unmapped_ds2",
+    "request_hex": "000300000006010300010001",
+    "response_hex": "0003000000050103020000"
+  },
+  {
+    "name": "write_c1_false",
+    "request_hex": "000400000006010540000000",
+    "response_hex": "000400000006010540000000"
+  },
+  {
+    "name": "write_ds1_42",
+    "request_hex": "00050000000601060000002a",
+    "response_hex": "00050000000601060000002a"
+  },
+  {
+    "name": "write_x1_illegal",
+    "request_hex": "00060000000601050000ff00",
+    "response_hex": "000600000003018502"
+  },
+  {
+    "name": "read_yd0",
+    "request_hex": "0007000000060103e2000001",
+    "response_hex": "0007000000050103021234"
+  }
+]

@@ -36,6 +36,13 @@ from pyrung.circuitpy.codegen._util import (
 )
 from pyrung.circuitpy.codegen.compile import _load_cast_expr, compile_rung
 from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.render_modbus import (
+    _render_ethernet_setup,
+    _render_modbus_accessors,
+    _render_modbus_client,
+    _render_modbus_protocol,
+    _render_modbus_server,
+)
 
 
 def _tag_is_input_endpoint(ctx: CodegenContext, tag_name: str) -> bool:
@@ -91,7 +98,13 @@ def _render_code(ctx: CodegenContext) -> str:
     io_lines = _render_io_helpers(ctx)
     helper_lines = _render_helper_section(ctx)
     function_source_lines = _render_embedded_functions(ctx)
-    needs_digitalio = ctx.uses_board_switch or ctx.uses_board_led
+    modbus_imports_enabled = ctx.modbus_server is not None or ctx.modbus_client is not None
+    modbus_bootstrap_lines = _render_ethernet_setup(ctx)
+    modbus_server_lines = _render_modbus_server(ctx)
+    modbus_accessor_lines = _render_modbus_accessors(ctx)
+    modbus_protocol_lines = _render_modbus_protocol(ctx)
+    modbus_client_lines = _render_modbus_client(ctx)
+    needs_digitalio = ctx.uses_board_switch or ctx.uses_board_led or modbus_imports_enabled
     needs_neopixel = ctx.uses_board_neopixel
 
     lines: list[str] = []
@@ -118,6 +131,14 @@ def _render_code(ctx: CodegenContext) -> str:
         lines.extend(["import digitalio", ""])
     if needs_neopixel:
         lines.extend(["import neopixel", ""])
+    if modbus_imports_enabled:
+        lines.extend(
+            [
+                "from adafruit_wiznet5k.adafruit_wiznet5k import WIZNET5K",
+                "import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket",
+                "",
+            ]
+        )
     lines.extend(
         [
             "try:",
@@ -151,6 +172,8 @@ def _render_code(ctx: CodegenContext) -> str:
             "",
         ]
     )
+    if modbus_bootstrap_lines:
+        lines.extend(modbus_bootstrap_lines)
     if needs_digitalio:
         if ctx.uses_board_switch:
             lines.extend(
@@ -248,6 +271,10 @@ def _render_code(ctx: CodegenContext) -> str:
                 "",
             ]
         )
+    if modbus_server_lines:
+        lines.extend(modbus_server_lines)
+    if modbus_client_lines:
+        lines.extend(modbus_client_lines)
 
     # 7) SD mount + load memory startup call
     ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
@@ -377,6 +404,8 @@ def _render_code(ctx: CodegenContext) -> str:
 
     # 8) helper definitions
     lines.extend(helper_lines)
+    lines.extend(modbus_accessor_lines)
+    lines.extend(modbus_protocol_lines)
 
     # 9) embedded user function sources
     lines.extend(function_source_lines)
@@ -992,6 +1021,12 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
                 "",
             ]
         )
+    if ctx.modbus_server is not None:
+        lines.append("    service_modbus_server()")
+    if ctx.modbus_client is not None:
+        lines.append("    service_modbus_client()")
+    if ctx.modbus_server is not None or ctx.modbus_client is not None:
+        lines.append("")
 
     for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]

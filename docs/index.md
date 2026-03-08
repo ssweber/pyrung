@@ -47,3 +47,4 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation
+- [CircuitPython Modbus TCP](dialects/circuitpy-modbus.md) — Modbus server and client for P1AM-200

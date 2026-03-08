@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import math as _math
+from typing import Literal
 
+from pyrung.click.tag_map import TagMap
+from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render import _render_code
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import validate_circuitpy_program
+from pyrung.core.memory_block import Block
 from pyrung.core.program import Program
-from pyrung.core.system_points import system
+from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
+from pyrung.core.tag import Tag
+
+MappedTagScope = Literal["referenced_only", "all_mapped"]
+
+
+def _needs_modbus_backing(tag: Tag, mode: MappedTagScope) -> bool:
+    if mode == "all_mapped":
+        return True
+    return tag.retentive or tag.default != _TYPE_DEFAULTS[tag.type]
 
 
 def generate_circuitpy(
@@ -20,6 +34,10 @@ def generate_circuitpy(
     target_scan_ms: float,
     watchdog_ms: int | None = None,
     runstop: RunStopConfig | None = None,
+    modbus_server: ModbusServerConfig | None = None,
+    modbus_client: ModbusClientConfig | None = None,
+    tag_map: TagMap | None = None,
+    mapped_tag_scope: MappedTagScope = "referenced_only",
 ) -> str:
     if not isinstance(program, Program):
         raise TypeError(f"program must be Program, got {type(program).__name__}")
@@ -38,12 +56,31 @@ def generate_circuitpy(
             raise ValueError("watchdog_ms must be >= 0")
     if runstop is not None and not isinstance(runstop, RunStopConfig):
         raise TypeError(f"runstop must be RunStopConfig or None, got {type(runstop).__name__}")
+    if modbus_server is not None and not isinstance(modbus_server, ModbusServerConfig):
+        raise TypeError(
+            f"modbus_server must be ModbusServerConfig or None, got {type(modbus_server).__name__}"
+        )
+    if modbus_client is not None and not isinstance(modbus_client, ModbusClientConfig):
+        raise TypeError(
+            f"modbus_client must be ModbusClientConfig or None, got {type(modbus_client).__name__}"
+        )
+    if tag_map is not None and not isinstance(tag_map, TagMap):
+        raise TypeError(f"tag_map must be TagMap or None, got {type(tag_map).__name__}")
+    if mapped_tag_scope not in {"referenced_only", "all_mapped"}:
+        raise ValueError(
+            "mapped_tag_scope must be 'referenced_only' or 'all_mapped'"
+        )
+    if (modbus_server is not None or modbus_client is not None) and tag_map is None:
+        raise ValueError("tag_map is required when modbus_server or modbus_client is enabled")
 
     ctx = CodegenContext(
         program=program,
         hw=hw,
         target_scan_ms=float(target_scan_ms),
         watchdog_ms=watchdog_ms,
+        modbus_server=modbus_server,
+        modbus_client=modbus_client,
+        tag_map=tag_map,
     )
     ctx.collect_hw_bindings()
     ctx.collect_program_references()
@@ -53,6 +90,26 @@ def generate_circuitpy(
         if runstop.expose_mode_tags:
             ctx.ensure_tag_referenced(system.sys.mode_run)
             ctx.ensure_tag_referenced(system.sys.cmd_mode_stop)
+    if tag_map is not None:
+        for entry in tag_map.entries:
+            logical = getattr(entry, "logical", None)
+            if isinstance(logical, Tag):
+                if _needs_modbus_backing(logical, mapped_tag_scope):
+                    ctx.ensure_tag_referenced(logical)
+                continue
+            if isinstance(logical, Block):
+                ctx._ensure_block_binding(logical)
+                for addr in getattr(entry, "logical_addresses", ()):
+                    tag = logical[addr]
+                    if _needs_modbus_backing(tag, mapped_tag_scope):
+                        ctx.ensure_tag_referenced(tag)
+        if mapped_tag_scope == "all_mapped":
+            for slot in tag_map.mapped_slots():
+                if slot.source != "system":
+                    continue
+                system_tag = SYSTEM_TAGS_BY_NAME.get(slot.logical_name)
+                if system_tag is not None:
+                    ctx.ensure_tag_referenced(system_tag)
 
     if not hw._slots and not ctx.board_tag_names:
         raise ValueError(

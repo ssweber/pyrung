@@ -112,6 +112,10 @@ source = generate_circuitpy(
 | `target_scan_ms` | `float` | Target scan cycle time in milliseconds (must be > 0) |
 | `watchdog_ms` | `int \| None` | Hardware watchdog timeout in ms, or `None` to disable |
 | `runstop` | `RunStopConfig \| None` | Optional board-switch RUN/STOP mapping with debounce |
+| `modbus_server` | `ModbusServerConfig \| None` | Modbus TCP server config; see [Modbus TCP](circuitpy-modbus.md) |
+| `modbus_client` | `ModbusClientConfig \| None` | Modbus TCP client config; see [Modbus TCP](circuitpy-modbus.md) |
+| `tag_map` | `TagMap \| None` | Click address mapping for Modbus-visible tags; required with server/client |
+| `mapped_tag_scope` | `MappedTagScope` | `"referenced_only"` (default) or `"all_mapped"` |
 
 Returns a complete, self-contained CircuitPython source file as a string. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
@@ -182,6 +186,12 @@ When `watchdog_ms` is set, the generated code calls `base.config_watchdog()` and
 ### Scan timing and overrun detection
 
 The scan loop paces itself to `target_scan_ms` using `time.monotonic()`. If a scan takes longer than the target, the overrun is counted and optionally printed (controlled by `PRINT_SCAN_OVERRUNS` in the generated code).
+
+### Modbus TCP
+
+The generated code can include a Modbus TCP server, client, or both via the P1AM-ETH shield. Configuration and usage:
+
+- [CircuitPython Modbus TCP](circuitpy-modbus.md)
 
 ## Validation
 
