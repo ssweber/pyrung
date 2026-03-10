@@ -24,7 +24,7 @@ MappedTagScope = Literal["referenced_only", "all_mapped"]
 def _needs_modbus_backing(tag: Tag, mode: MappedTagScope) -> bool:
     if mode == "all_mapped":
         return True
-    return tag.retentive or tag.default != _TYPE_DEFAULTS[tag.type]
+    return tag.default != _TYPE_DEFAULTS[tag.type]
 
 
 def generate_circuitpy(

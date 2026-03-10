@@ -129,10 +129,10 @@ Unlike the Click dialect's threaded `send`/`receive`, the CircuitPython versions
 
 | Value | Behavior |
 |-------|----------|
-| `"referenced_only"` (default) | Tags used in logic, retentive tags, and tags with non-default initial values |
+| `"referenced_only"` (default) | Tags used in logic and tags with non-default initial values |
 | `"all_mapped"` | Every entry in the TagMap gets a backing variable |
 
-The default avoids allocating RAM for tags that no rung references and no Modbus client needs to persist. Use `"all_mapped"` when an HMI or SCADA system needs to write values via Modbus that persist across scans even though no ladder rung touches them.
+The default avoids allocating RAM for tags that no rung references and start with type-default values. Use `"all_mapped"` when an HMI or SCADA system needs to write values via Modbus even though no ladder rung touches them.
 
 ## Scan cycle with Modbus
 
