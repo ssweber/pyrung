@@ -374,8 +374,12 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             ]
         elif slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
-            low_name = f"{slot.bank}{pair_index}"
-            high_name = f"{slot.bank}{pair_index + 1}"
+            # Skip even slots whose odd pair is already in reg_slots (avoids
+            # duplicate accessor entries — the odd slot's entry handles both).
+            if slot.index != pair_index and any(
+                item.bank == slot.bank and item.index == pair_index for item in reg_slots
+            ):
+                continue
             low_slot = next(
                 (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
                 None,
@@ -401,7 +405,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             continue
         lines.extend(
             [
-                f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                f'    if bank == "{slot.bank}" and index == {pair_index if slot.data_type == DataType.TXT else slot.index}:',
                 f"        return {read_lines[0]}",
             ]
         )
@@ -450,6 +454,10 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             )
         elif slot.data_type == DataType.TXT:
             pair_index = (slot.index - 1) // 2 * 2 + 1
+            if slot.index != pair_index and any(
+                item.bank == slot.bank and item.index == pair_index for item in reg_slots
+            ):
+                continue
             low_slot = next(
                 (item for item in reg_slots if item.bank == slot.bank and item.index == pair_index),
                 None,
@@ -464,7 +472,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             )
             lines.extend(
                 [
-                    f'    if bank == "{slot.bank}" and index == {slot.index}:',
+                    f'    if bank == "{slot.bank}" and index == {pair_index}:',
                 ]
             )
             if low_slot is not None:
