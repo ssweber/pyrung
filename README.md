@@ -21,16 +21,16 @@ with runner.active():
     assert Light.value is True
 ```
 
-> **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~26k lines, 1,600+ tests). Not yet on PyPI. API may still change.
+> **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~30k lines, 1,700+ tests). API may still change.
 
 - Documentation: https://ssweber.github.io/pyrung/
 - LLM docs index: https://ssweber.github.io/pyrung/llms.txt
 
 ## Why?
 
-AutomationDirect CLICK PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
+AutomationDirect Click PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
 
-Or don't transpose at all. Run your program as a **soft PLC** to test Modbus send/receive — it runs behind a Click-compatible Modbus interface, no hardware required. You can even spin up two pyrung programs and test them talking to each other. Or generate a CircuitPython scan loop for a ProductivityOpen P1AM-200 and run it on actual I/O.
+Or don't transpose at all. Run your logic as an **emulated Click over Modbus** to test send/receive, no hardware required. You can even spin up two pyrung programs and test them talking to each other. Or generate a CircuitPython scan loop for a ProductivityOpen P1AM-200 and run it on actual I/O.
 
 ## Quick start
 
@@ -92,13 +92,21 @@ tags.export_nicknames("motor.csv")  # For Click programming software
 
 ## What's included
 
-**Core engine** — Pure `f(state) → new_state` scan cycle with immutable snapshots. Coils, latches, timers, counters, branching, subroutines, structured tags, edge detection, and [more](docs/guides/ladder-logic.md). Built to match real Click behavior — no surprises when you move to hardware.
+### [Core engine](docs/guides/ladder-logic.md)
 
-**Click PLC dialect** — Hardware address mapping, memory bank validation, Modbus instructions, and nickname file export. Run any program as a soft PLC behind a Click-compatible Modbus interface for integration testing. [Docs →](docs/dialects/click.md)
+Pure `f(state) → new_state` scan cycle with immutable snapshots. Coils, latches, timers, counters, branching, subroutines, structured tags, edge detection, and more. Built to match real Click behavior — no surprises when you move to hardware.
 
-**CircuitPython dialect** — Generates a self-contained scan loop for P1AM-200 hardware from any pyrung program. [Docs →](docs/dialects/circuitpy.md)
+### [Click PLC dialect](docs/dialects/click.md)
 
-**VS Code debugger** — Step through scans, set breakpoints on rungs, force tags, diff states, and time-travel through scan history. [Docs →](docs/guides/dap-vscode.md)
+Hardware address mapping, memory bank validation, Modbus instructions, and nickname file export. Run any program as an emulated Click over Modbus for integration testing.
+
+### [CircuitPython dialect](docs/dialects/circuitpy.md)
+
+Gives the P1AM-200 what it's missing — a real scan cycle, Click-compatible instructions and Modbus interface, and SD persistence for state across power cycles.
+
+### [VS Code debugger](docs/guides/dap-vscode.md)
+
+Step through scans rung by rung, set breakpoints, force tags, diff states, and time-travel through scan history.
 
 ## Learn more
 
