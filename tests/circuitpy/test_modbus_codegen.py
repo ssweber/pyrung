@@ -1062,10 +1062,10 @@ def test_codegen_client_receive_first_and_last_of_every_bank(monkeypatch):
         # Unsigned 16-bit
         ("DH1", Word, struct.pack(">BBH", 3, 2, 0xBEEF), 0xBEEF),
         ("DH500", Word, struct.pack(">BBH", 3, 2, 0xDEAD), 0xDEAD),
-        # TXT (odd indices only; even-index single-char receive is a known
-        # limitation in _mb_client_unpack_register_values)
+        # TXT (odd/even single-char)
         ("TXT1", Char, struct.pack(">BBH", 3, 2, ord("A")), "A"),
         ("TXT999", Char, struct.pack(">BBH", 3, 2, ord("Z")), "Z"),
+        ("TXT1000", Char, struct.pack(">BBH", 3, 2, ord("Z") << 8), "Z"),
         # 32-bit signed — FC3 response with 2 registers
         ("DD1", Dint, struct.pack(">BB", 3, 4) + struct.pack(">HH", *_i32_regs(100000)), 100000),
         (

@@ -857,7 +857,7 @@ def _render_client_apply_helper(spec: Any, target: Any) -> list[str]:
                 "    for _offset in range(_byte_count // 2):",
                 "        _base = 9 + (_offset * 2)",
                 "        _regs.append(struct.unpack('>H', bytes(data[_base:_base + 2]))[0])",
-                f"    _values = _mb_client_unpack_register_values('{spec.bank}', _regs, {spec.item_count})",
+                f"    _values = _mb_client_unpack_register_values('{spec.bank}', _regs, {spec.item_count}, {spec.plc_start})",
                 f"    if len(_values) < {spec.item_count}:",
                 "        return (False, 0)",
             ]
@@ -951,7 +951,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "        return _regs",
         "    return [int(_value) & 0xFFFF for _value in values]",
         "",
-        "def _mb_client_unpack_register_values(bank, regs, logical_count):",
+        "def _mb_client_unpack_register_values(bank, regs, logical_count, plc_start=1):",
         "    if bank in ('DS', 'TD', 'SD'):",
         "        return [struct.unpack('<h', struct.pack('<H', int(_reg) & 0xFFFF))[0] for _reg in regs[:logical_count]]",
         "    if bank in ('DD', 'CTD'):",
@@ -977,7 +977,8 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "            _hi = (int(_reg) >> 8) & 0xFF",
         "            _values.append('' if _lo == 0 else chr(_lo))",
         "            _values.append('' if _hi == 0 else chr(_hi))",
-        "        return _values[:logical_count]",
+        "        _offset = 0 if (int(plc_start) % 2) == 1 else 1",
+        "        return _values[_offset:_offset + int(logical_count)]",
         "    return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]",
         "",
     ]
