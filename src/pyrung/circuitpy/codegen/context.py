@@ -84,6 +84,7 @@ class ModbusClientJobSpec:
     kind: str
     target_name: str
     bank: str
+    plc_start: int
     modbus_start: int
     modbus_quantity: int
     function_code: int

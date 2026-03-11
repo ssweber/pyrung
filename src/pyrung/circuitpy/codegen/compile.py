@@ -425,6 +425,7 @@ def _modbus_client_spec_for_instruction(
         kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
         target_name=instr.target_name,
         bank=instr.bank,
+        plc_start=instr.start,
         modbus_start=modbus_start,
         modbus_quantity=modbus_quantity,
         function_code=function_code,

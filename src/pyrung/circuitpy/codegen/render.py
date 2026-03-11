@@ -92,6 +92,12 @@ def _render_stop_output_clear_lines(ctx: CodegenContext) -> list[str]:
     return lines
 
 
+def _section(label: str) -> str:
+    """Build a fixed-width 80-char ASCII section header."""
+    prefix = f"# -- {label} "
+    return prefix + "-" * max(0, 80 - len(prefix))
+
+
 def _render_code(ctx: CodegenContext) -> str:
     main_fn_lines = _render_main_function(ctx)
     sub_fn_lines = _render_subroutine_functions(ctx)
@@ -110,6 +116,7 @@ def _render_code(ctx: CodegenContext) -> str:
     lines: list[str] = []
 
     # 1) imports
+    lines.append(_section("Imports"))
     lines.extend(
         [
             "import json",
@@ -150,6 +157,7 @@ def _render_code(ctx: CodegenContext) -> str:
     )
 
     # 2) config constants
+    lines.append(_section("Configuration"))
     lines.extend(
         [
             f"TARGET_SCAN_MS = {ctx.target_scan_ms!r}",
@@ -165,6 +173,7 @@ def _render_code(ctx: CodegenContext) -> str:
     )
 
     # 3) hardware bootstrap + roll-call
+    lines.append(_section("Hardware bootstrap"))
     lines.extend(
         [
             "base = P1AM.Base()",
@@ -216,6 +225,7 @@ def _render_code(ctx: CodegenContext) -> str:
         )
 
     # 5) tag and block declarations
+    lines.append(_section("Tags and blocks"))
     lines.append("# Scalars (non-block tags).")
     if ctx.scalar_tags:
         for tag_name in sorted(ctx.scalar_tags):
@@ -271,12 +281,15 @@ def _render_code(ctx: CodegenContext) -> str:
                 "",
             ]
         )
+    if modbus_server_lines or modbus_client_lines:
+        lines.append(_section("Modbus TCP"))
     if modbus_server_lines:
         lines.extend(modbus_server_lines)
     if modbus_client_lines:
         lines.extend(modbus_client_lines)
 
     # 7) SD mount + load memory startup call
+    lines.append(_section("Retentive memory (SD card)"))
     ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
     load_globals = ", ".join(ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"])
     save_globals = load_globals
@@ -403,9 +416,12 @@ def _render_code(ctx: CodegenContext) -> str:
     )
 
     # 8) helper definitions
+    lines.append(_section("Helpers"))
     lines.extend(helper_lines)
-    lines.extend(modbus_accessor_lines)
-    lines.extend(modbus_protocol_lines)
+    if modbus_accessor_lines:
+        lines.append(_section("Modbus address mapping"))
+        lines.extend(modbus_accessor_lines)
+        lines.extend(modbus_protocol_lines)
 
     # 9) embedded user function sources
     lines.extend(function_source_lines)
@@ -414,12 +430,15 @@ def _render_code(ctx: CodegenContext) -> str:
     lines.extend(sub_fn_lines)
 
     # 11) compiled main-rung function
+    lines.append(_section("Ladder logic"))
     lines.extend(main_fn_lines)
 
     # 12) scan-time I/O read/write helpers
+    lines.append(_section("I/O"))
     lines.extend(io_lines)
 
     # 13) main scan loop
+    lines.append(_section("Main scan loop"))
     lines.extend(_render_scan_loop(ctx))
 
     return "\n".join(lines).rstrip() + "\n"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pyclickplc.addresses import format_address_display
 from pyclickplc.banks import BANKS, DataType
 from pyclickplc.modbus import MODBUS_MAPPINGS, plc_to_modbus
 
@@ -15,6 +16,25 @@ from pyrung.core.system_points import system
 _SYSTEM_SLOT_BY_HARDWARE = {slot.hardware.name: slot for slot in SYSTEM_CLICK_SLOTS}
 _WORD_BANKS = {"DS", "DD", "DH", "DF", "TD", "CTD", "TXT", "XD", "YD", "SD"}
 _COIL_BANKS = {"X", "Y", "C", "T", "CT", "SC"}
+
+_BANK_DESCRIPTIONS: dict[str, str] = {
+    "X": "digital inputs",
+    "Y": "digital outputs",
+    "C": "bit memory",
+    "T": "timer done bits",
+    "CT": "counter done bits",
+    "SC": "system control bits",
+    "DS": "int memory",
+    "DD": "double-int memory",
+    "DH": "hex/word memory",
+    "DF": "float memory",
+    "TXT": "text memory",
+    "TD": "timer accumulators",
+    "CTD": "counter accumulators",
+    "XD": "input words",
+    "YD": "output words",
+    "SD": "system data",
+}
 
 
 @dataclass(frozen=True)
@@ -197,11 +217,13 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         "def _mb_reverse_coil(addr):",
     ]
     for bank in ("X", "Y"):
+        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
         lines.extend(_render_sparse_reverse_coil(bank, MODBUS_MAPPINGS[bank].base))
     for bank in ("C", "T", "CT", "SC"):
         mapping = MODBUS_MAPPINGS[bank]
         cfg = BANKS[bank]
         max_addr = mapping.base + cfg.max_addr - 1
+        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
         lines.extend(
             [
                 f"    if {mapping.base} <= addr <= {max_addr}:",
@@ -216,6 +238,7 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
         ]
     )
     for bank in ("DS", "DD", "DH", "DF", "TXT", "TD", "CTD", "XD", "YD", "SD"):
+        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
         lines.extend(_render_reverse_register_case(bank))
     lines.extend(
         [
@@ -365,12 +388,14 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
                 ),
                 None,
             )
-            low_expr = (
-                f"ord({low_slot.symbol}) if {low_slot is not None} and {low_slot.symbol} else 0"
-            )
-            high_expr = (
-                f"ord({high_slot.symbol}) if {high_slot is not None} and {high_slot.symbol} else 0"
-            )
+            if low_slot is not None:
+                low_expr = f"ord({low_slot.symbol}) if {low_slot.symbol} else 0"
+            else:
+                low_expr = "0"
+            if high_slot is not None:
+                high_expr = f"ord({high_slot.symbol}) if {high_slot.symbol} else 0"
+            else:
+                high_expr = "0"
             read_lines = [f"(({low_expr}) & 0xFF) | ((({high_expr}) & 0xFF) << 8)"]
         else:
             continue
@@ -697,7 +722,21 @@ def _render_client_values_helper(spec: Any) -> list[str]:
     return lines
 
 
+_FC_NAMES: dict[int, str] = {
+    1: "read coils",
+    2: "read discrete inputs",
+    3: "read holding registers",
+    4: "read input registers",
+    5: "write single coil",
+    6: "write single register",
+    15: "write multiple coils",
+    16: "write multiple registers",
+}
+
+
 def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
+    plc_addr = format_address_display(spec.bank, spec.plc_start)
+    fc_desc = _FC_NAMES.get(spec.function_code, f"FC {spec.function_code}")
     if spec.kind == "send":
         if spec.function_code == 5:
             pdu_lines = [
@@ -734,8 +773,9 @@ def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
             f"    _pdu = struct.pack('>BHH', {spec.function_code}, {spec.modbus_start}, {spec.modbus_quantity})"
         ]
 
+    count_desc = f"{spec.item_count} {'coil' if spec.function_code in (1, 2, 5, 15) else 'register'}{'s' if spec.item_count != 1 else ''}"
     return [
-        f"def {spec.var_name}_build_request(tid):",
+        f"def {spec.var_name}_build_request(tid):  # {fc_desc}: {plc_addr} ({count_desc}) on {spec.target_name}",
         *pdu_lines,
         "    return struct.pack('>HHHB', int(tid) & 0xFFFF, 0, len(_pdu) + 1, %d) + _pdu"
         % target.device_id,
