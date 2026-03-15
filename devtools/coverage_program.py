@@ -20,12 +20,9 @@ from pyrung import (
     Dint,
     Int,
     Program,
-    Real,
     Rung,
     TagType,
-    Word,
     Tms,
-    all_of,
     any_of,
     calc,
     copy,
@@ -35,15 +32,15 @@ from pyrung import (
     fill,
     immediate,
     latch,
-    on_delay,
     off_delay,
+    on_delay,
     out,
     reset,
     rise,
     search,
     shift,
 )
-from pyrung.click import c, ct, ctd, dd, df, dh, ds, t, td, txt, x, y, TagMap
+from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
 
 # ── Tag allocation ──────────────────────────────────────────────────
 # Each rung gets its own addresses so there are no collisions.
@@ -164,7 +161,6 @@ r25_out = Bool("r25_out")
 # Each rung comment encodes a stable ID for the progress report.
 
 with Program() as coverage_program:
-
     # ── Condition × Coil matrix ─────────────────────────────────────
 
     # 01: NO contact → OUT coil
@@ -311,52 +307,87 @@ with Program() as coverage_program:
 
 # ── TagMap ──────────────────────────────────────────────────────────
 
-mapping = TagMap({
-    # 01-07: contacts and coils
-    r01_in: x[1],   r01_out: y[1],
-    r02_in: x[2],   r02_out: y[2],
-    r03_in: x[3],   r03_out: y[3],
-    r04_in: x[4],   r04_out: y[4],
-    r05_in: x[5],   r05_out: y[5],
-    r06_in: x[6],   r06_out: y[6],
-    r07_in: x[7],   r07_out: y[7],
-
-    # 08-13: compare contacts (Y008+ invalid, use C bits for outputs)
-    r08_cmp: ds[1],  r08_out: c[31],
-    r09_cmp: ds[2],  r09_out: c[32],
-    r10_cmp: ds[3],  r10_out: c[33],
-    r11_cmp: ds[4],  r11_out: c[34],
-    r12_cmp: ds[5],  r12_out: c[35],
-    r13_cmp: ds[6],  r13_out: c[36],
-
-    # 14-16: timers
-    r14_in: x[8],    r14_done: t[1],  r14_acc: td[1],
-    r15_in: x[9],    r15_done: t[2],  r15_acc: td[2],  r15_rst: x[10],
-    r16_in: x[11],   r16_done: t[3],  r16_acc: td[3],
-
-    # 17-18: counters
-    r17_in: x[12],   r17_done: ct[1], r17_acc: ctd[1], r17_rst: c[1],
-    r18_in: x[13],   r18_done: ct[2], r18_acc: ctd[2], r18_rst: c[2],
-
-    # 19-20: data transfer
-    r19_in: x[14],   r19_src: ds[7],  r19_dst: ds[8],
-    r20_in: x[15],   r20_fill_dest: ds.select(41, 50),
-
-    # 21: calc
-    r21_in: x[16],   r21_a: ds[9],    r21_b: ds[10],   r21_result: ds[11],
-
-    # 22: search (X021+ invalid, use C bits)
-    r22_in: c[21],   r22_val: ds[12], r22_result: ds[13], r22_found: c[3],
-    r22_search_src: ds.select(31, 40),
-
-    # 23: shift
-    r23_in: c[4],    r23_clock: c[5], r23_reset: c[6],
-    r23_shift_bits: c.select(11, 18),
-
-    # 24-25: wiring (X/Y overflow → C bits)
-    r24_a: c[22],    r24_b: c[23],    r24_out: c[37],
-    r25_a: c[24],    r25_b: c[25],    r25_out: c[38],
-})
+mapping = TagMap(
+    {
+        # 01-07: contacts and coils
+        r01_in: x[1],
+        r01_out: y[1],
+        r02_in: x[2],
+        r02_out: y[2],
+        r03_in: x[3],
+        r03_out: y[3],
+        r04_in: x[4],
+        r04_out: y[4],
+        r05_in: x[5],
+        r05_out: y[5],
+        r06_in: x[6],
+        r06_out: y[6],
+        r07_in: x[7],
+        r07_out: y[7],
+        # 08-13: compare contacts (Y008+ invalid, use C bits for outputs)
+        r08_cmp: ds[1],
+        r08_out: c[31],
+        r09_cmp: ds[2],
+        r09_out: c[32],
+        r10_cmp: ds[3],
+        r10_out: c[33],
+        r11_cmp: ds[4],
+        r11_out: c[34],
+        r12_cmp: ds[5],
+        r12_out: c[35],
+        r13_cmp: ds[6],
+        r13_out: c[36],
+        # 14-16: timers
+        r14_in: x[8],
+        r14_done: t[1],
+        r14_acc: td[1],
+        r15_in: x[9],
+        r15_done: t[2],
+        r15_acc: td[2],
+        r15_rst: x[10],
+        r16_in: x[11],
+        r16_done: t[3],
+        r16_acc: td[3],
+        # 17-18: counters
+        r17_in: x[12],
+        r17_done: ct[1],
+        r17_acc: ctd[1],
+        r17_rst: c[1],
+        r18_in: x[13],
+        r18_done: ct[2],
+        r18_acc: ctd[2],
+        r18_rst: c[2],
+        # 19-20: data transfer
+        r19_in: x[14],
+        r19_src: ds[7],
+        r19_dst: ds[8],
+        r20_in: x[15],
+        r20_fill_dest: ds.select(41, 50),
+        # 21: calc
+        r21_in: x[16],
+        r21_a: ds[9],
+        r21_b: ds[10],
+        r21_result: ds[11],
+        # 22: search (X021+ invalid, use C bits)
+        r22_in: c[21],
+        r22_val: ds[12],
+        r22_result: ds[13],
+        r22_found: c[3],
+        r22_search_src: ds.select(31, 40),
+        # 23: shift
+        r23_in: c[4],
+        r23_clock: c[5],
+        r23_reset: c[6],
+        r23_shift_bits: c.select(11, 18),
+        # 24-25: wiring (X/Y overflow → C bits)
+        r24_a: c[22],
+        r24_b: c[23],
+        r24_out: c[37],
+        r25_a: c[24],
+        r25_b: c[25],
+        r25_out: c[38],
+    }
+)
 
 
 # ── Export ──────────────────────────────────────────────────────────
