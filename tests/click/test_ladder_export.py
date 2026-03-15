@@ -72,6 +72,13 @@ def _row(marker: str, prefix: list[str], af: str) -> tuple[str, ...]:
     return tuple([marker, *cells, af])
 
 
+def _blank_row(marker: str, prefix: list[str], af: str = "") -> tuple[str, ...]:
+    """Like _row but pads with blanks (OR continuation rows have no wires)."""
+    cells = list(prefix)
+    cells.extend([""] * (31 - len(cells)))
+    return tuple([marker, *cells, af])
+
+
 def test_header_and_width_invariants():
     A = Bool("A")
     B = Bool("B")
@@ -121,7 +128,7 @@ def test_or_expansion_with_trailing_and_golden():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _row("", ["X002", "-"], ""),
+        _blank_row("", ["X002", "-"]),
     )
 
 
@@ -311,8 +318,8 @@ def test_vertical_wire_stack_for_three_or_branches():
     assert bundle.main_rows[1][2] == "T"
     assert bundle.main_rows[2][2] == "T"
     assert bundle.main_rows[3][2] == "-"
-    assert bundle.main_rows[2][3] == "-"
-    assert bundle.main_rows[3][3] == "-"
+    assert bundle.main_rows[2][3] == ""
+    assert bundle.main_rows[3][3] == ""
     assert bundle.main_rows[1][-1] == "out(Y001)"
     assert bundle.main_rows[2][-1] == ""
     assert bundle.main_rows[3][-1] == ""

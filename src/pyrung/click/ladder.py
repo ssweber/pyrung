@@ -954,9 +954,11 @@ class _LadderExporter:
         rows: list[tuple[str, ...]] = []
         for row_index, condition_row in enumerate(condition_rows):
             cells = condition_row.cells.copy()
-            for col in range(condition_row.cursor, _CONDITION_COLS):
-                if cells[col] == "":
-                    cells[col] = "-"
+            if condition_row.accepts_terms:
+                # Main path: fill wires from cursor to AF column.
+                for col in range(condition_row.cursor, _CONDITION_COLS):
+                    if cells[col] == "":
+                        cells[col] = "-"
             rows.append(
                 tuple(
                     [
