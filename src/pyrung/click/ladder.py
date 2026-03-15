@@ -353,15 +353,6 @@ class _LadderExporter:
             )
 
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
-        if rung._branches and len(condition_rows) != 1:
-            self._raise_issue(
-                path=f"{path}.branch",
-                message=(
-                    "branch(...) with OR-expanded parent conditions is not supported "
-                    "in Click ladder v1 export."
-                ),
-                source=rung,
-            )
 
         if rung._branches:
             branch_rows = self._render_rung_with_branches(
@@ -445,6 +436,19 @@ class _LadderExporter:
                     )
                     first_row_emitted = True
 
+                    # Splice OR continuation rows after the first row.
+                    if len(condition_rows) > 1:
+                        or_cont = self._build_or_continuation_rows(condition_rows[1:])
+                        n_or = len(or_cont)
+                        base = len(rows)
+                        rows.append(branch_rows[0])
+                        rows.extend(or_cont)
+                        rows.extend(branch_rows[1:])
+                        split_entries.extend(
+                            base + (e if e == 0 else e + n_or) for e in branch_split_entries
+                        )
+                        continue
+
                 base = len(rows)
                 rows.extend(branch_rows)
                 split_entries.extend(base + offset for offset in branch_split_entries)
@@ -490,6 +494,19 @@ class _LadderExporter:
                     path=f"{path}.branch",
                 )
 
+            # Fill pass-through | markers on non-entry rows (OR continuations,
+            # pin rows) that sit between the first and last split entries.
+            # | means "vertical wire passes through" (not a junction entry).
+            split_set = set(split_entries)
+            for r in range(min(split_entries) + 1, max(split_entries)):
+                if r not in split_set:
+                    rows[r] = self._set_split_cell(
+                        rows[r],
+                        split_col=parent_cursor,
+                        value="|",
+                        path=f"{path}.branch",
+                    )
+
         return rows
 
     def _continuation_output_row(
@@ -503,6 +520,17 @@ class _LadderExporter:
         for col in range(parent_cursor, _CONDITION_COLS):
             cells[col] = "-"
         return tuple([marker, *cells, output_token])
+
+    @staticmethod
+    def _build_or_continuation_rows(
+        condition_rows: list[_ConditionRow],
+    ) -> list[tuple[str, ...]]:
+        """Build blank continuation rows for OR-expanded condition rows (rows 1..N)."""
+        rows: list[tuple[str, ...]] = []
+        for condition_row in condition_rows:
+            cells = condition_row.cells.copy()
+            rows.append(tuple(["", *cells, ""]))
+        return rows
 
     def _render_instruction_rows(
         self,
@@ -772,7 +800,7 @@ class _LadderExporter:
         row_cells = list(row)
         cell_index = split_col + 1
         existing = row_cells[cell_index]
-        if existing not in {"", "-", "T"}:
+        if existing not in {"", "-", "T", "|"}:
             self._raise_issue(
                 path=path,
                 message=(
