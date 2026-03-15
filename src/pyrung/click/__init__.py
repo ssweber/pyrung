@@ -185,7 +185,13 @@ txt: Block = _block_from_bank_config(BANKS["TXT"])
 
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError
-from pyrung.click.send_receive import receive, send
+from pyrung.click.send_receive import (
+    ModbusReceiveInstruction,
+    ModbusSendInstruction,
+    ModbusTarget,
+    receive,
+    send,
+)
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
     ValidationMode,
@@ -236,6 +242,9 @@ __all__ = [
     "LadderExportError",
     "ClickDataProvider",
     "validate_click_program",
+    "ModbusReceiveInstruction",
+    "ModbusSendInstruction",
+    "ModbusTarget",
     "send",
     "receive",
 ]

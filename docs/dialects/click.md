@@ -261,14 +261,15 @@ Reads return the current committed state. Writes queue a `runner.patch()` for th
 
 ## Communication instructions
 
-`send` and `receive` implement Modbus TCP communication between Click PLCs:
+`send` and `receive` implement Modbus TCP communication between Click PLCs. The `target` parameter accepts a `ModbusTarget` (live Modbus I/O during simulation) or a plain string name (codegen placeholder resolved via `ModbusClientConfig` at code generation time):
 
 ```python
-from pyrung.click import send, receive
+from pyrung.click import ModbusTarget, send, receive
+
+plc = ModbusTarget("plc1", "192.168.1.20")
 
 send(
-    host="192.168.1.20",
-    port=502,
+    target=plc,
     remote_start="DS1",
     source=LocalSetpoint,
     sending=CommSending,
@@ -278,8 +279,7 @@ send(
 )
 
 receive(
-    host="192.168.1.20",
-    port=502,
+    target=plc,
     remote_start="DS1",
     dest=LocalWords.select(1, 4),
     receiving=CommReceiving,
@@ -289,4 +289,4 @@ receive(
 )
 ```
 
-Communication runs asynchronously in a background worker pool — the scan loop stays synchronous. The instruction self-gates on the rung condition.
+When `target` is a `ModbusTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a string, the instruction is inert during simulation and exists only for CircuitPython code generation.

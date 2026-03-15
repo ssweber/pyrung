@@ -188,6 +188,28 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     "EnabledFunctionCallInstruction": ("_fn", "_enable_condition"),
     "CallInstruction": ("subroutine_name",),
     "ReturnInstruction": (),
+    "ModbusSendInstruction": (
+        "target_name",
+        "bank",
+        "start",
+        "addresses",
+        "source",
+        "sending",
+        "success",
+        "error",
+        "exception_response",
+    ),
+    "ModbusReceiveInstruction": (
+        "target_name",
+        "bank",
+        "start",
+        "addresses",
+        "dest",
+        "receiving",
+        "success",
+        "error",
+        "exception_response",
+    ),
 }
 
 # ---------------------------------------------------------------------------

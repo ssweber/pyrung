@@ -27,6 +27,11 @@ from pyrung.circuitpy.hardware import (
     MAX_SLOTS,
     P1AM,
 )
+from pyrung.circuitpy.modbus import (
+    ModbusClientConfig,
+    ModbusServerConfig,
+    ModbusTarget,
+)
 from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import (
     CircuitPyFinding,
@@ -54,6 +59,9 @@ __all__ = [
     "ChannelGroup",
     "MAX_SLOTS",
     "MODULE_CATALOG",
+    "ModbusClientConfig",
+    "ModbusServerConfig",
+    "ModbusTarget",
     "ModuleDirection",
     "ModuleSpec",
     "P1AM",

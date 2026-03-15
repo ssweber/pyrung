@@ -30,6 +30,7 @@ nav:
       - Click PLC: dialects/click.md
       - Click Ladder CSV Contract: dialects/click-ladder-csv.md
       - CircuitPython: dialects/circuitpy.md
+      - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:
       - Overview: reference/index.md
 

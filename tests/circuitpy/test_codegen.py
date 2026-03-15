@@ -9,13 +9,14 @@ from typing import cast
 
 import pytest
 
-from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy
+from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, board, generate_circuitpy
 from pyrung.circuitpy.codegen import (
     CodegenContext,
     compile_condition,
     compile_expression,
     compile_rung,
 )
+from pyrung.click import TagMap, c
 from pyrung.core import (
     Block,
     Bool,
@@ -122,7 +123,13 @@ def _namespace_list(namespace: dict[str, object], symbol: str) -> list[object]:
     return cast(list[object], value)
 
 
-def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict[str, object]:
+def _run_single_scan_source(
+    source: str,
+    monkeypatch,
+    stub_base: object,
+    *,
+    socket_factory=None,
+) -> dict[str, object]:
     single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
     class _StubDigitalInOut:
@@ -145,15 +152,63 @@ def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict
         def __getitem__(self, index: int) -> tuple[int, int, int]:
             return self._pixels[index]
 
+    class _StubWiznet5k:
+        def __init__(self, spi: object, cs: object, *args, **kwargs):
+            self.spi = spi
+            self.cs = cs
+            self.args = args
+            self.kwargs = kwargs
+            self.ifconfig = None
+
+    class _StubSocket:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.timeout = None
+            self.bound = None
+            self.listen_backlog = None
+            self.sent_packets: list[bytes] = []
+            self.connected_to = None
+
+        def bind(self, address):
+            self.bound = address
+
+        def listen(self, backlog: int):
+            self.listen_backlog = backlog
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def connect(self, address):
+            self.connected_to = address
+            return None
+
+        def accept(self):
+            raise OSError("would block")
+
+        def recv_into(self, buf):
+            return 0
+
+        def send(self, payload):
+            self.sent_packets.append(bytes(payload))
+            return len(payload)
+
+        def close(self):
+            return None
+
     board_mod = _stub_module(
         "board",
         SD_SCK=object(),
         SD_MOSI=object(),
         SD_MISO=object(),
         SD_CS=object(),
+        SCK=object(),
+        MOSI=object(),
+        MISO=object(),
         SWITCH=object(),
         LED=object(),
         NEOPIXEL=object(),
+        D5=object(),
     )
     busio_mod = _stub_module("busio", SPI=lambda *args, **kwargs: object())
     sdcardio_mod = _stub_module("sdcardio", SDCard=lambda *args, **kwargs: object())
@@ -164,6 +219,21 @@ def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict
         Pull=types.SimpleNamespace(UP=object(), DOWN=object()),
     )
     neopixel_mod = _stub_module("neopixel", NeoPixel=_StubNeoPixel)
+    adafruit_wiznet5k_mod = _stub_module("adafruit_wiznet5k")
+    adafruit_wiznet5k_core_mod = _stub_module(
+        "adafruit_wiznet5k.adafruit_wiznet5k", WIZNET5K=_StubWiznet5k
+    )
+    adafruit_wiznet5k_socket_mod = _stub_module(
+        "adafruit_wiznet5k.adafruit_wiznet5k_socket",
+        AF_INET=2,
+        SOCK_STREAM=1,
+        socket=(
+            socket_factory
+            if socket_factory is not None
+            else (lambda *args, **kwargs: _StubSocket(*args, **kwargs))
+        ),
+        set_interface=lambda *_args, **_kwargs: None,
+    )
     storage_mod = _stub_module(
         "storage",
         VfsFat=lambda *_args, **_kwargs: object(),
@@ -177,6 +247,15 @@ def _run_single_scan_source(source: str, monkeypatch, stub_base: object) -> dict
     monkeypatch.setitem(sys.modules, "sdcardio", sdcardio_mod)
     monkeypatch.setitem(sys.modules, "digitalio", digitalio_mod)
     monkeypatch.setitem(sys.modules, "neopixel", neopixel_mod)
+    monkeypatch.setitem(sys.modules, "adafruit_wiznet5k", adafruit_wiznet5k_mod)
+    monkeypatch.setitem(
+        sys.modules, "adafruit_wiznet5k.adafruit_wiznet5k", adafruit_wiznet5k_core_mod
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "adafruit_wiznet5k.adafruit_wiznet5k_socket",
+        adafruit_wiznet5k_socket_mod,
+    )
     monkeypatch.setitem(sys.modules, "storage", storage_mod)
     monkeypatch.setitem(sys.modules, "P1AM", p1am_mod)
     monkeypatch.setitem(sys.modules, "microcontroller", microcontroller_mod)
@@ -204,6 +283,65 @@ class TestGenerateCircuitPyAPI:
             generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="runstop"):
             generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="modbus_server"):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="tag_map"):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")  # type: ignore[arg-type]
+        with pytest.raises(ValueError, match="mapped_tag_scope"):
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")  # type: ignore[arg-type]
+
+    def test_modbus_requires_tag_map(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        prog = Program(strict=False)
+
+        with pytest.raises(ValueError, match="tag_map is required"):
+            generate_circuitpy(
+                prog,
+                hw,
+                target_scan_ms=10.0,
+                modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            )
+
+    def test_accepts_tag_map_without_modbus(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        prog = Program(strict=False)
+        mapping = TagMap({Bool("Mapped"): c[1]})
+
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping)
+        assert "def _run_main_rungs():" in source
+
+    def test_mapped_tag_scope_defaults_to_referenced_only(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        prog = Program(strict=False)
+        mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
+
+        source = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            tag_map=mapping,
+        )
+        assert 'if bank == "C" and index == 1:' not in source
+
+    def test_mapped_tag_scope_all_mapped_emits_all_mapped_slots(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        prog = Program(strict=False)
+        mapping = TagMap({Bool("Mapped"): c[1]}, include_system=False)
+
+        source = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            tag_map=mapping,
+            mapped_tag_scope="all_mapped",
+        )
+        assert 'if bank == "C" and index == 1:' in source
 
     def test_rejects_empty_and_non_contiguous_slots(self):
         empty_hw = P1AM()

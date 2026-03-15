@@ -18,6 +18,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._util import _first_defined_name, _io_kind, _mangle_symbol
 from pyrung.circuitpy.hardware import P1AM
+from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig
 from pyrung.core.condition import (
     Condition,
@@ -70,12 +71,40 @@ class BlockBinding:
     channel_count: int | None
 
 
+@dataclass(frozen=True)
+class ModbusClientSymbolSpec:
+    symbol: str
+    owner: str
+    tag_type: str | None = None
+
+
+@dataclass(frozen=True)
+class ModbusClientJobSpec:
+    var_name: str
+    kind: str
+    target_name: str
+    bank: str
+    plc_start: int
+    modbus_start: int
+    modbus_quantity: int
+    function_code: int
+    item_count: int
+    items: tuple[ModbusClientSymbolSpec, ...]
+    busy: ModbusClientSymbolSpec
+    success: ModbusClientSymbolSpec
+    error: ModbusClientSymbolSpec
+    exception_response: ModbusClientSymbolSpec
+
+
 @dataclass
 class CodegenContext:
     program: Program
     hw: P1AM
     target_scan_ms: float
     watchdog_ms: int | None
+    modbus_server: ModbusServerConfig | None = None
+    modbus_client: ModbusClientConfig | None = None
+    tag_map: Any = None
 
     slot_bindings: list[SlotBinding] = field(default_factory=list)
     block_bindings: dict[int, BlockBinding] = field(default_factory=dict)
@@ -104,6 +133,8 @@ class CodegenContext:
     _name_counters: dict[str, int] = field(default_factory=dict)
     _state_key_counter: int = 0
     _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
+    modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
+    modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
