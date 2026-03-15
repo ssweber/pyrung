@@ -183,6 +183,7 @@ ctd: Block = _block_from_bank_config(BANKS["CTD"])
 sd: Block = _block_from_bank_config(BANKS["SD"])
 txt: Block = _block_from_bank_config(BANKS["TXT"])
 
+from pyrung.click.codegen import csv_to_pyrung
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError
 from pyrung.click.send_receive import (
@@ -247,4 +248,5 @@ __all__ = [
     "ModbusTarget",
     "send",
     "receive",
+    "csv_to_pyrung",
 ]
