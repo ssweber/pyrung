@@ -124,6 +124,14 @@ class _RawRung:
     rows: list[list[str]]  # each row is 33 cells: [marker, A..AE, AF]
 
 
+@dataclass
+class _SubroutineInfo:
+    """A subroutine parsed from a sub_*.csv file."""
+
+    name: str  # original subroutine name (from call() match or slug)
+    analyzed: list[_AnalyzedRung]
+
+
 def _parse_csv(csv_path: Path) -> list[_RawRung]:
     """Read a CSV v2 file and segment into raw rungs."""
     with csv_path.open("r", encoding="utf-8", newline="") as f:
@@ -241,31 +249,6 @@ def _find_split_column(rows: list[list[str]]) -> int | None:
     return None
 
 
-def _find_or_merge_column(rows: list[list[str]]) -> int | None:
-    """Find an OR merge column: a column where T appears on the first row
-    and continuation rows have non-wire content before it."""
-    if len(rows) < 2:
-        return None
-
-    first_row = rows[0]
-    for col in range(_CONDITION_COLS):
-        cell = first_row[col + 1]
-        if cell != "T":
-            continue
-        # Check if any continuation row has content before this column
-        for cont_row in rows[1:]:
-            af = cont_row[-1]
-            if af and not af.startswith("."):
-                # This continuation row has its own AF — it's a branch, not OR
-                continue
-            # Check for conditions before the T column
-            for pre_col in range(col):
-                pre_cell = cont_row[pre_col + 1]
-                if pre_cell and pre_cell not in {"-", "T", "|"}:
-                    return col
-    return None
-
-
 def _is_pin_row(row: list[str]) -> bool:
     """Check if a row is a pin row (AF starts with '.')."""
     af = row[-1]
@@ -363,11 +346,6 @@ def _analyze_single_rung(
     split_col = _find_split_column(rows)
 
     if split_col is None:
-        # No split — check for OR merge pattern
-        or_col = _find_or_merge_column(rows)
-        if or_col is not None:
-            return _analyze_or_rung(rung, comment, or_col)
-
         # Just a single instruction with pin rows
         conditions = _extract_conditions(first_row, 0, _CONDITION_COLS)
         pins = _collect_pins(rows[1:])
@@ -403,39 +381,6 @@ def _analyze_single_rung(
 
     # Branch / multi-output pattern
     return _analyze_branch_rung(rung, comment, split_col, shared_conditions)
-
-
-def _analyze_or_rung(rung: _RawRung, comment: str | None, or_col: int) -> _AnalyzedRung:
-    """Analyze a rung with OR expansion (no T on first row, but merge column)."""
-    rows = rung.rows
-    first_row = rows[0]
-    af = first_row[-1]
-
-    # Conditions before OR merge on first row
-    pre_or = _extract_conditions(first_row, 0, or_col)
-    # Conditions after OR merge
-    post_or = _extract_conditions(first_row, or_col + 1, _CONDITION_COLS)
-
-    or_groups = [_OrGroup(conditions=pre_or)]
-
-    # Continuation rows contribute OR alternatives
-    remaining_rows = []
-    for row in rows[1:]:
-        if _is_pin_row(row):
-            remaining_rows.append(row)
-            continue
-        alt_conditions = _extract_conditions(row, 0, or_col)
-        if alt_conditions:
-            or_groups.append(_OrGroup(conditions=alt_conditions))
-
-    pins = _collect_pins(remaining_rows)
-
-    return _AnalyzedRung(
-        comment=comment,
-        shared_conditions=post_or,
-        or_groups=or_groups,
-        instructions=[_InstructionInfo(af_token=af, branch_conditions=[], pins=pins)] if af else [],
-    )
 
 
 def _analyze_or_rung_with_split(
@@ -840,6 +785,8 @@ def _generate_code(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
+    *,
+    subroutines: list[_SubroutineInfo] | None = None,
 ) -> str:
     """Generate the complete Python source file."""
     lines: list[str] = []
@@ -866,7 +813,7 @@ def _generate_code(
 
     # Program body
     lines.append("# --- Program ---")
-    _emit_program(lines, rungs, collection, nicknames)
+    _emit_program(lines, rungs, collection, nicknames, subroutines=subroutines)
     lines.append("")
 
     # Tag map
@@ -991,12 +938,40 @@ def _emit_program(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
+    *,
+    subroutines: list[_SubroutineInfo] | None = None,
 ) -> None:
     """Emit the program body."""
     lines.append("with Program() as logic:")
 
-    if not rungs:
+    if not rungs and not subroutines:
         lines.append("    pass")
+        return
+
+    _emit_rung_sequence(lines, rungs, collection, nicknames, indent=1)
+
+    # Emit subroutine blocks
+    if subroutines:
+        for sub in subroutines:
+            lines.append("")
+            lines.append(f'    with subroutine("{sub.name}"):')
+            if sub.analyzed:
+                _emit_rung_sequence(lines, sub.analyzed, collection, nicknames, indent=2)
+            else:
+                lines.append("        pass")
+
+
+def _emit_rung_sequence(
+    lines: list[str],
+    rungs: list[_AnalyzedRung],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    indent: int,
+) -> None:
+    """Emit a sequence of rungs (main program or subroutine body)."""
+    if not rungs:
+        pad = "    " * indent
+        lines.append(f"{pad}pass")
         return
 
     i = 0
@@ -1004,7 +979,7 @@ def _emit_program(
         rung = rungs[i]
 
         if rung.is_forloop_start:
-            _emit_forloop(lines, rungs, i, collection, nicknames, indent=1)
+            _emit_forloop(lines, rungs, i, collection, nicknames, indent=indent)
             # Skip to after next()
             i += 1
             while i < len(rungs) and not rungs[i].is_forloop_next:
@@ -1017,7 +992,7 @@ def _emit_program(
             i += 1
             continue
 
-        _emit_rung(lines, rung, collection, nicknames, indent=1)
+        _emit_rung(lines, rung, collection, nicknames, indent=indent)
         i += 1
 
 
@@ -1246,9 +1221,47 @@ def _render_af_token(
 
     args, kwargs = _parse_af_args(args_str)
 
+    # send/receive: positional CSV args must become keyword args in Python
+    if func_name in {"send", "receive"}:
+        return _render_send_receive(py_func, args, kwargs, collection, nicknames)
+
     rendered_parts: list[str] = []
     for arg in args:
         rendered_parts.append(_sub_operand(arg, collection, nicknames))
+    for key, value in kwargs:
+        if key in _DROP_KWARGS:
+            continue
+        rendered_v = _sub_operand_kwarg(key, value, collection, nicknames)
+        rendered_parts.append(f"{key}={rendered_v}")
+
+    return f"{py_func}({', '.join(rendered_parts)})"
+
+
+def _render_send_receive(
+    py_func: str,
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+) -> str:
+    """Render send/receive with all keyword arguments.
+
+    CSV format: send(target, remote_start, source, sending=..., ...)
+    Python API: send(target=..., remote_start=..., source=..., sending=..., ...)
+    For receive, the third positional arg is 'dest' instead of 'source'.
+    """
+    # Map positional CSV args to their keyword names
+    dest_key = "dest" if py_func == "receive" else "source"
+    pos_keys = ["target", "remote_start", dest_key]
+
+    rendered_parts: list[str] = []
+    for i, arg in enumerate(args):
+        rendered = _sub_operand(arg, collection, nicknames)
+        if i < len(pos_keys):
+            rendered_parts.append(f"{pos_keys[i]}={rendered}")
+        else:
+            rendered_parts.append(rendered)
+
     for key, value in kwargs:
         if key in _DROP_KWARGS:
             continue
@@ -1529,6 +1542,53 @@ def _load_nicknames_from_csv(csv_path: Path) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Subroutine Parsing
+# ---------------------------------------------------------------------------
+
+
+def _slugify(name: str) -> str:
+    """Convert a subroutine name to a filename slug (matching ladder.py)."""
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+    return slug if slug else "subroutine"
+
+
+def _find_call_names(raw_rungs: list[_RawRung]) -> dict[str, str]:
+    """Scan main rungs for call("name") tokens → {slug: original_name}."""
+    call_names: dict[str, str] = {}
+    call_re = re.compile(r'^call\("(.*)"\)$')
+    for rung in raw_rungs:
+        for row in rung.rows:
+            af = row[-1] if row else ""
+            m = call_re.match(af)
+            if m:
+                name = m.group(1)
+                call_names[_slugify(name)] = name
+    return call_names
+
+
+def _parse_subroutines(
+    dir_path: Path,
+    call_names: dict[str, str],
+) -> list[_SubroutineInfo]:
+    """Parse sub_*.csv files and match to call() names."""
+    sub_paths = sorted(
+        p
+        for p in dir_path.iterdir()
+        if p.is_file() and p.suffix.lower() == ".csv" and p.name.startswith("sub_")
+    )
+
+    subs: list[_SubroutineInfo] = []
+    for sub_path in sub_paths:
+        slug = sub_path.stem[4:]  # remove "sub_" prefix
+        name = call_names.get(slug, slug)
+        raw = _parse_csv(sub_path)
+        analyzed = _analyze_rungs(raw)
+        subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
+
+    return subs
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -1543,7 +1603,8 @@ def csv_to_pyrung(
     """Convert a Click ladder CSV (v2) to pyrung Python source code.
 
     Args:
-        csv_path: Path to the CSV file (main.csv).
+        csv_path: Path to the CSV file (main.csv) or a directory containing
+            main.csv and optional sub_*.csv subroutine files.
         nickname_csv: Optional path to a Click nickname CSV file (Address.csv).
             Read via ``pyclickplc.read_csv()``, extracts ``{display_address: nickname}``
             pairs for variable name substitution.
@@ -1570,17 +1631,38 @@ def csv_to_pyrung(
     elif nicknames is not None:
         nick_map = nicknames
 
-    # Phase 1: Parse CSV
-    raw_rungs = _parse_csv(csv_path)
+    # Determine if csv_path is a directory or a file
+    if csv_path.is_dir():
+        main_path = csv_path / "main.csv"
+        if not main_path.exists():
+            raise ValueError(f"main.csv not found in {csv_path}")
+        dir_path = csv_path
+    else:
+        main_path = csv_path
+        dir_path = csv_path.parent
+
+    # Phase 1: Parse main CSV
+    raw_rungs = _parse_csv(main_path)
+
+    # Phase 1b: Parse subroutine CSVs (if any sub_*.csv files exist)
+    call_names = _find_call_names(raw_rungs)
+    subroutines = _parse_subroutines(dir_path, call_names) if call_names else []
 
     # Phase 2: Analyze topology
     analyzed = _analyze_rungs(raw_rungs)
 
-    # Phase 3: Collect operands
-    collection = _collect_operands(analyzed, nick_map)
+    # Phase 3: Collect operands (from main + subroutines)
+    all_analyzed = list(analyzed)
+    for sub in subroutines:
+        all_analyzed.extend(sub.analyzed)
+    collection = _collect_operands(all_analyzed, nick_map)
+
+    # Mark subroutine usage if we have subroutines
+    if subroutines:
+        collection.has_subroutine = True
 
     # Phase 4: Generate code
-    code = _generate_code(analyzed, collection, nick_map)
+    code = _generate_code(analyzed, collection, nick_map, subroutines=subroutines)
 
     if output_path is not None:
         out = Path(output_path)

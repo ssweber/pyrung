@@ -30,6 +30,7 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
+    Tms,
     any_of,
     fall,
     immediate,
@@ -40,12 +41,16 @@ from pyrung.core.program import (
     calc,
     copy,
     count_up,
+    event_drum,
     fill,
     forloop,
     latch,
     on_delay,
     out,
     reset,
+    search,
+    shift,
+    time_drum,
     unpack_to_bits,
 )
 
@@ -55,13 +60,10 @@ from pyrung.core.program import (
 
 
 def _export_csv(program: Program, tag_map: TagMap, tmp_path: Path) -> Path:
-    """Export a program to CSV and return the path."""
+    """Export a program to CSV bundle and return the main.csv path."""
     bundle = tag_map.to_ladder(program)
-    csv_path = tmp_path / "main.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerows(bundle.main_rows)
-    return csv_path
+    bundle.write(tmp_path)
+    return tmp_path / "main.csv"
 
 
 def _round_trip(
@@ -78,8 +80,14 @@ def _round_trip(
     bundle = tag_map.to_ladder(program)
     original_rows = list(bundle.main_rows)
 
-    csv_path = _export_csv(program, tag_map, tmp_path)
-    code = csv_to_pyrung(csv_path, nicknames=nicknames)
+    # Write full bundle (main.csv + sub_*.csv)
+    csv_dir = tmp_path / "original"
+    bundle.write(csv_dir)
+
+    # If subroutines exist, pass directory; otherwise pass main.csv
+    has_subs = bool(bundle.subroutine_rows)
+    csv_input = csv_dir if has_subs else csv_dir / "main.csv"
+    code = csv_to_pyrung(csv_input, nicknames=nicknames)
 
     # Execute the generated code
     ns: dict = {}
@@ -751,6 +759,261 @@ class TestRoundTrip:
 
         mapping = TagMap(
             {Enable: x[1], Source: ds[1], Bits: c.select(1, 16)},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_shift(self, tmp_path: Path):
+        """Shift register with .clock() and .reset() pins."""
+        from pyrung.core import Block, TagType
+
+        Data = Bool("Data")
+        Clock = Bool("Clock")
+        ResetCond = Bool("ResetCond")
+        Bits = Block("Bits", TagType.BOOL, 1, 8)
+
+        with Program() as logic:
+            with Rung(Data):
+                shift(Bits.select(1, 8)).clock(Clock).reset(ResetCond)
+
+        mapping = TagMap(
+            {Data: x[1], Clock: x[2], ResetCond: x[3], Bits: c.select(1, 8)},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_search(self, tmp_path: Path):
+        """Search instruction."""
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        Target = Int("Target")
+        Data = Block("Data", TagType.INT, 1, 4)
+        Result = Int("Result")
+        Found = Bool("Found")
+
+        with Program() as logic:
+            with Rung(Enable):
+                search("==", Target, Data.select(1, 4), Result, Found)
+
+        mapping = TagMap(
+            {Enable: x[1], Target: ds[5], Data: ds.select(1, 4), Result: ds[6], Found: c[1]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_event_drum(self, tmp_path: Path):
+        """Event drum with reset pin."""
+        Enable = Bool("Enable")
+        ResetCond = Bool("ResetCond")
+        Out1 = Bool("Out1")
+        Out2 = Bool("Out2")
+        Event1 = Bool("Event1")
+        Event2 = Bool("Event2")
+        Step = Int("Step")
+        Done = Bool("Done")
+
+        with Program() as logic:
+            with Rung(Enable):
+                event_drum(
+                    outputs=[Out1, Out2],
+                    events=[Event1, Event2],
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Step,
+                    completion_flag=Done,
+                ).reset(ResetCond)
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                ResetCond: x[2],
+                Event1: x[3],
+                Event2: x[4],
+                Out1: y[1],
+                Out2: y[2],
+                Step: ds[1],
+                Done: c[1],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_time_drum(self, tmp_path: Path):
+        """Time drum with reset pin."""
+        Enable = Bool("Enable")
+        ResetCond = Bool("ResetCond")
+        Out1 = Bool("Out1")
+        Out2 = Bool("Out2")
+        Step = Int("Step")
+        Acc = Int("Acc")
+        Done = Bool("Done")
+
+        with Program() as logic:
+            with Rung(Enable):
+                time_drum(
+                    outputs=[Out1, Out2],
+                    presets=[100, 200],
+                    unit=Tms,
+                    pattern=[[1, 0], [0, 1]],
+                    current_step=Step,
+                    accumulator=Acc,
+                    completion_flag=Done,
+                ).reset(ResetCond)
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                ResetCond: x[2],
+                Out1: y[1],
+                Out2: y[2],
+                Step: ds[1],
+                Acc: td[1],
+                Done: c[1],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_send(self, tmp_path: Path):
+        """Send instruction with ModbusTarget."""
+        from pyrung.click import ModbusTarget, send
+
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                    count=1,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Source: ds[1],
+                Sending: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_receive(self, tmp_path: Path):
+        """Receive instruction with ModbusTarget."""
+        from pyrung.click import ModbusTarget, receive
+
+        Enable = Bool("Enable")
+        Dest = Int("Dest")
+        Receiving = Bool("Receiving")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                receive(
+                    target=target,
+                    remote_start="DS1",
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                    count=1,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Dest: ds[1],
+                Receiving: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_subroutine(self, tmp_path: Path):
+        """Subroutine with call() and return."""
+        from pyrung.core.program import call, subroutine
+
+        Button = Bool("Button")
+        Light = Bool("Light")
+        SubLight = Bool("SubLight")
+
+        with Program() as logic:
+            with Rung(Button):
+                out(Light)
+                call("init")
+
+            with subroutine("init"):
+                with Rung():
+                    out(SubLight)
+
+        mapping = TagMap(
+            {Button: x[1], Light: y[1], SubLight: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+        assert 'subroutine("init")' in code
+        assert 'call("init")' in code
+
+    def test_subroutine_with_conditions(self, tmp_path: Path):
+        """Subroutine rungs with conditions."""
+        from pyrung.core.program import call, subroutine
+
+        Enable = Bool("Enable")
+        Cond = Bool("Cond")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                call("worker")
+
+            with subroutine("worker"):
+                with Rung(Cond):
+                    out(Y1)
+                with Rung():
+                    out(Y2)
+
+        mapping = TagMap(
+            {Enable: x[1], Cond: x[2], Y1: y[1], Y2: y[2]},
             include_system=False,
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
