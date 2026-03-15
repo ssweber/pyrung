@@ -101,7 +101,7 @@ def test_and_example_golden():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "X002"], "out(Y001,0)"),
+        _row("R", ["X001", "X002"], "out(Y001)"),
     )
 
 
@@ -120,7 +120,7 @@ def test_or_expansion_with_trailing_and_golden():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "T", "C1"], "out(Y001,0)"),
+        _row("R", ["X001", "T", "C1"], "out(Y001)"),
         _row("", ["X002", "-"], ""),
     )
 
@@ -142,8 +142,8 @@ def test_branch_row_is_continuation_after_parent_conditions():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "T"], "out(Y001,0)"),
-        _row("", ["", "-", "X002"], "out(Y002,0)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["", "-", "X002"], "out(Y002)"),
     )
 
 
@@ -174,9 +174,9 @@ def test_multiple_branches_stack_vertical_markers():
     assert bundle.main_rows[3][2] == "-"
     assert bundle.main_rows[2][3] == "X002"
     assert bundle.main_rows[3][3] == "X003"
-    assert bundle.main_rows[1][-1] == "out(Y001,0)"
-    assert bundle.main_rows[2][-1] == "out(Y002,0)"
-    assert bundle.main_rows[3][-1] == "out(Y003,0)"
+    assert bundle.main_rows[1][-1] == "out(Y001)"
+    assert bundle.main_rows[2][-1] == "out(Y002)"
+    assert bundle.main_rows[3][-1] == "out(Y003)"
 
 
 def test_parent_instruction_after_branch_stays_on_parent_path():
@@ -201,9 +201,9 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "T"], "out(Y001,0)"),
-        _row("", ["", "T", "X002"], "out(Y002,0)"),
-        _row("", ["", "-"], "out(Y003,0)"),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["", "T", "X002"], "out(Y002)"),
+        _row("", ["", "-"], "out(Y003)"),
     )
 
 
@@ -234,7 +234,7 @@ def test_multiple_instruction_rows_share_powered_path():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "X002", "T"], "out(Y001,0)"),
+        _row("R", ["X001", "X002", "T"], "out(Y001)"),
         _row("", ["", "", "T"], "latch(Y002)"),
         _row("", ["", "", "-"], "reset(Y003)"),
     )
@@ -265,7 +265,7 @@ def test_immediate_contact_and_coils_render_canonical_tokens():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["immediate(X001)", "T"], "out(immediate(Y001),0)"),
+        _row("R", ["immediate(X001)", "T"], "out(immediate(Y001))"),
         _row("", ["", "T"], "latch(immediate(Y002))"),
         _row("", ["", "-"], "reset(immediate(Y003))"),
     )
@@ -288,7 +288,7 @@ def test_immediate_contiguous_range_renders_compact_token():
     )
     bundle = mapping.to_ladder(logic)
 
-    assert bundle.main_rows[1][-1] == "out(immediate(Y001..Y004),0)"
+    assert bundle.main_rows[1][-1] == "out(immediate(Y001..Y004))"
 
 
 def test_vertical_wire_stack_for_three_or_branches():
@@ -313,7 +313,7 @@ def test_vertical_wire_stack_for_three_or_branches():
     assert bundle.main_rows[3][2] == "-"
     assert bundle.main_rows[2][3] == "-"
     assert bundle.main_rows[3][3] == "-"
-    assert bundle.main_rows[1][-1] == "out(Y001,0)"
+    assert bundle.main_rows[1][-1] == "out(Y001)"
     assert bundle.main_rows[2][-1] == ""
     assert bundle.main_rows[3][-1] == ""
 
@@ -341,7 +341,7 @@ def test_builder_pin_rows_are_independent_continuations():
     )
     bundle = mapping.to_ladder(logic)
 
-    assert bundle.main_rows[1][-1] == "count_up(CT1,CTD1,5)"
+    assert bundle.main_rows[1][-1] == "count_up(CT1,CTD1,preset=5)"
     assert bundle.main_rows[2][-1] == ".down()"
     assert bundle.main_rows[3][-1] == ".reset()"
     assert bundle.main_rows[2][1] == "X002"
@@ -360,9 +360,9 @@ def test_forloop_lowers_to_for_body_and_next_rows():
     mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
 
-    assert bundle.main_rows[1][-1] == "for(3,1)"
+    assert bundle.main_rows[1][-1] == "for(3,oneshot=1)"
     assert bundle.main_rows[2][0] == "R"
-    assert bundle.main_rows[2][-1] == "out(Y001,0)"
+    assert bundle.main_rows[2][-1] == "out(Y001)"
     assert bundle.main_rows[3][0] == "R"
     assert bundle.main_rows[3][-1] == "next()"
 
@@ -426,8 +426,8 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert 'search("==","sub""name",TXT1..TXT4,DS1,C1,0,0)' in tokens
-    assert 'search("==","normal",TXT1..TXT4,DS1,C1,0,0)' in tokens
+    assert 'search("==","sub""name",TXT1..TXT4,DS1,C1)' in tokens
+    assert 'search("==","normal",TXT1..TXT4,DS1,C1)' in tokens
     assert all('\\"' not in token for token in tokens)
 
 
@@ -451,7 +451,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-    expected = 'search("==","sub""name",TXT1..TXT4,DS1,C1,0,0)'
+    expected = 'search("==","sub""name",TXT1..TXT4,DS1,C1)'
     assert bundle.main_rows[1][-1] == expected
 
     out_dir = tmp_path / "ladder"
@@ -512,11 +512,13 @@ def test_tokens_include_explicit_defaults_and_oneshot():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert "out(Y001,0)" in tokens
-    assert any(token.startswith("copy(") and token.endswith(",0)") for token in tokens)
-    assert any(",decimal,0)" in token for token in tokens if token.startswith("calc("))
-    assert any(token.startswith("search(") and token.endswith(",0,0)") for token in tokens)
-    assert any(token.startswith("pack_text(") and token.endswith(",0,0)") for token in tokens)
+    assert "out(Y001)" in tokens
+    assert any(token.startswith("copy(") and "oneshot" not in token for token in tokens)
+    assert any(",mode=decimal)" in token for token in tokens if token.startswith("calc("))
+    assert any(token.startswith("search(") and "continuous" not in token for token in tokens)
+    assert any(
+        token.startswith("pack_text(") and "allow_whitespace" not in token for token in tokens
+    )
 
 
 def test_calc_hex_token_uses_inferred_hex_mode():
@@ -541,7 +543,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert any(",hex,0)" in token for token in tokens if token.startswith("calc("))
+    assert any(",mode=hex)" in token for token in tokens if token.startswith("calc("))
 
 
 def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
@@ -720,30 +722,30 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert tokens == [
-        "blockcopy(DS100..DS102,DS200..DS202,1)",
-        "fill(7,DS200..DS202,1)",
-        "pack_bits(C10..C25,DD1,1)",
-        "pack_words(DS300..DS301,DD1,1)",
-        "unpack_to_bits(DD1,C10..C41,1)",
-        "unpack_to_words(DD1,DS300..DS301,1)",
-        "on_delay(T1,TD1,100,Tms,1)",
+        "blockcopy(DS100..DS102,DS200..DS202,oneshot=1)",
+        "fill(7,DS200..DS202,oneshot=1)",
+        "pack_bits(C10..C25,DD1,oneshot=1)",
+        "pack_words(DS300..DS301,DD1,oneshot=1)",
+        "unpack_to_bits(DD1,C10..C41,oneshot=1)",
+        "unpack_to_words(DD1,DS300..DS301,oneshot=1)",
+        "on_delay(T1,TD1,preset=100,unit=Tms)",
         ".reset()",
-        "off_delay(T2,TD2,50,Tms)",
-        "count_down(CT3,CTD3,9)",
+        "off_delay(T2,TD2,preset=50,unit=Tms)",
+        "count_down(CT3,CTD3,preset=9)",
         ".reset()",
         "shift(C10..C17)",
         ".clock()",
         ".reset()",
-        "event_drum([Y001,C1],[X009,SC50],[[1,0],[0,1]],DS10,C2)",
+        "event_drum(outputs=[Y001,C1],events=[X009,SC50],pattern=[[1,0],[0,1]],current_step=DS10,completion_flag=C2)",
         ".reset()",
         ".jump(DS10)",
         ".jog()",
-        "time_drum([Y001,C1],[100,200],Tms,[[1,0],[0,1]],DS10,TD10,C2)",
+        "time_drum(outputs=[Y001,C1],presets=[100,200],unit=Tms,pattern=[[1,0],[0,1]],current_step=DS10,accumulator=TD10,completion_flag=C2)",
         ".reset()",
         ".jump(DS10)",
         ".jog()",
-        'send(ModbusTarget("plc1","127.0.0.1",502,3),"DS1",DS20,C3,C4,C5,DS21,1)',
-        'receive(ModbusTarget("plc2","127.0.0.1",502,4),"DS2",DS22,C6,C7,C8,DS23,1)',
+        'send(ModbusTarget("plc1","127.0.0.1",502,3),"DS1",DS20,sending=C3,success=C4,error=C5,exception_response=DS21,count=1)',
+        'receive(ModbusTarget("plc2","127.0.0.1",502,4),"DS2",DS22,receiving=C6,success=C7,error=C8,exception_response=DS23,count=1)',
     ]
 
     assert ".clock()" in tokens
@@ -865,7 +867,7 @@ def test_comment_single_line():
     assert bundle.main_rows == (
         _header(),
         ("#", "Turn on B when A is true."),
-        _row("R", ["X001"], "out(Y001,0)"),
+        _row("R", ["X001"], "out(Y001)"),
     )
 
 
@@ -885,7 +887,7 @@ def test_comment_multi_line():
         _header(),
         ("#", "Line one."),
         ("#", "Line two."),
-        _row("R", ["X001"], "out(Y001,0)"),
+        _row("R", ["X001"], "out(Y001)"),
     )
 
 
@@ -902,7 +904,7 @@ def test_no_comment_no_extra_rows():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001"], "out(Y001,0)"),
+        _row("R", ["X001"], "out(Y001)"),
     )
 
 

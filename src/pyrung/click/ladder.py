@@ -842,10 +842,13 @@ class _LadderExporter:
                 source=instruction,
             )
 
+        for_kw: dict[str, str] = {}
+        if getattr(instruction, "oneshot", False):
+            for_kw["oneshot"] = "1"
         for_token = self._fn(
             "for",
             self._render_operand(instruction.count, path=f"{path}.count", source=instruction),
-            _bool_bit(getattr(instruction, "oneshot", False)),
+            **for_kw,
         )
         rows = self._single_output_rows(
             self._expand_conditions(conditions, path=f"{path}.condition"),
@@ -1191,7 +1194,8 @@ class _LadderExporter:
 
     def _instruction_token(self, instruction: Any, *, path: str) -> str:
         instruction_type = type(instruction).__name__
-        oneshot = _bool_bit(getattr(instruction, "oneshot", False))
+        oneshot = getattr(instruction, "oneshot", False)
+        oneshot_kw: dict[str, str] = {"oneshot": "1"} if oneshot else {}
 
         if instruction_type == "OutInstruction":
             return self._fn(
@@ -1203,7 +1207,7 @@ class _LadderExporter:
                     allow_immediate=True,
                     immediate_context="coil",
                 ),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "LatchInstruction":
             return self._fn(
@@ -1232,21 +1236,21 @@ class _LadderExporter:
                 "copy",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "BlockCopyInstruction":
             return self._fn(
                 "blockcopy",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "FillInstruction":
             return self._fn(
                 "fill",
                 self._render_operand(instruction.value, path=f"{path}.value", source=instruction),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "CalcInstruction":
             mode = infer_calc_mode(instruction.expression, instruction.dest).mode
@@ -1258,10 +1262,14 @@ class _LadderExporter:
                     source=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                str(mode),
-                oneshot,
+                mode=str(mode),
+                **oneshot_kw,
             )
         if instruction_type == "SearchInstruction":
+            kw: dict[str, str] = {}
+            if instruction.continuous:
+                kw["continuous"] = "1"
+            kw.update(oneshot_kw)
             return self._fn(
                 "search",
                 _quote(str(instruction.condition)),
@@ -1273,8 +1281,7 @@ class _LadderExporter:
                 ),
                 self._render_operand(instruction.result, path=f"{path}.result", source=instruction),
                 self._render_operand(instruction.found, path=f"{path}.found", source=instruction),
-                _bool_bit(bool(instruction.continuous)),
-                oneshot,
+                **kw,
             )
         if instruction_type == "PackBitsInstruction":
             return self._fn(
@@ -1285,7 +1292,7 @@ class _LadderExporter:
                     source=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "PackWordsInstruction":
             return self._fn(
@@ -1296,9 +1303,13 @@ class _LadderExporter:
                     source=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "PackTextInstruction":
+            pt_kw: dict[str, str] = {}
+            if instruction.allow_whitespace:
+                pt_kw["allow_whitespace"] = "1"
+            pt_kw.update(oneshot_kw)
             return self._fn(
                 "pack_text",
                 self._render_operand(
@@ -1307,8 +1318,7 @@ class _LadderExporter:
                     source=instruction,
                 ),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                _bool_bit(bool(instruction.allow_whitespace)),
-                oneshot,
+                **pt_kw,
             )
         if instruction_type == "UnpackToBitsInstruction":
             return self._fn(
@@ -1319,7 +1329,7 @@ class _LadderExporter:
                     path=f"{path}.bit_block",
                     source=instruction,
                 ),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "UnpackToWordsInstruction":
             return self._fn(
@@ -1330,7 +1340,7 @@ class _LadderExporter:
                     path=f"{path}.word_block",
                     source=instruction,
                 ),
-                oneshot,
+                **oneshot_kw,
             )
         if instruction_type == "OnDelayInstruction":
             return self._fn(
@@ -1345,9 +1355,12 @@ class _LadderExporter:
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                self._render_operand(instruction.preset, path=f"{path}.preset", source=instruction),
-                self._render_operand(instruction.unit, path=f"{path}.unit", source=instruction),
-                _bool_bit(bool(getattr(instruction, "has_reset", False))),
+                preset=self._render_operand(
+                    instruction.preset, path=f"{path}.preset", source=instruction
+                ),
+                unit=self._render_operand(
+                    instruction.unit, path=f"{path}.unit", source=instruction
+                ),
             )
         if instruction_type == "OffDelayInstruction":
             return self._fn(
@@ -1362,8 +1375,12 @@ class _LadderExporter:
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                self._render_operand(instruction.preset, path=f"{path}.preset", source=instruction),
-                self._render_operand(instruction.unit, path=f"{path}.unit", source=instruction),
+                preset=self._render_operand(
+                    instruction.preset, path=f"{path}.preset", source=instruction
+                ),
+                unit=self._render_operand(
+                    instruction.unit, path=f"{path}.unit", source=instruction
+                ),
             )
         if instruction_type == "CountUpInstruction":
             return self._fn(
@@ -1378,7 +1395,9 @@ class _LadderExporter:
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                self._render_operand(instruction.preset, path=f"{path}.preset", source=instruction),
+                preset=self._render_operand(
+                    instruction.preset, path=f"{path}.preset", source=instruction
+                ),
             )
         if instruction_type == "CountDownInstruction":
             return self._fn(
@@ -1393,7 +1412,9 @@ class _LadderExporter:
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                self._render_operand(instruction.preset, path=f"{path}.preset", source=instruction),
+                preset=self._render_operand(
+                    instruction.preset, path=f"{path}.preset", source=instruction
+                ),
             )
         if instruction_type == "ShiftInstruction":
             return self._fn(
@@ -1405,62 +1426,58 @@ class _LadderExporter:
                 ),
             )
         if instruction_type == "EventDrumInstruction":
-            outputs = self._render_sequence(
-                instruction.outputs,
-                path=f"{path}.outputs",
-                source=instruction,
-            )
-            events = self._render_condition_sequence(
-                instruction.events,
-                path=f"{path}.events",
-                source=instruction,
-            )
-            pattern = self._render_pattern(instruction.pattern)
             return self._fn(
                 "event_drum",
-                outputs,
-                events,
-                pattern,
-                self._render_operand(
+                outputs=self._render_sequence(
+                    instruction.outputs,
+                    path=f"{path}.outputs",
+                    source=instruction,
+                ),
+                events=self._render_condition_sequence(
+                    instruction.events,
+                    path=f"{path}.events",
+                    source=instruction,
+                ),
+                pattern=self._render_pattern(instruction.pattern),
+                current_step=self._render_operand(
                     instruction.current_step,
                     path=f"{path}.current_step",
                     source=instruction,
                 ),
-                self._render_operand(
+                completion_flag=self._render_operand(
                     instruction.completion_flag,
                     path=f"{path}.completion_flag",
                     source=instruction,
                 ),
             )
         if instruction_type == "TimeDrumInstruction":
-            outputs = self._render_sequence(
-                instruction.outputs,
-                path=f"{path}.outputs",
-                source=instruction,
-            )
-            presets = self._render_sequence(
-                instruction.presets,
-                path=f"{path}.presets",
-                source=instruction,
-            )
-            pattern = self._render_pattern(instruction.pattern)
             return self._fn(
                 "time_drum",
-                outputs,
-                presets,
-                self._render_operand(instruction.unit, path=f"{path}.unit", source=instruction),
-                pattern,
-                self._render_operand(
+                outputs=self._render_sequence(
+                    instruction.outputs,
+                    path=f"{path}.outputs",
+                    source=instruction,
+                ),
+                presets=self._render_sequence(
+                    instruction.presets,
+                    path=f"{path}.presets",
+                    source=instruction,
+                ),
+                unit=self._render_operand(
+                    instruction.unit, path=f"{path}.unit", source=instruction
+                ),
+                pattern=self._render_pattern(instruction.pattern),
+                current_step=self._render_operand(
                     instruction.current_step,
                     path=f"{path}.current_step",
                     source=instruction,
                 ),
-                self._render_operand(
+                accumulator=self._render_operand(
                     instruction.accumulator,
                     path=f"{path}.accumulator",
                     source=instruction,
                 ),
-                self._render_operand(
+                completion_flag=self._render_operand(
                     instruction.completion_flag,
                     path=f"{path}.completion_flag",
                     source=instruction,
@@ -1475,23 +1492,25 @@ class _LadderExporter:
                 target_expr,
                 _quote(remote_start),
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(
+                sending=self._render_operand(
                     instruction.sending,
                     path=f"{path}.sending",
                     source=instruction,
                 ),
-                self._render_operand(
+                success=self._render_operand(
                     instruction.success,
                     path=f"{path}.success",
                     source=instruction,
                 ),
-                self._render_operand(instruction.error, path=f"{path}.error", source=instruction),
-                self._render_operand(
+                error=self._render_operand(
+                    instruction.error, path=f"{path}.error", source=instruction
+                ),
+                exception_response=self._render_operand(
                     instruction.exception_response,
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                str(count),
+                count=str(count),
             )
         if instruction_type == "ModbusReceiveInstruction":
             count = len(instruction.addresses)
@@ -1502,23 +1521,25 @@ class _LadderExporter:
                 target_expr,
                 _quote(remote_start),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
-                self._render_operand(
+                receiving=self._render_operand(
                     instruction.receiving,
                     path=f"{path}.receiving",
                     source=instruction,
                 ),
-                self._render_operand(
+                success=self._render_operand(
                     instruction.success,
                     path=f"{path}.success",
                     source=instruction,
                 ),
-                self._render_operand(instruction.error, path=f"{path}.error", source=instruction),
-                self._render_operand(
+                error=self._render_operand(
+                    instruction.error, path=f"{path}.error", source=instruction
+                ),
+                exception_response=self._render_operand(
                     instruction.exception_response,
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                str(count),
+                count=str(count),
             )
         if instruction_type == "CallInstruction":
             return self._fn("call", _quote(str(instruction.subroutine_name)))
@@ -1983,10 +2004,12 @@ class _LadderExporter:
         rows.extend(return_rows)
         return rows
 
-    def _fn(self, name: str, *args: str) -> str:
-        if not args:
+    def _fn(self, name: str, *args: str, **kwargs: str) -> str:
+        parts = list(args)
+        parts.extend(f"{k}={v}" for k, v in kwargs.items())
+        if not parts:
             return f"{name}()"
-        return f"{name}({','.join(args)})"
+        return f"{name}({','.join(parts)})"
 
     def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn:
         source_file = getattr(source, "source_file", None) if source is not None else None

@@ -1,4 +1,4 @@
-# Click Ladder CSV Contract (v1)
+# Click Ladder CSV Contract (v2)
 
 This document specifies the CSV contract emitted by Click ladder export:
 
@@ -73,7 +73,7 @@ Multi-line comments emit one `#` row per line. Example:
 ```csv
 #,Initialize the light system.
 #,Activates when Button is pressed.
-R,X001,-,-,...,-,out(Y001,0)
+R,X001,-,-,...,-,out(Y001)
 ```
 
 Comment rows are metadata — consumers may ignore them or display them as rung annotations.
@@ -93,7 +93,7 @@ Cells can contain:
 - Blank (`""`) empty cell
 
 No shorthand markers (`->`, `...`) are emitted.
-No explicit `+` topology token is emitted in v1.
+No explicit `+` topology token is emitted.
 
 ## OR / branch wiring semantics
 
@@ -137,7 +137,7 @@ Pin rows are independent left-rail paths (not AND-chained through the parent out
 
 `forloop(count, oneshot=...)` lowers to:
 
-1. `for(count,oneshot)` row (`marker=R`)
+1. `for(count)` or `for(count,oneshot=1)` row (`marker=R`)
 2. Body instruction rows (`marker=R` per emitted body instruction row)
 3. Closing `next()` row (`marker=R`)
 
@@ -152,7 +152,8 @@ Each subroutine CSV is guaranteed to end with `return()`:
 
 All tokens are compact canonical function-style strings:
 
-- `name(arg1,arg2,...)`
+- `name(pos1,pos2,key=val,...)`
+- Positional args come first, then keyword args as `key=value`
 - no extra whitespace
 - dot pins as `.name(...)`
 
@@ -173,36 +174,39 @@ Collections:
 
 - List/tuple-like values render as bracket lists, for example `[A,B]`, `[[1,0],[0,1]]`.
 
-## Supported instruction tokens (v1)
+## Supported instruction tokens (v2)
+
+Positional args stay positional. Keyword-only args use `key=value` syntax.
+Conditional kwargs (marked with "if ≠0") are omitted when the value is the default (0).
 
 Producer may emit:
 
-- `out(target,oneshot)`
+- `out(target)` or `out(target,oneshot=1)`
 - `latch(target)`
 - `reset(target)`
-- `copy(source,target,oneshot)`
-- `blockcopy(source,dest,oneshot)`
-- `fill(value,dest,oneshot)`
-- `calc(expression,dest,mode,oneshot)`
-- `search("cond",value,range,result,found,continuous,oneshot)`
-- `pack_bits(bit_block,dest,oneshot)`
-- `pack_words(word_block,dest,oneshot)`
-- `pack_text(source_range,dest,allow_whitespace,oneshot)`
-- `unpack_to_bits(source,bit_block,oneshot)`
-- `unpack_to_words(source,word_block,oneshot)`
-- `on_delay(done,acc,preset,unit,has_reset)`
-- `off_delay(done,acc,preset,unit)`
-- `count_up(done,acc,preset)`
-- `count_down(done,acc,preset)`
+- `copy(source,target)` or `copy(source,target,oneshot=1)`
+- `blockcopy(source,dest)` or `blockcopy(source,dest,oneshot=1)`
+- `fill(value,dest)` or `fill(value,dest,oneshot=1)`
+- `calc(expression,dest,mode=decimal)` or `calc(...,mode=hex,oneshot=1)`
+- `search("cond",value,range,result,found)` or `search(...,continuous=1,oneshot=1)`
+- `pack_bits(bit_block,dest)` or `pack_bits(bit_block,dest,oneshot=1)`
+- `pack_words(word_block,dest)` or `pack_words(word_block,dest,oneshot=1)`
+- `pack_text(source_range,dest)` or `pack_text(...,allow_whitespace=1,oneshot=1)`
+- `unpack_to_bits(source,bit_block)` or `unpack_to_bits(source,bit_block,oneshot=1)`
+- `unpack_to_words(source,word_block)` or `unpack_to_words(source,word_block,oneshot=1)`
+- `on_delay(done,acc,preset=N,unit=Tms)`
+- `off_delay(done,acc,preset=N,unit=Tms)`
+- `count_up(done,acc,preset=N)`
+- `count_down(done,acc,preset=N)`
 - `shift(bit_range)`
-- `event_drum(outputs,events,pattern,current_step,completion_flag)`
-- `time_drum(outputs,presets,unit,pattern,current_step,accumulator,completion_flag)`
-- `send("host",port,"remote_start",source,sending,success,error,exception_response,device_id,count)`
-- `receive("host",port,"remote_start",dest,receiving,success,error,exception_response,device_id,count)`
+- `event_drum(outputs=[...],events=[...],pattern=[[...],...],current_step=X,completion_flag=X)`
+- `time_drum(outputs=[...],presets=[...],unit=Tms,pattern=[[...],...],current_step=X,accumulator=X,completion_flag=X)`
+- `send(target,"remote_start",source,sending=X,success=X,error=X,exception_response=X,count=N)`
+- `receive(target,"remote_start",dest,receiving=X,success=X,error=X,exception_response=X,count=N)`
 - `call("subroutine_name")`
   - Subroutine names must not contain `"`.
 - `return()`
-- `for(count,oneshot)`
+- `for(count)` or `for(count,oneshot=1)`
 - `next()`
 
 Pin tokens:
@@ -242,10 +246,10 @@ Allowed condition-cell forms:
 
 Allowed AF token forms:
 
-- `out(immediate(Y001),0)`
+- `out(immediate(Y001))`
 - `latch(immediate(Y001))`
 - `reset(immediate(Y001))`
-- `out(immediate(Y001..Y004),0)` (contiguous mapped range only)
+- `out(immediate(Y001..Y004))` (contiguous mapped range only)
 
 Rules:
 
