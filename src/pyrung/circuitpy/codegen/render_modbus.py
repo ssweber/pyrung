@@ -641,7 +641,7 @@ def _render_modbus_server(ctx: CodegenContext) -> list[str]:
     server = ctx.modbus_server
     return [
         "_mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)",
-        "_mb_server.bind(('', %d))" % server.port,
+        f"_mb_server.bind(('', {server.port}))",
         f"_mb_server.listen({server.max_clients})",
         "_mb_server.settimeout(0)",
         f"_mb_clients = [None] * {server.max_clients}",
@@ -785,8 +785,7 @@ def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
     return [
         f"def {spec.var_name}_build_request(tid):  # {fc_desc}: {plc_addr} ({count_desc}) on {spec.target_name}",
         *pdu_lines,
-        "    return struct.pack('>HHHB', int(tid) & 0xFFFF, 0, len(_pdu) + 1, %d) + _pdu"
-        % target.device_id,
+        f"    return struct.pack('>HHHB', int(tid) & 0xFFFF, 0, len(_pdu) + 1, {target.device_id}) + _pdu",
         "",
     ]
 
@@ -1013,7 +1012,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             ]
         )
 
-    lines.append("_mb_client_jobs = [%s]" % ", ".join(spec.var_name for spec in specs))
+    lines.append(f"_mb_client_jobs = [{', '.join(spec.var_name for spec in specs)}]")
     lines.extend(
         [
             "",

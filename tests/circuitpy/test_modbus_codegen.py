@@ -438,7 +438,7 @@ def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypat
         def readTemperature(self, slot, ch):
             return 0.0
 
-    created_sockets: list[object] = []
+    created_sockets: list[ScriptedSocket] = []
 
     class ScriptedSocket:
         def __init__(self, *args, **kwargs):
@@ -629,7 +629,7 @@ def test_modbus_client_receive_codegen_applies_response(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    created_sockets: list[object] = []
+    created_sockets: list[ScriptedSocket] = []
 
     class ScriptedSocket:
         def __init__(self, *args, **kwargs):
