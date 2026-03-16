@@ -240,17 +240,28 @@ def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     return tokens
 
 
-def _find_split_column(rows: list[list[str]]) -> int | None:
-    """Find the first column with T or | on the first data row.
+# Cell connectivity table — single source of truth for "what connects to what".
+# Content tokens (contacts, comparisons, out() calls) default to ("left", "right").
+# Adding a new read-only cell type is a one-line addition here.
+_ADJACENCY: dict[str, tuple[str, ...]] = {
+    "-": ("left", "right"),
+    "|": ("up", "down"),
+    "T": ("left", "right", "down"),
+}
 
-    Returns the column index (0-based, relative to condition columns) or None.
-    """
-    first_row = rows[0]
-    for col in range(_CONDITION_COLS):
-        cell = first_row[col + 1]  # +1 for marker
-        if cell == "T":
-            return col
-    return None
+
+def _cell_exits(cell: str) -> tuple[str, ...]:
+    """Exit directions for a cell type (content tokens default to left/right)."""
+    if not cell:
+        return ()
+    return _ADJACENCY.get(cell, ("left", "right"))
+
+
+def _cell_at(rows: list[list[str]], r: int, c: int) -> str:
+    """Cell value at condition column *c* on row *r* (empty if out of bounds)."""
+    if 0 <= r < len(rows) and 0 <= c < _CONDITION_COLS:
+        return rows[r][c + 1]  # +1 to skip marker column
+    return ""
 
 
 def _is_pin_row(row: list[str]) -> bool:
@@ -259,23 +270,200 @@ def _is_pin_row(row: list[str]) -> bool:
     return bool(af and af.startswith("."))
 
 
-def _is_or_continuation(row: list[str], split_col: int) -> bool:
-    """Check if a continuation row is an OR alternative.
+@dataclass
+class _PathResult:
+    """One path through the grid: collected conditions → AF instruction."""
 
-    OR rows have: no AF (or blank AF), and condition content before split_col,
-    and the split column cell is T or -.
+    conditions: list[str]
+    af_token: str
+    af_row: int
+
+
+def _walk_grid(
+    rows: list[list[str]],
+    pin_row_set: set[int],
+) -> list[_PathResult]:
+    """Find all root cells on the left edge and DFS-walk from each."""
+    n_rows = len(rows)
+    paths: list[_PathResult] = []
+
+    # Roots: first non-blank cell in column 0 per non-pin row.
+    roots: list[tuple[int, int]] = []
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        if _cell_at(rows, r, 0):
+            roots.append((r, 0))
+
+    # Fallback: if column 0 is entirely blank, scan for the leftmost occupied
+    # column (handles non-canonical decoded grids).
+    if not roots:
+        for r in range(n_rows):
+            if r in pin_row_set:
+                continue
+            for c in range(_CONDITION_COLS):
+                if _cell_at(rows, r, c):
+                    roots.append((r, c))
+                    break
+
+    for root_r, root_c in roots:
+        _dfs(rows, root_r, root_c, set(), pin_row_set, paths, ())
+
+    return paths
+
+
+def _dfs(
+    rows: list[list[str]],
+    r: int,
+    c: int,
+    visited: set[tuple[int, int]],
+    pin_row_set: set[int],
+    paths: list[_PathResult],
+    conditions: tuple[str, ...],
+) -> None:
+    """Recursive DFS walk.  Priority at every cell: right → down → up."""
+    cell = _cell_at(rows, r, c)
+    if not cell or (r, c) in visited:
+        return
+    visited.add((r, c))
+
+    # Record meaningful tokens (skip wire markers)
+    is_content = cell not in {"-", "|", "T"}
+    conds = conditions + (cell,) if is_content else conditions
+
+    exits = _cell_exits(cell)
+    has_right = "right" in exits
+    has_down = "down" in exits
+
+    # --- RIGHT ---
+    if has_right:
+        nc = c + 1
+        if nc < _CONDITION_COLS:
+            next_cell = _cell_at(rows, r, nc)
+            if next_cell and (r, nc) not in visited:
+                _dfs(rows, r, nc, visited, pin_row_set, paths, conds)
+            elif not next_cell:
+                # End of horizontal run — check AF on this row
+                af = rows[r][-1]
+                if af and not af.startswith("."):
+                    paths.append(_PathResult(list(conds), af, r))
+        else:
+            # Past last condition column → AF exit
+            af = rows[r][-1]
+            if af and not af.startswith("."):
+                paths.append(_PathResult(list(conds), af, r))
+
+    # --- DOWN (forced bidirectional from T) ---
+    if has_down:
+        nr = r + 1
+        if 0 <= nr < len(rows) and nr not in pin_row_set:
+            if _cell_at(rows, nr, c) and (nr, c) not in visited:
+                _dfs(rows, nr, c, visited, pin_row_set, paths, conds)
+
+    # --- UP (forced bidirectional — a T above pulls us up) ---
+    if r > 0 and (r - 1) not in pin_row_set:
+        above = _cell_at(rows, r - 1, c)
+        if above and "down" in _cell_exits(above) and (r - 1, c) not in visited:
+            _dfs(rows, r - 1, c, visited, pin_row_set, paths, conds)
+
+    # --- UP-RIGHT diagonal (T's down-wire drawn at left edge of its cell) ---
+    # A cell connects diagonally up-right to a T when the cell directly to the
+    # right is blank (gap), meaning there is no bridge occupying that position.
+    if r > 0 and c + 1 < _CONDITION_COLS and (r - 1) not in pin_row_set:
+        diag = _cell_at(rows, r - 1, c + 1)
+        right_cell = _cell_at(rows, r, c + 1)
+        if diag and "down" in _cell_exits(diag) and not right_cell:
+            if (r - 1, c + 1) not in visited:
+                _dfs(rows, r - 1, c + 1, visited, pin_row_set, paths, conds)
+
+    visited.discard((r, c))
+
+
+# --- Path grouping helpers ---------------------------------------------------
+
+
+def _longest_common_prefix(lists: list[list[str]]) -> list[str]:
+    """Return the longest list that is a prefix of every element in *lists*."""
+    if not lists:
+        return []
+    prefix = lists[0]
+    for lst in lists[1:]:
+        i = 0
+        while i < len(prefix) and i < len(lst) and prefix[i] == lst[i]:
+            i += 1
+        prefix = prefix[:i]
+    return list(prefix)
+
+
+def _longest_common_suffix(lists: list[list[str]]) -> list[str]:
+    """Return the longest list that is a suffix of every element in *lists*."""
+    if not lists:
+        return []
+    reversed_lists = [lst[::-1] for lst in lists]
+    return _longest_common_prefix(reversed_lists)[::-1]
+
+
+def _group_paths(
+    paths: list[_PathResult],
+) -> tuple[list[str], list[_OrGroup] | None, list[_InstructionInfo], list[int]]:
+    """Determine OR vs branch structure from walk paths.
+
+    Returns ``(shared_conditions, or_groups, instructions, af_rows)``.
     """
-    af = row[-1]
-    if af and not af.startswith("."):
-        return False
-    # Must have no AF
-    if af:
-        return False
-    # Check for the T/- marker at the split column
-    split_cell = row[split_col + 1]
-    if split_cell not in {"T", "-"}:
-        return False
-    return True
+    if not paths:
+        return [], None, [], []
+
+    unique_afs = list(dict.fromkeys(p.af_token for p in paths))
+
+    if len(unique_afs) == 1:
+        # All paths reach the same AF → possible OR
+        if len(paths) == 1:
+            p = paths[0]
+            return (
+                p.conditions,
+                None,
+                [_InstructionInfo(p.af_token, [], [])],
+                [p.af_row],
+            )
+
+        # Multiple paths → OR.  Shared trailing AND = common suffix.
+        cond_lists = [p.conditions for p in paths]
+        suffix = _longest_common_suffix(cond_lists)
+        n_suffix = len(suffix)
+
+        or_groups: list[_OrGroup] = []
+        for p in paths:
+            or_conds = (
+                p.conditions[: len(p.conditions) - n_suffix] if n_suffix else list(p.conditions)
+            )
+            if or_conds:
+                or_groups.append(_OrGroup(conditions=or_conds))
+
+        af = unique_afs[0]
+        af_row = paths[0].af_row
+        return (
+            suffix,
+            or_groups if len(or_groups) > 1 else None,
+            [_InstructionInfo(af, [], [])],
+            [af_row],
+        )
+
+    # Different AFs → branch.  Shared conditions = common prefix.
+    cond_lists = [p.conditions for p in paths]
+    prefix = _longest_common_prefix(cond_lists)
+    n_prefix = len(prefix)
+
+    instructions: list[_InstructionInfo] = []
+    af_rows: list[int] = []
+    for p in paths:
+        branch_conds = p.conditions[n_prefix:]
+        instructions.append(_InstructionInfo(p.af_token, branch_conds, []))
+        af_rows.append(p.af_row)
+
+    return prefix, None, instructions, af_rows
+
+
+# --- Top-level Phase 2 entry points -----------------------------------------
 
 
 def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
@@ -316,7 +504,7 @@ def _analyze_single_rung(
     is_forloop_body: bool = False,
     is_forloop_next: bool = False,
 ) -> _AnalyzedRung:
-    """Analyze a single rung's topology."""
+    """Analyze a single rung's topology via graph walk."""
     comment = "\n".join(rung.comment_lines) if rung.comment_lines else None
     rows = rung.rows
 
@@ -328,184 +516,70 @@ def _analyze_single_rung(
             instructions=[],
         )
 
-    first_row = rows[0]
-    af0 = first_row[-1]
+    # Separate pin rows from content rows
+    pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
 
-    # Simple case: single row, no split
-    if len(rows) == 1:
-        conditions = _extract_conditions(first_row, 0, _CONDITION_COLS)
+    # Walk the grid
+    paths = _walk_grid(rows, pin_row_set)
+
+    if not paths:
+        # No paths discovered — handle rows with only an AF and no conditions,
+        # or rows that are entirely blank in the condition columns.
+        for i, row in enumerate(rows):
+            if i not in pin_row_set:
+                af = row[-1]
+                if af and not af.startswith("."):
+                    pins = _collect_pins([rows[j] for j in sorted(pin_row_set)])
+                    return _AnalyzedRung(
+                        comment=comment,
+                        shared_conditions=[],
+                        or_groups=None,
+                        instructions=[
+                            _InstructionInfo(af_token=af, branch_conditions=[], pins=pins)
+                        ],
+                        is_forloop_start=is_forloop_start,
+                        is_forloop_body=is_forloop_body,
+                        is_forloop_next=is_forloop_next,
+                    )
         return _AnalyzedRung(
             comment=comment,
-            shared_conditions=conditions,
+            shared_conditions=[],
             or_groups=None,
-            instructions=[_InstructionInfo(af_token=af0, branch_conditions=[], pins=[])]
-            if af0
-            else [],
-            is_forloop_start=is_forloop_start,
-            is_forloop_body=is_forloop_body,
-            is_forloop_next=is_forloop_next,
+            instructions=[],
         )
 
-    # Multi-row: find split column
-    split_col = _find_split_column(rows)
+    # Group walk results into OR / branch structure
+    shared, or_groups, instructions, af_rows = _group_paths(paths)
 
-    if split_col is None:
-        # Just a single instruction with pin rows
-        conditions = _extract_conditions(first_row, 0, _CONDITION_COLS)
-        pins = _collect_pins(rows[1:])
-        return _AnalyzedRung(
-            comment=comment,
-            shared_conditions=conditions,
-            or_groups=None,
-            instructions=[_InstructionInfo(af_token=af0, branch_conditions=[], pins=pins)]
-            if af0
-            else [],
-            is_forloop_start=is_forloop_start,
-            is_forloop_body=is_forloop_body,
-            is_forloop_next=is_forloop_next,
-        )
-
-    # Has split — classify continuation rows
-    shared_conditions = _extract_conditions(first_row, 0, split_col)
-
-    # Check: is this an OR pattern or a branch/multi-output pattern?
-    # OR pattern: continuation rows have conditions before split, blank AF
-    # Branch/multi-output: continuation rows have AF tokens
-
-    # First, check if ALL continuation rows (non-pin) are OR continuations
-    non_pin_continuations = [r for r in rows[1:] if not _is_pin_row(r)]
-    all_or = (
-        all(_is_or_continuation(r, split_col) for r in non_pin_continuations)
-        if non_pin_continuations
-        else False
-    )
-
-    if all_or and non_pin_continuations:
-        return _analyze_or_rung_with_split(rung, comment, split_col, shared_conditions)
-
-    # Branch / multi-output pattern
-    return _analyze_branch_rung(rung, comment, split_col, shared_conditions)
-
-
-def _analyze_or_rung_with_split(
-    rung: _RawRung,
-    comment: str | None,
-    split_col: int,
-    shared_before_split: list[str],
-) -> _AnalyzedRung:
-    """Analyze a rung where T at split_col is an OR merge point."""
-    rows = rung.rows
-    first_row = rows[0]
-    af = first_row[-1]
-
-    # First OR group: conditions before split on first row
-    first_group_conds = _extract_conditions(first_row, 0, split_col)
-    or_groups = [_OrGroup(conditions=first_group_conds)]
-
-    # Post-split conditions (shared trailing AND)
-    post_split = _extract_conditions(first_row, split_col + 1, _CONDITION_COLS)
-
-    # Continuation rows contribute OR alternatives
-    pin_rows: list[list[str]] = []
-    for row in rows[1:]:
-        if _is_pin_row(row):
-            pin_rows.append(row)
-            continue
-        alt_conditions = _extract_conditions(row, 0, split_col)
-        if alt_conditions:
-            or_groups.append(_OrGroup(conditions=alt_conditions))
-
-    pins = _collect_pins(pin_rows)
-
-    return _AnalyzedRung(
-        comment=comment,
-        shared_conditions=post_split,
-        or_groups=or_groups if len(or_groups) > 1 else None,
-        instructions=[_InstructionInfo(af_token=af, branch_conditions=[], pins=pins)] if af else [],
-    )
-
-
-def _analyze_branch_rung(
-    rung: _RawRung,
-    comment: str | None,
-    split_col: int,
-    shared_conditions: list[str],
-) -> _AnalyzedRung:
-    """Analyze a rung with branches or multiple outputs."""
-    rows = rung.rows
-    first_row = rows[0]
-    af0 = first_row[-1]
-
-    instructions: list[_InstructionInfo] = []
-
-    # First instruction: from the first row
-    first_branch_conds = _extract_conditions(first_row, split_col + 1, _CONDITION_COLS)
-
-    # Collect pin rows that belong to the first instruction
-    first_pins: list[list[str]] = []
-    rest_start = 1
-    for idx in range(1, len(rows)):
-        if _is_pin_row(rows[idx]):
-            first_pins.append(rows[idx])
-            rest_start = idx + 1
-        else:
-            break
-
-    if af0:
-        instructions.append(
-            _InstructionInfo(
-                af_token=af0,
-                branch_conditions=first_branch_conds,
-                pins=_collect_pins(first_pins),
-            )
-        )
-
-    # Process remaining continuation rows
-    idx = rest_start
-    while idx < len(rows):
-        row = rows[idx]
-        af = row[-1]
-
-        if _is_pin_row(row):
-            # Attach to most recent instruction
-            if instructions:
-                pin_match = _PIN_RE.match(af)
-                if pin_match:
-                    pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
-                    instructions[-1].pins.append(
+    # Attach pin rows to their nearest preceding instruction (by row index)
+    if pin_row_set and instructions:
+        for pin_idx in sorted(pin_row_set):
+            best = -1
+            for i, ar in enumerate(af_rows):
+                if ar <= pin_idx:
+                    best = i
+            if best >= 0:
+                pin_row = rows[pin_idx]
+                af = pin_row[-1]
+                match = _PIN_RE.match(af)
+                if match:
+                    pin_conds = _extract_conditions(pin_row, 0, _CONDITION_COLS)
+                    instructions[best].pins.append(
                         _PinInfo(
-                            name=pin_match.group(1),
-                            arg=pin_match.group(2),
+                            name=match.group(1),
+                            arg=match.group(2),
                             conditions=pin_conds,
                         )
                     )
-            idx += 1
-            continue
-
-        if af:
-            # New instruction/branch row
-            branch_conds = _extract_conditions(row, split_col + 1, _CONDITION_COLS)
-            pin_rows_for_this: list[list[str]] = []
-            idx += 1
-            while idx < len(rows) and _is_pin_row(rows[idx]):
-                pin_rows_for_this.append(rows[idx])
-                idx += 1
-            instructions.append(
-                _InstructionInfo(
-                    af_token=af,
-                    branch_conditions=branch_conds,
-                    pins=_collect_pins(pin_rows_for_this),
-                )
-            )
-            continue
-
-        idx += 1
 
     return _AnalyzedRung(
         comment=comment,
-        shared_conditions=shared_conditions,
-        or_groups=None,
+        shared_conditions=shared,
+        or_groups=or_groups,
         instructions=instructions,
+        is_forloop_start=is_forloop_start,
+        is_forloop_body=is_forloop_body,
+        is_forloop_next=is_forloop_next,
     )
 
 
@@ -1593,9 +1667,7 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
                     if fhw is None:
                         continue
                     if fhw.start == fhw.end:
-                        lines.append(
-                            f"    {sdecl.name}.{fn}.map_to({fhw.block_var}[{fhw.start}]),"
-                        )
+                        lines.append(f"    {sdecl.name}.{fn}.map_to({fhw.block_var}[{fhw.start}]),")
                     else:
                         lines.append(
                             f"    {sdecl.name}.{fn}.map_to("

@@ -347,6 +347,243 @@ class TestTopologyAnalysis:
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 graph-walk edge cases (synthetic grids)
+# ---------------------------------------------------------------------------
+
+# _CONDITION_COLS (31) + marker + AF = 33 cells per row.
+_GRID_WIDTH = 33
+
+
+def _make_row(marker: str, cells: dict[int, str], af: str = "") -> list[str]:
+    """Build a 33-cell row from a sparse column map.
+
+    *cells* maps 0-based condition-column index → value.
+    Unmentioned columns are blank.
+    """
+    row = [""] * _GRID_WIDTH
+    row[0] = marker
+    row[-1] = af
+    for col, val in cells.items():
+        row[col + 1] = val  # +1 to skip marker
+    return row
+
+
+def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
+    """Fill condition columns [start, end) with '-' in *cells* (mutates)."""
+    for c in range(start, end):
+        cells.setdefault(c, "-")
+    return cells
+
+
+class TestGraphWalkEdgeCases:
+    """Synthetic grids exercising walk rules from the Phase 2 spec."""
+
+    def test_forced_bidirectional_or(self):
+        """OR alternative on row 1 reaches AF via UP through T (forced bidi).
+
+        Row 0: R | X001 | T | - ... - | out(Y001)
+        Row 1:   | X002 | - |         |
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002", 1: "-"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        result = _analyze_single_rung(rung)
+        assert result.or_groups is not None
+        assert len(result.or_groups) == 2
+        conds = [g.conditions for g in result.or_groups]
+        assert ["X001"] in conds
+        assert ["X002"] in conds
+        assert len(result.instructions) == 1
+        assert result.instructions[0].af_token == "out(Y001)"
+
+    def test_up_right_diagonal(self):
+        """Cell connects UP-RIGHT to a T when the bridge cell is blank (gap).
+
+        Row 0:   |      | T | - ... - | out(Y001)
+        Row 1:   | X001 |   |         |
+
+        X001 at (1,0) has blank to its right at (1,1).  T at (0,1) has
+        'down', so the diagonal UP-RIGHT rule fires: X001 → T → AF.
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row("R", _fill_dashes({1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X001"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        result = _analyze_single_rung(rung)
+        assert len(result.instructions) == 1
+        assert result.instructions[0].af_token == "out(Y001)"
+        assert "X001" in result.shared_conditions
+
+    def test_bridge_connects_branch(self):
+        """T forces bidirectional down to a '-' bridge, connecting a second AF.
+
+        Row 0: R | X001 | T | - ... - | out(Y001)
+        Row 1:   |      | - | - ... - | out(Y002)
+                          ^bridge at (1,1) — T forces connection
+
+        Single root (X001).  T forks: right→Y001, down→bridge→Y002.
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        r0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        r1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(Y002)")
+        result = _analyze_single_rung(_RawRung(comment_lines=[], rows=[r0, r1]))
+
+        assert len(result.instructions) == 2
+        assert result.instructions[0].af_token == "out(Y001)"
+        assert result.instructions[1].af_token == "out(Y002)"
+        assert "X001" in result.shared_conditions
+
+    def test_three_way_or(self):
+        """Three OR alternatives: X001, X002, X003 all reach the same AF.
+
+        Row 0: R | X001 | T | - ... - | out(Y001)
+        Row 1:   | X002 | T |         |
+        Row 2:   | X003 | - |         |
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", {0: "X002", 1: "T"})
+        row2 = _make_row("", {0: "X003", 1: "-"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
+
+        result = _analyze_single_rung(rung)
+        assert result.or_groups is not None
+        assert len(result.or_groups) == 3
+        conds = [g.conditions for g in result.or_groups]
+        assert ["X001"] in conds
+        assert ["X002"] in conds
+        assert ["X003"] in conds
+
+    def test_nested_t_cascade(self):
+        """Nested T cascade: T at (0,1) forks, T at (1,1) forks again.
+
+        Row 0: R | btn | T | -   ... - | out(L1)
+        Row 1:   |     | T | auto ... - | out(L2)
+        Row 2:   |     | - | -   ... - | out(L3)
+
+        Expected: shared=[btn], three instructions in scan order (right-first).
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row("R", _fill_dashes({0: "btn", 1: "T"}, 2, 31), af="out(L1)")
+        row1 = _make_row("", _fill_dashes({1: "T", 2: "auto"}, 3, 31), af="out(L2)")
+        row2 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(L3)")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
+
+        result = _analyze_single_rung(rung)
+        assert result.or_groups is None
+        assert "btn" in result.shared_conditions
+        assert len(result.instructions) == 3
+
+        # Scan order: right-first at each fork
+        assert result.instructions[0].af_token == "out(L1)"
+        assert result.instructions[1].af_token == "out(L2)"
+        assert result.instructions[2].af_token == "out(L3)"
+
+        # Only the second branch has a branch-local condition
+        assert result.instructions[0].branch_conditions == []
+        assert result.instructions[1].branch_conditions == ["auto"]
+        assert result.instructions[2].branch_conditions == []
+
+    def test_unconditional_rung(self):
+        """Rung with no conditions — all dashes to AF."""
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row = _make_row("R", _fill_dashes({}, 0, 31), af="out(Y001)")
+        rung = _RawRung(comment_lines=[], rows=[row])
+
+        result = _analyze_single_rung(rung)
+        assert result.shared_conditions == []
+        assert result.or_groups is None
+        assert len(result.instructions) == 1
+        assert result.instructions[0].af_token == "out(Y001)"
+
+    def test_or_with_three_trailing_and(self):
+        """OR alternatives followed by multiple shared trailing AND conditions.
+
+        Row 0: R | X001 | T | C1 | C2 | - ... | out(Y001)
+        Row 1:   | X002 | - |    |    |       |
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row(
+            "R", _fill_dashes({0: "X001", 1: "T", 2: "C1", 3: "C2"}, 4, 31), af="out(Y001)"
+        )
+        row1 = _make_row("", {0: "X002", 1: "-"})
+        rung = _RawRung(comment_lines=[], rows=[row0, row1])
+
+        result = _analyze_single_rung(rung)
+        assert result.or_groups is not None
+        assert len(result.or_groups) == 2
+        # Trailing AND conditions should be shared
+        assert "C1" in result.shared_conditions
+        assert "C2" in result.shared_conditions
+
+    def test_pin_attached_to_correct_instruction(self):
+        """Pin row attaches to its nearest preceding instruction.
+
+        Real encoder layout for branch + timer w/ pin:
+        Row 0: R | X001 | T | - ... | out(Y001)
+        Row 1:   |      | - | - ... | on_delay(T1)
+        Row 2:   | X002 | - | - ... | .reset()
+
+        Pin (.reset at row 2) attaches to on_delay (row 1), not out (row 0).
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
+        row1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="on_delay(T1)")
+        row2 = _make_row("", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
+
+        result = _analyze_single_rung(rung)
+        assert len(result.instructions) == 2
+        assert result.instructions[0].af_token == "out(Y001)"
+        assert result.instructions[0].pins == []
+        assert result.instructions[1].af_token == "on_delay(T1)"
+        assert len(result.instructions[1].pins) == 1
+        assert result.instructions[1].pins[0].name == "reset"
+        assert result.instructions[1].pins[0].conditions == ["X002"]
+
+    def test_noncanonical_left_edge_not_col0(self):
+        """Non-canonical grid: first content starts at column 1, not column 0.
+
+        Row 0: R |   | X001 | - ... | out(Y001)
+
+        Fallback root finding should locate X001 at col 1.
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row = _make_row("R", _fill_dashes({1: "X001"}, 2, 31), af="out(Y001)")
+        rung = _RawRung(comment_lines=[], rows=[row])
+
+        result = _analyze_single_rung(rung)
+        assert "X001" in result.shared_conditions
+        assert result.instructions[0].af_token == "out(Y001)"
+
+    def test_adjacency_table_content_default(self):
+        """Content tokens (contacts, comparisons) default to left/right exits.
+
+        Ensures tokens like 'DS1==5' are traversed the same as '-'.
+        """
+        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+
+        row = _make_row("R", _fill_dashes({0: "X001", 1: "DS1==5"}, 2, 31), af="out(Y001)")
+        rung = _RawRung(comment_lines=[], rows=[row])
+
+        result = _analyze_single_rung(rung)
+        assert "X001" in result.shared_conditions
+        assert "DS1==5" in result.shared_conditions
+
+
+# ---------------------------------------------------------------------------
 # Phase 3: Operand inference tests
 # ---------------------------------------------------------------------------
 
