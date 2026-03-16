@@ -238,6 +238,111 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 - [Click Ladder CSV Contract](click-ladder-csv.md)
 
+## CSV to Python codegen
+
+`csv_to_pyrung()` converts a Click ladder CSV (v2 format) back into executable pyrung Python source. The generated code round-trips: run it and call `to_ladder()` to reproduce the original CSV.
+
+```python
+from pyrung.click import csv_to_pyrung
+
+code = csv_to_pyrung("main.csv")
+
+# or write to file:
+code = csv_to_pyrung("main.csv", output_path="generated.py")
+```
+
+### Nickname substitution
+
+Three ways to provide nicknames for readable variable names:
+
+1. `nickname_csv=` — path to a Click nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
+2. `nicknames=` — pre-parsed `{operand: nickname}` dict (e.g. `{"X001": "start_button"}`).
+3. Neither — raw operand names used as-is (`X001`, `DS1`, etc.).
+
+Cannot provide both `nickname_csv` and `nicknames`.
+
+```python
+code = csv_to_pyrung("main.csv", nickname_csv="Address.csv")
+
+code = csv_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
+```
+
+### Structured type inference
+
+When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally, which reconstructs `@named_array` and `@udt` metadata from the CSV markers. The generated code emits idiomatic structure declarations instead of hundreds of flat tags.
+
+Without `nickname_csv`, a named-array group comes back flat:
+
+```python
+Channel1_id = Int("Channel1_id")
+Channel1_val = Int("Channel1_val")
+Channel2_id = Int("Channel2_id")
+Channel2_val = Int("Channel2_val")
+
+# in the program:
+copy(Channel1_id, Channel2_val)
+
+# in TagMap:
+mapping = TagMap({
+    Channel1_id: ds[101],
+    Channel1_val: ds[102],
+    ...
+})
+```
+
+With `nickname_csv=` pointing to a CSV that has named-array markers:
+
+```python
+@named_array(Int, count=2)
+class Channel:
+    id = 0
+    val = 0
+
+# in the program:
+copy(Channel[1].id, Channel[2].val)
+
+# in TagMap:
+mapping = TagMap([
+    *Channel.map_to(ds.select(101, 104)),
+], include_system=False)
+```
+
+For UDTs (fields spanning different memory banks), per-field `map_to` is emitted:
+
+```python
+@udt(count=2)
+class Motor:
+    running: Bool = False
+    speed: Int = 0
+
+mapping = TagMap([
+    Motor.running.map_to(c.select(101, 102)),
+    Motor.speed.map_to(ds.select(1001, 1002)),
+], include_system=False)
+```
+
+Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`.
+
+For details on `@named_array` and `@udt` syntax, see the [ladder logic guide](../guides/ladder-logic.md).
+
+### Subroutines
+
+Pass a directory containing `main.csv` and `sub_*.csv` files:
+
+```python
+code = csv_to_pyrung("ladder_dir/")
+```
+
+### What codegen infers
+
+Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `any_of()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
+
+For the CSV format that codegen reads, see the [Click Ladder CSV Contract](click-ladder-csv.md).
+
+### Round-trip guarantee
+
+The generated code is designed to round-trip: `exec()` the output, then `mapping.to_ladder(logic)` reproduces the original CSV. This is tested extensively.
+
 ## ClickDataProvider — soft PLC
 
 `ClickDataProvider` implements the `pyclickplc` `DataProvider` protocol, bridging pyrung's `SystemState` to a Modbus TCP server. This lets pyrung act as a soft PLC accessible from Click Programming Software or any Modbus client.
