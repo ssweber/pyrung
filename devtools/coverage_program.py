@@ -1,396 +1,574 @@
-"""Master coverage program — one rung per instruction variant.
+"""Coverage program generator for laddercodec.
 
-Run this to generate master.csv via to_ladder(). Each rung exercises
-exactly one instruction type so laddercodec can compare per-rung bytes
-independently.
+Programmatically generates one rung per instruction/operand variant,
+plus one rung per condition kind. Auto-allocates Click addresses.
 
-Rung IDs are embedded as comments so the progress report can name them.
+Each rung exercises exactly one codec path so laddercodec can compare
+per-rung bytes independently. Rung comments encode stable IDs.
 
 Usage:
-    python -m coverage_program
-
-Adapt imports to your actual pyrung project layout.
+    python devtools/coverage_program.py
 """
 
+from __future__ import annotations
+
+from itertools import count
 from pathlib import Path
+from typing import Any
 
 from pyrung import (
     Block,
     Bool,
+    Char,
     Dint,
     Int,
     Program,
+    Real,
     Rung,
     TagType,
     Tms,
+    Word,
     any_of,
+    as_ascii,
+    as_binary,
+    as_text,
+    as_value,
+    blockcopy,
     calc,
     copy,
     count_down,
     count_up,
+    event_drum,
     fall,
     fill,
+    forloop,
     immediate,
     latch,
     off_delay,
     on_delay,
     out,
+    pack_bits,
+    pack_text,
+    pack_words,
     reset,
     rise,
     search,
     shift,
+    time_drum,
+    unpack_to_bits,
+    unpack_to_words,
 )
-from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
-
-# ── Tag allocation ──────────────────────────────────────────────────
-# Each rung gets its own addresses so there are no collisions.
-# Naming: r{NN}_{purpose}
-
-# We'll use x[1]..x[16] for condition inputs, x[21]..x[32] for more.
-# y[1]..y[16] for coil outputs.
-# t[1]..t[4], td[1]..td[4] for timers.
-# ct[1]..ct[4], ctd[1]..ctd[4] for counters.
-# ds[1]..ds[50] for integer scratch.
-# c[1]..c[50] for bit scratch.
-# dd[1]..dd[4] for double int scratch.
-# df[1]..df[4] for float scratch.
-# dh[1]..dh[4] for hex scratch.
-# txt[1]..txt[10] for text scratch.
-
-
-# ── Semantic tags ───────────────────────────────────────────────────
-# Contacts / conditions
-r01_in = Bool("r01_in")
-r02_in = Bool("r02_in")
-r03_in = Bool("r03_in")
-r04_in = Bool("r04_in")
-r05_in = Bool("r05_in")
-r06_in = Bool("r06_in")
-r07_in = Bool("r07_in")
-r08_in = Bool("r08_in")
-r09_in = Bool("r09_in")
-r10_in = Bool("r10_in")
-r11_in = Bool("r11_in")
-r12_in = Bool("r12_in")
-r13_in = Bool("r13_in")
-r14_in = Bool("r14_in")
-r15_in = Bool("r15_in")
-r16_in = Bool("r16_in")
-r17_in = Bool("r17_in")
-r18_in = Bool("r18_in")
-r19_in = Bool("r19_in")
-r20_in = Bool("r20_in")
-r21_in = Bool("r21_in")
-r22_in = Bool("r22_in")
-r23_in = Bool("r23_in")
-r24_in = Bool("r24_in")
-r25_in = Bool("r25_in")
-
-r08_cmp = Int("r08_cmp")
-r09_cmp = Int("r09_cmp")
-r10_cmp = Int("r10_cmp")
-r11_cmp = Int("r11_cmp")
-r12_cmp = Int("r12_cmp")
-r13_cmp = Int("r13_cmp")
-
-# Coil outputs
-r01_out = Bool("r01_out")
-r02_out = Bool("r02_out")
-r03_out = Bool("r03_out")
-r04_out = Bool("r04_out")
-r05_out = Bool("r05_out")
-r06_out = Bool("r06_out")
-r07_out = Bool("r07_out")
-r08_out = Bool("r08_out")
-r09_out = Bool("r09_out")
-r10_out = Bool("r10_out")
-r11_out = Bool("r11_out")
-r12_out = Bool("r12_out")
-r13_out = Bool("r13_out")
-
-# Timer tags
-r14_done = Bool("r14_done")
-r14_acc = Int("r14_acc")
-r15_done = Bool("r15_done")
-r15_acc = Int("r15_acc")
-r15_rst = Bool("r15_rst")
-r16_done = Bool("r16_done")
-r16_acc = Int("r16_acc")
-
-# Counter tags
-r17_done = Bool("r17_done")
-r17_acc = Dint("r17_acc")
-r17_rst = Bool("r17_rst")
-r18_done = Bool("r18_done")
-r18_acc = Dint("r18_acc")
-r18_rst = Bool("r18_rst")
-
-# Data transfer tags
-r19_src = Int("r19_src")
-r19_dst = Int("r19_dst")
-r20_fill_dest = Block("r20_fill", TagType.INT, 1, 10)
-
-# Calc
-r21_a = Int("r21_a")
-r21_b = Int("r21_b")
-r21_result = Int("r21_result")
-
-# Search
-r22_val = Int("r22_val")
-r22_result = Int("r22_result")
-r22_found = Bool("r22_found")
-r22_search_src = Block("r22_srch", TagType.INT, 1, 10)
-
-# Shift
-r23_clock = Bool("r23_clock")
-r23_reset = Bool("r23_reset")
-r23_shift_bits = Block("r23_shft", TagType.BOOL, 1, 8)
-
-# OR branch
-r24_a = Bool("r24_a")
-r24_b = Bool("r24_b")
-r24_out = Bool("r24_out")
-
-# Multi-condition AND
-r25_a = Bool("r25_a")
-r25_b = Bool("r25_b")
-r25_out = Bool("r25_out")
+from pyrung.click import (
+    ModbusTarget,
+    TagMap,
+    c,
+    ct,
+    ctd,
+    dd,
+    df,
+    dh,
+    ds,
+    send,
+    receive,
+    t,
+    td,
+    txt,
+    x,
+    y,
+)
 
 
-# ── Rung catalog ────────────────────────────────────────────────────
-# Each rung comment encodes a stable ID for the progress report.
+# ── Auto-allocator ──────────────────────────────────────────────────
+
+
+class Alloc:
+    """Sequential Click address allocator with automatic TagMap building."""
+
+    def __init__(self) -> None:
+        self._pos: dict[str, int] = {
+            b: 1
+            for b in ("c", "ds", "dd", "dh", "df", "txt", "x", "y", "t", "td", "ct", "ctd")
+        }
+        self._seq = count(1)
+        self._map: dict[Any, Any] = {}
+
+    def _take(self, bank: str, n: int = 1) -> int:
+        start = self._pos[bank]
+        self._pos[bank] += n
+        return start
+
+    def _name(self) -> str:
+        return f"v{next(self._seq):03d}"
+
+    # — single tags —
+
+    def bool(self) -> Bool:
+        tag = Bool(self._name())
+        self._map[tag] = c[self._take("c")]
+        return tag
+
+    def x_bool(self) -> Bool:
+        tag = Bool(self._name())
+        self._map[tag] = x[self._take("x")]
+        return tag
+
+    def y_bool(self) -> Bool:
+        tag = Bool(self._name())
+        self._map[tag] = y[self._take("y")]
+        return tag
+
+    def int_(self) -> Int:
+        tag = Int(self._name())
+        self._map[tag] = ds[self._take("ds")]
+        return tag
+
+    def dint(self) -> Dint:
+        tag = Dint(self._name())
+        self._map[tag] = dd[self._take("dd")]
+        return tag
+
+    def real(self) -> Real:
+        tag = Real(self._name())
+        self._map[tag] = df[self._take("df")]
+        return tag
+
+    def word(self) -> Word:
+        tag = Word(self._name())
+        self._map[tag] = dh[self._take("dh")]
+        return tag
+
+    def char(self) -> Char:
+        tag = Char(self._name())
+        self._map[tag] = txt[self._take("txt")]
+        return tag
+
+    # — timer / counter pairs —
+
+    def timer(self) -> tuple[Bool, Int]:
+        n = self._name()
+        done, acc = Bool(f"{n}_d"), Int(f"{n}_a")
+        self._map[done] = t[self._take("t")]
+        self._map[acc] = td[self._take("td")]
+        return done, acc
+
+    def counter(self) -> tuple[Bool, Dint]:
+        n = self._name()
+        done, acc = Bool(f"{n}_d"), Dint(f"{n}_a")
+        self._map[done] = ct[self._take("ct")]
+        self._map[acc] = ctd[self._take("ctd")]
+        return done, acc
+
+    # — blocks —
+
+    def bool_block(self, size: int) -> Block:
+        blk = Block(self._name(), TagType.BOOL, 1, size)
+        s = self._take("c", size)
+        self._map[blk] = c.select(s, s + size - 1)
+        return blk
+
+    def int_block(self, size: int) -> Block:
+        blk = Block(self._name(), TagType.INT, 1, size)
+        s = self._take("ds", size)
+        self._map[blk] = ds.select(s, s + size - 1)
+        return blk
+
+    def char_block(self, size: int) -> Block:
+        blk = Block(self._name(), TagType.CHAR, 1, size)
+        s = self._take("txt", size)
+        self._map[blk] = txt.select(s, s + size - 1)
+        return blk
+
+    def tagmap(self) -> TagMap:
+        return TagMap(self._map)
+
+
+# ── Variant tables ──────────────────────────────────────────────────
+#
+# Each table is a list of (label, factory) pairs.  The factory receives
+# the allocator and returns the operand(s) needed for that variant.
+# Adding a new variant = one new line in the table.
+
+# fmt: off
+
+# Condition variants — each factory returns a tuple of Rung args.
+CONDITIONS: list[tuple[str, Any]] = [
+    ("no",        lambda a: (a.bool(),)),
+    ("nc",        lambda a: (~a.bool(),)),
+    ("rise",      lambda a: (rise(a.bool()),)),
+    ("fall",      lambda a: (fall(a.bool()),)),
+    ("immediate", lambda a: (immediate(a.x_bool()),)),
+    ("eq",        lambda a: (a.int_() == 5,)),
+    ("ne",        lambda a: (a.int_() != 0,)),
+    ("lt",        lambda a: (a.int_() < 100,)),
+    ("gt",        lambda a: (a.int_() > 0,)),
+    ("le",        lambda a: (a.int_() <= 50,)),
+    ("ge",        lambda a: (a.int_() >= 10,)),
+    ("or",        lambda a: (any_of(a.bool(), a.bool()),)),
+    ("and",       lambda a: (a.bool(), a.bool())),
+]
+
+# Coil target variants — each factory returns the target operand.
+COIL_TARGETS: list[tuple[str, Any]] = [
+    ("tag",       lambda a: a.bool()),
+    ("block",     lambda a: a.bool_block(4).select(1, 4)),
+    ("immediate", lambda a: immediate(a.y_bool())),
+]
+
+# Copy source variants — each factory returns (source, dest).
+COPY_VARIANTS: list[tuple[str, Any]] = [
+    ("tag",           lambda a: (a.int_(),                    a.int_())),
+    ("literal_int",   lambda a: (42,                          a.int_())),
+    ("literal_float", lambda a: (3.14,                        a.real())),
+    ("as_value",      lambda a: (as_value(a.int_()),          a.int_())),
+    ("as_text",       lambda a: (as_text(a.int_()),           a.int_())),
+    ("as_text_opts",  lambda a: (as_text(a.int_(), suppress_zero=False, pad=3), a.int_())),
+    ("as_binary",     lambda a: (as_binary(a.int_()),         a.int_())),
+    ("as_ascii",      lambda a: (as_ascii(a.int_()),          a.int_())),
+]
+
+# Blockcopy source variants — each factory returns (source_range, dest_range).
+BLOCKCOPY_VARIANTS: list[tuple[str, Any]] = [
+    ("block",    lambda a: (a.int_block(4).select(1, 4),              a.int_block(4).select(1, 4))),
+    ("as_value", lambda a: (as_value(a.int_block(4).select(1, 4)),    a.int_block(4).select(1, 4))),
+]
+
+# Fill value variants — each factory returns (value, dest_range).
+FILL_VARIANTS: list[tuple[str, Any]] = [
+    ("literal", lambda a: (0,        a.int_block(4).select(1, 4))),
+    ("tag",     lambda a: (a.int_(), a.int_block(4).select(1, 4))),
+]
+
+# Search operator variants.
+SEARCH_OPS: list[tuple[str, str]] = [
+    ("eq", "=="), ("ne", "!="), ("lt", "<"), ("gt", ">"), ("le", "<="), ("ge", ">="),
+]
+
+# Calc variants — each factory returns (expression, dest).
+CALC_VARIANTS: list[tuple[str, Any]] = [
+    ("decimal", lambda a: (a.int_() + a.int_(), a.int_(),  False)),
+    ("hex",     lambda a: (a.word() + a.word(), a.word(),   False)),
+    ("oneshot", lambda a: (a.int_() * a.int_(), a.int_(),   True)),
+]
+
+# Timer variants — each factory returns (done, acc, preset, unit, reset_tag|None).
+TIMER_VARIANTS: list[tuple[str, Any]] = [
+    ("ton",  lambda a: ("on",  a.timer(), 3000, None)),          # TON: no reset
+    ("rton", lambda a: ("on",  a.timer(), 5000, a.bool())),      # RTON: with reset
+    ("tof",  lambda a: ("off", a.timer(), 2000, None)),          # TOF: off-delay
+]
+
+# Counter variants — each factory returns (kind, done, acc, preset, down|None, reset).
+COUNTER_VARIANTS: list[tuple[str, Any]] = [
+    ("up__reset", lambda a: ("up",   a.counter(), 100, None,     a.bool())),
+    ("up__down",  lambda a: ("up",   a.counter(), 100, a.bool(), a.bool())),
+    ("down",      lambda a: ("down", a.counter(), 50,  None,     a.bool())),
+]
+
+# Forloop variants — each factory returns (count, oneshot).
+FORLOOP_VARIANTS: list[tuple[str, Any]] = [
+    ("basic",   lambda _: (4, False)),
+    ("oneshot", lambda _: (4, True)),
+]
+
+# fmt: on
+
+
+# ── Program generation ──────────────────────────────────────────────
+
+a = Alloc()
 
 with Program() as coverage_program:
-    # ── Condition × Coil matrix ─────────────────────────────────────
 
-    # 01: NO contact → OUT coil
-    with Rung(r01_in) as r:
-        r.comment = "01_contact_no__out"
-        out(r01_out)
+    # ── 1. Condition coverage (each kind × simple out) ──────────────
 
-    # 02: NC contact → OUT coil
-    with Rung(~r02_in) as r:
-        r.comment = "02_contact_nc__out"
-        out(r02_out)
+    for label, make_cond in CONDITIONS:
+        target = a.bool()
+        with Rung(*make_cond(a)) as r:
+            r.comment = f"cond__{label}"
+            out(target)
 
-    # 03: NO contact → LATCH coil
-    with Rung(r03_in) as r:
-        r.comment = "03_contact_no__latch"
-        latch(r03_out)
+    # ── 2. Coil instructions (out/latch/reset × target kinds) ───────
 
-    # 04: NO contact → RESET coil
-    with Rung(r04_in) as r:
-        r.comment = "04_contact_no__reset"
-        reset(r04_out)
+    for func_name, func in [("out", out), ("latch", latch), ("reset", reset)]:
+        for target_label, make_target in COIL_TARGETS:
+            trigger = a.bool()
+            with Rung(trigger) as r:
+                r.comment = f"{func_name}__{target_label}"
+                func(make_target(a))
 
-    # 05: Rising edge → OUT coil
-    with Rung(rise(r05_in)) as r:
-        r.comment = "05_edge_rise__out"
-        out(r05_out)
+    # out with oneshot
+    trigger = a.bool()
+    with Rung(trigger) as r:
+        r.comment = "out__oneshot"
+        out(a.bool(), oneshot=True)
 
-    # 06: Falling edge → OUT coil
-    with Rung(fall(r06_in)) as r:
-        r.comment = "06_edge_fall__out"
-        out(r06_out)
+    # ── 3. Copy variants ────────────────────────────────────────────
 
-    # 07: Immediate NO contact → Immediate OUT coil
-    with Rung(immediate(r07_in)) as r:
-        r.comment = "07_immediate__immediate_out"
-        out(immediate(r07_out))
+    for label, make in COPY_VARIANTS:
+        trigger = a.bool()
+        src, dst = make(a)
+        with Rung(trigger) as r:
+            r.comment = f"copy__{label}"
+            copy(src, dst)
 
-    # ── Compare contacts ────────────────────────────────────────────
+    # copy with oneshot
+    trigger = a.bool()
+    with Rung(trigger) as r:
+        r.comment = "copy__oneshot"
+        copy(a.int_(), a.int_(), oneshot=True)
 
-    # 08: Compare == → OUT
-    with Rung(r08_cmp == 5) as r:
-        r.comment = "08_compare_eq__out"
-        out(r08_out)
+    # ── 4. Blockcopy variants ───────────────────────────────────────
 
-    # 09: Compare != → OUT
-    with Rung(r09_cmp != 0) as r:
-        r.comment = "09_compare_ne__out"
-        out(r09_out)
+    for label, make in BLOCKCOPY_VARIANTS:
+        trigger = a.bool()
+        src, dst = make(a)
+        with Rung(trigger) as r:
+            r.comment = f"blockcopy__{label}"
+            blockcopy(src, dst)
 
-    # 10: Compare < → OUT
-    with Rung(r10_cmp < 100) as r:
-        r.comment = "10_compare_lt__out"
-        out(r10_out)
+    # blockcopy with oneshot
+    trigger = a.bool()
+    with Rung(trigger) as r:
+        r.comment = "blockcopy__oneshot"
+        blockcopy(a.int_block(4).select(1, 4), a.int_block(4).select(1, 4), oneshot=True)
 
-    # 11: Compare > → OUT
-    with Rung(r11_cmp > 0) as r:
-        r.comment = "11_compare_gt__out"
-        out(r11_out)
+    # ── 5. Fill variants ────────────────────────────────────────────
 
-    # 12: Compare <= → OUT
-    with Rung(r12_cmp <= 50) as r:
-        r.comment = "12_compare_le__out"
-        out(r12_out)
+    for label, make in FILL_VARIANTS:
+        trigger = a.bool()
+        val, dst = make(a)
+        with Rung(trigger) as r:
+            r.comment = f"fill__{label}"
+            fill(val, dst)
 
-    # 13: Compare >= → OUT
-    with Rung(r13_cmp >= 10) as r:
-        r.comment = "13_compare_ge__out"
-        out(r13_out)
+    # fill with oneshot
+    trigger = a.bool()
+    with Rung(trigger) as r:
+        r.comment = "fill__oneshot"
+        fill(0, a.int_block(4).select(1, 4), oneshot=True)
 
-    # ── Timers ──────────────────────────────────────────────────────
+    # ── 6. Calc variants ────────────────────────────────────────────
 
-    # 14: On-delay timer (standard, no reset → TON)
-    with Rung(r14_in) as r:
-        r.comment = "14_on_delay__ton"
-        on_delay(r14_done, r14_acc, preset=3000, unit=Tms)
+    for label, make in CALC_VARIANTS:
+        trigger = a.bool()
+        expr, dest, os = make(a)
+        with Rung(trigger) as r:
+            r.comment = f"calc__{label}"
+            calc(expr, dest, oneshot=os)
 
-    # 15: On-delay timer + .reset() → RTON (retentive)
-    with Rung(r15_in) as r:
-        r.comment = "15_on_delay_reset__rton"
-        on_delay(r15_done, r15_acc, preset=5000, unit=Tms).reset(r15_rst)
+    # ── 7. Timer variants ───────────────────────────────────────────
 
-    # 16: Off-delay timer → TOF
-    with Rung(r16_in) as r:
-        r.comment = "16_off_delay__tof"
-        off_delay(r16_done, r16_acc, preset=2000, unit=Tms)
+    for label, make in TIMER_VARIANTS:
+        trigger = a.bool()
+        kind, (done, acc), preset, rst = make(a)
+        fn = on_delay if kind == "on" else off_delay
+        with Rung(trigger) as r:
+            r.comment = f"{'on' if kind == 'on' else 'off'}_delay__{label}"
+            builder = fn(done, acc, preset=preset, unit=Tms)
+            if rst is not None:
+                builder.reset(rst)
 
-    # ── Counters ────────────────────────────────────────────────────
+    # ── 8. Counter variants ─────────────────────────────────────────
 
-    # 17: Count up + .reset()
-    with Rung(rise(r17_in)) as r:
-        r.comment = "17_count_up"
-        count_up(r17_done, r17_acc, preset=100).reset(r17_rst)
+    for label, make in COUNTER_VARIANTS:
+        trigger = a.bool()
+        kind, (done, acc), preset, dwn, rst = make(a)
+        fn = count_up if kind == "up" else count_down
+        with Rung(rise(trigger)) as r:
+            r.comment = f"count_{label}"
+            builder = fn(done, acc, preset=preset)
+            if dwn is not None:
+                builder = builder.down(dwn)
+            builder.reset(rst)
 
-    # 18: Count down + .reset()
-    with Rung(rise(r18_in)) as r:
-        r.comment = "18_count_down"
-        count_down(r18_done, r18_acc, preset=50).reset(r18_rst)
+    # ── 9. Search variants ──────────────────────────────────────────
 
-    # ── Data transfer ───────────────────────────────────────────────
+    for label, op in SEARCH_OPS:
+        trigger = a.bool()
+        val, src_blk = a.int_(), a.int_block(10)
+        result, found = a.int_(), a.bool()
+        with Rung(trigger) as r:
+            r.comment = f"search__{label}"
+            search(op, val, src_blk.select(1, 10), result, found)
 
-    # 19: Copy (scalar)
-    with Rung(r19_in) as r:
-        r.comment = "19_copy"
-        copy(r19_src, r19_dst)
+    # search with continuous
+    trigger = a.bool()
+    val, src_blk = a.int_(), a.int_block(10)
+    result, found = a.int_(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "search__continuous"
+        search("==", val, src_blk.select(1, 10), result, found, continuous=True)
 
-    # 20: Fill
-    with Rung(r20_in) as r:
-        r.comment = "20_fill"
-        fill(0, r20_fill_dest.select(1, 10))
+    # search with oneshot
+    trigger = a.bool()
+    val, src_blk = a.int_(), a.int_block(10)
+    result, found = a.int_(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "search__oneshot"
+        search("==", val, src_blk.select(1, 10), result, found, oneshot=True)
 
-    # ── Calc ────────────────────────────────────────────────────────
+    # ── 10. Shift register ──────────────────────────────────────────
 
-    # 21: Calc expression
-    with Rung(r21_in) as r:
-        r.comment = "21_calc"
-        calc(r21_a + r21_b, r21_result)
+    trigger = a.bool()
+    clk, rst = a.bool(), a.bool()
+    bits = a.bool_block(8)
+    with Rung(trigger) as r:
+        r.comment = "shift__basic"
+        shift(bits.select(1, 8)).clock(clk).reset(rst)
 
-    # ── Search ──────────────────────────────────────────────────────
+    # ── 11. Pack / unpack ───────────────────────────────────────────
 
-    # 22: Search
-    with Rung(r22_in) as r:
-        r.comment = "22_search"
-        search("==", r22_val, r22_search_src.select(1, 10), r22_result, r22_found)
+    trigger = a.bool()
+    bits, dest = a.bool_block(16), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "pack_bits"
+        pack_bits(bits.select(1, 16), dest)
 
-    # ── Shift register ──────────────────────────────────────────────
+    trigger = a.bool()
+    words, dest = a.int_block(2), a.dint()
+    with Rung(trigger) as r:
+        r.comment = "pack_words"
+        pack_words(words.select(1, 2), dest)
 
-    # 23: Shift
-    with Rung(r23_in) as r:
-        r.comment = "23_shift"
-        shift(r23_shift_bits.select(1, 8)).clock(r23_clock).reset(r23_reset)
+    trigger = a.bool()
+    chars, dest = a.char_block(4), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "pack_text"
+        pack_text(chars.select(1, 4), dest)
 
-    # ── Wiring / topology ───────────────────────────────────────────
+    trigger = a.bool()
+    chars, dest = a.char_block(4), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "pack_text__allow_whitespace"
+        pack_text(chars.select(1, 4), dest, allow_whitespace=True)
 
-    # 24: OR branch (any_of)
-    with Rung(any_of(r24_a, r24_b)) as r:
-        r.comment = "24_or_branch"
-        out(r24_out)
+    trigger = a.bool()
+    src, bits = a.int_(), a.bool_block(16)
+    with Rung(trigger) as r:
+        r.comment = "unpack_to_bits"
+        unpack_to_bits(src, bits.select(1, 16))
 
-    # 25: AND chain (multiple contacts)
-    with Rung(r25_a, r25_b) as r:
-        r.comment = "25_and_chain"
-        out(r25_out)
+    trigger = a.bool()
+    src, words = a.dint(), a.int_block(2)
+    with Rung(trigger) as r:
+        r.comment = "unpack_to_words"
+        unpack_to_words(src, words.select(1, 2))
+
+    # ── 12. Drums ───────────────────────────────────────────────────
+
+    # Event drum — basic (reset only)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    evts = [a.bool(), a.bool()]
+    step, flag, rst = a.int_(), a.bool(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "event_drum__basic"
+        event_drum(
+            outputs=outs_tags,
+            events=evts,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            completion_flag=flag,
+        ).reset(rst)
+
+    # Event drum — full (reset + jump + jog)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    evts = [a.bool(), a.bool()]
+    step, flag = a.int_(), a.bool()
+    rst, jmp, jog_c = a.bool(), a.bool(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "event_drum__full"
+        event_drum(
+            outputs=outs_tags,
+            events=evts,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            completion_flag=flag,
+        ).reset(rst).jump(jmp, step=1).jog(jog_c)
+
+    # Time drum — basic (reset only)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    step, flag, rst = a.int_(), a.bool(), a.bool()
+    _, tmr_acc = a.timer()  # accumulator must be on TD bank
+    with Rung(trigger) as r:
+        r.comment = "time_drum__basic"
+        time_drum(
+            outputs=outs_tags,
+            presets=[1000, 2000],
+            unit=Tms,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            accumulator=tmr_acc,
+            completion_flag=flag,
+        ).reset(rst)
+
+    # Time drum — full (reset + jump + jog)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    step, flag = a.int_(), a.bool()
+    _, tmr_acc = a.timer()  # accumulator must be on TD bank
+    rst, jmp, jog_c = a.bool(), a.bool(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "time_drum__full"
+        time_drum(
+            outputs=outs_tags,
+            presets=[1000, 2000],
+            unit=Tms,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            accumulator=tmr_acc,
+            completion_flag=flag,
+        ).reset(rst).jump(jmp, step=1).jog(jog_c)
+
+    # ── 13. Forloop variants ────────────────────────────────────────
+
+    for label, make in FORLOOP_VARIANTS:
+        trigger = a.bool()
+        cnt, os = make(a)
+        src, dst = a.int_(), a.int_()
+        with Rung(trigger) as r:
+            r.comment = f"forloop__{label}"
+            with forloop(cnt, oneshot=os):
+                copy(src, dst)
+
+    # ── 14. Send / receive (Modbus TCP) ─────────────────────────────
+
+    trigger = a.bool()
+    src = a.int_block(4)
+    sending, success, error, exc = a.bool(), a.bool(), a.bool(), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "send__basic"
+        send(
+            target=ModbusTarget(name="plc2", ip="192.168.1.10"),
+            remote_start="DS1",
+            source=src.select(1, 4),
+            sending=sending,
+            success=success,
+            error=error,
+            exception_response=exc,
+        )
+
+    trigger = a.bool()
+    dst = a.int_block(4)
+    receiving, success, error, exc = a.bool(), a.bool(), a.bool(), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "receive__basic"
+        receive(
+            target=ModbusTarget(name="plc2", ip="192.168.1.10"),
+            remote_start="DS1",
+            dest=dst.select(1, 4),
+            receiving=receiving,
+            success=success,
+            error=error,
+            exception_response=exc,
+        )
 
 
-# ── TagMap ──────────────────────────────────────────────────────────
+# ── Build TagMap and export ─────────────────────────────────────────
 
-mapping = TagMap(
-    {
-        # 01-07: contacts and coils
-        r01_in: x[1],
-        r01_out: y[1],
-        r02_in: x[2],
-        r02_out: y[2],
-        r03_in: x[3],
-        r03_out: y[3],
-        r04_in: x[4],
-        r04_out: y[4],
-        r05_in: x[5],
-        r05_out: y[5],
-        r06_in: x[6],
-        r06_out: y[6],
-        r07_in: x[7],
-        r07_out: y[7],
-        # 08-13: compare contacts (Y008+ invalid, use C bits for outputs)
-        r08_cmp: ds[1],
-        r08_out: c[31],
-        r09_cmp: ds[2],
-        r09_out: c[32],
-        r10_cmp: ds[3],
-        r10_out: c[33],
-        r11_cmp: ds[4],
-        r11_out: c[34],
-        r12_cmp: ds[5],
-        r12_out: c[35],
-        r13_cmp: ds[6],
-        r13_out: c[36],
-        # 14-16: timers
-        r14_in: x[8],
-        r14_done: t[1],
-        r14_acc: td[1],
-        r15_in: x[9],
-        r15_done: t[2],
-        r15_acc: td[2],
-        r15_rst: x[10],
-        r16_in: x[11],
-        r16_done: t[3],
-        r16_acc: td[3],
-        # 17-18: counters
-        r17_in: x[12],
-        r17_done: ct[1],
-        r17_acc: ctd[1],
-        r17_rst: c[1],
-        r18_in: x[13],
-        r18_done: ct[2],
-        r18_acc: ctd[2],
-        r18_rst: c[2],
-        # 19-20: data transfer
-        r19_in: x[14],
-        r19_src: ds[7],
-        r19_dst: ds[8],
-        r20_in: x[15],
-        r20_fill_dest: ds.select(41, 50),
-        # 21: calc
-        r21_in: x[16],
-        r21_a: ds[9],
-        r21_b: ds[10],
-        r21_result: ds[11],
-        # 22: search (X021+ invalid, use C bits)
-        r22_in: c[21],
-        r22_val: ds[12],
-        r22_result: ds[13],
-        r22_found: c[3],
-        r22_search_src: ds.select(31, 40),
-        # 23: shift
-        r23_in: c[4],
-        r23_clock: c[5],
-        r23_reset: c[6],
-        r23_shift_bits: c.select(11, 18),
-        # 24-25: wiring (X/Y overflow → C bits)
-        r24_a: c[22],
-        r24_b: c[23],
-        r24_out: c[37],
-        r25_a: c[24],
-        r25_b: c[25],
-        r25_out: c[38],
-    }
-)
-
-
-# ── Export ──────────────────────────────────────────────────────────
+mapping = a.tagmap()
 
 if __name__ == "__main__":
     out_dir = Path("fixtures/coverage")
