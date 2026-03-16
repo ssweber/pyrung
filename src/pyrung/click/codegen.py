@@ -1221,10 +1221,6 @@ def _render_af_token(
 
     args, kwargs = _parse_af_args(args_str)
 
-    # send/receive: positional CSV args must become keyword args in Python
-    if func_name in {"send", "receive"}:
-        return _render_send_receive(py_func, args, kwargs, collection, nicknames)
-
     rendered_parts: list[str] = []
     for arg in args:
         rendered_parts.append(_sub_operand(arg, collection, nicknames))
@@ -1236,39 +1232,6 @@ def _render_af_token(
 
     return f"{py_func}({', '.join(rendered_parts)})"
 
-
-def _render_send_receive(
-    py_func: str,
-    args: list[str],
-    kwargs: list[tuple[str, str]],
-    collection: _OperandCollection,
-    nicknames: dict[str, str] | None,
-) -> str:
-    """Render send/receive with all keyword arguments.
-
-    CSV format: send(target, remote_start, source, sending=..., ...)
-    Python API: send(target=..., remote_start=..., source=..., sending=..., ...)
-    For receive, the third positional arg is 'dest' instead of 'source'.
-    """
-    # Map positional CSV args to their keyword names
-    dest_key = "dest" if py_func == "receive" else "source"
-    pos_keys = ["target", "remote_start", dest_key]
-
-    rendered_parts: list[str] = []
-    for i, arg in enumerate(args):
-        rendered = _sub_operand(arg, collection, nicknames)
-        if i < len(pos_keys):
-            rendered_parts.append(f"{pos_keys[i]}={rendered}")
-        else:
-            rendered_parts.append(rendered)
-
-    for key, value in kwargs:
-        if key in _DROP_KWARGS:
-            continue
-        rendered_v = _sub_operand_kwarg(key, value, collection, nicknames)
-        rendered_parts.append(f"{key}={rendered_v}")
-
-    return f"{py_func}({', '.join(rendered_parts)})"
 
 
 def _render_pin(

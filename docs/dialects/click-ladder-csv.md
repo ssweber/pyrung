@@ -201,8 +201,8 @@ Producer may emit:
 - `shift(bit_range)`
 - `event_drum(outputs=[...],events=[...],pattern=[[...],...],current_step=X,completion_flag=X)`
 - `time_drum(outputs=[...],presets=[...],unit=Tms,pattern=[[...],...],current_step=X,accumulator=X,completion_flag=X)`
-- `send(target,"remote_start",source,sending=X,success=X,error=X,exception_response=X,count=N)`
-- `receive(target,"remote_start",dest,receiving=X,success=X,error=X,exception_response=X,count=N)`
+- `send(target=X,remote_start="addr",source=X,sending=X,success=X,error=X,exception_response=X,count=N)`
+- `receive(target=X,remote_start="addr",dest=X,receiving=X,success=X,error=X,exception_response=X,count=N)`
 - `call("subroutine_name")`
   - Subroutine names must not contain `"`.
 - `return()`

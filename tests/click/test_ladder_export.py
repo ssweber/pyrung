@@ -751,8 +751,8 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         ".reset()",
         ".jump(DS10)",
         ".jog()",
-        'send(ModbusTarget("plc1","127.0.0.1",502,3),"DS1",DS20,sending=C3,success=C4,error=C5,exception_response=DS21,count=1)',
-        'receive(ModbusTarget("plc2","127.0.0.1",502,4),"DS2",DS22,receiving=C6,success=C7,error=C8,exception_response=DS23,count=1)',
+        'send(target=ModbusTarget("plc1","127.0.0.1",502,3),remote_start="DS1",source=DS20,sending=C3,success=C4,error=C5,exception_response=DS21,count=1)',
+        'receive(target=ModbusTarget("plc2","127.0.0.1",502,4),remote_start="DS2",dest=DS22,receiving=C6,success=C7,error=C8,exception_response=DS23,count=1)',
     ]
 
     assert ".clock()" in tokens

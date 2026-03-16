@@ -1519,9 +1519,11 @@ class _LadderExporter:
             target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "send",
-                target_expr,
-                _quote(remote_start),
-                self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
+                target=target_expr,
+                remote_start=_quote(remote_start),
+                source=self._render_operand(
+                    instruction.source, path=f"{path}.source", source=instruction
+                ),
                 sending=self._render_operand(
                     instruction.sending,
                     path=f"{path}.sending",
@@ -1548,9 +1550,11 @@ class _LadderExporter:
             target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "receive",
-                target_expr,
-                _quote(remote_start),
-                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                target=target_expr,
+                remote_start=_quote(remote_start),
+                dest=self._render_operand(
+                    instruction.dest, path=f"{path}.dest", source=instruction
+                ),
                 receiving=self._render_operand(
                     instruction.receiving,
                     path=f"{path}.receiving",
