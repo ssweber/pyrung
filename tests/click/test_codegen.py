@@ -1151,3 +1151,312 @@ class TestCodeGeneration:
         assert "x[1]" in code
         assert "y[1]" in code
         assert "include_system=False" in code
+
+
+# ---------------------------------------------------------------------------
+# Structured codegen tests
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredCodegen:
+    def _make_nickname_csv(self, tmp_path, records):
+        """Helper to write a nickname CSV and return its path."""
+        import pyclickplc
+
+        path = tmp_path / "nicknames.csv"
+        pyclickplc.write_csv(path, records)
+        return path
+
+    def test_named_array_codegen(self, tmp_path: Path):
+        """Named array: codegen emits @named_array decorator and .map_to()."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Channel_id_1 = Int("Channel1_id")
+        Channel_id_2 = Int("Channel2_id")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Channel_id_1, Channel_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Channel_id_1: ds[101], Channel_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = mapping.to_ladder(logic)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        # Build nickname CSV with named_array metadata
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="Channel1_val",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 103): AddressRecord(
+                    memory_type="DS",
+                    address=103,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 104): AddressRecord(
+                    memory_type="DS",
+                    address=104,
+                    nickname="Channel2_val",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@named_array(" in code
+        assert "class Channel:" in code
+        assert "Channel[1].id" in code or "Channel[2].id" in code
+        assert "ds.select(" in code
+        assert "mapping = TagMap([" in code
+        assert "*Channel.map_to(" in code
+
+    def test_udt_codegen(self, tmp_path: Path):
+        """UDT: codegen emits @udt decorator and .map_to()."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Motor_running = Bool("Motor1_running")
+        Motor_speed = Int("Motor1_speed")
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Motor_running)
+
+        mapping = TagMap(
+            {Enable: x[1], Motor_running: c[101], Motor_speed: ds[1001]},
+            include_system=False,
+        )
+        bundle = mapping.to_ladder(logic)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 1001): AddressRecord(
+                    memory_type="DS",
+                    address=1001,
+                    nickname="Motor1_speed",
+                    comment="<Motor.speed>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 1002): AddressRecord(
+                    memory_type="DS",
+                    address=1002,
+                    nickname="Motor2_speed",
+                    comment="</Motor.speed>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("C", 101): AddressRecord(
+                    memory_type="C",
+                    address=101,
+                    nickname="Motor1_running",
+                    comment="<Motor.running>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 102): AddressRecord(
+                    memory_type="C",
+                    address=102,
+                    nickname="Motor2_running",
+                    comment="</Motor.running>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@udt(" in code
+        assert "class Motor:" in code
+        assert "Motor[1].running" in code
+        assert "mapping = TagMap([" in code
+        assert "Motor.running.map_to(" in code
+        assert "Motor.speed.map_to(" in code
+
+    def test_mixed_structured_and_flat(self, tmp_path: Path):
+        """Mixed: some tags in structures, some flat → both coexist."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Ch_id = Int("Channel1_id")
+        Flat = Int("FlatTag")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Ch_id, Flat)
+
+        mapping = TagMap(
+            {Enable: x[1], Ch_id: ds[101], Flat: ds[200]},
+            include_system=False,
+        )
+        bundle = mapping.to_ladder(logic)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(1,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="Channel1_val",
+                    comment="</Channel:named_array(1,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 200): AddressRecord(
+                    memory_type="DS",
+                    address=200,
+                    nickname="FlatTag",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Should have both structure and flat tags
+        assert "@named_array(" in code
+        assert "class Channel:" in code
+        assert 'FlatTag = Int("FlatTag")' in code
+        # Flat tag should use regular variable name in TagMap
+        assert "FlatTag.map_to(ds[200])" in code
+
+    def test_singleton_structure_no_index(self, tmp_path: Path):
+        """Singleton structure (count=1) → no instance index in references."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Config_timeout = Int("Config1_timeout")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Config_timeout, Config_timeout)
+
+        mapping = TagMap(
+            {Enable: x[1], Config_timeout: ds[301]},
+            include_system=False,
+        )
+        bundle = mapping.to_ladder(logic)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 301): AddressRecord(
+                    memory_type="DS",
+                    address=301,
+                    nickname="Config1_timeout",
+                    comment="<Config.timeout />",
+                    initial_value="100",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("C", 201): AddressRecord(
+                    memory_type="C",
+                    address=201,
+                    nickname="Config1_enabled",
+                    comment="<Config.enabled />",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        # Singleton → should use Config.timeout not Config[1].timeout
+        assert "Config.timeout" in code
+        assert "Config[1]" not in code

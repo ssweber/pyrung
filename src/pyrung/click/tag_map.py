@@ -48,6 +48,16 @@ class MappedSlot:
 
 
 @dataclass(frozen=True)
+class OwnerInfo:
+    """Reverse-lookup result: which structure/block owns a hardware address."""
+
+    structure_name: str
+    instance: int | None  # 1-based, or None for singleton (count=1)
+    field: str | None  # field name, or None for plain block slot
+    structure_type: str  # "named_array", "udt", or "block"
+
+
+@dataclass(frozen=True)
 class StructuredImport:
     """Structured metadata reconstructed during nickname import."""
 
@@ -1200,6 +1210,78 @@ class TagMap:
     @property
     def structure_warnings(self) -> tuple[str, ...]:
         return self._structure_warnings
+
+    def owner_of(self, display_address: str) -> OwnerInfo | None:
+        """Return the structure/block that owns a hardware display address.
+
+        Args:
+            display_address: Click display address string (e.g. ``"DS103"``).
+
+        Returns:
+            An :class:`OwnerInfo` describing the owning structure, or ``None``
+            if the address is not mapped.
+        """
+        if not hasattr(self, "_reverse_index"):
+            self._build_reverse_index()
+        return self._reverse_index.get(display_address)
+
+    def _build_reverse_index(self) -> None:
+        """Build the reverse index mapping display addresses to OwnerInfo."""
+        index: dict[str, OwnerInfo] = {}
+
+        # 1. Index plain block entries
+        structure_block_names: set[str] = set()
+        for structure in self._structures:
+            runtime = cast(Any, structure.runtime)
+            for field_name in runtime.field_names:
+                structure_block_names.add(runtime._blocks[field_name].name)
+
+        for block_entry in self._block_entries_tuple:
+            if block_entry.logical.name in structure_block_names:
+                continue
+            for logical_addr, hardware_addr in zip(
+                block_entry.logical_addresses,
+                block_entry.hardware_addresses,
+                strict=True,
+            ):
+                hw_tag = block_entry.hardware.block[hardware_addr]
+                memory_type, address = self._parse_hardware_tag(hw_tag)
+                display = format_address_display(memory_type, address)
+                index[display] = OwnerInfo(
+                    structure_name=block_entry.logical.name,
+                    instance=logical_addr,
+                    field=None,
+                    structure_type="block",
+                )
+
+        # 2. Index structures (overwrites block entries for same addresses)
+        for structure in self._structures:
+            runtime = cast(Any, structure.runtime)
+            for field_name in runtime.field_names:
+                block = runtime._blocks[field_name]
+                for i in range(1, structure.count + 1):
+                    logical_slot = block[i]
+                    # Try block slot forward (Block→BlockRange entries)
+                    hw_tag = self._block_slot_forward_by_name.get(logical_slot.name)
+                    if hw_tag is None:
+                        hw_tag = self._block_slot_forward_by_id.get(id(logical_slot))
+                    # Try tag forward (Tag→Tag entries, e.g. from named_array.map_to)
+                    if hw_tag is None:
+                        tag_entry = self._tag_forward.get(logical_slot.name)
+                        if tag_entry is not None:
+                            hw_tag = tag_entry.hardware
+                    if hw_tag is None:
+                        continue
+                    memory_type, address = self._parse_hardware_tag(hw_tag)
+                    display = format_address_display(memory_type, address)
+                    index[display] = OwnerInfo(
+                        structure_name=structure.name,
+                        instance=i if structure.count > 1 else None,
+                        field=field_name,
+                        structure_type=structure.kind,
+                    )
+
+        self._reverse_index = index
 
     def __contains__(self, item: Tag | Block | str) -> bool:
         if isinstance(item, str):

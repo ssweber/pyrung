@@ -1094,3 +1094,244 @@ def test_to_nickname_file_exports_named_array_markers_from_structured_metadata(t
     # End marker is synthesized because DS906 is a gap for this named-array layout.
     assert exported_rows[get_addr_key("DS", 906)].comment == "</AlarmPacked:named_array(2,3)>"
     assert exported_rows[get_addr_key("DS", 906)].nickname == ""
+
+
+# ---------------------------------------------------------------------------
+# owner_of() tests
+# ---------------------------------------------------------------------------
+
+
+def test_owner_of_unmapped_address():
+    mapping = TagMap(include_system=False)
+    assert mapping.owner_of("DS999") is None
+
+
+def test_owner_of_named_array(tmp_path):
+    path = tmp_path / "na.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Channel1_id",
+            comment="<Channel:named_array(2,3)>",
+            initial_value="1",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Channel1_val",
+            comment="",
+            initial_value="10",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 503): AddressRecord(
+            memory_type="DS",
+            address=503,
+            nickname="",
+            comment="",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 504): AddressRecord(
+            memory_type="DS",
+            address=504,
+            nickname="Channel2_id",
+            comment="",
+            initial_value="2",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 505): AddressRecord(
+            memory_type="DS",
+            address=505,
+            nickname="Channel2_val",
+            comment="",
+            initial_value="20",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 506): AddressRecord(
+            memory_type="DS",
+            address=506,
+            nickname="",
+            comment="</Channel:named_array(2,3)>",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("DS501")
+    assert owner is not None
+    assert owner.structure_name == "Channel"
+    assert owner.instance == 1
+    assert owner.field == "id"
+    assert owner.structure_type == "named_array"
+
+    owner2 = restored.owner_of("DS505")
+    assert owner2 is not None
+    assert owner2.instance == 2
+    assert owner2.field == "val"
+
+
+def test_owner_of_udt(tmp_path):
+    path = tmp_path / "udt.csv"
+    records = {
+        get_addr_key("DS", 1001): AddressRecord(
+            memory_type="DS",
+            address=1001,
+            nickname="Motor1_speed",
+            comment="<Motor.speed>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 1002): AddressRecord(
+            memory_type="DS",
+            address=1002,
+            nickname="Motor2_speed",
+            comment="</Motor.speed>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="Motor1_running",
+            comment="<Motor.running>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="Motor2_running",
+            comment="</Motor.running>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("DS1001")
+    assert owner is not None
+    assert owner.structure_name == "Motor"
+    assert owner.instance == 1
+    assert owner.field == "speed"
+    assert owner.structure_type == "udt"
+
+    owner2 = restored.owner_of("C102")
+    assert owner2 is not None
+    assert owner2.structure_name == "Motor"
+    assert owner2.instance == 2
+    assert owner2.field == "running"
+    assert owner2.structure_type == "udt"
+
+
+def test_owner_of_singleton(tmp_path):
+    """Singleton structure (count=1) → instance is None."""
+    path = tmp_path / "singleton.csv"
+    records = {
+        get_addr_key("DS", 301): AddressRecord(
+            memory_type="DS",
+            address=301,
+            nickname="Config1_timeout",
+            comment="<Config.timeout />",
+            initial_value="100",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("C", 201): AddressRecord(
+            memory_type="C",
+            address=201,
+            nickname="Config1_enabled",
+            comment="<Config.enabled />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("DS301")
+    assert owner is not None
+    assert owner.structure_name == "Config"
+    assert owner.instance is None
+    assert owner.field == "timeout"
+    assert owner.structure_type == "udt"
+
+
+def test_owner_of_plain_block(tmp_path):
+    path = tmp_path / "plain.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="Alarm1",
+            comment="<Alarm>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="Alarm2",
+            comment="</Alarm>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("C101")
+    assert owner is not None
+    assert owner.structure_name == "Alarm"
+    assert owner.instance == 1
+    assert owner.field is None
+    assert owner.structure_type == "block"
+
+
+def test_owner_of_structure_wins_over_block(tmp_path):
+    """When a named_array overlays a block, named_array wins."""
+    path = tmp_path / "overlap.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Packed1_id",
+            comment="<Packed:named_array(1,2)>",
+            initial_value="1",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Packed1_val",
+            comment="</Packed:named_array(1,2)>",
+            initial_value="10",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("DS501")
+    assert owner is not None
+    assert owner.structure_type == "named_array"
+    assert owner.structure_name == "Packed"
