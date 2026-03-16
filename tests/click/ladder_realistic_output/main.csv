@@ -42,8 +42,8 @@ R,Y001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS1,DS2
 ,,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS3,DS200)"
 ,,T,C1,CT1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS4,DS201)"
 ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(DS2,DS204)"
-R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"send(target=ModbusTarget(""plc1"",""10.0.0.1""),remote_start=""DS1"",source=DS3,sending=C20,success=C21,error=C22,exception_response=DS20,count=1)"
-R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"receive(target=ModbusTarget(""plc1"",""10.0.0.1""),remote_start=""DS10"",dest=DS22,receiving=C23,success=C24,error=C25,exception_response=DS23,count=1)"
+R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"send(target=ModbusTarget(name=""plc1"",ip=""10.0.0.1"",port=502,device_id=1),remote_start=""DS1"",source=DS3,sending=C20,success=C21,error=C22,exception_response=DS20,count=1)"
+R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"receive(target=ModbusTarget(name=""plc1"",ip=""10.0.0.1"",port=502,device_id=1),remote_start=""DS10"",dest=DS22,receiving=C23,success=C24,error=C25,exception_response=DS23,count=1)"
 R,X004,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
 ,C1,-,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
 R,DS3>0,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)

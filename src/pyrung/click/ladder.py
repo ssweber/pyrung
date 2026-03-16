@@ -2066,11 +2066,12 @@ def _render_modbus_target(instruction: object) -> str:
         return _quote(name)
     port = getattr(instruction, "port", 502)
     device_id = getattr(instruction, "device_id", 1)
-    parts = [_quote(name), _quote(host)]
-    if port != 502 or device_id != 1:
-        parts.append(str(port))
-    if device_id != 1:
-        parts.append(str(device_id))
+    parts = [
+        f"name={_quote(name)}",
+        f"ip={_quote(host)}",
+        f"port={port}",
+        f"device_id={device_id}",
+    ]
     return f"ModbusTarget({','.join(parts)})"
 
 
