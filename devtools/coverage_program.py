@@ -35,6 +35,7 @@ from pyrung import (
     as_value,
     blockcopy,
     calc,
+    call,
     copy,
     count_down,
     count_up,
@@ -51,9 +52,11 @@ from pyrung import (
     pack_text,
     pack_words,
     reset,
+    return_early,
     rise,
     search,
     shift,
+    subroutine,
     time_drum,
     unpack_to_bits,
     unpack_to_words,
@@ -221,7 +224,10 @@ COPY_VARIANTS: list[tuple[str, Any]] = [
     ("literal_float", lambda a: (3.14,                        a.real())),
     ("as_value",      lambda a: (as_value(a.int_()),          a.int_())),
     ("as_text",       lambda a: (as_text(a.int_()),           a.int_())),
-    ("as_text_opts",  lambda a: (as_text(a.int_(), suppress_zero=False, pad=3), a.int_())),
+    ("as_text_sz",    lambda a: (as_text(a.int_(), suppress_zero=False),         a.int_())),
+    ("as_text_pad",   lambda a: (as_text(a.int_(), pad=3),                      a.int_())),
+    ("as_text_exp",   lambda a: (as_text(a.int_(), exponential=True),            a.int_())),
+    ("as_text_term",  lambda a: (as_text(a.int_(), termination_code=13),         a.int_())),
     ("as_binary",     lambda a: (as_binary(a.int_()),         a.int_())),
     ("as_ascii",      lambda a: (as_ascii(a.int_()),          a.int_())),
 ]
@@ -454,6 +460,37 @@ with Program() as coverage_program:
         r.comment = "unpack_to_words"
         unpack_to_words(src, words.select(1, 2))
 
+    # oneshot variants
+    trigger = a.bool()
+    bits, dest = a.bool_block(16), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "pack_bits__oneshot"
+        pack_bits(bits.select(1, 16), dest, oneshot=True)
+
+    trigger = a.bool()
+    words, dest = a.int_block(2), a.dint()
+    with Rung(trigger) as r:
+        r.comment = "pack_words__oneshot"
+        pack_words(words.select(1, 2), dest, oneshot=True)
+
+    trigger = a.bool()
+    chars, dest = a.char_block(4), a.int_()
+    with Rung(trigger) as r:
+        r.comment = "pack_text__oneshot"
+        pack_text(chars.select(1, 4), dest, oneshot=True)
+
+    trigger = a.bool()
+    src, bits = a.int_(), a.bool_block(16)
+    with Rung(trigger) as r:
+        r.comment = "unpack_to_bits__oneshot"
+        unpack_to_bits(src, bits.select(1, 16), oneshot=True)
+
+    trigger = a.bool()
+    src, words = a.dint(), a.int_block(2)
+    with Rung(trigger) as r:
+        r.comment = "unpack_to_words__oneshot"
+        unpack_to_words(src, words.select(1, 2), oneshot=True)
+
     # ── 12. Drums ───────────────────────────────────────────────────
 
     # Event drum — basic (reset only)
@@ -471,21 +508,37 @@ with Program() as coverage_program:
             completion_flag=flag,
         ).reset(rst)
 
-    # Event drum — full (reset + jump + jog)
+    # Event drum — jump (reset + jump)
     trigger = a.bool()
     outs_tags = [a.bool(), a.bool()]
     evts = [a.bool(), a.bool()]
     step, flag = a.int_(), a.bool()
-    rst, jmp, jog_c = a.bool(), a.bool(), a.bool()
+    rst, jmp = a.bool(), a.bool()
     with Rung(trigger) as r:
-        r.comment = "event_drum__full"
+        r.comment = "event_drum__jump"
         event_drum(
             outputs=outs_tags,
             events=evts,
             pattern=[[True, False], [False, True]],
             current_step=step,
             completion_flag=flag,
-        ).reset(rst).jump(jmp, step=1).jog(jog_c)
+        ).reset(rst).jump(jmp, step=1)
+
+    # Event drum — jog (reset + jog)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    evts = [a.bool(), a.bool()]
+    step, flag = a.int_(), a.bool()
+    rst, jog_c = a.bool(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "event_drum__jog"
+        event_drum(
+            outputs=outs_tags,
+            events=evts,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            completion_flag=flag,
+        ).reset(rst).jog(jog_c)
 
     # Time drum — basic (reset only)
     trigger = a.bool()
@@ -504,14 +557,14 @@ with Program() as coverage_program:
             completion_flag=flag,
         ).reset(rst)
 
-    # Time drum — full (reset + jump + jog)
+    # Time drum — jump (reset + jump)
     trigger = a.bool()
     outs_tags = [a.bool(), a.bool()]
     step, flag = a.int_(), a.bool()
     _, tmr_acc = a.timer()  # accumulator must be on TD bank
-    rst, jmp, jog_c = a.bool(), a.bool(), a.bool()
+    rst, jmp = a.bool(), a.bool()
     with Rung(trigger) as r:
-        r.comment = "time_drum__full"
+        r.comment = "time_drum__jump"
         time_drum(
             outputs=outs_tags,
             presets=[1000, 2000],
@@ -520,7 +573,25 @@ with Program() as coverage_program:
             current_step=step,
             accumulator=tmr_acc,
             completion_flag=flag,
-        ).reset(rst).jump(jmp, step=1).jog(jog_c)
+        ).reset(rst).jump(jmp, step=1)
+
+    # Time drum — jog (reset + jog)
+    trigger = a.bool()
+    outs_tags = [a.bool(), a.bool()]
+    step, flag = a.int_(), a.bool()
+    _, tmr_acc = a.timer()  # accumulator must be on TD bank
+    rst, jog_c = a.bool(), a.bool()
+    with Rung(trigger) as r:
+        r.comment = "time_drum__jog"
+        time_drum(
+            outputs=outs_tags,
+            presets=[1000, 2000],
+            unit=Tms,
+            pattern=[[True, False], [False, True]],
+            current_step=step,
+            accumulator=tmr_acc,
+            completion_flag=flag,
+        ).reset(rst).jog(jog_c)
 
     # ── 13. Forloop variants ────────────────────────────────────────
 
@@ -564,6 +635,24 @@ with Program() as coverage_program:
             error=error,
             exception_response=exc,
         )
+
+    # ── 16. Subroutine call / return ─────────────────────────────────
+
+    trigger = a.bool()
+    with Rung(trigger) as r:
+        r.comment = "call__basic"
+        call("coverage_sub")
+
+    with subroutine("coverage_sub"):
+        trigger = a.bool()
+        with Rung(trigger) as r:
+            r.comment = "return_early__basic"
+            return_early()
+
+        target = a.bool()
+        with Rung() as r:
+            r.comment = "sub__out"
+            out(target)
 
 
 # ── Build TagMap and export ─────────────────────────────────────────
