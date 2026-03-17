@@ -68,7 +68,12 @@ plugins:
           - dialects/*.md
         API Reference:
           - reference/index.md
-          - reference/api/*.md
+          - reference/api/runtime.md
+          - reference/api/data-model.md
+          - reference/api/program-structure.md
+          - reference/api/instruction-set.md
+          - reference/api/click-dialect.md
+          - reference/api/circuitpy-dialect.md
 
 exclude_docs: |
   internal/**
