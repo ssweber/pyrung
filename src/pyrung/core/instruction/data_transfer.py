@@ -57,6 +57,7 @@ class CopyInstruction(OneShotMixin, Instruction):
         self,
         source: Tag | IndirectRef | IndirectExprRef | Any,
         target: Tag | IndirectRef | IndirectExprRef,
+        *,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
@@ -241,7 +242,7 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     Source and dest can be BlockRange or IndirectBlockRange (resolved at scan time).
     """
 
-    def __init__(self, source: Any, dest: Any, oneshot: bool = False):
+    def __init__(self, source: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.dest = dest
@@ -336,7 +337,7 @@ class FillInstruction(OneShotMixin, Instruction):
     Dest can be BlockRange or IndirectBlockRange (resolved at scan time).
     """
 
-    def __init__(self, value: Any, dest: Any, oneshot: bool = False):
+    def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.value = value
         self.dest = dest

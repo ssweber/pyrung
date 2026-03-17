@@ -30,8 +30,9 @@ class FunctionCallInstruction(OneShotMixin, Instruction):
     def __init__(
         self,
         fn: Callable[..., dict[str, Any]],
-        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None,
-        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None,
+        *,
+        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
+        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
@@ -67,8 +68,9 @@ class EnabledFunctionCallInstruction(Instruction):
     def __init__(
         self,
         fn: Callable[..., dict[str, Any]],
-        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None,
-        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None,
+        *,
+        ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
+        outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
         enable_condition: Condition | None,
     ):
         self._fn = fn

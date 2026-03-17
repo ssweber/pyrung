@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 class PackBitsInstruction(OneShotMixin, Instruction):
     """Pack BOOL tags from a BlockRange into a destination register."""
 
-    def __init__(self, bit_block: Any, dest: Any, oneshot: bool = False):
+    def __init__(self, bit_block: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.bit_block = bit_block
         self.dest = dest
@@ -75,7 +75,7 @@ class PackBitsInstruction(OneShotMixin, Instruction):
 class PackWordsInstruction(OneShotMixin, Instruction):
     """Pack two 16-bit tags into a 32-bit destination register."""
 
-    def __init__(self, word_block: Any, dest: Any, oneshot: bool = False):
+    def __init__(self, word_block: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.word_block = word_block
         self.dest = dest
@@ -165,7 +165,7 @@ class PackTextInstruction(OneShotMixin, Instruction):
 class UnpackToBitsInstruction(OneShotMixin, Instruction):
     """Unpack a register value into individual BOOL tags in a BlockRange."""
 
-    def __init__(self, source: Any, bit_block: Any, oneshot: bool = False):
+    def __init__(self, source: Any, bit_block: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.bit_block = bit_block
@@ -211,7 +211,7 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
 class UnpackToWordsInstruction(OneShotMixin, Instruction):
     """Unpack a 32-bit register value into two 16-bit destination tags."""
 
-    def __init__(self, source: Any, word_block: Any, oneshot: bool = False):
+    def __init__(self, source: Any, word_block: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.word_block = word_block

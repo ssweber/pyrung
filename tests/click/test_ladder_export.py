@@ -417,9 +417,9 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
 
     with Program() as logic:
         with Rung(Enable):
-            search("==", 'sub"name', Chars.select(1, 4), Result, Found)
+            search("==", 'sub"name', Chars.select(1, 4), result=Result, found=Found)
         with Rung(Enable):
-            search("==", "normal", Chars.select(1, 4), Result, Found)
+            search("==", "normal", Chars.select(1, 4), result=Result, found=Found)
 
     mapping = TagMap(
         {
@@ -446,7 +446,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
 
     with Program() as logic:
         with Rung(Enable):
-            search("==", 'sub"name', Chars.select(1, 4), Result, Found)
+            search("==", 'sub"name', Chars.select(1, 4), result=Result, found=Found)
 
     mapping = TagMap(
         {
@@ -498,7 +498,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
         with Rung(Enable):
             calc(Dest1 + 1, Dest2)
         with Rung(Enable):
-            search("==", 1, Data.select(1, 2), Result, Found)
+            search("==", 1, Data.select(1, 2), result=Result, found=Found)
         with Rung(Enable):
             pack_text(Chars.select(1, 2), PackDest)
 

@@ -66,6 +66,7 @@ class SearchInstruction(OneShotMixin, Instruction):
         condition: str,
         value: Any,
         search_range: BlockRange | IndirectBlockRange,
+        *,
         result: Tag,
         found: Tag,
         continuous: bool = False,

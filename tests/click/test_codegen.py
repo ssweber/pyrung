@@ -1035,7 +1035,7 @@ class TestRoundTrip:
 
         with Program() as logic:
             with Rung(Enable):
-                search("==", Target, Data.select(1, 4), Result, Found)
+                search("==", Target, Data.select(1, 4), result=Result, found=Found)
 
         mapping = TagMap(
             {Enable: x[1], Target: ds[5], Data: ds.select(1, 4), Result: ds[6], Found: c[1]},

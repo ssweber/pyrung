@@ -130,6 +130,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         self,
         expression: Any,
         dest: Tag,
+        *,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)

@@ -443,7 +443,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung():
-                search("==", 42, DS.select(1, 10), result, found, continuous=True)
+                search("==", 42, DS.select(1, 10), result=result, found=found, continuous=True)
 
         facts = walk_program(prog)
         cont_facts = _facts_at(facts, "instruction.continuous")

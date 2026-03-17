@@ -128,7 +128,7 @@ def _validate_function_call(
 
 
 def out(
-    target: Tag | BlockRange | ImmediateRef, oneshot: bool = False
+    target: Tag | BlockRange | ImmediateRef, *, oneshot: bool = False
 ) -> Tag | BlockRange | ImmediateRef:
     """Output coil instruction (OUT).
 
@@ -142,7 +142,7 @@ def out(
     """
     ctx, source_file, source_line = _capture_instruction_context("out", source_depth=3)
     _iter_coil_tags(target)
-    _attach_instruction(ctx, OutInstruction(target, oneshot), source_file, source_line)
+    _attach_instruction(ctx, OutInstruction(target, oneshot=oneshot), source_file, source_line)
     return target
 
 
@@ -182,6 +182,7 @@ def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
 def copy(
     source: Any,
     target: Tag | IndirectRef | IndirectExprRef,
+    *,
     oneshot: bool = False,
 ) -> Tag | IndirectRef | IndirectExprRef:
     """Copy instruction (CPY/MOV).
@@ -192,15 +193,15 @@ def copy(
         with Rung(Button):
             copy(5, StepNumber)
     """
-    _add_instruction("copy", CopyInstruction, source, target, oneshot)
+    _add_instruction("copy", CopyInstruction, source, target, oneshot=oneshot)
     return target
 
 
 def run_function(
     fn: Callable[..., dict[str, Any]],
+    *,
     ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
     outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
-    *,
     oneshot: bool = False,
 ) -> None:
     """Execute a synchronous function when rung power is true."""
@@ -211,7 +212,7 @@ def run_function(
     _validate_function_call(fn, ins, outs, func_name="run_function")
     _attach_instruction(
         ctx,
-        FunctionCallInstruction(fn, ins, outs, oneshot),
+        FunctionCallInstruction(fn, ins=ins, outs=outs, oneshot=oneshot),
         source_file,
         source_line,
     )
@@ -219,6 +220,7 @@ def run_function(
 
 def run_enabled_function(
     fn: Callable[..., dict[str, Any]],
+    *,
     ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
     outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
 ) -> None:
@@ -231,13 +233,13 @@ def run_enabled_function(
     enable_condition = ctx._rung._get_combined_condition()
     _attach_instruction(
         ctx,
-        EnabledFunctionCallInstruction(fn, ins, outs, enable_condition),
+        EnabledFunctionCallInstruction(fn, ins=ins, outs=outs, enable_condition=enable_condition),
         source_file,
         source_line,
     )
 
 
-def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
+def blockcopy(source: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Block copy instruction.
 
     Copies values from source BlockRange to dest BlockRange.
@@ -252,10 +254,10 @@ def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
         dest: Dest BlockRange or IndirectBlockRange from .select().
         oneshot: If True, execute only once per rung activation.
     """
-    _add_instruction("blockcopy", BlockCopyInstruction, source, dest, oneshot)
+    _add_instruction("blockcopy", BlockCopyInstruction, source, dest, oneshot=oneshot)
 
 
-def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
+def fill(value: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Fill instruction.
 
     Writes a constant value to every element in a BlockRange.
@@ -269,17 +271,17 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
         dest: Dest BlockRange or IndirectBlockRange from .select().
         oneshot: If True, execute only once per rung activation.
     """
-    _add_instruction("fill", FillInstruction, value, dest, oneshot)
+    _add_instruction("fill", FillInstruction, value, dest, oneshot=oneshot)
 
 
-def pack_bits(bit_block: Any, dest: Any, oneshot: bool = False) -> None:
+def pack_bits(bit_block: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Pack BOOL tags from a BlockRange into a register destination."""
-    _add_instruction("pack_bits", PackBitsInstruction, bit_block, dest, oneshot)
+    _add_instruction("pack_bits", PackBitsInstruction, bit_block, dest, oneshot=oneshot)
 
 
-def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
+def pack_words(word_block: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
-    _add_instruction("pack_words", PackWordsInstruction, word_block, dest, oneshot)
+    _add_instruction("pack_words", PackWordsInstruction, word_block, dest, oneshot=oneshot)
 
 
 def pack_text(
@@ -300,29 +302,29 @@ def pack_text(
     )
 
 
-def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:
+def unpack_to_bits(source: Any, bit_block: Any, *, oneshot: bool = False) -> None:
     """Unpack a register source into BOOL tags in a BlockRange."""
     _add_instruction(
         "unpack_to_bits",
         UnpackToBitsInstruction,
         source,
         bit_block,
-        oneshot,
+        oneshot=oneshot,
     )
 
 
-def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None:
+def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> None:
     """Unpack a 32-bit register source into two 16-bit tags in a BlockRange."""
     _add_instruction(
         "unpack_to_words",
         UnpackToWordsInstruction,
         source,
         word_block,
-        oneshot,
+        oneshot=oneshot,
     )
 
 
-def calc(expression: Any, dest: Tag, oneshot: bool = False) -> Tag:
+def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
     """Calc instruction.
 
     Evaluates an expression and stores the result in dest, with
@@ -346,7 +348,7 @@ def calc(expression: Any, dest: Tag, oneshot: bool = False) -> Tag:
     Returns:
         The dest tag.
     """
-    _add_instruction("calc", CalcInstruction, expression, dest, oneshot)
+    _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)
     return dest
 
 
@@ -354,6 +356,7 @@ def search(
     condition: str,
     value: Any,
     search_range: BlockRange | IndirectBlockRange,
+    *,
     result: Tag,
     found: Tag,
     continuous: bool = False,
@@ -386,10 +389,10 @@ def search(
         condition,
         value,
         search_range,
-        result,
-        found,
-        continuous,
-        oneshot,
+        result=result,
+        found=found,
+        continuous=continuous,
+        oneshot=oneshot,
     )
     return result
 

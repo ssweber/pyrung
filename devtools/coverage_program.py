@@ -389,7 +389,7 @@ with Program() as coverage_program:
         result, found = a.int_(), a.bool()
         with Rung(trigger) as r:
             r.comment = f"search__{label}"
-            search(op, val, src_blk.select(1, 10), result, found)
+            search(op, val, src_blk.select(1, 10), result=result, found=found)
 
     # search with continuous
     trigger = a.bool()
@@ -397,7 +397,7 @@ with Program() as coverage_program:
     result, found = a.int_(), a.bool()
     with Rung(trigger) as r:
         r.comment = "search__continuous"
-        search("==", val, src_blk.select(1, 10), result, found, continuous=True)
+        search("==", val, src_blk.select(1, 10), result=result, found=found, continuous=True)
 
     # search with oneshot
     trigger = a.bool()
@@ -405,7 +405,7 @@ with Program() as coverage_program:
     result, found = a.int_(), a.bool()
     with Rung(trigger) as r:
         r.comment = "search__oneshot"
-        search("==", val, src_blk.select(1, 10), result, found, oneshot=True)
+        search("==", val, src_blk.select(1, 10), result=result, found=found, oneshot=True)
 
     # ── 10. Shift register ──────────────────────────────────────────
 

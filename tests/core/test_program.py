@@ -357,7 +357,7 @@ class TestSearchDSL:
 
         with Program() as prog:
             with Rung(Enable):
-                search("==", 20, DS.select(1, 3), Result, Found)
+                search("==", 20, DS.select(1, 3), result=Result, found=Found)
 
         state = SystemState().with_tags(
             {"Enable": True, "DS1": 10, "DS2": 20, "DS3": 30, "Result": 0, "Found": False}
@@ -377,7 +377,7 @@ class TestSearchDSL:
 
         with Program() as prog:
             with Rung(Enable):
-                search("==", 30, DS.select(1, 5), Pointer, Found)
+                search("==", 30, DS.select(1, 5), result=Pointer, found=Found)
             with Rung(Found):
                 copy(DS[Pointer], DD[1])
 
@@ -410,7 +410,7 @@ class TestSearchDSL:
 
         with Program() as logic:
             with Rung(Enable):
-                search("==", 7, DS.select(1, 4), Result, Found, continuous=True)
+                search("==", 7, DS.select(1, 4), result=Result, found=Found, continuous=True)
 
         runner = PLCRunner(logic)
         runner.patch(
@@ -439,7 +439,7 @@ class TestSearchDSL:
 
         with Program() as prog:
             with Rung(Enable):
-                search("==", 5, DS.select(1, 4).reverse(), Result, Found)
+                search("==", 5, DS.select(1, 4).reverse(), result=Result, found=Found)
 
         state = SystemState().with_tags(
             {"Enable": True, "DS1": 5, "DS2": 0, "DS3": 5, "DS4": 0, "Result": 0, "Found": False}
@@ -459,7 +459,7 @@ class TestSearchDSL:
 
         with Program() as logic:
             with Rung(Enable):
-                search("==", "ADC", CH.select(1, 6), Result, Found)
+                search("==", "ADC", CH.select(1, 6), result=Result, found=Found)
 
         runner = PLCRunner(logic)
         runner.patch(
