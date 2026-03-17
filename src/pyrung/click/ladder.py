@@ -1303,14 +1303,20 @@ class _LadderExporter:
             return self._fn(
                 "search",
                 _quote(str(instruction.condition)),
-                self._render_operand(instruction.value, path=f"{path}.value", source=instruction),
-                self._render_operand(
+                value=self._render_operand(
+                    instruction.value, path=f"{path}.value", source=instruction
+                ),
+                search_range=self._render_operand(
                     instruction.search_range,
                     path=f"{path}.search_range",
                     source=instruction,
                 ),
-                self._render_operand(instruction.result, path=f"{path}.result", source=instruction),
-                self._render_operand(instruction.found, path=f"{path}.found", source=instruction),
+                result=self._render_operand(
+                    instruction.result, path=f"{path}.result", source=instruction
+                ),
+                found=self._render_operand(
+                    instruction.found, path=f"{path}.found", source=instruction
+                ),
                 **kw,
             )
         if instruction_type == "PackBitsInstruction":
@@ -1777,10 +1783,12 @@ class _LadderExporter:
             return self._fn(
                 "as_text",
                 self._render_operand(modifier.source, path=f"{path}.source", source=source),
-                _bool_bit(bool(modifier.suppress_zero)),
-                "none" if modifier.pad is None else str(modifier.pad),
-                _bool_bit(bool(modifier.exponential)),
-                "none" if modifier.termination_code is None else str(modifier.termination_code),
+                suppress_zero=_bool_bit(bool(modifier.suppress_zero)),
+                pad="none" if modifier.pad is None else str(modifier.pad),
+                exponential=_bool_bit(bool(modifier.exponential)),
+                termination_code="none"
+                if modifier.termination_code is None
+                else str(modifier.termination_code),
             )
         return self._fn(
             f"as_{modifier.mode}",

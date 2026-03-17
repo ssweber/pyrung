@@ -433,8 +433,8 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert 'search("==","sub""name",TXT1..TXT4,DS1,C1)' in tokens
-    assert 'search("==","normal",TXT1..TXT4,DS1,C1)' in tokens
+    assert 'search("==",value="sub""name",search_range=TXT1..TXT4,result=DS1,found=C1)' in tokens
+    assert 'search("==",value="normal",search_range=TXT1..TXT4,result=DS1,found=C1)' in tokens
     assert all('\\"' not in token for token in tokens)
 
 
@@ -458,7 +458,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-    expected = 'search("==","sub""name",TXT1..TXT4,DS1,C1)'
+    expected = 'search("==",value="sub""name",search_range=TXT1..TXT4,result=DS1,found=C1)'
     assert bundle.main_rows[1][-1] == expected
 
     out_dir = tmp_path / "ladder"
@@ -474,7 +474,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
     assert af_token == expected
     assert '\\"' not in af_token
 
-    value_literal = af_token[len('search("==",') :].split(",TXT1..TXT4", maxsplit=1)[0]
+    value_literal = af_token[len('search("==",value=') :].split(",search_range=", maxsplit=1)[0]
     assert value_literal == '"sub""name"'
     assert value_literal[1:-1].replace('""', '"') == 'sub"name'
 
