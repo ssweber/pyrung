@@ -1516,7 +1516,9 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 2, DS.select(1, 4), result=Result, found=Found, continuous=True)
+        instr = SearchInstruction(
+            "==", 2, DS.select(1, 4), result=Result, found=Found, continuous=True
+        )
         state = SystemState().with_tags(
             {"DS1": 1, "DS2": 2, "DS3": 3, "DS4": 2, "Result": 0, "Found": False}
         )
@@ -1540,7 +1542,9 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 1, DS.select(1, 3), result=Result, found=Found, continuous=True)
+        instr = SearchInstruction(
+            "==", 1, DS.select(1, 3), result=Result, found=Found, continuous=True
+        )
         state = SystemState().with_tags({"DS1": 1, "DS2": 1, "DS3": 1, "Result": -1, "Found": True})
         new_state = execute(instr, state)
 
@@ -1554,7 +1558,9 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 7, DS.select(1, 3), result=Result, found=Found, continuous=True)
+        instr = SearchInstruction(
+            "==", 7, DS.select(1, 3), result=Result, found=Found, continuous=True
+        )
         state = SystemState().with_tags({"DS1": 1, "DS2": 7, "DS3": 7, "Result": 0, "Found": False})
         new_state = execute(instr, state)
 
@@ -1594,7 +1600,9 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 2, DS.select(1, 2), result=Result, found=Found, oneshot=True)
+        instr = SearchInstruction(
+            "==", 2, DS.select(1, 2), result=Result, found=Found, oneshot=True
+        )
         state = SystemState().with_tags({"DS1": 0, "DS2": 2, "Result": 0, "Found": False})
 
         step1 = execute(instr, state)
@@ -1615,7 +1623,9 @@ class TestSearchInstruction:
         Result = Int("Result")
 
         rung = RungLogic(Enable)
-        rung.add_instruction(SearchInstruction("==", 1, DS.select(1, 3), result=Result, found=Found))
+        rung.add_instruction(
+            SearchInstruction("==", 1, DS.select(1, 3), result=Result, found=Found)
+        )
 
         state = SystemState().with_tags(
             {"Enable": False, "DS1": 1, "DS2": 1, "DS3": 1, "Result": 55, "Found": True}
@@ -1660,7 +1670,9 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", "ADC", CH.select(1, 4).reverse(), result=Result, found=Found)
+        instr = SearchInstruction(
+            "==", "ADC", CH.select(1, 4).reverse(), result=Result, found=Found
+        )
         state = SystemState().with_tags({"CH1": "Z", "CH2": "C", "CH3": "D", "CH4": "A"})
         new_state = execute(instr, state)
 

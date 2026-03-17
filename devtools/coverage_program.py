@@ -71,15 +71,14 @@ from pyrung.click import (
     df,
     dh,
     ds,
-    send,
     receive,
+    send,
     t,
     td,
     txt,
     x,
     y,
 )
-
 
 # ── Auto-allocator ──────────────────────────────────────────────────
 
@@ -89,8 +88,7 @@ class Alloc:
 
     def __init__(self) -> None:
         self._pos: dict[str, int] = {
-            b: 1
-            for b in ("c", "ds", "dd", "dh", "df", "txt", "x", "y", "t", "td", "ct", "ctd")
+            b: 1 for b in ("c", "ds", "dd", "dh", "df", "txt", "x", "y", "t", "td", "ct", "ctd")
         }
         self._seq = count(1)
         self._map: dict[Any, Any] = {}
@@ -284,7 +282,6 @@ FORLOOP_VARIANTS: list[tuple[str, Any]] = [
 a = Alloc()
 
 with Program() as coverage_program:
-
     # ── 1. Condition coverage (each kind × simple out) ──────────────
 
     for label, make_cond in CONDITIONS:

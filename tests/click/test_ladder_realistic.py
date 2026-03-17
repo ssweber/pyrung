@@ -176,8 +176,12 @@ def _build_program_and_mapping():
         # R8: Numeric search (continuous)
         with Rung(Running):
             search(
-                ">=", CalcOut, DstBlk.select(1, 5),
-                result=FoundAddr, found=Found, continuous=True,
+                ">=",
+                CalcOut,
+                DstBlk.select(1, 5),
+                result=FoundAddr,
+                found=Found,
+                continuous=True,
             )
 
         # R9: Text search
@@ -380,16 +384,8 @@ def test_realistic_instruction_surface_coverage():
     logic, mapping = _build_program_and_mapping()
     bundle = mapping.to_ladder(logic)
 
-    main_tokens = [
-        row[-1]
-        for row in bundle.main_rows[1:]
-        if row[-1] != "" and row[0] != "#"
-    ]
-    sub_tokens = [
-        row[-1]
-        for row in bundle.subroutine_rows[0][1][1:]
-        if row[-1] != ""
-    ]
+    main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != "" and row[0] != "#"]
+    sub_tokens = [row[-1] for row in bundle.subroutine_rows[0][1][1:] if row[-1] != ""]
     tokens = main_tokens + sub_tokens
 
     expected_prefixes = [

@@ -384,7 +384,7 @@ class TestGraphWalkEdgeCases:
         Row 0: R | X001 | T | - ... - | out(Y001)
         Row 1:   | X002 | - |         |
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X002", 1: "-"})
@@ -408,7 +408,7 @@ class TestGraphWalkEdgeCases:
         X001 at (1,0) has blank to its right at (1,1).  T at (0,1) has
         'down', so the diagonal UP-RIGHT rule fires: X001 → T → AF.
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X001"})
@@ -428,7 +428,7 @@ class TestGraphWalkEdgeCases:
 
         Single root (X001).  T forks: right→Y001, down→bridge→Y002.
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         r0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         r1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(Y002)")
@@ -446,7 +446,7 @@ class TestGraphWalkEdgeCases:
         Row 1:   | X002 | T |         |
         Row 2:   | X003 | - |         |
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X002", 1: "T"})
@@ -470,7 +470,7 @@ class TestGraphWalkEdgeCases:
 
         Expected: shared=[btn], three instructions in scan order (right-first).
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "btn", 1: "T"}, 2, 31), af="out(L1)")
         row1 = _make_row("", _fill_dashes({1: "T", 2: "auto"}, 3, 31), af="out(L2)")
@@ -494,7 +494,7 @@ class TestGraphWalkEdgeCases:
 
     def test_unconditional_rung(self):
         """Rung with no conditions — all dashes to AF."""
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row = _make_row("R", _fill_dashes({}, 0, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
@@ -511,7 +511,7 @@ class TestGraphWalkEdgeCases:
         Row 0: R | X001 | T | C1 | C2 | - ... | out(Y001)
         Row 1:   | X002 | - |    |    |       |
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row(
             "R", _fill_dashes({0: "X001", 1: "T", 2: "C1", 3: "C2"}, 4, 31), af="out(Y001)"
@@ -536,7 +536,7 @@ class TestGraphWalkEdgeCases:
 
         Pin (.reset at row 2) attaches to on_delay (row 1), not out (row 0).
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="on_delay(T1)")
@@ -559,7 +559,7 @@ class TestGraphWalkEdgeCases:
 
         Fallback root finding should locate X001 at col 1.
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row = _make_row("R", _fill_dashes({1: "X001"}, 2, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
@@ -573,7 +573,7 @@ class TestGraphWalkEdgeCases:
 
         Ensures tokens like 'DS1==5' are traversed the same as '-'.
         """
-        from pyrung.click.codegen import _RawRung, _analyze_single_rung
+        from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row = _make_row("R", _fill_dashes({0: "X001", 1: "DS1==5"}, 2, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
