@@ -224,6 +224,7 @@ class _LadderExporter:
             main_rows.extend(
                 self._render_scope(self._program.rungs, scope="main", subroutine_name=None)
             )
+            main_rows.extend(self._end_rung())
 
             subroutine_rows: list[tuple[str, tuple[tuple[str, ...], ...]]] = []
             for subroutine_name in sorted(self._program.subroutines):
@@ -2045,6 +2046,14 @@ class _LadderExporter:
         )
         rows.extend(return_rows)
         return rows
+
+    def _end_rung(self) -> list[tuple[str, ...]]:
+        """Emit an unconditional ``end()`` rung for the main program tail."""
+        return self._single_output_rows(
+            self._expand_conditions([], path="main.end"),
+            output_token=self._fn("end"),
+            first_marker="R",
+        )
 
     def _fn(self, name: str, *args: str, **kwargs: str) -> str:
         parts = list(args)

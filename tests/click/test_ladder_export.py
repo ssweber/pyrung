@@ -79,6 +79,9 @@ def _blank_row(marker: str, prefix: list[str], af: str = "") -> tuple[str, ...]:
     return tuple([marker, *cells, af])
 
 
+_END_ROW = _row("R", [], "end()")
+
+
 def test_header_and_width_invariants():
     A = Bool("A")
     B = Bool("B")
@@ -109,6 +112,7 @@ def test_and_example_golden():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "X002"], "out(Y001)"),
+        _END_ROW,
     )
 
 
@@ -129,6 +133,7 @@ def test_or_expansion_with_trailing_and_golden():
         _header(),
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
         _blank_row("", ["X002", "-"]),
+        _END_ROW,
     )
 
 
@@ -151,6 +156,7 @@ def test_branch_row_is_continuation_after_parent_conditions():
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "-", "X002"], "out(Y002)"),
+        _END_ROW,
     )
 
 
@@ -211,6 +217,7 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "T", "X002"], "out(Y002)"),
         _row("", ["", "-"], "out(Y003)"),
+        _END_ROW,
     )
 
 
@@ -244,6 +251,7 @@ def test_multiple_instruction_rows_share_powered_path():
         _row("R", ["X001", "X002", "T"], "out(Y001)"),
         _row("", ["", "", "T"], "latch(Y002)"),
         _row("", ["", "", "-"], "reset(Y003)"),
+        _END_ROW,
     )
 
 
@@ -275,6 +283,7 @@ def test_immediate_contact_and_coils_render_canonical_tokens():
         _row("R", ["immediate(X001)", "T"], "out(immediate(Y001))"),
         _row("", ["", "T"], "latch(immediate(Y002))"),
         _row("", ["", "-"], "reset(immediate(Y003))"),
+        _END_ROW,
     )
 
 
@@ -396,7 +405,7 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
     main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert [name for name, _ in bundle.subroutine_rows] == ["alpha", "beta-two"]
-    assert main_tokens == ['call("beta-two")', 'call("alpha")']
+    assert main_tokens == ['call("beta-two")', 'call("alpha")', "end()"]
     alpha_rows = dict(bundle.subroutine_rows)["alpha"]
     beta_rows = dict(bundle.subroutine_rows)["beta-two"]
     assert alpha_rows[-1][-1] == "return()"
@@ -753,6 +762,7 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         ".jog()",
         'send(target=ModbusTarget(name="plc1",ip="127.0.0.1",port=502,device_id=3),remote_start="DS1",source=DS20,sending=C3,success=C4,error=C5,exception_response=DS21,count=1)',
         'receive(target=ModbusTarget(name="plc2",ip="127.0.0.1",port=502,device_id=4),remote_start="DS2",dest=DS22,receiving=C6,success=C7,error=C8,exception_response=DS23,count=1)',
+        "end()",
     ]
 
     assert ".clock()" in tokens
@@ -875,6 +885,7 @@ def test_comment_single_line():
         _header(),
         ("#", "Turn on B when A is true."),
         _row("R", ["X001"], "out(Y001)"),
+        _END_ROW,
     )
 
 
@@ -895,6 +906,7 @@ def test_comment_multi_line():
         ("#", "Line one."),
         ("#", "Line two."),
         _row("R", ["X001"], "out(Y001)"),
+        _END_ROW,
     )
 
 
@@ -912,6 +924,7 @@ def test_no_comment_no_extra_rows():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001"], "out(Y001)"),
+        _END_ROW,
     )
 
 
@@ -950,7 +963,7 @@ def test_comment_not_emitted_for_empty_branches():
     mapping = TagMap({A: x[1], Mode: c[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
 
-    assert bundle.main_rows == (_header(),)
+    assert bundle.main_rows == (_header(), _END_ROW)
 
 
 # --- OR branching pattern audit ---
@@ -973,6 +986,7 @@ def test_simple_or_full_row_tuples():
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
         _blank_row("", ["X002", "-"]),
+        _END_ROW,
     )
 
 
@@ -995,6 +1009,7 @@ def test_three_branch_or_full_row_tuples():
         _row("R", ["X001", "T"], "out(Y001)"),
         _blank_row("", ["X002", "T"]),
         _blank_row("", ["C1", "-"]),
+        _END_ROW,
     )
 
 
@@ -1021,6 +1036,7 @@ def test_three_branch_or_with_trailing_and_full_row_tuples():
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
         _blank_row("", ["X002", "T"]),
         _blank_row("", ["X003", "-"]),
+        _END_ROW,
     )
 
 
@@ -1044,6 +1060,7 @@ def test_nested_or_full_row_tuples():
         _row("R", ["X001", "T", "T"], "out(Y001)"),
         _blank_row("", ["X002", "-", "T"]),
         _blank_row("", ["C1", "-", "-"]),
+        _END_ROW,
     )
 
 
@@ -1065,6 +1082,7 @@ def test_or_after_and_full_row_tuples():
         _header(),
         _row("R", ["X001", "X002", "T"], "out(Y001)"),
         _blank_row("", ["X001", "C1", "-"]),
+        _END_ROW,
     )
 
 
@@ -1093,6 +1111,7 @@ def test_two_series_ors_full_row_tuples():
         _row("R", ["X001", "T", "C1", "T"], "out(Y001)"),
         _blank_row("", ["X001", "T", "C2", "-"]),
         _blank_row("", ["X002", "-"]),
+        _END_ROW,
     )
 
 
@@ -1121,6 +1140,7 @@ def test_or_with_branch():
         _row("R", ["X001", "T", "T"], "out(Y001)"),
         _blank_row("", ["X002", "-", "|"]),
         _row("", ["", "", "-", "C1"], "out(Y002)"),
+        _END_ROW,
     )
 
 
@@ -1151,6 +1171,7 @@ def test_three_or_with_branch():
         _blank_row("", ["X002", "T", "|"]),
         _blank_row("", ["X003", "-", "|"]),
         _row("", ["", "", "-", "C1"], "out(Y002)"),
+        _END_ROW,
     )
 
 
@@ -1184,6 +1205,7 @@ def test_or_with_multiple_branches():
         _blank_row("", ["X002", "-", "|"]),
         _row("", ["", "", "T", "C1"], "out(Y002)"),
         _row("", ["", "", "-", "C2"], "out(Y003)"),
+        _END_ROW,
     )
 
 
@@ -1215,6 +1237,7 @@ def test_or_with_branch_and_trailing_instruction():
         _blank_row("", ["X002", "-", "|"]),
         _row("", ["", "", "T", "C1"], "out(Y002)"),
         _row("", ["", "", "-"], "out(Y003)"),
+        _END_ROW,
     )
 
 
@@ -1245,4 +1268,5 @@ def test_or_with_branch_first_item():
         _row("R", ["X001", "T", "T", "C1"], "out(Y001)"),
         _blank_row("", ["X002", "-", "|"]),
         _row("", ["", "", "-", "C2"], "out(Y002)"),
+        _END_ROW,
     )
