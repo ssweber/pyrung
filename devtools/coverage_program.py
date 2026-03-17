@@ -79,6 +79,7 @@ from pyrung.click import (
     x,
     y,
 )
+from pyrung.core.program.builders import CountUpBuilder, OnDelayBuilder
 
 # ── Auto-allocator ──────────────────────────────────────────────────
 
@@ -368,7 +369,7 @@ with Program() as coverage_program:
         with Rung(trigger) as r:
             r.comment = f"{'on' if kind == 'on' else 'off'}_delay__{label}"
             builder = fn(done, acc, preset=preset, unit=Tms)
-            if rst is not None:
+            if rst is not None and isinstance(builder, OnDelayBuilder):
                 builder.reset(rst)
 
     # ── 8. Counter variants ─────────────────────────────────────────
@@ -380,7 +381,7 @@ with Program() as coverage_program:
         with Rung(rise(trigger)) as r:
             r.comment = f"count_{label}"
             builder = fn(done, acc, preset=preset)
-            if dwn is not None:
+            if dwn is not None and isinstance(builder, CountUpBuilder):
                 builder = builder.down(dwn)
             builder.reset(rst)
 

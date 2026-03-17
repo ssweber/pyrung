@@ -270,7 +270,7 @@ class TestTopologyAnalysis:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit="Tms").reset(Reset)
+                on_delay(Done, Acc, preset=100, unit=Tms).reset(Reset)
 
         mapping = TagMap(
             {Enable: x[1], Reset: x[2], Done: t[1], Acc: td[1]},
@@ -370,8 +370,8 @@ def _make_row(marker: str, cells: dict[int, str], af: str = "") -> list[str]:
 
 def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
     """Fill condition columns [start, end) with '-' in *cells* (mutates)."""
-    for c in range(start, end):
-        cells.setdefault(c, "-")
+    for col in range(start, end):
+        cells.setdefault(col, "-")
     return cells
 
 
@@ -623,11 +623,15 @@ class TestOperandInference:
         """CTD matches before CT, TD matches before T."""
         from pyrung.click.codegen import _parse_operand_prefix
 
-        _, tag_type, block_var, _ = _parse_operand_prefix("CTD1")
+        result = _parse_operand_prefix("CTD1")
+        assert result is not None
+        _, tag_type, block_var, _ = result
         assert block_var == "ctd"
         assert tag_type == "Dint"
 
-        _, tag_type, block_var, _ = _parse_operand_prefix("TD1")
+        result = _parse_operand_prefix("TD1")
+        assert result is not None
+        _, tag_type, block_var, _ = result
         assert block_var == "td"
         assert tag_type == "Int"
 
@@ -834,7 +838,7 @@ class TestRoundTrip:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit="Tms").reset(ResetCond)
+                on_delay(Done, Acc, preset=100, unit=Tms).reset(ResetCond)
 
         mapping = TagMap(
             {Enable: x[1], ResetCond: x[2], Done: t[1], Acc: td[1]},

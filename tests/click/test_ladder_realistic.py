@@ -510,7 +510,7 @@ def test_realistic_csv_roundtrip(tmp_path: Path):
         read_back = [tuple(row) for row in reader]
 
     assert len(read_back) == len(bundle.main_rows)
-    for expected, actual in zip(bundle.main_rows, read_back):
+    for expected, actual in zip(bundle.main_rows, read_back, strict=True):
         # Comment rows have fewer columns; compare as-is.
         if expected[0] == "#":
             assert actual == list(expected) or tuple(actual) == expected
