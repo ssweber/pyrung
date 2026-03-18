@@ -132,7 +132,7 @@ def test_or_expansion_with_trailing_and_golden():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002", "-"]),
+        _blank_row("", ["X002"]),
         _END_ROW,
     )
 
@@ -325,8 +325,8 @@ def test_vertical_wire_stack_for_three_or_branches():
     bundle = mapping.to_ladder(logic)
 
     assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "T"
-    assert bundle.main_rows[3][2] == "-"
+    assert bundle.main_rows[2][2] == "|"
+    assert bundle.main_rows[3][2] == ""
     assert bundle.main_rows[2][3] == ""
     assert bundle.main_rows[3][3] == ""
     assert bundle.main_rows[1][-1] == "out(Y001)"
@@ -985,7 +985,7 @@ def test_simple_or_full_row_tuples():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "-"]),
+        _blank_row("", ["X002"]),
         _END_ROW,
     )
 
@@ -1007,8 +1007,8 @@ def test_three_branch_or_full_row_tuples():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "T"]),
-        _blank_row("", ["C1", "-"]),
+        _blank_row("", ["X002", "|"]),
+        _blank_row("", ["C1"]),
         _END_ROW,
     )
 
@@ -1034,8 +1034,8 @@ def test_three_branch_or_with_trailing_and_full_row_tuples():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002", "T"]),
-        _blank_row("", ["X003", "-"]),
+        _blank_row("", ["X002", "|"]),
+        _blank_row("", ["X003"]),
         _END_ROW,
     )
 
@@ -1054,12 +1054,12 @@ def test_nested_or_full_row_tuples():
     mapping = TagMap({A: x[1], B: x[2], C: c[1], Y: y[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
 
-    # Inner any_of(A, B) produces T/- at col 1; outer any_of wraps with T/T/- at col 2.
+    # Inner any_of(A, B) produces bare contacts at col 0; outer any_of wraps with T/|/empty at col 1.
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "-", "T"]),
-        _blank_row("", ["C1", "-", "-"]),
+        _blank_row("", ["X002", "", "|"]),
+        _blank_row("", ["C1", "-"]),
         _END_ROW,
     )
 
@@ -1080,8 +1080,8 @@ def test_or_after_and_full_row_tuples():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "X002", "T"], "out(Y001)"),
-        _blank_row("", ["X001", "C1", "-"]),
+        _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
+        _blank_row("", ["X001", "C1"]),
         _END_ROW,
     )
 
@@ -1104,13 +1104,13 @@ def test_two_series_ors_full_row_tuples():
     )
     bundle = mapping.to_ladder(logic)
 
-    # First OR: A/B with T/- at col 1.  B row frozen (accepts_terms=False).
-    # Second OR: C/D expanded under A path only, T/- at col 3.
+    # First OR: A/B bare at col 0 (power rail).  B row frozen (accepts_terms=False).
+    # Second OR: C/D at col 2, T: prefix on C (mid-rung).
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "T", "C1", "T"], "out(Y001)"),
-        _blank_row("", ["X001", "T", "C2", "-"]),
-        _blank_row("", ["X002", "-"]),
+        _row("R", ["X001", "T", "T:C1", "T"], "out(Y001)"),
+        _blank_row("", ["X001", "T", "C2"]),
+        _blank_row("", ["X002"]),
         _END_ROW,
     )
 
@@ -1138,7 +1138,7 @@ def test_or_with_branch():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "-", "|"]),
+        _blank_row("", ["X002", "", "|"]),
         _row("", ["", "", "-", "C1"], "out(Y002)"),
         _END_ROW,
     )
@@ -1168,8 +1168,8 @@ def test_three_or_with_branch():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "T", "|"]),
-        _blank_row("", ["X003", "-", "|"]),
+        _blank_row("", ["X002", "|", "|"]),
+        _blank_row("", ["X003", "", "|"]),
         _row("", ["", "", "-", "C1"], "out(Y002)"),
         _END_ROW,
     )
@@ -1202,7 +1202,7 @@ def test_or_with_multiple_branches():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "-", "|"]),
+        _blank_row("", ["X002", "", "|"]),
         _row("", ["", "", "T", "C1"], "out(Y002)"),
         _row("", ["", "", "-", "C2"], "out(Y003)"),
         _END_ROW,
@@ -1234,7 +1234,7 @@ def test_or_with_branch_and_trailing_instruction():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "-", "|"]),
+        _blank_row("", ["X002", "", "|"]),
         _row("", ["", "", "T", "C1"], "out(Y002)"),
         _row("", ["", "", "-"], "out(Y003)"),
         _END_ROW,
@@ -1266,7 +1266,7 @@ def test_or_with_branch_first_item():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002", "-", "|"]),
+        _blank_row("", ["X002", "", "|"]),
         _row("", ["", "", "-", "C2"], "out(Y002)"),
         _END_ROW,
     )

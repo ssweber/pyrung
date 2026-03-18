@@ -764,6 +764,66 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_three_way_or(self, tmp_path: Path):
+        """3-branch OR exercises | output-bus marker."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(A, B, C)):
+                out(Y)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], Y: y[1]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    @pytest.mark.xfail(reason="codegen does not factor common AND prefix from OR branches")
+    def test_mid_rung_or(self, tmp_path: Path):
+        """OR after AND exercises T: prefix on mid-rung contacts."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(A, any_of(B, C)):
+                out(Y)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], Y: y[1]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    @pytest.mark.xfail(reason="codegen does not factor common AND prefix from OR branches")
+    def test_two_series_ors(self, tmp_path: Path):
+        """Two sequential ORs: first at col 0 (bare), second mid-rung (T: prefix)."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(A, B), any_of(C, D)):
+                out(Y)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], D: c[2], Y: y[1]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs from same conditions."""
         A = Bool("A")

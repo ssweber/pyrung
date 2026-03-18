@@ -1104,17 +1104,35 @@ class _LadderExporter:
                     source=condition,
                 )
 
+            total = len(branch_rows)
             for index, branch_row in enumerate(branch_rows):
+                # Apply T: prefix to the last contact on all-but-last branches
+                # so the contact itself carries the down-wire flag.
+                # Skip when the contact is at column 0 — the power rail
+                # already connects all rows on their left side.
+                if index < total - 1:
+                    last_contact_col = branch_row.cursor - 1
+                    if last_contact_col > 0:
+                        tok = branch_row.cells[last_contact_col]
+                        if tok and tok not in {"-", "T", "|"} and not tok.startswith("T:"):
+                            branch_row.cells[last_contact_col] = f"T:{tok}"
+
+                # Fill horizontal wires from cursor to merge_col.
                 for col in range(branch_row.cursor, merge_col):
                     if branch_row.cells[col] == "":
                         branch_row.cells[col] = "-"
-                self._write_cell(
-                    branch_row.cells,
-                    merge_col,
-                    _vertical_marker(index=index, total=len(branch_rows)),
-                    path=path,
-                    source=condition,
-                )
+
+                # Write output-bus marker: T on first row, | on middle, nothing on last.
+                marker = _output_bus_marker(index=index, total=total)
+                if marker:
+                    self._write_cell(
+                        branch_row.cells,
+                        merge_col,
+                        marker,
+                        path=path,
+                        source=condition,
+                    )
+
                 branch_row.cursor = merge_col + 1
                 branch_row.accepts_terms = index == 0
             expanded_rows.extend(branch_rows)
@@ -2107,6 +2125,21 @@ def _vertical_marker(*, index: int, total: int) -> str:
     if index < total - 1:
         return "T"
     return "-"
+
+
+def _output_bus_marker(*, index: int, total: int) -> str:
+    """Marker for the output-side vertical bus of an OR merge.
+
+    Native Click topology: T (right+down) on the first row, ``|``
+    (vertical pass-through) on middle rows, nothing on the last row.
+    """
+    if total <= 1:
+        return "-"
+    if index == 0:
+        return "T"
+    if index < total - 1:
+        return "|"
+    return ""
 
 
 def _compact_contiguous_range(addresses: list[str]) -> str | None:

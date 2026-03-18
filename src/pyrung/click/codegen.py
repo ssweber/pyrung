@@ -230,13 +230,20 @@ class _AnalyzedRung:
     is_forloop_next: bool = False
 
 
+def _strip_wire_prefix(cell: str) -> str:
+    """Strip ``T:`` wire-down prefix from a contact cell token."""
+    if cell.startswith("T:"):
+        return cell[2:]
+    return cell
+
+
 def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     """Extract non-wire condition tokens from columns [start, end)."""
     tokens: list[str] = []
     for col in range(start, end):
         cell = row[col + 1]  # +1 because row[0] is marker
         if cell and cell not in {"-", "T", "|"}:
-            tokens.append(cell)
+            tokens.append(_strip_wire_prefix(cell))
     return tokens
 
 
@@ -329,7 +336,8 @@ def _dfs(
 
     # Record meaningful tokens (skip wire markers)
     is_content = cell not in {"-", "|", "T"}
-    conds = conditions + (cell,) if is_content else conditions
+    token = _strip_wire_prefix(cell) if is_content else cell
+    conds = conditions + (token,) if is_content else conditions
 
     exits = _cell_exits(cell)
     has_right = "right" in exits
