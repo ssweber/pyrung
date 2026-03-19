@@ -268,6 +268,8 @@ def _cell_exits(cell: str) -> tuple[str, ...]:
     """Exit directions for a cell type (content tokens default to left/right)."""
     if not cell:
         return ()
+    if cell.startswith("T:"):
+        return ("left", "right", "down")
     return _ADJACENCY.get(cell, ("left", "right"))
 
 
@@ -297,17 +299,50 @@ def _walk_grid(
     rows: list[list[str]],
     pin_row_set: set[int],
 ) -> list[_PathResult]:
-    """Find all root cells on the left edge and DFS-walk from each."""
+    """Find root cells and DFS-walk from each."""
     n_rows = len(rows)
     paths: list[_PathResult] = []
 
-    # Roots: first non-blank cell in column 0 per non-pin row.
+    # Primary roots: first non-blank cell in column 0 per non-pin row.
     roots: list[tuple[int, int]] = []
+    primary_col0_root_rows: set[int] = set()
     for r in range(n_rows):
         if r in pin_row_set:
             continue
         if _cell_at(rows, r, 0):
             roots.append((r, 0))
+            primary_col0_root_rows.add(r)
+
+    # Supplemental roots: AF-blank rows with blank column 0 whose first
+    # non-blank cell is a T/T: vertical-chain head.
+    for r in range(n_rows):
+        if r in pin_row_set or r in primary_col0_root_rows:
+            continue
+        if _cell_at(rows, r, 0):
+            continue
+        if rows[r][-1]:
+            continue
+
+        first_col = -1
+        first_cell = ""
+        for c in range(_CONDITION_COLS):
+            cell = _cell_at(rows, r, c)
+            if cell:
+                first_col = c
+                first_cell = cell
+                break
+        if first_col < 0:
+            continue
+        if not (first_cell == "T" or first_cell.startswith("T:")):
+            continue
+
+        # Only root at the head of a vertical chain.
+        if r > 0 and (r - 1) not in pin_row_set:
+            above = _cell_at(rows, r - 1, first_col)
+            if above and "down" in _cell_exits(above):
+                continue
+
+        roots.append((r, first_col))
 
     # Fallback: if column 0 is entirely blank, scan for the leftmost occupied
     # column (handles non-canonical decoded grids).
@@ -321,9 +356,27 @@ def _walk_grid(
                     break
 
     for root_r, root_c in roots:
-        _dfs(rows, root_r, root_c, set(), pin_row_set, paths, ())
+        _dfs(
+            rows,
+            root_r,
+            root_c,
+            set(),
+            pin_row_set,
+            paths,
+            (),
+            primary_col0_root_rows,
+        )
 
-    return paths
+    # Preserve walk order, but drop exact duplicates.
+    deduped: list[_PathResult] = []
+    seen: set[tuple[tuple[str, ...], str, int]] = set()
+    for p in paths:
+        key = (tuple(p.conditions), p.af_token, p.af_row)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(p)
+
+    return deduped
 
 
 def _dfs(
@@ -334,8 +387,9 @@ def _dfs(
     pin_row_set: set[int],
     paths: list[_PathResult],
     conditions: tuple[str, ...],
+    primary_col0_root_rows: set[int],
 ) -> None:
-    """Recursive DFS walk.  Priority at every cell: right → down → up."""
+    """Recursive DFS walk. Priority: right → down → up → up-right."""
     cell = _cell_at(rows, r, c)
     if not cell or (r, c) in visited:
         return
@@ -356,7 +410,16 @@ def _dfs(
         if nc < _CONDITION_COLS:
             next_cell = _cell_at(rows, r, nc)
             if next_cell and (r, nc) not in visited:
-                _dfs(rows, r, nc, visited, pin_row_set, paths, conds)
+                _dfs(
+                    rows,
+                    r,
+                    nc,
+                    visited,
+                    pin_row_set,
+                    paths,
+                    conds,
+                    primary_col0_root_rows,
+                )
             elif not next_cell:
                 # End of horizontal run — check AF on this row
                 af = rows[r][-1]
@@ -372,14 +435,58 @@ def _dfs(
     if has_down:
         nr = r + 1
         if 0 <= nr < len(rows) and nr not in pin_row_set:
-            if _cell_at(rows, nr, c) and (nr, c) not in visited:
-                _dfs(rows, nr, c, visited, pin_row_set, paths, conds)
+            below = _cell_at(rows, nr, c)
+            if below and (nr, c) not in visited:
+                # T:-prefixed contacts represent OR fork inputs. Stepping down
+                # from them starts a parallel branch and must not carry the
+                # current contact token into that branch.
+                down_conds = conditions if cell.startswith("T:") else conds
+
+                if cell.startswith("T:"):
+                    below_is_content = below not in {"-", "|", "T"}
+                    below_is_plain_content = below_is_content and not below.startswith("T:")
+                    if not (below_is_plain_content and nr in primary_col0_root_rows):
+                        _dfs(
+                            rows,
+                            nr,
+                            c,
+                            visited,
+                            pin_row_set,
+                            paths,
+                            down_conds,
+                            primary_col0_root_rows,
+                        )
+                else:
+                    _dfs(
+                        rows,
+                        nr,
+                        c,
+                        visited,
+                        pin_row_set,
+                        paths,
+                        down_conds,
+                        primary_col0_root_rows,
+                    )
 
     # --- UP (forced bidirectional — a T above pulls us up) ---
     if r > 0 and (r - 1) not in pin_row_set:
         above = _cell_at(rows, r - 1, c)
-        if above and "down" in _cell_exits(above) and (r - 1, c) not in visited:
-            _dfs(rows, r - 1, c, visited, pin_row_set, paths, conds)
+        if (
+            above
+            and "down" in _cell_exits(above)
+            and not above.startswith("T:")
+            and (r - 1, c) not in visited
+        ):
+            _dfs(
+                rows,
+                r - 1,
+                c,
+                visited,
+                pin_row_set,
+                paths,
+                conds,
+                primary_col0_root_rows,
+            )
 
     # --- UP-RIGHT diagonal (T's down-wire drawn at left edge of its cell) ---
     # A cell connects diagonally up-right to a T when the cell directly to the
@@ -389,7 +496,16 @@ def _dfs(
         right_cell = _cell_at(rows, r, c + 1)
         if diag and "down" in _cell_exits(diag) and not right_cell:
             if (r - 1, c + 1) not in visited:
-                _dfs(rows, r - 1, c + 1, visited, pin_row_set, paths, conds)
+                _dfs(
+                    rows,
+                    r - 1,
+                    c + 1,
+                    visited,
+                    pin_row_set,
+                    paths,
+                    conds,
+                    primary_col0_root_rows,
+                )
 
     visited.discard((r, c))
 

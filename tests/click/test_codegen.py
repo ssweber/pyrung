@@ -390,6 +390,14 @@ def _or_level(rung):
 class TestGraphWalkEdgeCases:
     """Synthetic grids exercising walk rules from the Phase 2 spec."""
 
+    @staticmethod
+    def _walk_path_set(rows: list[list[str]]) -> set[tuple[tuple[str, ...], str]]:
+        from pyrung.click.codegen import _is_pin_row, _walk_grid
+
+        pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
+        paths = _walk_grid(rows, pin_row_set)
+        return {(tuple(p.conditions), p.af_token) for p in paths}
+
     def test_forced_bidirectional_or(self):
         """OR alternative on row 1 reaches AF via UP through T (forced bidi).
 
@@ -399,7 +407,7 @@ class TestGraphWalkEdgeCases:
         from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
-        row1 = _make_row("", {0: "X002", 1: "-"})
+        row1 = _make_row("", {0: "X002"})
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
@@ -462,8 +470,8 @@ class TestGraphWalkEdgeCases:
         from pyrung.click.codegen import _analyze_single_rung, _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
-        row1 = _make_row("", {0: "X002", 1: "T"})
-        row2 = _make_row("", {0: "X003", 1: "-"})
+        row1 = _make_row("", {0: "X002", 1: "|"})
+        row2 = _make_row("", {0: "X003"})
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
@@ -529,7 +537,7 @@ class TestGraphWalkEdgeCases:
         row0 = _make_row(
             "R", _fill_dashes({0: "X001", 1: "T", 2: "C1", 3: "C2"}, 4, 31), af="out(Y001)"
         )
-        row1 = _make_row("", {0: "X002", 1: "-"})
+        row1 = _make_row("", {0: "X002"})
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
@@ -595,6 +603,60 @@ class TestGraphWalkEdgeCases:
         result = _analyze_single_rung(rung)
         assert "X001" in result.condition_seq
         assert "DS1==5" in result.condition_seq
+
+    def test_another_case_t_fork_down_through_contact(self):
+        """T fork down through contact reaches second AF without reverse leakage."""
+        rows = [
+            _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)"),
+            _make_row("", {1: "X003", 2: "|"}),
+            _make_row("", _fill_dashes({0: "X002"}, 1, 31), af="out(Y002)"),
+        ]
+
+        got = self._walk_path_set(rows)
+        expected = {
+            (("X001",), "out(Y001)"),
+            (("X001", "X003"), "out(Y002)"),
+            (("X002",), "out(Y002)"),
+        }
+        assert got == expected
+
+    def test_or_with_all_offs_t_prefix_rows_above_output(self):
+        """T:-prefixed stacked OR rows above output row remain reachable."""
+        rows = [
+            _make_row("R", {1: "T:X006", 2: "X007", 3: "|"}),
+            _make_row("", {1: "T:X004", 2: "X005", 3: "|"}),
+            _make_row("", _fill_dashes({0: "X001", 1: "X002", 2: "X003"}, 3, 31), af="out(Y001)"),
+        ]
+
+        got = self._walk_path_set(rows)
+        expected = {
+            (("X001", "X002", "X003"), "out(Y001)"),
+            (("X006", "X007"), "out(Y001)"),
+            (("X004", "X005"), "out(Y001)"),
+        }
+        assert got == expected
+
+    def test_crazy_mid_grid_vertical_or_stack(self):
+        """Mid-grid vertical stack yields unconditional and three OR-branch paths."""
+        rows = [
+            _make_row("R", {}),
+            _make_row("", _fill_dashes({}, 0, 31), af="out(Y001)"),
+            _make_row("", {}),
+            _make_row("", {2: "T", 3: "X010", 4: "T"}),
+            _make_row("", {4: "|"}),
+            _make_row("", _fill_dashes({4: "T:X001"}, 5, 31), af="out(Y002)"),
+            _make_row("", _fill_dashes({4: "T:X002"}, 5, 31), af="out(Y002)"),
+            _make_row("", _fill_dashes({4: "X003", 5: "X004"}, 6, 31), af="out(Y002)"),
+        ]
+
+        got = self._walk_path_set(rows)
+        expected = {
+            ((), "out(Y001)"),
+            (("X010", "X001"), "out(Y002)"),
+            (("X010", "X002"), "out(Y002)"),
+            (("X010", "X003", "X004"), "out(Y002)"),
+        }
+        assert got == expected
 
 
 # ---------------------------------------------------------------------------
