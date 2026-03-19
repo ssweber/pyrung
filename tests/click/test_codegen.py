@@ -190,9 +190,9 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert r.or_groups is None
-        assert "X001" in r.shared_conditions
-        assert "X002" in r.shared_conditions
+        assert _or_level(r) is None
+        assert "X001" in r.condition_seq
+        assert "X002" in r.condition_seq
         assert len(r.instructions) == 1
         assert r.instructions[0].af_token == "out(Y001)"
 
@@ -213,8 +213,9 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert r.or_groups is not None
-        assert len(r.or_groups) == 2
+        ol = _or_level(r)
+        assert ol is not None
+        assert len(ol.groups) == 2
 
     def test_or_with_trailing_and(self, tmp_path: Path):
         """OR + AND: any_of(A, B), Ready → out(Y)."""
@@ -234,10 +235,11 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert r.or_groups is not None
-        assert len(r.or_groups) == 2
-        # Trailing AND should be in shared_conditions
-        assert "C1" in r.shared_conditions
+        ol = _or_level(r)
+        assert ol is not None
+        assert len(ol.groups) == 2
+        # Trailing AND should be in condition_seq
+        assert "C1" in r.condition_seq
 
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs: same conditions, different instructions."""
@@ -375,6 +377,16 @@ def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
     return cells
 
 
+def _or_level(rung):
+    """Return the first ``_OrLevel`` in *rung.condition_seq*, or ``None``."""
+    from pyrung.click.codegen import _OrLevel
+
+    for elem in rung.condition_seq:
+        if isinstance(elem, _OrLevel):
+            return elem
+    return None
+
+
 class TestGraphWalkEdgeCases:
     """Synthetic grids exercising walk rules from the Phase 2 spec."""
 
@@ -391,9 +403,10 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        assert result.or_groups is not None
-        assert len(result.or_groups) == 2
-        conds = [g.conditions for g in result.or_groups]
+        ol = _or_level(result)
+        assert ol is not None
+        assert len(ol.groups) == 2
+        conds = [g.conditions for g in ol.groups]
         assert ["X001"] in conds
         assert ["X002"] in conds
         assert len(result.instructions) == 1
@@ -417,7 +430,7 @@ class TestGraphWalkEdgeCases:
         result = _analyze_single_rung(rung)
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
-        assert "X001" in result.shared_conditions
+        assert "X001" in result.condition_seq
 
     def test_bridge_connects_branch(self):
         """T forces bidirectional down to a '-' bridge, connecting a second AF.
@@ -437,7 +450,7 @@ class TestGraphWalkEdgeCases:
         assert len(result.instructions) == 2
         assert result.instructions[0].af_token == "out(Y001)"
         assert result.instructions[1].af_token == "out(Y002)"
-        assert "X001" in result.shared_conditions
+        assert "X001" in result.condition_seq
 
     def test_three_way_or(self):
         """Three OR alternatives: X001, X002, X003 all reach the same AF.
@@ -454,9 +467,10 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        assert result.or_groups is not None
-        assert len(result.or_groups) == 3
-        conds = [g.conditions for g in result.or_groups]
+        ol = _or_level(result)
+        assert ol is not None
+        assert len(ol.groups) == 3
+        conds = [g.conditions for g in ol.groups]
         assert ["X001"] in conds
         assert ["X002"] in conds
         assert ["X003"] in conds
@@ -478,8 +492,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        assert result.or_groups is None
-        assert "btn" in result.shared_conditions
+        assert _or_level(result) is None
+        assert "btn" in result.condition_seq
         assert len(result.instructions) == 3
 
         # Scan order: right-first at each fork
@@ -500,8 +514,7 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert result.shared_conditions == []
-        assert result.or_groups is None
+        assert result.condition_seq == []
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
 
@@ -520,11 +533,12 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        assert result.or_groups is not None
-        assert len(result.or_groups) == 2
-        # Trailing AND conditions should be shared
-        assert "C1" in result.shared_conditions
-        assert "C2" in result.shared_conditions
+        ol = _or_level(result)
+        assert ol is not None
+        assert len(ol.groups) == 2
+        # Trailing AND conditions should be in condition_seq
+        assert "C1" in result.condition_seq
+        assert "C2" in result.condition_seq
 
     def test_pin_attached_to_correct_instruction(self):
         """Pin row attaches to its nearest preceding instruction.
@@ -565,7 +579,7 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in result.shared_conditions
+        assert "X001" in result.condition_seq
         assert result.instructions[0].af_token == "out(Y001)"
 
     def test_adjacency_table_content_default(self):
@@ -579,8 +593,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in result.shared_conditions
-        assert "DS1==5" in result.shared_conditions
+        assert "X001" in result.condition_seq
+        assert "DS1==5" in result.condition_seq
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +797,6 @@ class TestRoundTrip:
 
         assert orig == repro
 
-    @pytest.mark.xfail(reason="codegen does not factor common AND prefix from OR branches")
     def test_mid_rung_or(self, tmp_path: Path):
         """OR after AND exercises T: prefix on mid-rung contacts."""
         A = Bool("A")
@@ -803,7 +816,6 @@ class TestRoundTrip:
 
         assert orig == repro
 
-    @pytest.mark.xfail(reason="codegen does not factor common AND prefix from OR branches")
     def test_two_series_ors(self, tmp_path: Path):
         """Two sequential ORs: first at col 0 (bare), second mid-rung (T: prefix)."""
         A = Bool("A")

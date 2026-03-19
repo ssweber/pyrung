@@ -219,12 +219,18 @@ class _OrGroup:
 
 
 @dataclass
+class _OrLevel:
+    """One ``any_of()`` grouping in the condition sequence."""
+
+    groups: list[_OrGroup]
+
+
+@dataclass
 class _AnalyzedRung:
     """Fully analyzed rung topology."""
 
     comment: str | None
-    shared_conditions: list[str]  # conditions before split (shared across all outputs)
-    or_groups: list[_OrGroup] | None  # None if no OR expansion; list if any_of()
+    condition_seq: list[str | _OrLevel]  # ordered AND conditions and OR levels
     instructions: list[_InstructionInfo]
     is_forloop_start: bool = False
     is_forloop_body: bool = False
@@ -412,15 +418,49 @@ def _longest_common_suffix(lists: list[list[str]]) -> list[str]:
     return _longest_common_prefix(reversed_lists)[::-1]
 
 
+def _build_condition_tree(cond_lists: list[list[str]]) -> list[str | _OrLevel]:
+    """Build an ordered sequence of AND conditions and OR levels from path lists.
+
+    Recursively groups paths by common prefix tokens.  When all paths share the
+    same first token it becomes a plain AND condition; when they diverge the
+    distinct first tokens form an ``_OrLevel``.
+    """
+    # Drop fully-consumed (empty) paths
+    active = [cl for cl in cond_lists if cl]
+    if not active:
+        return []
+
+    # Group by first token (preserving insertion order)
+    groups: dict[str, list[list[str]]] = {}
+    for cl in active:
+        groups.setdefault(cl[0], []).append(cl[1:])
+
+    if len(groups) == 1:
+        # All paths share the same first token → shared AND condition
+        token = next(iter(groups))
+        return [token] + _build_condition_tree(groups[token])
+
+    # Multiple distinct first tokens → OR level
+    or_groups: list[_OrGroup] = [_OrGroup(conditions=[tok]) for tok in groups]
+    result: list[str | _OrLevel] = [_OrLevel(groups=or_groups)]
+
+    # Collect remaining tails from all groups and recurse
+    all_remainders: list[list[str]] = []
+    for remainders in groups.values():
+        all_remainders.extend(remainders)
+    result.extend(_build_condition_tree(all_remainders))
+    return result
+
+
 def _group_paths(
     paths: list[_PathResult],
-) -> tuple[list[str], list[_OrGroup] | None, list[_InstructionInfo], list[int]]:
+) -> tuple[list[str | _OrLevel], list[_InstructionInfo], list[int]]:
     """Determine OR vs branch structure from walk paths.
 
-    Returns ``(shared_conditions, or_groups, instructions, af_rows)``.
+    Returns ``(condition_seq, instructions, af_rows)``.
     """
     if not paths:
-        return [], None, [], []
+        return [], [], []
 
     unique_afs = list(dict.fromkeys(p.af_token for p in paths))
 
@@ -429,30 +469,28 @@ def _group_paths(
         if len(paths) == 1:
             p = paths[0]
             return (
-                p.conditions,
-                None,
+                list(p.conditions),
                 [_InstructionInfo(p.af_token, [], [])],
                 [p.af_row],
             )
 
-        # Multiple paths → OR.  Shared trailing AND = common suffix.
+        # Multiple paths → build condition tree (handles prefix, suffix, nested ORs)
         cond_lists = [p.conditions for p in paths]
+
+        # Extract common trailing AND (suffix) first
         suffix = _longest_common_suffix(cond_lists)
         n_suffix = len(suffix)
+        trimmed = [cl[: len(cl) - n_suffix] if n_suffix else list(cl) for cl in cond_lists]
 
-        or_groups: list[_OrGroup] = []
-        for p in paths:
-            or_conds = (
-                p.conditions[: len(p.conditions) - n_suffix] if n_suffix else list(p.conditions)
-            )
-            if or_conds:
-                or_groups.append(_OrGroup(conditions=or_conds))
+        # Build tree from remaining conditions
+        seq = _build_condition_tree(trimmed)
+        # Append suffix as trailing AND conditions
+        seq.extend(suffix)
 
         af = unique_afs[0]
         af_row = paths[0].af_row
         return (
-            suffix,
-            or_groups if len(or_groups) > 1 else None,
+            seq,
             [_InstructionInfo(af, [], [])],
             [af_row],
         )
@@ -469,7 +507,7 @@ def _group_paths(
         instructions.append(_InstructionInfo(p.af_token, branch_conds, []))
         af_rows.append(p.af_row)
 
-    return prefix, None, instructions, af_rows
+    return list(prefix), instructions, af_rows
 
 
 # --- Top-level Phase 2 entry points -----------------------------------------
@@ -527,8 +565,7 @@ def _analyze_single_rung(
     if not rows:
         return _AnalyzedRung(
             comment=comment,
-            shared_conditions=[],
-            or_groups=None,
+            condition_seq=[],
             instructions=[],
         )
 
@@ -548,8 +585,7 @@ def _analyze_single_rung(
                     pins = _collect_pins([rows[j] for j in sorted(pin_row_set)])
                     return _AnalyzedRung(
                         comment=comment,
-                        shared_conditions=[],
-                        or_groups=None,
+                        condition_seq=[],
                         instructions=[
                             _InstructionInfo(af_token=af, branch_conditions=[], pins=pins)
                         ],
@@ -559,13 +595,12 @@ def _analyze_single_rung(
                     )
         return _AnalyzedRung(
             comment=comment,
-            shared_conditions=[],
-            or_groups=None,
+            condition_seq=[],
             instructions=[],
         )
 
     # Group walk results into OR / branch structure
-    shared, or_groups, instructions, af_rows = _group_paths(paths)
+    condition_seq, instructions, af_rows = _group_paths(paths)
 
     # Attach pin rows to their nearest preceding instruction (by row index)
     if pin_row_set and instructions:
@@ -590,8 +625,7 @@ def _analyze_single_rung(
 
     return _AnalyzedRung(
         comment=comment,
-        shared_conditions=shared,
-        or_groups=or_groups,
+        condition_seq=condition_seq,
         instructions=instructions,
         is_forloop_start=is_forloop_start,
         is_forloop_body=is_forloop_body,
@@ -720,17 +754,20 @@ def _collect_operands(
     collection = _OperandCollection()
 
     for rung in rungs:
-        if rung.or_groups:
+        if any(isinstance(e, _OrLevel) for e in rung.condition_seq):
             collection.has_any_of = True
 
         if rung.is_forloop_start:
             collection.has_forloop = True
 
         # Scan conditions
-        all_conditions: list[str] = list(rung.shared_conditions)
-        if rung.or_groups:
-            for group in rung.or_groups:
-                all_conditions.extend(group.conditions)
+        all_conditions: list[str] = []
+        for elem in rung.condition_seq:
+            if isinstance(elem, str):
+                all_conditions.append(elem)
+            else:
+                for group in elem.groups:
+                    all_conditions.extend(group.conditions)
 
         for cond in all_conditions:
             _scan_token_for_operands(cond, collection, nicknames)
@@ -1500,28 +1537,25 @@ def _build_conditions_str(
     """Build the condition string for a Rung() constructor."""
     parts: list[str] = []
 
-    if rung.or_groups and len(rung.or_groups) > 1:
-        or_parts: list[str] = []
-        for group in rung.or_groups:
-            group_rendered = [
-                _render_condition(c, collection, nicknames, structured_map)
-                for c in group.conditions
-            ]
-            if len(group_rendered) == 1:
-                or_parts.append(group_rendered[0])
-            elif group_rendered:
-                # Wrap multi-condition groups in implicit AND (just comma-separated in any_of)
-                or_parts.append(", ".join(group_rendered))
-        if len(or_parts) == 1:
-            parts.append(or_parts[0])
+    for elem in rung.condition_seq:
+        if isinstance(elem, str):
+            parts.append(_render_condition(elem, collection, nicknames, structured_map))
         else:
-            parts.append(f"any_of({', '.join(or_parts)})")
-    elif rung.or_groups and len(rung.or_groups) == 1:
-        for c in rung.or_groups[0].conditions:
-            parts.append(_render_condition(c, collection, nicknames, structured_map))
-
-    for c in rung.shared_conditions:
-        parts.append(_render_condition(c, collection, nicknames, structured_map))
+            # _OrLevel — render any_of(...)
+            or_parts: list[str] = []
+            for group in elem.groups:
+                group_rendered = [
+                    _render_condition(c, collection, nicknames, structured_map)
+                    for c in group.conditions
+                ]
+                if len(group_rendered) == 1:
+                    or_parts.append(group_rendered[0])
+                elif group_rendered:
+                    or_parts.append(", ".join(group_rendered))
+            if len(or_parts) == 1:
+                parts.append(or_parts[0])
+            else:
+                parts.append(f"any_of({', '.join(or_parts)})")
 
     return ", ".join(parts)
 
