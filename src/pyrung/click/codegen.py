@@ -96,6 +96,7 @@ _INSTRUCTION_NAMES = {
     "return",
     "for",
     "next",
+    "raw",
     "send",
     "receive",
 }
@@ -955,6 +956,10 @@ def _scan_af_token(
     if func_name == "call":
         collection.has_subroutine = True
 
+    # raw() args are class name + hex blob, not operands — skip scanning.
+    if func_name == "raw":
+        return
+
     # Strip quoted strings before scanning for operands
     clean_args = _strip_quoted_strings(args_str)
 
@@ -1599,6 +1604,13 @@ def _render_af_token(
 
     # Map 'return' → 'return_early'
     py_func = "return_early" if func_name == "return" else func_name
+
+    # raw(ClassName,hex) → raw("ClassName", blob=bytes.fromhex("hex"))
+    if func_name == "raw":
+        parts = args_str.split(",", 1)
+        class_name = parts[0].strip()
+        hex_blob = parts[1].strip() if len(parts) > 1 else ""
+        return f'raw("{class_name}", blob=bytes.fromhex("{hex_blob}"))'
 
     if not args_str:
         return f"{py_func}()"

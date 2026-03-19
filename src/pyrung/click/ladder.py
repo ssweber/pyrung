@@ -1605,6 +1605,9 @@ class _LadderExporter:
         if instruction_type == "ReturnInstruction":
             return self._fn("return")
 
+        if instruction_type == "RawInstruction":
+            return f"raw({instruction.class_name},{instruction.blob.hex()})"
+
         self._raise_issue(
             path=path,
             message=f"Unsupported instruction type: {instruction_type}.",
