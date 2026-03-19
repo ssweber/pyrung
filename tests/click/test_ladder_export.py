@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import functools
+import re
 from pathlib import Path
 
 import pytest
@@ -26,7 +28,7 @@ from pyrung.click import (
     x,
     y,
 )
-from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, any_of, immediate
+from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, all_of, any_of, immediate
 from pyrung.core.program import (
     blockcopy,
     branch,
@@ -966,307 +968,261 @@ def test_comment_not_emitted_for_empty_branches():
     assert bundle.main_rows == (_header(), _END_ROW)
 
 
-# --- OR branching pattern audit ---
+# --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
 
 
-def test_simple_or_full_row_tuples():
-    """Pattern 1: any_of(A, B) → 2 rows, continuation has blanks after join."""
-    A = Bool("A")
-    B = Bool("B")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(any_of(A, B)):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _blank_row("", ["X002"]),
-        _END_ROW,
-    )
+_NATIVE_OR_TOPOLOGY_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "click_or_topology.csv"
 
 
-def test_three_branch_or_full_row_tuples():
-    """Pattern 3: any_of(A, B, C) → middle rows use T, all continuations blank."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Y = Bool("Y")
+@functools.lru_cache(maxsize=1)
+def _native_or_topology_rows() -> dict[int, tuple[tuple[str, ...], ...]]:
+    patterns: dict[int, list[tuple[str, ...]]] = {}
+    current_pattern: int | None = None
 
-    with Program() as logic:
-        with Rung(any_of(A, B, C)):
-            out(Y)
+    with _NATIVE_OR_TOPOLOGY_FIXTURE.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if not row:
+                continue
 
-    mapping = TagMap({A: x[1], B: x[2], C: c[1], Y: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+            marker = row[0]
+            if marker == "#":
+                text = row[1].strip() if len(row) > 1 else ""
+                match = re.match(r"^(\d+)\.", text)
+                if match is not None:
+                    current_pattern = int(match.group(1))
+                    patterns[current_pattern] = []
+                continue
 
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "|"]),
-        _blank_row("", ["C1"]),
-        _END_ROW,
-    )
+            if marker in {"R", ""} and current_pattern is not None:
+                patterns[current_pattern].append(tuple(row))
 
-
-def test_three_branch_or_with_trailing_and_full_row_tuples():
-    """Pattern 3+2: any_of(A, B, C), Ready → only main row carries Ready and AF."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Ready = Bool("Ready")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(any_of(A, B, C), Ready):
-            out(Y)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Ready: c[1], Y: y[1]},
-        include_system=False,
-    )
-    bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002", "|"]),
-        _blank_row("", ["X003"]),
-        _END_ROW,
-    )
+    return {key: tuple(rows) for key, rows in patterns.items()}
 
 
-def test_nested_or_full_row_tuples():
-    """Pattern 4: any_of(any_of(A, B), C) → expands to 3 rows with nested T markers."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Y = Bool("Y")
+def _assert_native_pattern(
+    *,
+    pattern_id: int,
+    bundle_rows: tuple[tuple[str, ...], ...],
+    expected_rows: tuple[tuple[str, ...], ...],
+) -> None:
+    assert _native_or_topology_rows()[pattern_id] == expected_rows
+    assert bundle_rows == (_header(), *expected_rows, _END_ROW)
+
+
+def test_native_or_topology_fixture_shape():
+    patterns = _native_or_topology_rows()
+    assert set(patterns) == set(range(1, 9))
+    assert all(len(row) == 33 for rows in patterns.values() for row in rows)
+
+
+def test_native_pattern_1_mid_rung_or():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    C1 = Bool("C1")
+    Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(any_of(any_of(A, B), C)):
-            out(Y)
+        with Rung(X001, any_of(X002, C1)):
+            out(Y001)
 
-    mapping = TagMap({A: x[1], B: x[2], C: c[1], Y: y[1]}, include_system=False)
+    mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
-
-    # Inner any_of(A, B) produces bare contacts at col 0; outer any_of wraps with T/|/empty at col 1.
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "|"]),
-        _blank_row("", ["C1", "-"]),
-        _END_ROW,
-    )
-
-
-def test_or_after_and_full_row_tuples():
-    """Pattern 5: A, any_of(B, C) → A on both rows, OR split after A."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(A, any_of(B, C)):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], C: c[1], Y: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
+    expected = (
         _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
-        _blank_row("", ["X001", "C1"]),
-        _END_ROW,
+        _blank_row("", ["", "C1"]),
     )
+    _assert_native_pattern(pattern_id=1, bundle_rows=bundle.main_rows, expected_rows=expected)
 
 
-def test_two_series_ors_full_row_tuples():
-    """Pattern 6: any_of(A, B), any_of(C, D) → second OR expands only on main path."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    Y = Bool("Y")
+def test_native_pattern_2_series_ors():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    C1 = Bool("C1")
+    C2 = Bool("C2")
+    Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(any_of(A, B), any_of(C, D)):
-            out(Y)
+        with Rung(any_of(X001, X002), any_of(C1, C2)):
+            out(Y001)
 
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: c[1], D: c[2], Y: y[1]},
-        include_system=False,
-    )
+    mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
     bundle = mapping.to_ladder(logic)
-
-    # First OR: A/B bare at col 0 (power rail).  B row frozen (accepts_terms=False).
-    # Second OR: C/D at col 2, T: prefix on C (mid-rung).
-    assert bundle.main_rows == (
-        _header(),
+    expected = (
         _row("R", ["X001", "T", "T:C1", "T"], "out(Y001)"),
-        _blank_row("", ["X001", "T", "C2"]),
-        _blank_row("", ["X002"]),
-        _END_ROW,
+        _blank_row("", ["X002", "", "C2"]),
     )
+    _assert_native_pattern(pattern_id=2, bundle_rows=bundle.main_rows, expected_rows=expected)
 
 
-def test_or_with_branch():
-    """Pattern 7: any_of(A, B) + out(Y1) + branch(Mode): out(Y2)."""
-    A = Bool("A")
-    B = Bool("B")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
+def test_native_pattern_3_or_plus_branch():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    C1 = Bool("C1")
+    Y001 = Bool("Y001")
+    Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(A, B)):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
+        with Rung(any_of(X001, X002)):
+            out(Y001)
+            with branch(C1):
+                out(Y002)
 
     mapping = TagMap(
-        {A: x[1], B: x[2], Mode: c[1], Y1: y[1], Y2: y[2]},
+        {X001: x[1], X002: x[2], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
+    expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "|"]),
-        _row("", ["", "", "-", "C1"], "out(Y002)"),
-        _END_ROW,
+        _row("", ["X002", "", "C1"], "out(Y002)"),
     )
+    _assert_native_pattern(pattern_id=3, bundle_rows=bundle.main_rows, expected_rows=expected)
 
 
-def test_three_or_with_branch():
-    """3-way OR + branch: continuation rows all get pass-through |."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
+def test_native_pattern_4_three_way_or_plus_branch():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    X003 = Bool("X003")
+    C1 = Bool("C1")
+    Y001 = Bool("Y001")
+    Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(A, B, C)):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
+        with Rung(any_of(X001, X002, X003)):
+            out(Y001)
+            with branch(C1):
+                out(Y002)
 
     mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Mode: c[1], Y1: y[1], Y2: y[2]},
+        {X001: x[1], X002: x[2], X003: x[3], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
+    expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "|", "|"]),
-        _blank_row("", ["X003", "", "|"]),
-        _row("", ["", "", "-", "C1"], "out(Y002)"),
-        _END_ROW,
+        _row("", ["X002", "|", "C1"], "out(Y002)"),
+        _blank_row("", ["X003"]),
     )
+    _assert_native_pattern(pattern_id=4, bundle_rows=bundle.main_rows, expected_rows=expected)
 
 
-def test_or_with_multiple_branches():
-    """OR + two branches: pass-through | spans all OR continuation rows."""
-    A = Bool("A")
-    B = Bool("B")
-    Mode1 = Bool("Mode1")
-    Mode2 = Bool("Mode2")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
+def test_native_pattern_5_combined_or_multi_output_branch():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    X003 = Bool("X003")
+    X004 = Bool("X004")
+    C1 = Bool("C1")
+    Y001 = Bool("Y001")
+    Y002 = Bool("Y002")
+    Y003 = Bool("Y003")
 
     with Program() as logic:
-        with Rung(any_of(A, B)):
-            out(Y1)
-            with branch(Mode1):
-                out(Y2)
-            with branch(Mode2):
-                out(Y3)
+        with Rung(X001, any_of(X002, X003, X004)):
+            out(Y001)
+            with branch(C1):
+                out(Y002)
+            out(Y003)
 
     mapping = TagMap(
-        {A: x[1], B: x[2], Mode1: c[1], Mode2: c[2], Y1: y[1], Y2: y[2], Y3: y[3]},
+        {
+            X001: x[1],
+            X002: x[2],
+            X003: x[3],
+            X004: x[4],
+            C1: c[1],
+            Y001: y[1],
+            Y002: y[2],
+            Y003: y[3],
+        },
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
+    expected = (
+        _row("R", ["X001", "T:X002", "T", "T"], "out(Y001)"),
+        _row("", ["", "T:X003", "|", "T:C1"], "out(Y002)"),
+        _row("", ["", "X004", "", "-"], "out(Y003)"),
+    )
+    _assert_native_pattern(pattern_id=5, bundle_rows=bundle.main_rows, expected_rows=expected)
 
-    assert bundle.main_rows == (
-        _header(),
+
+def test_native_pattern_6_mid_rung_or_with_nested_all_of():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    X003 = Bool("X003")
+    C1 = Bool("C1")
+    C2 = Bool("C2")
+    C3 = Bool("C3")
+    Y001 = Bool("Y001")
+
+    with Program() as logic:
+        with Rung(X001, any_of(X002, all_of(C1, C2, C3), X003)):
+            out(Y001)
+
+    mapping = TagMap(
+        {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], C3: c[3], Y001: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    expected = (
+        _row("R", ["X001", "T:X002", "-", "-", "T:X003"], "out(Y001)"),
+        _blank_row("", ["", "C1", "C2", "C3"]),
+    )
+    _assert_native_pattern(pattern_id=6, bundle_rows=bundle.main_rows, expected_rows=expected)
+
+
+def test_native_pattern_7_or_with_two_branches():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    C1 = Bool("C1")
+    C2 = Bool("C2")
+    Y001 = Bool("Y001")
+    Y002 = Bool("Y002")
+    Y003 = Bool("Y003")
+
+    with Program() as logic:
+        with Rung(any_of(X001, X002)):
+            out(Y001)
+            with branch(C1):
+                out(Y002)
+            with branch(C2):
+                out(Y003)
+
+    mapping = TagMap(
+        {X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2], Y003: y[3]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "|"]),
-        _row("", ["", "", "T", "C1"], "out(Y002)"),
-        _row("", ["", "", "-", "C2"], "out(Y003)"),
-        _END_ROW,
+        _row("", ["X002", "", "T:C1"], "out(Y002)"),
+        _row("", ["", "", "C2"], "out(Y003)"),
     )
+    _assert_native_pattern(pattern_id=7, bundle_rows=bundle.main_rows, expected_rows=expected)
 
 
-def test_or_with_branch_and_trailing_instruction():
-    """OR + branch + trailing out: trailing out goes on merged path."""
-    A = Bool("A")
-    B = Bool("B")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
+def test_native_pattern_8_series_ors_plus_branch():
+    X001 = Bool("X001")
+    X002 = Bool("X002")
+    X003 = Bool("X003")
+    C1 = Bool("C1")
+    C2 = Bool("C2")
+    Y001 = Bool("Y001")
+    Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(A, B)):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
-            out(Y3)
+        with Rung(any_of(X001, X002), any_of(C1, C2)):
+            out(Y001)
+            with branch(X003):
+                out(Y002)
 
     mapping = TagMap(
-        {A: x[1], B: x[2], Mode: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
+        {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T", "T"], "out(Y001)"),
-        _blank_row("", ["X002", "", "|"]),
-        _row("", ["", "", "T", "C1"], "out(Y002)"),
-        _row("", ["", "", "-"], "out(Y003)"),
-        _END_ROW,
+    expected = (
+        _row("R", ["X001", "T", "T:C1", "T", "T"], "out(Y001)"),
+        _row("", ["X002", "", "C2", "", "X003"], "out(Y002)"),
     )
-
-
-def test_or_with_branch_first_item():
-    """OR where branches are the first execution items (no leading instruction)."""
-    A = Bool("A")
-    B = Bool("B")
-    Mode1 = Bool("Mode1")
-    Mode2 = Bool("Mode2")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(any_of(A, B)):
-            with branch(Mode1):
-                out(Y1)
-            with branch(Mode2):
-                out(Y2)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], Mode1: c[1], Mode2: c[2], Y1: y[1], Y2: y[2]},
-        include_system=False,
-    )
-    bundle = mapping.to_ladder(logic)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002", "", "|"]),
-        _row("", ["", "", "-", "C2"], "out(Y002)"),
-        _END_ROW,
-    )
+    _assert_native_pattern(pattern_id=8, bundle_rows=bundle.main_rows, expected_rows=expected)
