@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import linecache
 import textwrap
 import warnings
 from collections.abc import Callable
@@ -333,7 +334,15 @@ def _check_with_body_from_frame(frame: FrameType, *, opt_out_hint: str) -> None:
     code = frame.f_code
     source_label = f"{code.co_filename}:{frame.f_lineno}"
     try:
-        source_lines, start_line = inspect.getsourcelines(code)
+        if code.co_name == "<module>":
+            # getsourcelines on module-level code objects only returns the
+            # first statement (Python's getblock stops early), so read the
+            # full file instead.
+            filename = inspect.getsourcefile(code) or code.co_filename
+            source_lines = linecache.getlines(filename, frame.f_globals)
+            start_line = 1
+        else:
+            source_lines, start_line = inspect.getsourcelines(code)
         source = textwrap.dedent("".join(source_lines))
         module = ast.parse(source)
     except (OSError, TypeError, SyntaxError) as exc:

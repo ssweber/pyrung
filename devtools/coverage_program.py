@@ -282,7 +282,7 @@ FORLOOP_VARIANTS: list[tuple[str, Any]] = [
 
 a = Alloc()
 
-with Program() as coverage_program:
+with Program(strict=False) as coverage_program:
     # ── 1. Condition coverage (each kind × simple out) ──────────────
 
     for label, make_cond in CONDITIONS:
