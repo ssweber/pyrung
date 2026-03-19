@@ -206,6 +206,12 @@ class _ConditionRow:
         )
 
 
+@dataclass(frozen=True)
+class _OutputSlot:
+    output_token: str
+    local_conditions: tuple[Condition, ...] = ()
+
+
 def build_ladder_bundle(tag_map: TagMap, program: Program) -> LadderBundle:
     """Render a `Program` into deterministic Click ladder CSV row matrices."""
     return _LadderExporter(tag_map=tag_map, program=program).export()
@@ -402,12 +408,31 @@ class _LadderExporter:
                 source=rung,
             )
 
+        slots, pin_rows = self._collect_execution_slots(rung, path=path)
+        if not slots:
+            return []
+
+        rows = self._render_slots_on_condition_rows(
+            condition_rows=condition_rows,
+            slots=slots,
+            split_col=parent_cursor,
+            first_marker="R",
+            path=f"{path}.branch",
+        )
+        rows.extend(pin_rows)
+        return rows
+
+    def _collect_execution_slots(
+        self,
+        rung: Rung,
+        *,
+        path: str,
+    ) -> tuple[list[_OutputSlot], list[tuple[str, ...]]]:
         instruction_index_by_id = {id(item): idx for idx, item in enumerate(rung._instructions)}
         branch_index_by_id = {id(item): idx for idx, item in enumerate(rung._branches)}
 
-        rows: list[tuple[str, ...]] = []
-        split_entries: list[int] = []
-        first_row_emitted = False
+        slots: list[_OutputSlot] = []
+        pin_rows: list[tuple[str, ...]] = []
 
         for item in rung._execution_items:
             if isinstance(item, Rung):
@@ -419,40 +444,40 @@ class _LadderExporter:
                         source=item,
                     )
 
-                branch_rows, branch_split_entries = self._render_branch_item_rows(
-                    branch=item,
-                    parent_cursor=parent_cursor,
-                    path=f"{path}.branch[{branch_idx}]",
-                )
-                if branch_rows and not first_row_emitted:
-                    branch_rows[0] = self._set_marker(
-                        branch_rows[0],
-                        marker="R",
-                        path=f"{path}.branch[{branch_idx}]",
+                branch_path = f"{path}.branch[{branch_idx}]"
+                if item._branches:
+                    self._raise_issue(
+                        path=f"{branch_path}.branch",
+                        message="Nested branch(...) export is not supported in Click ladder v1.",
+                        source=item,
                     )
-                    branch_rows[0] = self._apply_parent_condition_prefix(
-                        branch_rows[0],
-                        parent_condition_row=condition_rows[0],
-                        path=f"{path}.branch[{branch_idx}]",
+                if any(
+                    type(instruction).__name__ == "ForLoopInstruction"
+                    for instruction in item._instructions
+                ):
+                    self._raise_issue(
+                        path=f"{branch_path}.instruction",
+                        message="forloop() is not supported inside branch(...) in Click ladder v1 export.",
+                        source=item,
                     )
-                    first_row_emitted = True
+                if not item._instructions:
+                    continue
 
-                    # Splice OR continuation rows after the first row.
-                    if len(condition_rows) > 1:
-                        or_cont = self._build_or_continuation_rows(condition_rows[1:])
-                        n_or = len(or_cont)
-                        base = len(rows)
-                        rows.append(branch_rows[0])
-                        rows.extend(or_cont)
-                        rows.extend(branch_rows[1:])
-                        split_entries.extend(
-                            base + (e if e == 0 else e + n_or) for e in branch_split_entries
+                local_conditions = tuple(item._conditions[item._branch_condition_start :])
+                for instruction_index, instruction in enumerate(item._instructions):
+                    instruction_path = (
+                        f"{branch_path}.instruction[{instruction_index}]"
+                        f"({type(instruction).__name__})"
+                    )
+                    slots.append(
+                        _OutputSlot(
+                            output_token=self._instruction_token(instruction, path=instruction_path),
+                            local_conditions=local_conditions,
                         )
-                        continue
+                    )
 
-                base = len(rows)
-                rows.extend(branch_rows)
-                split_entries.extend(base + offset for offset in branch_split_entries)
+                first_path = f"{branch_path}.instruction[0]({type(item._instructions[0]).__name__})"
+                pin_rows.extend(self._pin_rows(item._instructions[0], path=first_path))
                 continue
 
             instruction_idx = instruction_index_by_id.get(id(item))
@@ -462,53 +487,125 @@ class _LadderExporter:
                     message="Internal error: instruction item missing from instruction index map.",
                     source=item,
                 )
-
             instruction_path = f"{path}.instruction[{instruction_idx}]({type(item).__name__})"
-            instruction_token = self._instruction_token(item, path=instruction_path)
-            if not first_row_emitted:
-                instruction_rows = self._single_output_rows(
-                    condition_rows,
-                    output_token=instruction_token,
-                    first_marker="R",
+            slots.append(
+                _OutputSlot(
+                    output_token=self._instruction_token(item, path=instruction_path),
+                    local_conditions=(),
                 )
-            else:
-                instruction_rows = [
-                    self._continuation_output_row(
-                        parent_cursor=parent_cursor,
-                        output_token=instruction_token,
-                        marker="",
+            )
+            pin_rows.extend(self._pin_rows(item, path=instruction_path))
+
+        return slots, pin_rows
+
+    def _render_slots_on_condition_rows(
+        self,
+        *,
+        condition_rows: list[_ConditionRow],
+        slots: list[_OutputSlot],
+        split_col: int,
+        first_marker: str,
+        path: str,
+    ) -> list[tuple[str, ...]]:
+        if not slots:
+            return []
+
+        if split_col < 0 or split_col >= _CONDITION_COLS:
+            self._raise_issue(
+                path=path,
+                message="Condition columns exceed AE before output branch split.",
+                source=None,
+            )
+
+        row_count = max(len(condition_rows), len(slots))
+        rows: list[list[str]] = []
+        for row_index in range(row_count):
+            cells = (
+                condition_rows[row_index].cells.copy()
+                if row_index < len(condition_rows)
+                else [""] * _CONDITION_COLS
+            )
+            rows.append([first_marker if row_index == 0 else "", *cells, ""])
+
+        if len(slots) > 1:
+            for slot_index in range(len(slots)):
+                marker = _vertical_marker(index=slot_index, total=len(slots))
+                cell_index = split_col + 1
+                existing = rows[slot_index][cell_index]
+                if existing in {"", "-", "T", "|"}:
+                    if marker == "T" or existing == "T":
+                        rows[slot_index][cell_index] = "T"
+                    elif existing == "|":
+                        rows[slot_index][cell_index] = "|"
+                    else:
+                        rows[slot_index][cell_index] = marker
+                else:
+                    self._raise_issue(
+                        path=path,
+                        message=(
+                            f"Conflicting branch split content at column {split_col}: "
+                            f"{existing!r} vs {marker!r}."
+                        ),
+                        source=None,
                     )
-                ]
-            first_row_emitted = True
 
-            base = len(rows)
-            rows.extend(instruction_rows)
-            split_entries.append(base)
-            rows.extend(self._pin_rows(item, path=instruction_path))
+        for slot_index, slot in enumerate(slots):
+            row = rows[slot_index]
+            row[-1] = slot.output_token
 
-        if len(split_entries) > 1:
-            for marker_index, row_index in enumerate(split_entries):
-                rows[row_index] = self._set_split_cell(
-                    rows[row_index],
-                    split_col=parent_cursor,
-                    value=_vertical_marker(index=marker_index, total=len(split_entries)),
-                    path=f"{path}.branch",
-                )
-
-            # Fill pass-through | markers on non-entry rows (OR continuations,
-            # pin rows) that sit between the first and last split entries.
-            # | means "vertical wire passes through" (not a junction entry).
-            split_set = set(split_entries)
-            for r in range(min(split_entries) + 1, max(split_entries)):
-                if r not in split_set:
-                    rows[r] = self._set_split_cell(
-                        rows[r],
-                        split_col=parent_cursor,
-                        value="|",
-                        path=f"{path}.branch",
+            local_tokens = self._local_condition_tokens(
+                slot.local_conditions,
+                path=f"{path}.slot[{slot_index}]",
+            )
+            for token_index, token in enumerate(local_tokens):
+                col = split_col + token_index
+                if col >= _CONDITION_COLS:
+                    self._raise_issue(
+                        path=f"{path}.slot[{slot_index}]",
+                        message="Condition columns exceed AE after branch offset.",
+                        source=None,
                     )
+                value = token
+                if (
+                    token_index == 0
+                    and slot_index < len(slots) - 1
+                    and col > 0
+                    and value not in {"-", "T", "|"}
+                    and not value.startswith("T:")
+                ):
+                    value = f"T:{value}"
+                row[col + 1] = value
 
-        return rows
+            for col in range(split_col + 1, _CONDITION_COLS):
+                if row[col + 1] == "":
+                    row[col + 1] = "-"
+
+        return [tuple(row) for row in rows]
+
+    def _local_condition_tokens(
+        self,
+        conditions: tuple[Condition, ...],
+        *,
+        path: str,
+    ) -> list[str]:
+        if not conditions:
+            return []
+
+        local_rows = self._expand_conditions(list(conditions), path=f"{path}.condition")
+        if len(local_rows) != 1:
+            self._raise_issue(
+                path=f"{path}.condition",
+                message="branch(...) local any_of() export is not supported in Click ladder v1.",
+                source=None,
+            )
+
+        local = local_rows[0]
+        tokens: list[str] = []
+        for col in range(local.cursor):
+            value = local.cells[col]
+            if value != "":
+                tokens.append(value)
+        return tokens
 
     def _continuation_output_row(
         self,
@@ -560,20 +657,12 @@ class _LadderExporter:
                 first_marker=first_marker,
             )
         else:
-            if len(condition_rows) != 1:
-                self._raise_issue(
-                    path=f"{path}.instruction",
-                    message=(
-                        "Rungs with both OR-expanded conditions and multiple output instructions "
-                        "are not supported in Click ladder v1 export."
-                    ),
-                    source=source,
-                )
-            output_rows = self._multi_output_rows(
-                condition_row=condition_rows[0],
-                output_tokens=instruction_tokens,
-                path=f"{path}.instruction",
+            output_rows = self._render_slots_on_condition_rows(
+                condition_rows=condition_rows,
+                slots=[_OutputSlot(output_token=token) for token in instruction_tokens],
+                split_col=condition_rows[0].cursor,
                 first_marker=first_marker,
+                path=f"{path}.instruction",
             )
 
         first_instruction_path = f"{path}.instruction[0]({type(instructions[0]).__name__})"
@@ -1081,19 +1170,22 @@ class _LadderExporter:
                 source=condition,
             )
 
-        expanded_rows: list[_ConditionRow] = []
+        active_rows: list[_ConditionRow] = []
+        frozen_rows: list[_ConditionRow] = []
+
         for row in rows:
             if not row.accepts_terms:
-                expanded_rows.append(row)
+                frozen_rows.append(row.clone())
                 continue
 
+            start_cursor = row.cursor
             branch_rows: list[_ConditionRow] = []
             for branch_condition in condition.conditions:
                 seeded = [row.clone()]
                 branch_rows.extend(self._apply_condition_term(seeded, branch_condition, path=path))
 
             if len(branch_rows) == 1:
-                expanded_rows.extend(branch_rows)
+                active_rows.extend(branch_rows)
                 continue
 
             merge_col = max(branch.cursor for branch in branch_rows)
@@ -1106,23 +1198,26 @@ class _LadderExporter:
 
             total = len(branch_rows)
             for index, branch_row in enumerate(branch_rows):
-                # Apply T: prefix to the last contact on all-but-last branches
-                # so the contact itself carries the down-wire flag.
-                # Skip when the contact is at column 0 — the power rail
-                # already connects all rows on their left side.
-                if index < total - 1:
-                    last_contact_col = branch_row.cursor - 1
-                    if last_contact_col > 0:
-                        tok = branch_row.cells[last_contact_col]
-                        if tok and tok not in {"-", "T", "|"} and not tok.startswith("T:"):
-                            branch_row.cells[last_contact_col] = f"T:{tok}"
+                if index > 0:
+                    for col in range(start_cursor):
+                        branch_row.cells[col] = ""
 
-                # Fill horizontal wires from cursor to merge_col.
+                if index < total - 1 and start_cursor > 0:
+                    contact_cols = [
+                        col
+                        for col in range(start_cursor, branch_row.cursor)
+                        if branch_row.cells[col] not in {"", "-", "T", "|"}
+                    ]
+                    if len(contact_cols) == 1:
+                        contact_col = contact_cols[0]
+                        tok = branch_row.cells[contact_col]
+                        if tok and not tok.startswith("T:"):
+                            branch_row.cells[contact_col] = f"T:{tok}"
+
                 for col in range(branch_row.cursor, merge_col):
                     if branch_row.cells[col] == "":
                         branch_row.cells[col] = "-"
 
-                # Write output-bus marker: T on first row, | on middle, nothing on last.
                 marker = _output_bus_marker(index=index, total=total)
                 if marker:
                     self._write_cell(
@@ -1135,8 +1230,100 @@ class _LadderExporter:
 
                 branch_row.cursor = merge_col + 1
                 branch_row.accepts_terms = index == 0
-            expanded_rows.extend(branch_rows)
-        return expanded_rows
+
+            branch_rows = self._compact_any_triplet(
+                branch_rows,
+                start_cursor=start_cursor,
+                merge_col=merge_col,
+            )
+            active_rows.extend(branch_rows)
+
+        if not active_rows:
+            return frozen_rows
+
+        if frozen_rows:
+            return self._merge_any_frozen_rows(active_rows, frozen_rows)
+        return active_rows
+
+    def _merge_any_frozen_rows(
+        self,
+        active_rows: list[_ConditionRow],
+        frozen_rows: list[_ConditionRow],
+    ) -> list[_ConditionRow]:
+        merged = [row.clone() for row in active_rows]
+        if not merged:
+            return [row.clone() for row in frozen_rows]
+
+        split_col = max(0, merged[0].cursor - 1)
+        for index, frozen in enumerate(frozen_rows):
+            target_index = index + 1
+            if target_index >= len(merged):
+                merged.append(frozen.clone())
+                continue
+
+            target = merged[target_index]
+            for col in range(split_col):
+                if target.cells[col] == merged[0].cells[col]:
+                    target.cells[col] = ""
+
+            for col, value in enumerate(frozen.cells):
+                if value == "":
+                    continue
+                existing = target.cells[col]
+                if existing in {"", value}:
+                    target.cells[col] = value
+                    continue
+                if col < split_col and value not in {"-", "T", "|"}:
+                    target.cells[col] = value
+            target.accepts_terms = False
+
+        return merged
+
+    @staticmethod
+    def _contact_count(row: _ConditionRow, *, start: int, end: int) -> int:
+        return sum(1 for col in range(start, end) if row.cells[col] not in {"", "-", "T", "|"})
+
+    def _compact_any_triplet(
+        self,
+        branch_rows: list[_ConditionRow],
+        *,
+        start_cursor: int,
+        merge_col: int,
+    ) -> list[_ConditionRow]:
+        if len(branch_rows) != 3:
+            return branch_rows
+
+        first, middle, last = branch_rows
+        if self._contact_count(first, start=start_cursor, end=merge_col) != 1:
+            return branch_rows
+        if self._contact_count(middle, start=start_cursor, end=merge_col) < 2:
+            return branch_rows
+        if self._contact_count(last, start=start_cursor, end=merge_col) != 1:
+            return branch_rows
+        if middle.cells[merge_col] != "|":
+            return branch_rows
+
+        last_token_col = next(
+            (
+                col
+                for col in range(start_cursor, merge_col)
+                if last.cells[col] not in {"", "-", "T", "|"}
+            ),
+            None,
+        )
+        if last_token_col is None:
+            return branch_rows
+
+        last_token = last.cells[last_token_col]
+        if merge_col > 0 and not last_token.startswith("T:"):
+            first.cells[merge_col] = f"T:{last_token}"
+        else:
+            first.cells[merge_col] = last_token
+        middle.cells[merge_col] = ""
+        middle.cursor = merge_col
+        middle.accepts_terms = False
+        first.accepts_terms = True
+        return [first, middle]
 
     def _condition_leaf_token(self, condition: Condition, *, path: str) -> str:
         if isinstance(condition, BitCondition):

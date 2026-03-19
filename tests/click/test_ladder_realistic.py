@@ -454,12 +454,12 @@ def test_realistic_branch_wiring():
 
     # Branch 1: AutoMode → copy(CalcOut, DstBlk[1])
     assert r1[0] == ""  # continuation
-    assert "X004" in r1  # AutoMode
+    assert any(cell in {"X004", "T:X004"} for cell in r1)  # AutoMode
     assert r1[-1] == "copy(DS3,DS200)"
 
     # Branch 2: Found, CtuDone → copy(FoundAddr, DstBlk[2])
     assert r2[0] == ""
-    assert "C1" in r2  # Found
+    assert any(cell in {"C1", "T:C1"} for cell in r2)  # Found
     assert "CT1" in r2  # CtuDone
     assert r2[-1] == "copy(DS4,DS201)"
 

@@ -157,7 +157,7 @@ def test_branch_row_is_continuation_after_parent_conditions():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "-", "X002"], "out(Y002)"),
+        _row("", ["", "X002"], "out(Y002)"),
         _END_ROW,
     )
 
@@ -185,10 +185,8 @@ def test_multiple_branches_stack_vertical_markers():
     bundle = mapping.to_ladder(logic)
 
     assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "T"
-    assert bundle.main_rows[3][2] == "-"
-    assert bundle.main_rows[2][3] == "X002"
-    assert bundle.main_rows[3][3] == "X003"
+    assert bundle.main_rows[2][2] == "T:X002"
+    assert bundle.main_rows[3][2] == "X003"
     assert bundle.main_rows[1][-1] == "out(Y001)"
     assert bundle.main_rows[2][-1] == "out(Y002)"
     assert bundle.main_rows[3][-1] == "out(Y003)"
@@ -217,7 +215,7 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
     assert bundle.main_rows == (
         _header(),
         _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T", "X002"], "out(Y002)"),
+        _row("", ["", "T:X002"], "out(Y002)"),
         _row("", ["", "-"], "out(Y003)"),
         _END_ROW,
     )
