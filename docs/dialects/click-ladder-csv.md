@@ -86,40 +86,170 @@ Cells can contain:
 - Negated contact: `~X001`
 - Edge contacts: `rise(X001)`, `fall(X001)`
 - Comparison terms (for example `DS1!=0`, `DS1==5`, `DS1<DS2`)
+- Wire-down prefixed contacts: `T:X001`, `T:~X002`, `T:rise(C1)` — the contact token
+  carries a `T:` prefix indicating the contact also has a vertical-down wire exit
+  (used on non-final OR branches at mid-rung positions)
 - Wiring symbols:
   - `-` horizontal-only wire
-  - `T` horizontal + vertical-down wire
-  - `|` vertical-only wire (reserved; currently not emitted because exporter does not output empty vertical-only rows yet)
+  - `T` horizontal + vertical-down wire (T-junction)
+  - `|` vertical-only pass-through wire (OR output bus, middle rows)
 - Blank (`""`) empty cell
 
 No shorthand markers (`->`, `...`) are emitted.
 No explicit `+` topology token is emitted.
 
-## OR / branch wiring semantics
+## Vertical topology
 
-### `any_of(...)` OR expansion
+OR conditions (`any_of`), multi-output stacking, and `branch()` conditions all use
+continuation rows within a rung. These mechanisms share the same vertical space — OR
+branch rows double as multi-output and branch rows.
 
-For OR-expanded condition terms:
+### Bus patterns
 
-- Split/merge marker column uses `T` on non-final stacked rows and `-` on the final stacked row.
-- Only the top OR branch row carries trailing downstream condition terms.
-- Lower OR continuation rows end at split/merge marker (with wire fill where applicable).
+Two column patterns control vertical connectivity:
 
-### `branch(...)` rows
+**Convergent bus (OR merge)** — gathers parallel branches into a single downstream path:
 
-Branch rows are continuation rows with normal instruction tokens in `AF`.
+- `T` on the first row (right + down)
+- `|` on middle rows (vertical pass-through — up + down only, no right exit)
+- blank on the last row (bus terminates)
 
-- Branch-local conditions are offset to the right of the parent split column.
-- Parent split column is wired with `T` on non-final stacked rows and `-` on the final stacked row across parent + branch entry rows.
-- Nested branches are not emitted (export error).
+Middle and last rows reach downstream columns by routing up through `|` to the `T`, then
+right. This ensures only the first row's horizontal path continues directly.
 
-## Multi-output rung semantics
+**Divergent bus (output split)** — distributes one condition path to multiple output rows:
 
-If one condition path has multiple output instructions, exporter emits stacked continuation rows:
+- `T` on non-final rows (right + down)
+- `-` on the final row (right only)
 
-- First row `marker = R`, then blank marker rows
-- Split column uses `T` on non-final stacked rows and `-` on the final stacked row
-- Each row has one `AF` token
+Every row has a right exit to its own AF output token.
+
+**Contact input bus (T: prefix)** — an OR variant where the contacts themselves carry the
+vertical bus instead of a separate wire column:
+
+- `T:` prefix on non-final branch contacts (right + down)
+- Bare contact on the final branch (right only)
+- Contacts at column 0 (power rail) are always bare — the rail connects all rows.
+
+The `T:` prefix applies to any contact token: `T:X002`, `T:~C1`, `T:rise(X001)`, `T:DS1==5`.
+
+### T-junction physical model
+
+A `T` cell's vertical wire extends from the left edge of its cell downward. This wire
+connects to either:
+
+- A cell directly below in the same column, or
+- The right edge of a contact in the column to the left (when the cell below is blank)
+
+This diagonal adjacency is how contacts on continuation rows connect upward to merge/split
+columns even when their own column has no marker below.
+
+### Continuation row rules
+
+- Only the first row (`marker = R`) carries the full condition path from power rail to output.
+- Continuation rows carry only their OR-branch-local contacts and branch-local conditions.
+  Shared AND-prefix contacts from earlier columns are not repeated.
+- Each continuation row has at most one AF token or is blank in AF.
+
+## `any_of(...)` OR expansion
+
+### Simple OR at power rail
+
+`any_of(X001, X002, X003)`:
+
+```
+     A      B     …    AF
+R    X001   T     -…-  out(Y001)
+     X002   |
+     X003
+```
+
+Contacts at col 0 are bare (power rail). Convergent bus at col B: T / | / blank.
+
+### Mid-rung OR
+
+`X001, any_of(X002, C1)`:
+
+```
+     A      B       C     …    AF
+R    X001   T:X002  T     -…-  out(Y001)
+            C1
+```
+
+T: prefix on X002 (non-final, mid-rung). Convergent bus at col C: T / blank.
+Shared AND-prefix (X001) appears only on the first row.
+
+### Series ORs
+
+`any_of(X001, X002), any_of(C1, C2)`:
+
+```
+     A      B     C      D     …    AF
+R    X001   T     T:C1   T     -…-  out(Y001)
+     X002   -     C2
+```
+
+First OR at power rail (bare contacts, convergent bus at col B). Second OR mid-rung
+(T: prefix on C1, convergent bus at col D). Continuation rows merge — X002 and C2
+share the same row, connected by `-` wire at col B.
+
+## Multi-output stacking
+
+Multiple output instructions from the same condition path stack vertically using a
+divergent bus:
+
+`X001, X002` → `out(Y001)`, `latch(Y002)`, `reset(Y003)`:
+
+```
+     A      B      C     …    AF
+R    X001   X002   T     -…-  out(Y001)
+                   T     -…-  latch(Y002)
+                   -     -…-  reset(Y003)
+```
+
+Divergent bus at col C: T / T / -. Each row continues right to its own output.
+
+## `branch(...)` conditions
+
+Branch-local conditions are placed on continuation rows to the right of the output
+split column. The branch contact carries a `T:` prefix when it is not on the final row,
+maintaining the vertical bus for rows below it.
+
+`X001, X002` → `out(Y001)`, `branch(C1): out(Y002)`, `out(Y003)`:
+
+```
+     A      B      C     D      …    AF
+R    X001   X002   T     T      -…-  out(Y001)
+                   T     T:C1   -…-  out(Y002)
+                   -     -      -…-  out(Y003)
+```
+
+Divergent bus at col C: T / T / -. Col D: T on row 0, T:C1 on row 1 (branch condition
+with down-wire), `-` on row 2. The T: prefix on C1 ensures the down-wire continues to
+row 2 (dropping C1 from conditions) so row 2 receives the parent condition without C1.
+
+Nested branches are not emitted (export error).
+
+## Combined OR + multi-output + branch
+
+When a rung has both OR conditions and multiple outputs/branches, they share the same
+set of continuation rows. The OR branches provide the rows needed for the outputs.
+
+`X001, any_of(X002, X003, X004)` → `out(Y001)`, `branch(C1): out(Y002)`, `out(Y003)`:
+
+```
+     A      B        C     D      …    AF
+R    X001   T:X002   T     T      -…-  out(Y001)
+            T:X003   |     T:C1   -…-  out(Y002)
+            X004           -      -…-  out(Y003)
+```
+
+Col B: 3-way OR input bus (T: / T: / bare). Col C: convergent bus (T / | / blank).
+Col D: divergent bus with branch condition (T / T:C1 / -).
+
+The 3 OR branches provide the 3 rows needed for the 3 outputs. C1 slots in as a
+branch-local condition on the middle row. Middle OR rows reach the output split by
+routing up through `|` to `T`, then right and back down through the divergent bus.
 
 ## Builder pin continuation rows
 
@@ -208,6 +338,10 @@ Producer may emit:
 - `return()`
 - `for(count)` or `for(count,oneshot=1)`
 - `next()`
+- `raw(ClassName,hex)` — opaque instruction passthrough for binary round-trip fidelity.
+  `ClassName` is the Click binary class name (unquoted) and `hex` is the raw blob as a
+  hex string. Runtime no-op; preserved so CSV → DSL → CSV round-trips losslessly for
+  unrecognized instruction types.
 
 Pin tokens:
 
