@@ -19,11 +19,9 @@ from pyrung.click import (
     x,
     y,
 )
-from pyrung.click.codegen import (
-    _analyze_rungs,
-    _parse_af_args,
-    _parse_csv,
-)
+from pyrung.click.codegen.analyzer import _analyze_rungs
+from pyrung.click.codegen.parser import _parse_csv
+from pyrung.click.codegen.utils import _parse_af_args
 from pyrung.core import (
     Bool,
     Dint,
@@ -379,7 +377,7 @@ def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
 
 def _or_level(rung):
     """Return the first ``_OrLevel`` in *rung.condition_seq*, or ``None``."""
-    from pyrung.click.codegen import _OrLevel
+    from pyrung.click.codegen.models import _OrLevel
 
     for elem in rung.condition_seq:
         if isinstance(elem, _OrLevel):
@@ -392,7 +390,7 @@ class TestGraphWalkEdgeCases:
 
     @staticmethod
     def _walk_path_set(rows: list[list[str]]) -> set[tuple[tuple[str, ...], str]]:
-        from pyrung.click.codegen import _is_pin_row, _walk_grid
+        from pyrung.click.codegen.analyzer import _is_pin_row, _walk_grid
 
         pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
         paths = _walk_grid(rows, pin_row_set)
@@ -404,7 +402,8 @@ class TestGraphWalkEdgeCases:
         Row 0: R | X001 | T | - ... - | out(Y001)
         Row 1:   | X002 | - |         |
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X002"})
@@ -429,7 +428,8 @@ class TestGraphWalkEdgeCases:
         X001 at (1,0) has blank to its right at (1,1).  T at (0,1) has
         'down', so the diagonal UP-RIGHT rule fires: X001 → T → AF.
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row("R", _fill_dashes({1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X001"})
@@ -449,7 +449,8 @@ class TestGraphWalkEdgeCases:
 
         Single root (X001).  T forks: right→Y001, down→bridge→Y002.
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         r0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         r1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(Y002)")
@@ -467,7 +468,8 @@ class TestGraphWalkEdgeCases:
         Row 1:   | X002 | T |         |
         Row 2:   | X003 | - |         |
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", {0: "X002", 1: "|"})
@@ -492,7 +494,8 @@ class TestGraphWalkEdgeCases:
 
         Expected: shared=[btn], three instructions in scan order (right-first).
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "btn", 1: "T"}, 2, 31), af="out(L1)")
         row1 = _make_row("", _fill_dashes({1: "T", 2: "auto"}, 3, 31), af="out(L2)")
@@ -516,7 +519,8 @@ class TestGraphWalkEdgeCases:
 
     def test_unconditional_rung(self):
         """Rung with no conditions — all dashes to AF."""
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row = _make_row("R", _fill_dashes({}, 0, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
@@ -532,7 +536,8 @@ class TestGraphWalkEdgeCases:
         Row 0: R | X001 | T | C1 | C2 | - ... | out(Y001)
         Row 1:   | X002 | - |    |    |       |
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row(
             "R", _fill_dashes({0: "X001", 1: "T", 2: "C1", 3: "C2"}, 4, 31), af="out(Y001)"
@@ -558,7 +563,8 @@ class TestGraphWalkEdgeCases:
 
         Pin (.reset at row 2) attaches to on_delay (row 1), not out (row 0).
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row0 = _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)")
         row1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="on_delay(T1)")
@@ -581,7 +587,8 @@ class TestGraphWalkEdgeCases:
 
         Fallback root finding should locate X001 at col 1.
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row = _make_row("R", _fill_dashes({1: "X001"}, 2, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
@@ -595,7 +602,8 @@ class TestGraphWalkEdgeCases:
 
         Ensures tokens like 'DS1==5' are traversed the same as '-'.
         """
-        from pyrung.click.codegen import _analyze_single_rung, _RawRung
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
 
         row = _make_row("R", _fill_dashes({0: "X001", 1: "DS1==5"}, 2, 31), af="out(Y001)")
         rung = _RawRung(comment_lines=[], rows=[row])
@@ -667,7 +675,7 @@ class TestGraphWalkEdgeCases:
 class TestOperandInference:
     def test_all_prefix_types(self, tmp_path: Path):
         """Verify correct tag types inferred from all operand prefixes."""
-        from pyrung.click.codegen import _parse_operand_prefix
+        from pyrung.click.codegen.utils import _parse_operand_prefix
 
         cases = [
             ("X001", "Bool", "x", 1),
@@ -697,7 +705,7 @@ class TestOperandInference:
 
     def test_longer_prefix_wins(self):
         """CTD matches before CT, TD matches before T."""
-        from pyrung.click.codegen import _parse_operand_prefix
+        from pyrung.click.codegen.utils import _parse_operand_prefix
 
         result = _parse_operand_prefix("CTD1")
         assert result is not None
