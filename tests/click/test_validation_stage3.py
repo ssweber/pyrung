@@ -350,6 +350,12 @@ def test_drum_stage3_wrong_role_failures_are_reported():
 
     report = validate_click_program(prog, tag_map, mode="warn")
     assert CLK_BANK_WRONG_ROLE in _codes(report)
+    wrong_role_locations = [
+        finding.location
+        for finding in (*report.errors, *report.warnings, *report.hints)
+        if finding.code == CLK_BANK_WRONG_ROLE
+    ]
+    assert len(wrong_role_locations) == len(set(wrong_role_locations))
 
 
 def test_time_drum_non_literal_preset_reports_literal_required():
