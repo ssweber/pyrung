@@ -218,13 +218,21 @@ class Tag:
         return MappingEntry(source=self, target=target)
 
     def as_value(self) -> Any:
-        """Wrap this tag for text->numeric character-value conversion."""
+        """Copy this Text tag to a numeric destination using the character value.
+
+        Corresponds to the Click PLC "Copy Character Value" option.
+        E.g. TXT1='5' -> DS1=5.
+        """
         from pyrung.core.copy_modifiers import as_value
 
         return as_value(self)
 
     def as_ascii(self) -> Any:
-        """Wrap this tag for text->numeric ASCII-code conversion."""
+        """Copy this Text tag to a numeric destination using the ASCII code.
+
+        Corresponds to the Click PLC "Copy ASCII Code Value" option.
+        E.g. TXT1='5' -> DS1=53 (0x35).
+        """
         from pyrung.core.copy_modifiers import as_ascii
 
         return as_ascii(self)
@@ -237,7 +245,11 @@ class Tag:
         exponential: bool = False,
         termination_code: int | str | None = None,
     ) -> Any:
-        """Wrap this tag for numeric->text conversion."""
+        """Copy this numeric tag to a Text destination as a string.
+
+        See :func:`pyrung.core.copy_modifiers.as_text` for full
+        parameter documentation.
+        """
         from pyrung.core.copy_modifiers import as_text
 
         return as_text(
@@ -249,7 +261,11 @@ class Tag:
         )
 
     def as_binary(self) -> Any:
-        """Wrap this tag for numeric->text binary-copy conversion."""
+        """Copy this numeric tag to a Text destination as its raw binary value.
+
+        Corresponds to the Click PLC "Copy Binary" option.
+        E.g. DS1=123 (0x7B) -> TXT1='{' (ASCII 123).
+        """
         from pyrung.core.copy_modifiers import as_binary
 
         return as_binary(self)

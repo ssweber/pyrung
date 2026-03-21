@@ -178,13 +178,29 @@ fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
 
 ### Type conversion (copy modifiers)
 
+Copy modifiers handle the conversions between numeric and text registers — the same options you see in the Click PLC Copy Single dialog.
+
+#### Text → Numeric
+
 ```python
-copy(ModeChar.as_value(), DS[1])    # CHAR '5' → numeric 5
-copy(ModeChar.as_ascii(), DS[1])    # CHAR '5' → ASCII code 53
-copy(DS[1].as_text(), ModeChar)     # Numeric → CHAR string
-copy(DS[1].as_text(pad=5), Txt[1])  # Numeric → zero-padded CHAR
-copy(DS[1].as_binary(), ModeChar)   # Numeric → raw byte CHAR
+copy(ModeChar.as_value(), DS[1])    # CHAR '5' → numeric 5   (Copy Character Value)
+copy(ModeChar.as_ascii(), DS[1])    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
 ```
+
+#### Numeric → Text
+
+```python
+copy(DS[1].as_text(), Txt[1])                       # "123"           (Suppress zero)
+copy(DS[1].as_text(suppress_zero=False), Txt[1])    # "00123"         (Do not Suppress zero)
+copy(DS[1].as_text(pad=6), Txt[1])                  # "000123"        (see below)
+copy(DF[1].as_text(exponential=True), Txt[1])       # "1.0000000E+04" (Exponential Numbering)
+copy(DS[1].as_text(termination_code=0), Txt[1])     # "123" + NUL     (Termination Code)
+copy(DS[1].as_binary(), Txt[1])                     # raw byte: 123 → '{' (Copy Binary)
+```
+
+In Click's programming software you can type `000123` directly into the source field to get six fixed digits with leading zeros. Python won't allow that — `000123` is a syntax error. `pad=6` is pyrung's way of expressing the same thing.
+
+`termination_code` appends a single ASCII character after the converted text. Pass an int (0–127) or a one-character string. This matches the Click PLC Termination Code option (C0-1x and C2-x CPUs).
 
 ### Pack / unpack
 
