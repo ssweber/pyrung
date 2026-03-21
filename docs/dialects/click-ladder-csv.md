@@ -367,7 +367,7 @@ Click supports additional instruction placeholders that pyrung does not currentl
   - `as_value(source)`
   - `as_ascii(source)`
   - `as_binary(source)`
-  - `as_text(source,suppress_zero,pad,exponential,termination_code)`
+  - `as_text(source,suppress_zero=<0|1>,pad=<none|N>,exponential=<0|1>,termination_code=<none|N>)`
 
 ## Immediate handling
 
