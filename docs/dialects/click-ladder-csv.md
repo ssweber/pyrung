@@ -367,7 +367,7 @@ Click supports additional instruction placeholders that pyrung does not currentl
   - `convert=to_value`
   - `convert=to_ascii`
   - `convert=to_binary`
-  - `convert=to_text(suppress_zero=<0|1>,exponential=<0|1>,termination_code=<none|N>)`
+  - `convert=to_text(suppress_zero=<0|1>,exponential=<0|1>,termination_code=<none|$XX>)`
 
 ## Immediate handling
 

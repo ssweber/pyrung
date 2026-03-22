@@ -1775,6 +1775,19 @@ class TestCopyTextModifiers:
         assert new_state.tags["CH1"] == "5"
         assert ord(new_state.tags["CH2"]) == 13
 
+    def test_copy_to_text_with_termination_code_hex_string(self):
+        from pyrung.core.copy_converters import to_text
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        # $0D = hex 13 = carriage return
+        instr = CopyInstruction(Source, CH[1], convert=to_text(termination_code="$0D"))
+        new_state = execute(instr, SystemState().with_tags({"Source": 5}))
+
+        assert new_state.tags["CH1"] == "5"
+        assert ord(new_state.tags["CH2"]) == 13
+
     def test_copy_to_binary_low_byte_ascii(self):
         from pyrung.core.copy_converters import to_binary
         from pyrung.core.instruction import CopyInstruction
@@ -1812,6 +1825,55 @@ class TestCopyTextModifiers:
         assert new_state.tags["CH3"] == "0"
         assert new_state.tags["CH4"] == "2"
         assert new_state.tags["CH5"] == "6"
+
+
+class TestNormalizeTerminationCode:
+    def test_hex_string_parses_to_int(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("$0D") == 0x0D  # 13 decimal
+        assert _normalize_termination_code("$00") == 0
+        assert _normalize_termination_code("$7F") == 127
+        assert _normalize_termination_code("$0d") == 13  # lowercase hex
+
+    def test_hex_string_out_of_range_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="ASCII range"):
+            _normalize_termination_code("$80")  # 128 decimal
+
+    def test_hex_string_invalid_digits_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="invalid hex digits"):
+            _normalize_termination_code("$GG")
+
+    def test_hex_single_digit(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("$0") == 0
+        assert _normalize_termination_code("$A") == 10
+
+    def test_multi_char_non_hex_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="single character or \\$XX hex"):
+            _normalize_termination_code("AB")
+
+    def test_none_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code(None) is None
+
+    def test_int_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code(13) == 13
+
+    def test_single_char_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("\r") == 13
 
 
 class TestBlockCopyTextModes:

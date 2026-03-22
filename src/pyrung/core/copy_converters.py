@@ -41,9 +41,21 @@ def _normalize_termination_code(value: int | str | None) -> int | None:
     if value is None:
         return None
     if isinstance(value, str):
-        if len(value) != 1:
-            raise ValueError("termination_code string must be exactly one character")
-        value = ord(value)
+        # $XX hex notation (Click PLC convention, e.g. "$0D" → 13)
+        if value.startswith("$") and len(value) >= 2:
+            hex_part = value[1:]
+            try:
+                value = int(hex_part, 16)
+            except ValueError:
+                raise ValueError(
+                    f"termination_code hex string {value!r} contains invalid hex digits"
+                ) from None
+        elif len(value) == 1:
+            value = ord(value)
+        else:
+            raise ValueError(
+                "termination_code string must be a single character or $XX hex notation"
+            )
     if not isinstance(value, int):
         raise TypeError("termination_code must be int, str, or None")
     if value < 0 or value > 127:
@@ -74,9 +86,10 @@ def to_text(
         exponential: When True, use scientific notation
             (Click PLC "Exponential Numbering", Option 4c). Only
             applicable to Float sources.
-        termination_code: An ASCII code (int 0–127) or single character
-            appended after the converted text. Corresponds to the Click
-            PLC "Termination Code" option (C0-1x and C2-x CPUs).
+        termination_code: An ASCII code (int 0–127), single character,
+            or ``$XX`` hex string appended after the converted text.
+            Corresponds to the Click PLC "Termination Code" option
+            (C0-1x and C2-x CPUs).
 
     Examples::
 
@@ -84,6 +97,7 @@ def to_text(
         copy(DS[1], Txt[1], convert=to_text(suppress_zero=False))
         copy(DF[1], Txt[1], convert=to_text(exponential=True))
         copy(DS[1], Txt[1], convert=to_text(termination_code=0))
+        copy(DS[1], Txt[1], convert=to_text(termination_code="$0D"))
     """
     return CopyConverter(
         mode="text",

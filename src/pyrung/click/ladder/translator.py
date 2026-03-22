@@ -423,7 +423,7 @@ class _TranslatorMixin:
                 exponential=_bool_bit(bool(converter.exponential)),
                 termination_code="none"
                 if converter.termination_code is None
-                else str(converter.termination_code),
+                else f"${converter.termination_code:02X}",
             )
         return f"to_{converter.mode}"
 

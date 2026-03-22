@@ -193,11 +193,12 @@ copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCI
 copy(DS[1], Txt[1], convert=to_text())                       # "123"           (Suppress zero)
 copy(DS[1], Txt[1], convert=to_text(suppress_zero=False))    # "00123"         (Do not Suppress zero)
 copy(DF[1], Txt[1], convert=to_text(exponential=True))       # "1.0000000E+04" (Exponential Numbering)
-copy(DS[1], Txt[1], convert=to_text(termination_code=0))     # "123" + NUL     (Termination Code)
-copy(DS[1], Txt[1], convert=to_binary)                       # raw byte: 123 → '{' (Copy Binary)
+copy(DS[1], Txt[1], convert=to_text(termination_code=0))       # "123" + NUL     (Termination Code)
+copy(DS[1], Txt[1], convert=to_text(termination_code="$0D"))   # "123" + CR      (Termination Code, hex)
+copy(DS[1], Txt[1], convert=to_binary)                         # raw byte: 123 → '{' (Copy Binary)
 ```
 
-`termination_code` appends a single ASCII character after the converted text. Pass an int (0–127) or a one-character string. This matches the Click PLC Termination Code option (C0-1x and C2-x CPUs).
+`termination_code` appends a single ASCII character after the converted text. Pass an int (0–127), a one-character string, or a `$XX` hex string matching Click's native notation (e.g. `"$0D"` for carriage return). This matches the Click PLC Termination Code option (C0-1x and C2-x CPUs).
 
 #### Leading zeros with string literals
 
