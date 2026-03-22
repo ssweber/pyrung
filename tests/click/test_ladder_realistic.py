@@ -219,7 +219,7 @@ def _build_program_and_mapping():
                 current_step=DrumStep,
                 accumulator=DrumAcc,
                 completion_flag=DrumDone,
-            ).reset(ShiftReset).jump(Found, step=2).jog(Start)
+            ).reset(ShiftReset).jump(Found, step=DrumJumpStep).jog(Start)
 
         # R13: Pack / unpack family
         with Rung(Running):
