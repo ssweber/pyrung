@@ -112,14 +112,15 @@ This DSL follows Click PLC instruction naming as closely as possible, departing 
 ## Writing a Click program
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
-from pyrung.click import x, y, c, ds, TagMap
+from pyrung import Bool, Real, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
 StartButton  = Bool("StartButton")
 StopButton   = Bool("StopButton")
 MotorRunning = Bool("MotorRunning")
-Speed        = Int("Speed")
+RawSpeed     = Real("RawSpeed")
+Speed        = Real("Speed")
 
 # Write logic using semantic names
 with Program() as logic:
@@ -130,7 +131,7 @@ with Program() as logic:
         reset(MotorRunning)
 
     with Rung(MotorRunning):
-        copy(Speed, ds[1])
+        copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
 runner = PLCRunner(logic)
@@ -152,7 +153,8 @@ mapping = TagMap({
     StartButton:  x[1],           # BOOL → X001
     StopButton:   x[2],           # BOOL → X002
     MotorRunning: y[1],           # BOOL → Y001
-    Speed:        ds[1],          # INT  → DS1
+    RawSpeed:     df[1],          # REAL → DF1 (analog input)
+    Speed:        df[11],         # REAL → DF11
 })
 ```
 
