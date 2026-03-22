@@ -581,8 +581,8 @@ class TestInstructionCoverage:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                search(">=", 5, ds.select(1, 10), result=result, found=found, continuous=True)
-                search("==", "AB", txt.select(1, 8), result=result, found=found)
+                search(ds.select(1, 10) >= 5, result=result, found=found, continuous=True)
+                search(txt.select(1, 8) == "AB", result=result, found=found)
             with Rung(Bool("Enable")):
                 shift(bits.select(1, 8)).clock(clock).reset(reset_tag)
             with Rung(Bool("Enable")):

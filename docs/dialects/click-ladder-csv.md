@@ -318,7 +318,7 @@ Producer may emit:
 - `blockcopy(source,dest)` or `blockcopy(source,dest,oneshot=1)`
 - `fill(value,dest)` or `fill(value,dest,oneshot=1)`
 - `calc(expression,dest,mode=decimal)` or `calc(...,mode=hex,oneshot=1)`
-- `search("cond",value,range,result,found)` or `search(...,continuous=1,oneshot=1)`
+- `search(range cond value,result,found)` or `search(...,continuous=1,oneshot=1)`
 - `pack_bits(bit_block,dest)` or `pack_bits(bit_block,dest,oneshot=1)`
 - `pack_words(word_block,dest)` or `pack_words(word_block,dest,oneshot=1)`
 - `pack_text(source_range,dest)` or `pack_text(...,allow_whitespace=1,oneshot=1)`

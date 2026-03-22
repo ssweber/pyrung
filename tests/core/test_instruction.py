@@ -1415,9 +1415,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="found tag must be BOOL"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=DS.select(1, 3),
+                DS.select(1, 3) == 1,
                 result=Result,
                 found=Int("Found"),
             )
@@ -1430,15 +1428,14 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="result tag must be INT or DINT"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=DS.select(1, 3),
+                DS.select(1, 3) == 1,
                 result=Real("Result"),
                 found=Found,
             )
 
     def test_search_invalid_condition_rejected(self):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         DS = Block("DS", TagType.INT, 1, 10)
         Found = Bool("Found")
@@ -1446,26 +1443,34 @@ class TestSearchInstruction:
 
         with pytest.raises(ValueError, match="Invalid search condition"):
             SearchInstruction(
-                condition="=",
-                value=1,
-                search_range=DS.select(1, 3),
+                RangeComparison(DS.select(1, 3), "=", 1),
                 result=Result,
                 found=Found,
             )
 
     def test_search_range_type_enforced(self):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         Found = Bool("Found")
         Result = Int("Result")
 
-        with pytest.raises(
-            TypeError, match="search_range must be BlockRange or IndirectBlockRange"
-        ):
+        with pytest.raises(TypeError, match="comparison must use a .select\\(\\) range"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=Int("NotARange"),  # type: ignore[arg-type]
+                RangeComparison(Int("NotARange"), "==", 1),  # type: ignore[arg-type]
+                result=Result,
+                found=Found,
+            )
+
+    def test_search_comparison_type_enforced(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        with pytest.raises(TypeError, match="expects a comparison expression"):
+            SearchInstruction(
+                "not a comparison",  # type: ignore[arg-type]
                 result=Result,
                 found=Found,
             )
@@ -1483,12 +1488,15 @@ class TestSearchInstruction:
     )
     def test_search_numeric_success(self, condition, value, expected):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         DS = Block("DS", TagType.INT, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(condition, value, DS.select(1, 3), result=Result, found=Found)
+        instr = SearchInstruction(
+            RangeComparison(DS.select(1, 3), condition, value), result=Result, found=Found
+        )
         state = SystemState().with_tags({"DS1": 10, "DS2": 20, "DS3": 5})
         new_state = execute(instr, state)
 
@@ -1502,7 +1510,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(">", 100, DS.select(1, 3), result=Result, found=Found)
+        instr = SearchInstruction(DS.select(1, 3) > 100, result=Result, found=Found)
         state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3, "Result": 99, "Found": True})
         new_state = execute(instr, state)
 
@@ -1516,9 +1524,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(
-            "==", 2, DS.select(1, 4), result=Result, found=Found, continuous=True
-        )
+        instr = SearchInstruction(DS.select(1, 4) == 2, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags(
             {"DS1": 1, "DS2": 2, "DS3": 3, "DS4": 2, "Result": 0, "Found": False}
         )
@@ -1542,9 +1548,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(
-            "==", 1, DS.select(1, 3), result=Result, found=Found, continuous=True
-        )
+        instr = SearchInstruction(DS.select(1, 3) == 1, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags({"DS1": 1, "DS2": 1, "DS3": 1, "Result": -1, "Found": True})
         new_state = execute(instr, state)
 
@@ -1558,9 +1562,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(
-            "==", 7, DS.select(1, 3), result=Result, found=Found, continuous=True
-        )
+        instr = SearchInstruction(DS.select(1, 3) == 7, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags({"DS1": 1, "DS2": 7, "DS3": 7, "Result": 0, "Found": False})
         new_state = execute(instr, state)
 
@@ -1575,7 +1577,7 @@ class TestSearchInstruction:
         Result = Int("Result")
 
         instr = SearchInstruction(
-            "==", 5, DS.select(1, 5).reverse(), result=Result, found=Found, continuous=True
+            DS.select(1, 5).reverse() == 5, result=Result, found=Found, continuous=True
         )
         state = SystemState().with_tags(
             {"DS1": 0, "DS2": 5, "DS3": 0, "DS4": 5, "DS5": 0, "Result": 0, "Found": False}
@@ -1600,9 +1602,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(
-            "==", 2, DS.select(1, 2), result=Result, found=Found, oneshot=True
-        )
+        instr = SearchInstruction(DS.select(1, 2) == 2, result=Result, found=Found, oneshot=True)
         state = SystemState().with_tags({"DS1": 0, "DS2": 2, "Result": 0, "Found": False})
 
         step1 = execute(instr, state)
@@ -1623,9 +1623,7 @@ class TestSearchInstruction:
         Result = Int("Result")
 
         rung = RungLogic(Enable)
-        rung.add_instruction(
-            SearchInstruction("==", 1, DS.select(1, 3), result=Result, found=Found)
-        )
+        rung.add_instruction(SearchInstruction(DS.select(1, 3) == 1, result=Result, found=Found))
 
         state = SystemState().with_tags(
             {"Enable": False, "DS1": 1, "DS2": 1, "DS3": 1, "Result": 55, "Found": True}
@@ -1642,7 +1640,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", "ADC", CH.select(1, 6), result=Result, found=Found)
+        instr = SearchInstruction(CH.select(1, 6) == "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
         new_state = execute(instr, state)
 
@@ -1656,7 +1654,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("!=", "ADC", CH.select(1, 4), result=Result, found=Found)
+        instr = SearchInstruction(CH.select(1, 4) != "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
         new_state = execute(instr, state)
 
@@ -1670,9 +1668,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(
-            "==", "ADC", CH.select(1, 4).reverse(), result=Result, found=Found
-        )
+        instr = SearchInstruction(CH.select(1, 4).reverse() == "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "Z", "CH2": "C", "CH3": "D", "CH4": "A"})
         new_state = execute(instr, state)
 
@@ -1685,7 +1681,7 @@ class TestSearchInstruction:
         CH = Block("CH", TagType.CHAR, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
-        instr = SearchInstruction(">", "ADC", CH.select(1, 4), result=Result, found=Found)
+        instr = SearchInstruction(CH.select(1, 4) > "ADC", result=Result, found=Found)
 
         with pytest.raises(ValueError, match="Text search only supports"):
             execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B", "CH3": "C"}))
@@ -1696,7 +1692,7 @@ class TestSearchInstruction:
         CH = Block("CH", TagType.CHAR, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
-        instr = SearchInstruction("==", "", CH.select(1, 4), result=Result, found=Found)
+        instr = SearchInstruction(CH.select(1, 4) == "", result=Result, found=Found)
 
         with pytest.raises(ValueError, match="cannot be empty"):
             execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B"}))
@@ -1708,7 +1704,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 0, DS.select(3, 4), result=Result, found=Found)
+        instr = SearchInstruction(DS.select(3, 4) == 0, result=Result, found=Found)
         new_state = execute(instr, SystemState().with_tags({"Result": 123, "Found": True}))
 
         assert new_state.tags["Result"] == -1

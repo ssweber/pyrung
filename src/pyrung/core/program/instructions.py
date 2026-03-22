@@ -27,13 +27,13 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
-from pyrung.core.memory_block import BlockRange
+from pyrung.core.memory_block import BlockRange, RangeComparison
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .context import Program, SubroutineFunc, _require_rung_context, _validate_subroutine_name
 
 if TYPE_CHECKING:
-    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
 def _iter_coil_tags(target: Tag | BlockRange | ImmediateRef) -> list[Tag]:
@@ -368,9 +368,7 @@ def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
 
 
 def search(
-    condition: str,
-    value: Any,
-    search_range: BlockRange | IndirectBlockRange,
+    comparison: RangeComparison,
     *,
     result: Tag,
     found: Tag,
@@ -381,17 +379,16 @@ def search(
 
     Scans a selected range and writes the first matching address into `result`.
     Writes `found` True on hit; on miss writes `result=-1` and `found=False`.
-    """
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
-    if condition not in {"==", "!=", "<", "<=", ">", ">="}:
-        raise ValueError(
-            f"Invalid search condition: {condition!r}. Expected one of: ==, !=, <, <=, >, >="
-        )
-    if not isinstance(search_range, (BlockRange, IndirectBlockRange)):
+    The first argument is a comparison expression built from a ``.select()`` range::
+
+        search(DS.select(1, 100) >= 100, result=FoundAddr, found=FoundFlag)
+        search(Txt.select(1, 50) == "A", result=FoundAddr, found=FoundFlag)
+    """
+    if not isinstance(comparison, RangeComparison):
         raise TypeError(
-            "search() expects search_range from .select() "
-            f"(BlockRange or IndirectBlockRange), got {type(search_range).__name__}"
+            "search() expects a comparison expression, "
+            f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
         )
     if found.type != TagType.BOOL:
         raise TypeError(f"search() found must be BOOL, got {found.type.name}")
@@ -401,9 +398,7 @@ def search(
     _add_instruction(
         "search",
         SearchInstruction,
-        condition,
-        value,
-        search_range,
+        comparison,
         result=result,
         found=found,
         continuous=continuous,

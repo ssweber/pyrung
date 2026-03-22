@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.constants import (
@@ -559,6 +560,36 @@ def _emit_instruction(
         lines.append(f"{pad}{rendered}")
 
 
+_SEARCH_OP_RE = re.compile(r"^(.+?)\s+(==|!=|<=|>=|<|>)\s+(.+)$")
+
+
+def _render_search_token(
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None = None,
+) -> str:
+    """Render search CSV token as ``search(range <op> value, ...)``."""
+    # First positional arg is the comparison expression: "RANGE OP VALUE"
+    raw = args[0] if args else ""
+    m = _SEARCH_OP_RE.match(raw)
+    if m:
+        range_expr = _sub_operand(m.group(1), collection, nicknames, structured_map)
+        op = m.group(2)
+        value_expr = _sub_operand(m.group(3), collection, nicknames, structured_map)
+        comparison = f"{range_expr} {op} {value_expr}"
+    else:
+        comparison = _sub_operand(raw, collection, nicknames, structured_map)
+    rest: list[str] = []
+    for key, value in kwargs:
+        if key in _DROP_KWARGS:
+            continue
+        rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+        rest.append(f"{key}={rendered_v}")
+    return f"search({', '.join([comparison, *rest])})"
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -587,6 +618,10 @@ def _render_af_token(
         return f"{py_func}()"
 
     args, kwargs = _parse_af_args(args_str)
+
+    # search("cond",value=V,search_range=R,...) → search(R <op> V, ...)
+    if func_name == "search":
+        return _render_search_token(args, kwargs, collection, nicknames, structured_map)
 
     rendered_parts: list[str] = []
     for arg in args:

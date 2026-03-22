@@ -37,6 +37,7 @@ from pyrung.core.memory_block import (
     IndirectRef,
     InputBlock,
     OutputBlock,
+    RangeComparison,
     SlotConfig,
 )
 from pyrung.core.program import (
@@ -147,6 +148,7 @@ __all__ = [
     "IndirectBlockRange",
     "IndirectRef",
     "IndirectExprRef",
+    "RangeComparison",
     "SlotConfig",
     # Program structure
     "Program",

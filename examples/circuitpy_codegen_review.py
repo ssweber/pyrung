@@ -145,8 +145,8 @@ with Program(strict=False) as logic:
 
     # Numeric + text search.
     with Rung(Running):
-        search(">=", CalcOut, DD.select(1, 20), result=FoundAddr, found=Found, continuous=True)
-        search("==", "AB", TXT.select(1, 8), result=FoundAddr, found=Found)
+        search(DD.select(1, 20) >= CalcOut, result=FoundAddr, found=Found, continuous=True)
+        search(TXT.select(1, 8) == "AB", result=FoundAddr, found=Found)
 
     # Shift is terminal, so keep it on its own rung.
     with Rung(Running):

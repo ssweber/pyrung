@@ -23,6 +23,7 @@ from pyrung import (
     Dint,
     Int,
     Program,
+    RangeComparison,
     Real,
     Rung,
     TagType,
@@ -393,7 +394,7 @@ with Program(strict=False) as coverage_program:
         result, found = a.int_(), a.bool()
         with Rung(trigger) as r:
             r.comment = f"search__{label}"
-            search(op, val, src_blk.select(1, 10), result=result, found=found)
+            search(RangeComparison(src_blk.select(1, 10), op, val), result=result, found=found)
 
     # search with continuous
     trigger = a.bool()
@@ -401,7 +402,7 @@ with Program(strict=False) as coverage_program:
     result, found = a.int_(), a.bool()
     with Rung(trigger) as r:
         r.comment = "search__continuous"
-        search("==", val, src_blk.select(1, 10), result=result, found=found, continuous=True)
+        search(src_blk.select(1, 10) == val, result=result, found=found, continuous=True)
 
     # search with oneshot
     trigger = a.bool()
@@ -409,7 +410,7 @@ with Program(strict=False) as coverage_program:
     result, found = a.int_(), a.bool()
     with Rung(trigger) as r:
         r.comment = "search__oneshot"
-        search("==", val, src_blk.select(1, 10), result=result, found=found, oneshot=True)
+        search(src_blk.select(1, 10) == val, result=result, found=found, oneshot=True)
 
     # ── 10. Shift register ──────────────────────────────────────────
 

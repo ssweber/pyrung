@@ -250,17 +250,18 @@ class _InstructionMixin:
             if instruction.continuous:
                 kw["continuous"] = "1"
             kw.update(oneshot_kw)
+            range_str = self._render_operand(
+                instruction.search_range,
+                path=f"{path}.search_range",
+                source=instruction,
+            )
+            value_str = self._render_operand(
+                instruction.value, path=f"{path}.value", source=instruction
+            )
+            comparison = f"{range_str} {instruction.condition} {value_str}"
             return self._fn(
                 "search",
-                _quote(str(instruction.condition)),
-                value=self._render_operand(
-                    instruction.value, path=f"{path}.value", source=instruction
-                ),
-                search_range=self._render_operand(
-                    instruction.search_range,
-                    path=f"{path}.search_range",
-                    source=instruction,
-                ),
+                comparison,
                 result=self._render_operand(
                     instruction.result, path=f"{path}.result", source=instruction
                 ),

@@ -176,9 +176,7 @@ def _build_program_and_mapping():
         # R8: Numeric search (continuous)
         with Rung(Running):
             search(
-                ">=",
-                CalcOut,
-                DstBlk.select(1, 5),
+                DstBlk.select(1, 5) >= CalcOut,
                 result=FoundAddr,
                 found=Found,
                 continuous=True,
@@ -186,7 +184,7 @@ def _build_program_and_mapping():
 
         # R9: Text search
         with Rung(Running):
-            search("==", "AB", Chars.select(1, 8), result=FoundAddr, found=Found)
+            search(Chars.select(1, 8) == "AB", result=FoundAddr, found=Found)
 
         # R10: Shift with clock + reset
         with Rung(Running):

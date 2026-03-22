@@ -426,9 +426,9 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
 
     with Program() as logic:
         with Rung(Enable):
-            search("==", 'sub"name', Chars.select(1, 4), result=Result, found=Found)
+            search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
         with Rung(Enable):
-            search("==", "normal", Chars.select(1, 4), result=Result, found=Found)
+            search(Chars.select(1, 4) == "normal", result=Result, found=Found)
 
     mapping = TagMap(
         {
@@ -442,8 +442,8 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert 'search("==",value="sub""name",search_range=TXT1..TXT4,result=DS1,found=C1)' in tokens
-    assert 'search("==",value="normal",search_range=TXT1..TXT4,result=DS1,found=C1)' in tokens
+    assert 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)' in tokens
+    assert 'search(TXT1..TXT4 == "normal",result=DS1,found=C1)' in tokens
     assert all('\\"' not in token for token in tokens)
 
 
@@ -455,7 +455,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
 
     with Program() as logic:
         with Rung(Enable):
-            search("==", 'sub"name', Chars.select(1, 4), result=Result, found=Found)
+            search(Chars.select(1, 4) == 'sub"name', result=Result, found=Found)
 
     mapping = TagMap(
         {
@@ -467,7 +467,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
         include_system=False,
     )
     bundle = mapping.to_ladder(logic)
-    expected = 'search("==",value="sub""name",search_range=TXT1..TXT4,result=DS1,found=C1)'
+    expected = 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)'
     assert bundle.main_rows[1][-1] == expected
 
     out_dir = tmp_path / "ladder"
@@ -483,7 +483,8 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
     assert af_token == expected
     assert '\\"' not in af_token
 
-    value_literal = af_token[len('search("==",value=') :].split(",search_range=", maxsplit=1)[0]
+    # Extract the value literal from the comparison expression
+    value_literal = af_token.split(" == ", maxsplit=1)[1].split(",result=", maxsplit=1)[0]
     assert value_literal == '"sub""name"'
     assert value_literal[1:-1].replace('""', '"') == 'sub"name'
 
@@ -507,7 +508,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
         with Rung(Enable):
             calc(Dest1 + 1, Dest2)
         with Rung(Enable):
-            search("==", 1, Data.select(1, 2), result=Result, found=Found)
+            search(Data.select(1, 2) == 1, result=Result, found=Found)
         with Rung(Enable):
             pack_text(Chars.select(1, 2), PackDest)
 

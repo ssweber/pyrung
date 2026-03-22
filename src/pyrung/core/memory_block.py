@@ -620,6 +620,33 @@ class BlockRange:
         for addr in self.addresses:
             yield self.block._get_tag(addr)
 
+    def __eq__(self, other: object) -> RangeComparison:  # type: ignore[override]
+        """Create equality comparison for search."""
+        return RangeComparison(self, "==", other)
+
+    def __ne__(self, other: object) -> RangeComparison:  # type: ignore[override]
+        """Create inequality comparison for search."""
+        return RangeComparison(self, "!=", other)
+
+    def __lt__(self, other: Any) -> RangeComparison:
+        """Create less-than comparison for search."""
+        return RangeComparison(self, "<", other)
+
+    def __le__(self, other: Any) -> RangeComparison:
+        """Create less-than-or-equal comparison for search."""
+        return RangeComparison(self, "<=", other)
+
+    def __gt__(self, other: Any) -> RangeComparison:
+        """Create greater-than comparison for search."""
+        return RangeComparison(self, ">", other)
+
+    def __ge__(self, other: Any) -> RangeComparison:
+        """Create greater-than-or-equal comparison for search."""
+        return RangeComparison(self, ">=", other)
+
+    def __hash__(self) -> int:
+        return hash((id(self.block), self.start, self.end, self.reverse_order))
+
     def __repr__(self) -> str:
         return f"BlockRange({self.block.name}[{self.start}:{self.end}])"
 
@@ -660,6 +687,33 @@ class IndirectBlockRange:
             reverse_order=not self.reverse_order,
         )
 
+    def __eq__(self, other: object) -> RangeComparison:  # type: ignore[override]
+        """Create equality comparison for search."""
+        return RangeComparison(self, "==", other)
+
+    def __ne__(self, other: object) -> RangeComparison:  # type: ignore[override]
+        """Create inequality comparison for search."""
+        return RangeComparison(self, "!=", other)
+
+    def __lt__(self, other: Any) -> RangeComparison:
+        """Create less-than comparison for search."""
+        return RangeComparison(self, "<", other)
+
+    def __le__(self, other: Any) -> RangeComparison:
+        """Create less-than-or-equal comparison for search."""
+        return RangeComparison(self, "<=", other)
+
+    def __gt__(self, other: Any) -> RangeComparison:
+        """Create greater-than comparison for search."""
+        return RangeComparison(self, ">", other)
+
+    def __ge__(self, other: Any) -> RangeComparison:
+        """Create greater-than-or-equal comparison for search."""
+        return RangeComparison(self, ">=", other)
+
+    def __hash__(self) -> int:
+        return hash((id(self.block), self.reverse_order))
+
     @staticmethod
     def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:
         from pyrung.core.expression import Expression
@@ -671,6 +725,21 @@ class IndirectBlockRange:
         if isinstance(expr, Tag):
             return int(ctx.get_tag(expr.name, expr.default))
         raise TypeError(f"Cannot resolve {type(expr).__name__} to address")
+
+
+@dataclass(frozen=True)
+class RangeComparison:
+    """Comparison expression over a block range, used by ``search()``.
+
+    Created by applying a comparison operator to a ``.select()`` result::
+
+        DS.select(1, 100) >= 100   # RangeComparison(range, ">=", 100)
+        Txt.select(1, 50) == "A"   # RangeComparison(range, "==", "A")
+    """
+
+    search_range: BlockRange | IndirectBlockRange
+    operator: str
+    value: Any
 
 
 @dataclass(frozen=True)

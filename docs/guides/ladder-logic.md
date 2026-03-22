@@ -584,3 +584,13 @@ with Rung(Button) as r:
 ```
 
 Comments are limited to 1400 characters. Exceeding this raises `ValueError`.
+
+## Numeric behavior
+
+| Operation | Out-of-range behavior |
+|-----------|----------------------|
+| `copy()` | Clamps to destination min/max |
+| `calc()` | Wraps (modular arithmetic) |
+| Timer accumulator | Clamps at 32,767 |
+| Counter accumulator | Clamps at DINT min/max |
+| Division by zero | Result = 0, fault flag set |

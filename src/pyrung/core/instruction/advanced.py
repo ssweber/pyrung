@@ -20,7 +20,7 @@ from .utils import (
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange, RangeComparison
 
 _SEARCH_OPERATOR_MAP = {
     "==": eq,
@@ -51,10 +51,8 @@ class SearchInstruction(OneShotMixin, Instruction):
     Set ``result = 0`` to restart, or set ``result = -1`` to signal exhaustion.
 
     Args:
-        condition: Comparison operator string: ``"=="``, ``"!="`, ``"<"``,
-            ``"<="`, ``">"``, or ``">="`.
-        value: Value to compare against (constant, Tag, or Expression).
-        search_range: `BlockRange` or `IndirectBlockRange` from `.select()`.
+        comparison: A `RangeComparison` from a block-range comparison
+            expression, e.g. ``DS.select(1, 100) >= 100``.
         result: INT or DINT tag to receive the matched address (or −1).
         found: BOOL tag set True on hit, False on miss.
         continuous: Resume from previous result position. Default False.
@@ -63,26 +61,31 @@ class SearchInstruction(OneShotMixin, Instruction):
 
     def __init__(
         self,
-        condition: str,
-        value: Any,
-        search_range: BlockRange | IndirectBlockRange,
+        comparison: RangeComparison,
         *,
         result: Tag,
         found: Tag,
         continuous: bool = False,
         oneshot: bool = False,
     ):
-        from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+        from pyrung.core.memory_block import BlockRange, IndirectBlockRange, RangeComparison
         from pyrung.core.tag import TagType
 
-        if condition not in _SEARCH_OPERATOR_MAP:
-            raise ValueError(
-                f"Invalid search condition: {condition!r}. Expected one of: ==, !=, <, <=, >, >="
-            )
-        if not isinstance(search_range, (BlockRange, IndirectBlockRange)):
+        if not isinstance(comparison, RangeComparison):
             raise TypeError(
-                "search_range must be BlockRange or IndirectBlockRange from .select(), "
-                f"got {type(search_range).__name__}"
+                "search() expects a comparison expression, "
+                f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
+            )
+        if comparison.operator not in _SEARCH_OPERATOR_MAP:
+            raise ValueError(
+                f"Invalid search condition: {comparison.operator!r}. "
+                "Expected one of: ==, !=, <, <=, >, >="
+            )
+        if not isinstance(comparison.search_range, (BlockRange, IndirectBlockRange)):
+            raise TypeError(
+                "search() comparison must use a .select() range "
+                "(BlockRange or IndirectBlockRange), "
+                f"got {type(comparison.search_range).__name__}"
             )
         if found.type != TagType.BOOL:
             raise TypeError(f"search found tag must be BOOL, got {found.type.name}")
@@ -90,13 +93,13 @@ class SearchInstruction(OneShotMixin, Instruction):
             raise TypeError(f"search result tag must be INT or DINT, got {result.type.name}")
 
         OneShotMixin.__init__(self, oneshot)
-        self.condition = condition
-        self.value = value
-        self.search_range = search_range
+        self.condition = comparison.operator
+        self.value = comparison.value
+        self.search_range = comparison.search_range
         self.result = result
         self.found = found
         self.continuous = continuous
-        self._compare = _SEARCH_OPERATOR_MAP[condition]
+        self._compare = _SEARCH_OPERATOR_MAP[comparison.operator]
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
