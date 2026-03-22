@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyclickplc.addresses import parse_address
 
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation
@@ -138,8 +138,8 @@ def _resolve_operand_slots(value: Any, tag_map: TagMap) -> _OperandResolution:
     if isinstance(value, ImmediateRef):
         return _resolve_operand_slots(value.value, tag_map)
 
-    if isinstance(value, CopyModifier):
-        return _resolve_operand_slots(value.source, tag_map)
+    if isinstance(value, CopyConverter):
+        return _OperandResolution()
 
     if isinstance(value, Tag):
         resolved = _resolve_direct_tag(value, tag_map)

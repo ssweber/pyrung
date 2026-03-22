@@ -176,31 +176,58 @@ fill(0, DS.select(1, 100))          # Zero out DS1..DS100
 fill(Setpoint, Alarms.select(1, 8)) # Copy tag value to all 8 elements
 ```
 
-### Type conversion (copy modifiers)
+### Type conversion (copy converters)
 
-Copy modifiers handle the conversions between numeric and text registers — the same options you see in the Click PLC Copy Single dialog.
+Copy converters handle conversions between numeric and text registers — the same options you see in the Click PLC Copy Single dialog. Pass them as the `convert` argument to `copy()`.
 
 #### Text → Numeric
 
 ```python
-copy(ModeChar.as_value(), DS[1])    # CHAR '5' → numeric 5   (Copy Character Value)
-copy(ModeChar.as_ascii(), DS[1])    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
+copy(ModeChar, DS[1], convert=to_value)    # CHAR '5' → numeric 5   (Copy Character Value)
+copy(ModeChar, DS[1], convert=to_ascii)    # CHAR '5' → ASCII 53    (Copy ASCII Code Value)
 ```
 
 #### Numeric → Text
 
 ```python
-copy(DS[1].as_text(), Txt[1])                       # "123"           (Suppress zero)
-copy(DS[1].as_text(suppress_zero=False), Txt[1])    # "00123"         (Do not Suppress zero)
-copy(DS[1].as_text(pad=6), Txt[1])                  # "000123"        (see below)
-copy(DF[1].as_text(exponential=True), Txt[1])       # "1.0000000E+04" (Exponential Numbering)
-copy(DS[1].as_text(termination_code=0), Txt[1])     # "123" + NUL     (Termination Code)
-copy(DS[1].as_binary(), Txt[1])                     # raw byte: 123 → '{' (Copy Binary)
+copy(DS[1], Txt[1], convert=to_text())                       # "123"           (Suppress zero)
+copy(DS[1], Txt[1], convert=to_text(suppress_zero=False))    # "00123"         (Do not Suppress zero)
+copy(DF[1], Txt[1], convert=to_text(exponential=True))       # "1.0000000E+04" (Exponential Numbering)
+copy(DS[1], Txt[1], convert=to_text(termination_code=0))     # "123" + NUL     (Termination Code)
+copy(DS[1], Txt[1], convert=to_binary)                       # raw byte: 123 → '{' (Copy Binary)
 ```
 
-In Click's programming software you can type `000123` directly into the source field to get six fixed digits with leading zeros. Python won't allow that — `000123` is a syntax error. `pad=6` is pyrung's way of expressing the same thing.
-
 `termination_code` appends a single ASCII character after the converted text. Pass an int (0–127) or a one-character string. This matches the Click PLC Termination Code option (C0-1x and C2-x CPUs).
+
+#### Leading zeros with string literals
+
+In Click's programming software you can type `00026` directly into the source field to copy fixed-width text into text registers. Python won't allow leading zeros on integer literals — `00026` is a syntax error. Use a string instead:
+
+```python
+copy("00026", Txt[1])          # Txt1..Txt5 = "0", "0", "0", "2", "6"
+```
+
+#### blockcopy and fill
+
+`blockcopy()` supports `convert=` but only for text→numeric conversions (`to_value` and `to_ascii`). This matches Click PLC hardware, which limits block copy to those two modes.
+
+```python
+blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_value)
+blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
+```
+
+`fill()` does not support `convert=` — it is plain value copy only.
+
+#### Converter reference
+
+| Converter | Direction | Click PLC equivalent | `copy` | `blockcopy` | `fill` |
+|-----------|-----------|---------------------|--------|-------------|--------|
+| `to_value` | Text → Numeric | Copy Character Value (Option 4b) | yes | yes | no |
+| `to_ascii` | Text → Numeric | Copy ASCII Code Value (Option 4b) | yes | yes | no |
+| `to_text()` | Numeric → Text | Copy Option 4a / 4c | yes | no | no |
+| `to_binary` | Numeric → Text | Copy Binary (Option 4a) | yes | no | no |
+
+`to_value`, `to_ascii`, and `to_binary` take no arguments — pass them bare (no parentheses needed, though `to_binary()` also works). `to_text()` accepts keyword arguments for formatting options.
 
 ### Pack / unpack
 

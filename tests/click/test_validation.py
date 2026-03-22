@@ -21,7 +21,7 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Tag, TagType, as_value, immediate
+from pyrung.core import Block, Bool, Tag, TagType, immediate, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -821,7 +821,7 @@ class TestWrappedCopySources:
 
         def logic():
             with Rung():
-                copy(as_value(dd[Pointer]), Dest)
+                copy(dd[Pointer], Dest, convert=to_value)
 
         prog = _build_program(logic)
         tag_map = TagMap([Pointer.map_to(ds[100]), Dest.map_to(dd[1])], include_system=False)

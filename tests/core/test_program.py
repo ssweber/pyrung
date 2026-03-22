@@ -768,13 +768,13 @@ class TestPublicExports:
 
         assert issubclass(ForbiddenControlFlowError, RuntimeError)
 
-    def test_copy_modifier_exports(self):
-        from pyrung.core import as_ascii, as_binary, as_text, as_value
+    def test_copy_converter_exports(self):
+        from pyrung.core import to_ascii, to_binary, to_text, to_value
 
-        assert callable(as_value)
-        assert callable(as_ascii)
-        assert callable(as_text)
-        assert callable(as_binary)
+        assert to_value is not None
+        assert to_ascii is not None
+        assert callable(to_text)
+        assert to_binary is not None
 
     def test_no_copy_text_or_unpack_text_exports(self):
         import pyrung.core as core

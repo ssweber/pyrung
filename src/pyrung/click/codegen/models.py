@@ -149,7 +149,7 @@ class _OperandCollection:
     used_instructions: set[str] = field(default_factory=set)  # instruction names
     used_conditions: set[str] = field(default_factory=set)  # rise, fall, immediate
     used_time_units: set[str] = field(default_factory=set)  # Tms, Ts, etc.
-    used_copy_modifiers: set[str] = field(default_factory=set)  # as_value, as_text, etc.
+    used_copy_converters: set[str] = field(default_factory=set)  # to_value, to_text, etc.
     has_any_of: bool = False
     has_branch: bool = False
     has_subroutine: bool = False

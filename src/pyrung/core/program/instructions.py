@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core._source import (
     _capture_source,
 )
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction import (
     BlockCopyInstruction,
     CalcInstruction,
@@ -183,17 +184,19 @@ def copy(
     source: Any,
     target: Tag | IndirectRef | IndirectExprRef,
     *,
+    convert: CopyConverter | None = None,
     oneshot: bool = False,
 ) -> Tag | IndirectRef | IndirectExprRef:
     """Copy instruction (CPY/MOV).
 
-    Copies source value to target.
+    Copies source value to target.  Pass ``convert=`` for text/numeric
+    conversion (see :mod:`pyrung.core.copy_converters`).
 
     Example:
         with Rung(Button):
             copy(5, StepNumber)
     """
-    _add_instruction("copy", CopyInstruction, source, target, oneshot=oneshot)
+    _add_instruction("copy", CopyInstruction, source, target, convert=convert, oneshot=oneshot)
     return target
 
 
@@ -239,11 +242,20 @@ def run_enabled_function(
     )
 
 
-def blockcopy(source: Any, dest: Any, *, oneshot: bool = False) -> None:
+def blockcopy(
+    source: Any,
+    dest: Any,
+    *,
+    convert: CopyConverter | None = None,
+    oneshot: bool = False,
+) -> None:
     """Block copy instruction.
 
     Copies values from source BlockRange to dest BlockRange.
     Both ranges must have the same length.
+
+    Pass ``convert=to_value`` or ``convert=to_ascii`` for text→numeric
+    block conversion.  Only ``value`` and ``ascii`` modes are supported.
 
     Example:
         with Rung(CopyEnable):
@@ -252,9 +264,12 @@ def blockcopy(source: Any, dest: Any, *, oneshot: bool = False) -> None:
     Args:
         source: Source BlockRange or IndirectBlockRange from .select().
         dest: Dest BlockRange or IndirectBlockRange from .select().
+        convert: Optional converter (to_value or to_ascii only).
         oneshot: If True, execute only once per rung activation.
     """
-    _add_instruction("blockcopy", BlockCopyInstruction, source, dest, oneshot=oneshot)
+    _add_instruction(
+        "blockcopy", BlockCopyInstruction, source, dest, convert=convert, oneshot=oneshot
+    )
 
 
 def fill(value: Any, dest: Any, *, oneshot: bool = False) -> None:

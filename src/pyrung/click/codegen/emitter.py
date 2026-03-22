@@ -161,9 +161,9 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     for tu in sorted(collection.used_time_units):
         core_imports.append(tu)
 
-    # Copy modifiers
-    for cm in sorted(collection.used_copy_modifiers):
-        core_imports.append(cm)
+    # Copy converters
+    for cc in sorted(collection.used_copy_converters):
+        core_imports.append(cc)
 
     lines.append(f"from pyrung import {', '.join(core_imports)}")
 

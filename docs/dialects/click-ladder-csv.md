@@ -363,11 +363,11 @@ Click supports additional instruction placeholders that pyrung does not currentl
   - contiguous compact form `BANKstart..BANKend` (same bank, +1 sequence), or
   - explicit list form `[A,B,C]`.
 - Indirect refs render as `BANK[pointer]` or `BANK[pointer+offset]` / `BANK[pointer-offset]`.
-- Copy modifiers are emitted inline as nested operands:
-  - `as_value(source)`
-  - `as_ascii(source)`
-  - `as_binary(source)`
-  - `as_text(source,suppress_zero=<0|1>,pad=<none|N>,exponential=<0|1>,termination_code=<none|N>)`
+- Copy converters are emitted as a `convert=` kwarg on the instruction:
+  - `convert=to_value`
+  - `convert=to_ascii`
+  - `convert=to_binary`
+  - `convert=to_text(suppress_zero=<0|1>,exponential=<0|1>,termination_code=<none|N>)`
 
 ## Immediate handling
 

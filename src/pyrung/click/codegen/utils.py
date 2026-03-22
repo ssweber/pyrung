@@ -4,7 +4,6 @@ import re
 from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.constants import (
-    _COPY_MODIFIERS,
     _FUNC_RE,
     _OPERAND_PREFIXES,
     _OPERAND_RE,
@@ -106,6 +105,9 @@ def _sub_operand_kwarg(
     # oneshot=1 → oneshot=True
     if key == "oneshot" and value == "1":
         return "True"
+    # convert=to_value or convert=to_text(suppress_zero=0,...) — pass through
+    if key == "convert":
+        return value
     return _sub_operand(value, collection, nicknames, structured_map)
 
 
@@ -159,17 +161,11 @@ def _sub_operand(
     if text == "none":
         return "None"
 
-    # Check for copy modifiers: as_text(DS1,...), as_value(DS1), etc.
+    # Check for function-call operands
     match = _FUNC_RE.match(text)
     if match:
         func_name = match.group(2)
         inner_args_str = match.group(3) or ""
-        if func_name in _COPY_MODIFIERS:
-            args, kwargs = _parse_af_args(inner_args_str)
-            rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
-            for k, v in kwargs:
-                rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
-            return f"{func_name}({', '.join(rendered)})"
         if func_name == "ModbusTarget":
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]

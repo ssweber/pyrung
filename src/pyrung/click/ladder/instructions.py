@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from pyrung.core.condition import Condition
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction.calc import infer_calc_mode
 
 from .translator import _quote
@@ -15,6 +16,7 @@ class _InstructionMixin:
     """Render instruction objects into Click-compatible output tokens."""
 
     if TYPE_CHECKING:
+
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
         def _render_operand(
             self,
@@ -42,6 +44,7 @@ class _InstructionMixin:
             source: Any,
         ) -> str: ...
         def _render_pattern(self, pattern: tuple[tuple[bool, ...], ...]) -> str: ...
+        def _render_converter(self, converter: CopyConverter) -> str: ...
 
     def _render_forloop_instruction(
         self,
@@ -201,17 +204,25 @@ class _InstructionMixin:
                 ),
             )
         if instruction_type == "CopyInstruction":
+            convert_kw = {}
+            if instruction.convert is not None:
+                convert_kw["convert"] = self._render_converter(instruction.convert)
             return self._fn(
                 "copy",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+                **convert_kw,
                 **oneshot_kw,
             )
         if instruction_type == "BlockCopyInstruction":
+            convert_kw = {}
+            if instruction.convert is not None:
+                convert_kw["convert"] = self._render_converter(instruction.convert)
             return self._fn(
                 "blockcopy",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
                 self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
+                **convert_kw,
                 **oneshot_kw,
             )
         if instruction_type == "FillInstruction":

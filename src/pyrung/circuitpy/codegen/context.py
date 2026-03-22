@@ -25,7 +25,7 @@ from pyrung.core.condition import (
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     Expression,
 )
@@ -261,8 +261,7 @@ class CodegenContext:
                 walk_value(value.end_expr)
                 return
 
-            if isinstance(value, CopyModifier):
-                walk_value(value.source)
+            if isinstance(value, CopyConverter):
                 return
 
             if isinstance(value, Condition):

@@ -27,7 +27,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     AbsExpr,
     AddExpr,
@@ -117,6 +117,7 @@ class _TranslatorMixin:
     _tag_map: TagMap
 
     if TYPE_CHECKING:
+
         def _fn(self, name: str, *args: str, **kwargs: str) -> str: ...
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
 
@@ -297,8 +298,12 @@ class _TranslatorMixin:
                 message="Indirect block ranges are not supported in Click ladder export.",
                 source=source,
             )
-        if isinstance(value, CopyModifier):
-            return self._render_copy_modifier(value, path=path, source=source)
+        if isinstance(value, CopyConverter):
+            self._raise_issue(
+                path=path,
+                message="CopyConverter should not appear as a direct operand; use convert= keyword.",
+                source=source,
+            )
         if isinstance(value, Expression):
             return self._render_expression(value, path=path, source=source)
         if isinstance(value, TimeUnit):
@@ -410,22 +415,17 @@ class _TranslatorMixin:
             source=source,
         )
 
-    def _render_copy_modifier(self, modifier: CopyModifier, *, path: str, source: Any) -> str:
-        if modifier.mode == "text":
+    def _render_converter(self, converter: CopyConverter) -> str:
+        if converter.mode == "text":
             return self._fn(
-                "as_text",
-                self._render_operand(modifier.source, path=f"{path}.source", source=source),
-                suppress_zero=_bool_bit(bool(modifier.suppress_zero)),
-                pad="none" if modifier.pad is None else str(modifier.pad),
-                exponential=_bool_bit(bool(modifier.exponential)),
+                "to_text",
+                suppress_zero=_bool_bit(bool(converter.suppress_zero)),
+                exponential=_bool_bit(bool(converter.exponential)),
                 termination_code="none"
-                if modifier.termination_code is None
-                else str(modifier.termination_code),
+                if converter.termination_code is None
+                else str(converter.termination_code),
             )
-        return self._fn(
-            f"as_{modifier.mode}",
-            self._render_operand(modifier.source, path=f"{path}.source", source=source),
-        )
+        return f"to_{converter.mode}"
 
     def _render_expression(self, expression: Expression, *, path: str, source: Any) -> str:
         if isinstance(expression, TagExpr):
@@ -637,8 +637,10 @@ def _quote(value: str) -> str:
     escaped = value.replace('"', '""')
     return f'"{escaped}"'
 
+
 def _bool_bit(value: bool) -> str:
     return "1" if bool(value) else "0"
+
 
 def _compact_contiguous_range(addresses: list[str]) -> str | None:
     parsed = [_parse_display_address(value) for value in addresses]
@@ -655,6 +657,7 @@ def _compact_contiguous_range(addresses: list[str]) -> str | None:
         return None
 
     return f"{addresses[0]}..{addresses[-1]}"
+
 
 def _parse_display_address(value: str) -> tuple[str, int] | None:
     match = re.fullmatch(r"([A-Za-z]+)(\d+)", value)

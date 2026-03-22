@@ -15,7 +15,7 @@ from pyrung.click.validation import (
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
-from pyrung.core import Bool, Dint, Int, as_value
+from pyrung.core import Bool, Dint, Int, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -242,7 +242,7 @@ def test_wrapped_copy_source_keeps_copy_context_rules():
 
     def logic():
         with Rung():
-            copy(as_value(txt[pointer]), dest)
+            copy(txt[pointer], dest, convert=to_value)
 
     prog = _build_program(logic)
     tag_map = TagMap([pointer.map_to(ds[100]), dest.map_to(ds[1])], include_system=False)

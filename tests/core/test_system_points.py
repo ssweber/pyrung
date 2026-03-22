@@ -15,12 +15,12 @@ from pyrung.core import (
     Rung,
     TagType,
     TimeMode,
-    as_binary,
-    as_value,
     calc,
     copy,
     out,
     system,
+    to_binary,
+    to_value,
 )
 
 
@@ -352,7 +352,7 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
 
     with Program() as program:
         with Rung(Enable):
-            copy(as_value(CH[1]), Dest, oneshot=True)
+            copy(CH[1], Dest, oneshot=True, convert=to_value)
 
     runner = PLCRunner(logic=program)
     runner.patch({"Enable": True, "CH1": "A"})
@@ -371,7 +371,7 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered():
 
     with Program() as program:
         with Rung(Enable):
-            copy(as_binary(DS[Pointer]), CH[1], oneshot=True)
+            copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
     runner = PLCRunner(logic=program)
     runner.patch({"Enable": True, "Pointer": 999})

@@ -40,7 +40,7 @@ SKIP_MODULE_PAGES: set[str] = {
     "pyrung.dap.handlers.stack_variables_evaluate",
     "pyrung.dap.session",
     # Core internals
-    "pyrung.core.copy_modifiers",
+    "pyrung.core.copy_converters",
     "pyrung.core.debug_trace",
     "pyrung.core.input_overrides",
     "pyrung.core.system_points",
@@ -195,10 +195,10 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.all_of",
             "pyrung.any_of",
             "pyrung.immediate",
-            "pyrung.as_value",
-            "pyrung.as_ascii",
-            "pyrung.as_text",
-            "pyrung.as_binary",
+            "pyrung.to_value",
+            "pyrung.to_ascii",
+            "pyrung.to_text",
+            "pyrung.to_binary",
         ),
     ),
     ReferencePage(

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
-    _COPY_MODIFIERS,
+    _COPY_CONVERTERS,
     _FUNC_RE,
     _INSTRUCTION_NAMES,
     _OPERAND_RE,
@@ -298,10 +298,10 @@ def _scan_af_token(
         if tu in clean_args:
             collection.used_time_units.add(tu)
 
-    # Check for copy modifiers
-    for cm in _COPY_MODIFIERS:
-        if cm + "(" in clean_args:
-            collection.used_copy_modifiers.add(cm)
+    # Check for copy converters
+    for cc in _COPY_CONVERTERS:
+        if f"convert={cc}" in clean_args:
+            collection.used_copy_converters.add(cc)
 
     # Scan for operands
     _register_operands_from_text(clean_args, collection, nicknames)

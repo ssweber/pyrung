@@ -97,8 +97,8 @@ _PIN_INSTRUCTIONS = {
     "time_drum",
 }
 
-# Copy modifier functions
-_COPY_MODIFIERS = {"as_value", "as_ascii", "as_text", "as_binary"}
+# Copy converter functions
+_COPY_CONVERTERS = {"to_value", "to_ascii", "to_text", "to_binary"}
 
 # Cell connectivity table — single source of truth for "what connects to what".
 # Content tokens (contacts, comparisons, out() calls) default to ("left", "right").
