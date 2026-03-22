@@ -366,13 +366,13 @@ count_up(CountDone, accumulator=CountAcc, preset=100) \
 
 Both up and down conditions are evaluated every scan; the net delta is applied once.
 
-### Oneshot counting
+### Edge-triggered counting
 
-To count edges instead of scans, use `oneshot=True`:
+To count edges instead of scans, wrap the condition with `rise()`:
 
 ```python
-with Rung(Sensor):
-    count_up(CountDone, CountAcc, preset=9999, oneshot=True).reset(CountReset)
+with Rung(rise(Sensor)):
+    count_up(CountDone, CountAcc, preset=9999).reset(CountReset)
 ```
 
 For chained builders (counters, shift registers, drums), complete the full chain (`.down(...)`, `.clock(...)`, `.reset(...)`) before any later DSL statement.
@@ -385,13 +385,13 @@ Find the first element in a range matching a condition:
 
 ```python
 search(
-    condition=">=",
-    value=100,
-    search_range=DS.select(1, 100),
+    DS.select(1, 100) >= 100,
     result=FoundAddr,
     found=FoundFlag,
 )
 ```
+
+The first argument is a comparison expression built from a `.select()` range — the same operator syntax tags use elsewhere in the DSL.
 
 - On success: `result = matched_address` (1-based), `found = True`
 - On miss: `result = -1`, `found = False`
@@ -401,8 +401,7 @@ search(
 
 ```python
 search(
-    condition=">=", value=100,
-    search_range=DS.select(1, 100),
+    DS.select(1, 100) >= 100,
     result=FoundAddr, found=FoundFlag,
     continuous=True,
 )
@@ -416,9 +415,7 @@ search(
 
 ```python
 search(
-    condition="==",
-    value="AB",                     # Search for substring "AB"
-    search_range=Txt.select(1, 50),
+    Txt.select(1, 50) == "AB",     # Search for substring "AB"
     result=FoundAddr, found=FoundFlag,
 )
 ```
