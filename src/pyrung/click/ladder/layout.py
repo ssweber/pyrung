@@ -24,6 +24,7 @@ class _LayoutMixin:
     """Build 31-column condition matrices and branch wiring rows."""
 
     if TYPE_CHECKING:
+
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
         def _instruction_token(self, instruction: Any, *, path: str) -> str: ...
         def _pin_rows(self, instruction: Any, *, path: str) -> list[tuple[str, ...]]: ...
@@ -107,7 +108,9 @@ class _LayoutMixin:
                     )
                     slots.append(
                         _OutputSlot(
-                            output_token=self._instruction_token(instruction, path=instruction_path),
+                            output_token=self._instruction_token(
+                                instruction, path=instruction_path
+                            ),
                             local_conditions=local_conditions,
                         )
                     )
@@ -881,6 +884,7 @@ def _vertical_marker(*, index: int, total: int) -> str:
     if index < total - 1:
         return "T"
     return "-"
+
 
 def _output_bus_marker(*, index: int, total: int) -> str:
     """Marker for the output-side vertical bus of an OR merge.

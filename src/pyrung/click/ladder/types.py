@@ -110,6 +110,7 @@ def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
     return slug if slug else "subroutine"
 
+
 __all__ = [
     "Issue",
     "LadderBundle",

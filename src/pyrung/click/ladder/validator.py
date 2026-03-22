@@ -21,6 +21,7 @@ class _ValidationMixin:
     _program: Program
 
     if TYPE_CHECKING:
+
         def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn: ...
 
     def _run_precheck(self) -> None:

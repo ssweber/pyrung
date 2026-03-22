@@ -159,7 +159,9 @@ def validate_click_program(
                 _evaluate_write_targets(instruction, base_location, tag_map, active_profile, mode)
             )
             findings.extend(
-                _evaluate_role_assignments(instruction, base_location, tag_map, active_profile, mode)
+                _evaluate_role_assignments(
+                    instruction, base_location, tag_map, active_profile, mode
+                )
             )
             findings.extend(
                 _evaluate_copy_compatibility(
@@ -167,7 +169,9 @@ def validate_click_program(
                 )
             )
             findings.extend(_evaluate_pack_text(instruction, base_location, tag_map, mode))
-            findings.extend(_evaluate_drums(instruction, base_location, tag_map, active_profile, mode))
+            findings.extend(
+                _evaluate_drums(instruction, base_location, tag_map, active_profile, mode)
+            )
 
     errors: list[ClickFinding] = []
     warnings: list[ClickFinding] = []

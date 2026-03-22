@@ -969,7 +969,9 @@ def test_comment_not_emitted_for_empty_branches():
 # --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
 
 
-_NATIVE_OR_TOPOLOGY_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "click_or_topology.csv"
+_NATIVE_OR_TOPOLOGY_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "click_or_topology.csv"
+)
 
 
 @functools.lru_cache(maxsize=1)
