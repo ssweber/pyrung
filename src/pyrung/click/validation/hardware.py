@@ -15,6 +15,7 @@ from .findings import (
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
+    CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     ClickFinding,
@@ -466,5 +467,21 @@ def _evaluate_drums(
                         location=location_text,
                     )
                 )
+
+    jump_step = getattr(instruction, "jump_step", None)
+    if jump_step is not None and not isinstance(jump_step, Tag):
+        location = _instruction_location(base_location, "instruction.jump_step")
+        location_text = _format_location(location)
+        findings.append(
+            ClickFinding(
+                code=CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
+                severity=_route_severity(CLK_DRUM_JUMP_STEP_TAG_REQUIRED, mode),
+                message=(
+                    "drum jump step must be a DS memory address for Click portability "
+                    f"at {location_text}."
+                ),
+                location=location_text,
+            )
+        )
 
     return findings

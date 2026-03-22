@@ -10,6 +10,7 @@ from pyrung.click.validation import (
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
     CLK_COPY_CONVERTER_INCOMPATIBLE,
+    CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
@@ -308,6 +309,7 @@ def test_drum_stage3_valid_mapping_passes_without_role_or_literal_findings():
     codes = _codes(report)
     assert CLK_BANK_WRONG_ROLE not in codes
     assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED not in codes
+    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED not in codes
 
 
 def test_drum_stage3_wrong_role_failures_are_reported():
@@ -396,6 +398,81 @@ def test_time_drum_non_literal_preset_reports_literal_required():
 
     report = validate_click_program(prog, tag_map, mode="warn")
     assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED in _codes(report)
+
+
+def test_event_drum_literal_jump_step_reports_tag_required():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    step = Int("Step")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+    event1 = Bool("Event1")
+
+    def logic():
+        with Rung(enable):
+            event_drum(
+                outputs=[out1],
+                events=[event1],
+                pattern=[[1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset).jump(jump, step=3)
+
+    prog = _build_program(logic)
+    tag_map = TagMap(
+        [
+            enable.map_to(x[1]),
+            reset.map_to(x[2]),
+            jump.map_to(x[3]),
+            out1.map_to(y[1]),
+            event1.map_to(x[4]),
+            step.map_to(ds[1]),
+            done.map_to(c[1]),
+        ],
+        include_system=False,
+    )
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED in _codes(report)
+
+
+def test_time_drum_literal_jump_step_reports_tag_required():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    out1 = Bool("Out1")
+
+    def logic():
+        with Rung(enable):
+            time_drum(
+                outputs=[out1],
+                presets=[100],
+                pattern=[[1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset).jump(jump, step=2)
+
+    prog = _build_program(logic)
+    tag_map = TagMap(
+        [
+            enable.map_to(x[1]),
+            reset.map_to(x[2]),
+            jump.map_to(x[3]),
+            out1.map_to(y[1]),
+            step.map_to(ds[1]),
+            acc.map_to(td[1]),
+            done.map_to(c[1]),
+        ],
+        include_system=False,
+    )
+
+    report = validate_click_program(prog, tag_map, mode="warn")
+    assert CLK_DRUM_JUMP_STEP_TAG_REQUIRED in _codes(report)
 
 
 # ---------------------------------------------------------------------------
