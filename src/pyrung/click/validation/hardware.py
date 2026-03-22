@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.click.capabilities import CONVERTER_COMPATIBILITY
 from pyrung.core.condition import Condition
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation, _condition_children
 
@@ -12,10 +14,12 @@ from .findings import (
     CLK_BANK_NOT_WRITABLE,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     ClickFinding,
     ValidationMode,
+    _build_suggestion,
     _route_severity,
 )
 from .resolve import (
@@ -234,6 +238,49 @@ def _evaluate_copy_compatibility(
                         location=location_text,
                     )
                 )
+
+    # --- Converter / bank compatibility ---
+    converter = getattr(instruction, "convert", None)
+    if isinstance(converter, CopyConverter):
+        compat = CONVERTER_COMPATIBILITY.get(converter.mode)
+        if compat is not None:
+            valid_sources, valid_dests = compat
+            for source_slot in source_resolution.slots:
+                if source_slot.memory_type not in valid_sources:
+                    location_text = _format_location(source_location)
+                    findings.append(
+                        ClickFinding(
+                            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
+                            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
+                            message=(
+                                f"Converter to_{converter.mode} requires source bank in "
+                                f"{sorted(valid_sources)}, got {source_slot.memory_type} "
+                                f"at {location_text}."
+                            ),
+                            location=location_text,
+                            suggestion=_build_suggestion(
+                                CLK_COPY_CONVERTER_INCOMPATIBLE, None, tag_map
+                            ),
+                        )
+                    )
+            for dest_slot in dest_resolution.slots:
+                if dest_slot.memory_type not in valid_dests:
+                    location_text = _format_location(dest_location)
+                    findings.append(
+                        ClickFinding(
+                            code=CLK_COPY_CONVERTER_INCOMPATIBLE,
+                            severity=_route_severity(CLK_COPY_CONVERTER_INCOMPATIBLE, mode),
+                            message=(
+                                f"Converter to_{converter.mode} requires destination bank in "
+                                f"{sorted(valid_dests)}, got {dest_slot.memory_type} "
+                                f"at {location_text}."
+                            ),
+                            location=location_text,
+                            suggestion=_build_suggestion(
+                                CLK_COPY_CONVERTER_INCOMPATIBLE, None, tag_map
+                            ),
+                        )
+                    )
 
     return findings
 

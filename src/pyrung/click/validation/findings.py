@@ -32,6 +32,7 @@ CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
 CLK_BANK_NOT_WRITABLE = "CLK_BANK_NOT_WRITABLE"
 CLK_BANK_WRONG_ROLE = "CLK_BANK_WRONG_ROLE"
 CLK_COPY_BANK_INCOMPATIBLE = "CLK_COPY_BANK_INCOMPATIBLE"
+CLK_COPY_CONVERTER_INCOMPATIBLE = "CLK_COPY_CONVERTER_INCOMPATIBLE"
 CLK_PACK_TEXT_BANK_INCOMPATIBLE = "CLK_PACK_TEXT_BANK_INCOMPATIBLE"
 CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED = "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED"
 CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
@@ -183,6 +184,13 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
             "or convert through an intermediate tag so each calc() stays one family."
         )
 
+    if code == CLK_COPY_CONVERTER_INCOMPATIBLE:
+        return (
+            "Converters require specific bank types: "
+            "to_text/to_binary need a numeric source and TXT destination; "
+            "to_value/to_ascii need a TXT source and numeric destination."
+        )
+
     if code == CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED:
         return "Use immediate(...) only in rung contacts and out()/latch()/reset() coil targets."
 
@@ -216,6 +224,7 @@ __all__ = [
     "CLK_BANK_NOT_WRITABLE",
     "CLK_BANK_WRONG_ROLE",
     "CLK_COPY_BANK_INCOMPATIBLE",
+    "CLK_COPY_CONVERTER_INCOMPATIBLE",
     "CLK_PACK_TEXT_BANK_INCOMPATIBLE",
     "CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED",
     "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED",

@@ -9,16 +9,18 @@ from pyrung.click.validation import (
     CLK_BANK_UNRESOLVED,
     CLK_BANK_WRONG_ROLE,
     CLK_COPY_BANK_INCOMPATIBLE,
+    CLK_COPY_CONVERTER_INCOMPATIBLE,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
-from pyrung.core import Bool, Dint, Int, to_value
+from pyrung.core import Bool, Char, Dint, Int, to_ascii, to_binary, to_text, to_value
 from pyrung.core.program import (
     Program,
     Rung,
+    blockcopy,
     copy,
     event_drum,
     forloop,
@@ -394,3 +396,215 @@ def test_time_drum_non_literal_preset_reports_literal_required():
 
     report = validate_click_program(prog, tag_map, mode="warn")
     assert CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED in _codes(report)
+
+
+# ---------------------------------------------------------------------------
+# Converter / bank compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestConverterBankCompatibility:
+    """Converter mode must match source/dest bank data types."""
+
+    def test_to_text_valid_numeric_source_txt_dest(self):
+        source = Int("Source")
+        dest = Char("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_text())
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(txt[1])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_to_text_rejects_txt_source(self):
+        source = Char("Source")
+        dest = Char("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_text())
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_to_text_rejects_numeric_dest(self):
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_text())
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_to_binary_valid(self):
+        source = Int("Source")
+        dest = Char("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_binary)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(txt[1])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_to_binary_rejects_txt_source(self):
+        source = Char("Source")
+        dest = Char("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_binary)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_to_value_valid_txt_source_numeric_dest(self):
+        source = Char("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(ds[1])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_to_value_rejects_numeric_source(self):
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_to_value_rejects_txt_dest(self):
+        source = Char("Source")
+        dest = Char("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(txt[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_to_ascii_valid(self):
+        source = Char("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_ascii)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(txt[1]), dest.map_to(ds[1])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_to_ascii_rejects_numeric_source(self):
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_ascii)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_copy_without_converter_no_converter_finding(self):
+        """Plain copy (no convert=) should not emit converter findings."""
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_blockcopy_to_value_valid(self):
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                blockcopy(txt.select(1, 3), dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[1])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE not in _codes(report)
+
+    def test_blockcopy_to_value_rejects_numeric_source(self):
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                blockcopy(ds.select(1, 3), dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([dest.map_to(ds[10])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_COPY_CONVERTER_INCOMPATIBLE in _codes(report)
+
+    def test_converter_finding_includes_suggestion(self):
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="warn")
+        converter_findings = [
+            f
+            for f in (*report.errors, *report.warnings, *report.hints)
+            if f.code == CLK_COPY_CONVERTER_INCOMPATIBLE
+        ]
+        assert converter_findings
+        assert all(f.suggestion for f in converter_findings)
+
+    def test_strict_mode_emits_error(self):
+        source = Int("Source")
+        dest = Int("Dest")
+
+        def logic():
+            with Rung():
+                copy(source, dest, convert=to_value)
+
+        prog = _build_program(logic)
+        tag_map = TagMap([source.map_to(ds[1]), dest.map_to(ds[2])], include_system=False)
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(
+            f.code == CLK_COPY_CONVERTER_INCOMPATIBLE and f.severity == "error"
+            for f in report.errors
+        )
