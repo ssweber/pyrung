@@ -252,13 +252,3 @@ runner.monitor(Motor, lambda curr, prev: print(f"{prev} → {curr}"))
 ```
 
 See [Testing — Monitoring changes](testing.md#monitoring-changes) and [Testing — Predicate breakpoints](testing.md#predicate-breakpoints-and-snapshots) for usage patterns.
-
-## Numeric behavior
-
-| Operation | Out-of-range behavior |
-|-----------|----------------------|
-| `copy()` | Clamps to destination min/max |
-| `calc()` | Wraps (modular arithmetic) |
-| Timer accumulator | Clamps at 32,767 |
-| Counter accumulator | Clamps at DINT min/max |
-| Division by zero | Result = 0, fault flag set |
