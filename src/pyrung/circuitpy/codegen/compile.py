@@ -30,7 +30,7 @@ from pyrung.circuitpy.codegen.context import (
     ModbusClientJobSpec,
     ModbusClientSymbolSpec,
 )
-from pyrung.click.send_receive import (
+from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )

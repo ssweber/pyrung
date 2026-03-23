@@ -33,6 +33,13 @@ from .resolvers import (
     resolve_tag_name_ctx,
     resolve_tag_or_value_ctx,
 )
+from .send_receive import (
+    ModbusReceiveInstruction,
+    ModbusSendInstruction,
+    ModbusTarget,
+    receive,
+    send,
+)
 from .timers import OffDelayInstruction, OnDelayInstruction
 
 __all__ = [
@@ -74,4 +81,10 @@ __all__ = [
     "TimeDrumInstruction",
     "UnpackToBitsInstruction",
     "UnpackToWordsInstruction",
+    # Send/receive
+    "ModbusReceiveInstruction",
+    "ModbusSendInstruction",
+    "ModbusTarget",
+    "receive",
+    "send",
 ]

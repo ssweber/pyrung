@@ -187,7 +187,7 @@ from pyrung.click.codegen import csv_to_pyrung
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.click.send_receive import (
+from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
     ModbusTarget,

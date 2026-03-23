@@ -20,15 +20,13 @@ from pyclickplc.addresses import format_address_display, parse_address
 from pyclickplc.banks import BANKS
 
 from pyrung.core._source import _capture_source
-from pyrung.core.instruction import (
-    Instruction,
-    resolve_block_range_tags_ctx,
-    resolve_tag_ctx,
-)
-from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program.context import _require_rung_context
 from pyrung.core.tag import Tag, TagType
+
+from .base import Instruction
+from .conversions import _store_copy_value_to_tag_type
+from .resolvers import resolve_block_range_tags_ctx, resolve_tag_ctx
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext

@@ -79,6 +79,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
+from pyrung.core.instruction.send_receive import ModbusTarget, receive, send
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
 from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
@@ -185,6 +186,9 @@ __all__ = [
     "on_delay",
     "off_delay",
     "time_drum",
+    "send",
+    "receive",
+    "ModbusTarget",
     # Conditions
     "rise",
     "fall",

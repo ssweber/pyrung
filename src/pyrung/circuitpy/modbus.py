@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pyrung.click.send_receive import ModbusTarget
+from pyrung.core.instruction.send_receive import ModbusTarget
 
 
 @dataclass(frozen=True)
