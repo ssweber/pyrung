@@ -43,7 +43,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Installation](getting-started/installation.md) — `pip install pyrung`
 - [Quickstart](getting-started/quickstart.md) — up and running in 5 minutes
 - [Core Concepts](getting-started/concepts.md) — how the scan cycle and state model work
-- [Writing Ladder Logic](guides/ladder-logic.md) — the full DSL reference
+- [Instruction Reference](instructions/conditions.md) — the full DSL reference
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation

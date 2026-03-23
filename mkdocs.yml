@@ -18,8 +18,17 @@ nav:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
       - Core Concepts: getting-started/concepts.md
+  - Instruction Reference:
+      - Rungs: instructions/rungs.md
+      - Conditions: instructions/conditions.md
+      - Coils: instructions/coils.md
+      - Timers & Counters: instructions/timers-counters.md
+      - Copy: instructions/copy.md
+      - Math: instructions/math.md
+      - Drum, Shift & Search: instructions/drum-shift-search.md
+      - Program Control: instructions/program-control.md
+      - Communication: instructions/communication.md
   - Guides:
-      - Ladder Logic Reference: guides/ladder-logic.md
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md
@@ -62,6 +71,8 @@ plugins:
           - index.md
         Getting Started:
           - getting-started/*.md
+        Instruction Reference:
+          - instructions/*.md
         Guides:
           - guides/*.md
         Dialects:

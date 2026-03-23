@@ -18,7 +18,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 - `docs/index.md` — Project entry point, philosophy, feature overview
 - `docs/getting-started/` — Installation, core concepts (Redux model, SystemState, scan cycle), quickstart tutorial
-- `docs/guides/ladder-logic.md` — Full DSL reference (conditions, instructions, timers, counters, branching, subroutines)
+- `docs/instructions/` — Full DSL reference split by instruction group (rungs, conditions, coils, timers, counters, copy, math, drums, program control, communication)
 - `docs/guides/runner.md` — Execution engine (time modes, history, seek/rewind, fork, rung inspection)
 - `docs/guides/testing.md` — Unit testing patterns with FIXED_STEP, forces as fixtures, pytest usage
 - `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork

@@ -1,7 +1,7 @@
 ﻿# Core Debug - Specification
 
 > **Status:** Draft specification (milestone 11 scope)
-> **Depends on:** `docs/getting-started/concepts.md`, `docs/guides/ladder-logic.md`
+> **Depends on:** `docs/getting-started/concepts.md`, `docs/instructions/`
 
 ---
 

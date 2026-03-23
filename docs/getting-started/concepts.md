@@ -97,7 +97,7 @@ count_up(Done, Acc, preset=100)              # Counter: increment on rising edge
 
 `out` vs `latch`: `out` follows the rung — true when the rung is true, false when it's false. `latch` is sticky — once set, it stays set until explicitly `reset`.
 
-The full instruction set (branching, subroutines, shift registers, edge detection, and more) is in the [Ladder Logic Guide](../guides/ladder-logic.md).
+The full instruction set (branching, subroutines, shift registers, edge detection, and more) is in the [Instruction Reference](../instructions/conditions.md).
 
 ## Timers and counters
 
@@ -119,6 +119,41 @@ Counters increment once per scan while enabled. To count only on the rising edge
 with Rung(Sensor):
     count_up(CountDone, CountAcc, preset=9999, oneshot=True).reset(CountReset)
 ```
+
+## Instruction pins
+
+Some instructions have extra condition inputs beyond the rung — like the `.reset()` on the counter example above. These are pins on the instruction block.
+
+```
+                    ┌─────────────────┐
+ Sensor ───────────▶│   count_up       │
+                    │                  │──▶ Done
+ Reverse ──.down()─▶│  preset: 100     │──▶ Acc
+ Home, Auto .reset()▶│                  │
+                    └─────────────────┘
+```
+
+The rung condition powers the instruction (top wire). Other pins are wired with dot-methods: `.down()`, `.reset()`, `.clock()`. Multiple conditions on one pin AND together — `Home, Auto` on `.reset()` means both must be True.
+
+```
+                       ┌─────────────────┐
+ State == "g" ────────▶│   on_delay       │
+                       │                  │──▶ Done
+                       │  preset: 3000    │──▶ Acc
+ StopBtn, Fault .reset()▶│  unit: Tms       │
+                       └─────────────────┘
+```
+
+Each pin gets its own line with `\` continuation:
+
+```python
+with Rung(Sensor):
+    count_up(Done, Acc, preset=100) \
+        .down(Reverse) \
+        .reset(Home, Auto)
+```
+
+Reads directly off the diagram — the pin name in the ASCII maps to the dot-method in the Python.
 
 ## Programs
 
@@ -228,6 +263,6 @@ runner.remove_force("Button")
 ## Next steps
 
 - [Quickstart](quickstart.md) — build and test a traffic light
-- [Ladder Logic Guide](../guides/ladder-logic.md) — full instruction reference
+- [Instruction Reference](../instructions/conditions.md) — full instruction reference
 - [Testing Guide](../guides/testing.md) — patterns for deterministic testing
 - [Architecture](../guides/architecture.md) — engine internals, scan phases, SystemState

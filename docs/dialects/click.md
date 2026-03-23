@@ -325,7 +325,7 @@ mapping = TagMap([
 
 Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`.
 
-For details on `@named_array` and `@udt` syntax, see the [ladder logic guide](../guides/ladder-logic.md).
+For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md).
 
 ### Subroutines
 
