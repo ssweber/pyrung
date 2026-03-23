@@ -111,7 +111,9 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
+    ModbusRtuTarget,
     ModbusSendInstruction,
+    RegisterType,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -387,11 +389,68 @@ def _modbus_client_spec_for_instruction(
         raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
 
     if instr.bank is None:
-        raise ValueError(
-            f"{type(instr).__name__} with raw ModbusAddress is not yet supported "
-            "for CircuitPython code generation"
+        # Raw ModbusAddress path (TCP only).
+        if isinstance(instr.raw_target, ModbusRtuTarget):
+            raise ValueError(
+                "ModbusRtuTarget is not yet supported for CircuitPython code generation"
+            )
+        assert instr.remote_address is not None
+        ra = instr.remote_address
+        is_coil = ra.register_type in (RegisterType.COIL, RegisterType.DISCRETE_INPUT)
+        modbus_start = ra.address
+        modbus_quantity = instr.register_count
+        item_tags = _modbus_client_operand_tags(
+            instr.source if isinstance(instr, ModbusSendInstruction) else instr.dest
         )
+        item_specs = tuple(_modbus_client_symbol_spec(tag, ctx) for tag in item_tags)
+        if isinstance(instr, ModbusSendInstruction):
+            function_code = (
+                5
+                if is_coil and modbus_quantity == 1
+                else 15
+                if is_coil
+                else 6
+                if modbus_quantity == 1
+                else 16
+            )
+            busy_tag = instr.sending
+        else:
+            function_code = (
+                2
+                if ra.register_type == RegisterType.DISCRETE_INPUT
+                else 1
+                if is_coil
+                else 4
+                if ra.register_type == RegisterType.INPUT
+                else 3
+            )
+            busy_tag = instr.receiving
+            ctx.mark_helper("_store_copy_value_to_type")
 
+        state_key = ctx.state_key_for(instr)
+        spec = ModbusClientJobSpec(
+            var_name=f"_mb_client_{state_key}",
+            kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
+            target_name=instr.target_name,
+            bank=None,
+            plc_start=modbus_start,
+            modbus_start=modbus_start,
+            modbus_quantity=modbus_quantity,
+            function_code=function_code,
+            item_count=len(item_specs),
+            items=item_specs,
+            is_coil=is_coil,
+            word_order=ra.word_order.value,
+            busy=_modbus_client_symbol_spec(busy_tag, ctx),
+            success=_modbus_client_symbol_spec(instr.success, ctx),
+            error=_modbus_client_symbol_spec(instr.error, ctx),
+            exception_response=_modbus_client_symbol_spec(instr.exception_response, ctx),
+        )
+        ctx.modbus_client_specs_by_instruction[id(instr)] = spec
+        ctx.modbus_client_specs.append(spec)
+        return spec
+
+    # Click bank-addressed path.
     mapping = MODBUS_MAPPINGS[instr.bank]
     modbus_start, _ = plc_to_modbus(instr.bank, instr.addresses[0])
     modbus_last, modbus_last_width = plc_to_modbus(instr.bank, instr.addresses[-1])
@@ -436,6 +495,7 @@ def _modbus_client_spec_for_instruction(
         function_code=function_code,
         item_count=len(item_specs),
         items=item_specs,
+        is_coil=mapping.is_coil,
         busy=_modbus_client_symbol_spec(busy_tag, ctx),
         success=_modbus_client_symbol_spec(instr.success, ctx),
         error=_modbus_client_symbol_spec(instr.error, ctx),

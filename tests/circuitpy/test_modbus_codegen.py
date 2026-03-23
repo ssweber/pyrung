@@ -31,6 +31,12 @@ from pyrung.click import (
     x,
     y,
 )
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusRtuTarget,
+    RegisterType,
+    WordOrder,
+)
 from tests.circuitpy.test_codegen import _run_single_scan_source
 
 
@@ -1248,3 +1254,570 @@ def test_codegen_client_send_first_and_last_of_every_bank(monkeypatch):
         ns["service_modbus_client"]()  # receive
 
         assert ns["_t_Success"] is True, f"{label} success"
+
+
+# ---------------------------------------------------------------------------
+# Raw ModbusAddress codegen tests
+# ---------------------------------------------------------------------------
+
+_RAW_TARGET = ModbusTcpTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17)
+
+
+def _raw_client_source(program: Program) -> str:
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    return generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=10.0,
+        modbus_client=ModbusClientConfig(targets=(_RAW_TARGET,)),
+        tag_map=TagMap(),
+    )
+
+
+def _run_raw_client_job(monkeypatch, prog):
+    """Run a raw-address client program.  Returns (namespace, sockets)."""
+    sockets: list[object] = []
+
+    class _Sock:
+        def __init__(self, *args, **kwargs):
+            self.sent_packets: list[bytes] = []
+            self.recv_chunks: list[bytes] = []
+            sockets.append(self)
+
+        def settimeout(self, timeout):
+            return None
+
+        def connect(self, address):
+            return None
+
+        def send(self, payload):
+            data = bytes(payload)
+            self.sent_packets.append(data)
+            return len(data)
+
+        def recv_into(self, buf):
+            if not self.recv_chunks:
+                return 0
+            chunk = self.recv_chunks.pop(0)
+            buf[: len(chunk)] = chunk
+            return len(chunk)
+
+        def close(self):
+            return None
+
+    class _Stub:
+        def rollCall(self, modules):
+            return None
+
+        def readDiscrete(self, slot):
+            return 0
+
+        def writeDiscrete(self, value, slot):
+            return None
+
+        def readAnalog(self, slot, ch):
+            return 0
+
+        def writeAnalog(self, value, slot, ch):
+            return None
+
+        def readTemperature(self, slot, ch):
+            return 0.0
+
+    ns = _run_single_scan_source(
+        _raw_client_source(prog),
+        monkeypatch,
+        _Stub(),
+        socket_factory=lambda *a, **kw: _Sock(*a, **kw),
+    )
+    return ns, sockets
+
+
+def test_raw_send_int_single_register(monkeypatch):
+    """Raw send of a single INT → FC 6 (write single register)."""
+    enable = Bool("Enable", default=True)
+    source = Int("Source", default=123)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    expected_pdu = struct.pack(">BHH", 6, 0x100, 123)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+    # Complete the state machine
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, expected_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+    assert ns["_t_Success"] is True
+    assert ns["_t_Sending"] is False
+
+
+def test_raw_send_dint_high_low(monkeypatch):
+    """Raw send DINT with HIGH_LOW word order → FC 16, big-endian word pair."""
+    enable = Bool("Enable", default=True)
+    source = Dint("Source", default=100000)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x200, word_order=WordOrder.HIGH_LOW),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    hi, lo = struct.unpack(">HH", struct.pack(">i", 100000))
+    expected_pdu = struct.pack(">BHHB", 16, 0x200, 2, 4) + struct.pack(">HH", hi, lo)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+
+def test_raw_send_dint_low_high(monkeypatch):
+    """Raw send DINT with LOW_HIGH word order → FC 16, little-endian word pair."""
+    enable = Bool("Enable", default=True)
+    source = Dint("Source", default=100000)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x200, word_order=WordOrder.LOW_HIGH),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    lo, hi = struct.unpack("<HH", struct.pack("<i", 100000))
+    expected_pdu = struct.pack(">BHHB", 16, 0x200, 2, 4) + struct.pack(">HH", lo, hi)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+
+def test_raw_send_real_high_low(monkeypatch):
+    """Raw send REAL with HIGH_LOW word order."""
+    enable = Bool("Enable", default=True)
+    source = Real("Source", default=3.14)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x300, word_order=WordOrder.HIGH_LOW),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    hi, lo = struct.unpack(">HH", struct.pack(">f", 3.14))
+    expected_pdu = struct.pack(">BHHB", 16, 0x300, 2, 4) + struct.pack(">HH", hi, lo)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+
+def test_raw_send_coil_single(monkeypatch):
+    """Raw send single coil → FC 5."""
+    enable = Bool("Enable", default=True)
+    source = Bool("Source", default=True)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x10, RegisterType.COIL),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    expected_pdu = struct.pack(">BHH", 5, 0x10, 0xFF00)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+
+def test_raw_receive_int_holding(monkeypatch):
+    """Raw receive INT from HOLDING register → FC 3."""
+    enable = Bool("Enable", default=True)
+    dest = Int("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    assert job["request"] == _mbap(1, struct.pack(">BHH", 3, 0x100, 1), uid=17)
+
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBH", 3, 2, 456), uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] == 456
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_dint_high_low(monkeypatch):
+    """Raw receive DINT with HIGH_LOW word order from HOLDING → FC 3."""
+    enable = Bool("Enable", default=True)
+    dest = Dint("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    assert job["request"] == _mbap(1, struct.pack(">BHH", 3, 0x200, 2), uid=17)
+
+    hi, lo = struct.unpack(">HH", struct.pack(">i", 100000))
+    response_pdu = struct.pack(">BB", 3, 4) + struct.pack(">HH", hi, lo)
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, response_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] == 100000
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_dint_low_high(monkeypatch):
+    """Raw receive DINT with LOW_HIGH word order."""
+    enable = Bool("Enable", default=True)
+    dest = Dint("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.LOW_HIGH),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+
+    lo, hi = struct.unpack("<HH", struct.pack("<i", -200000))
+    response_pdu = struct.pack(">BB", 3, 4) + struct.pack(">HH", lo, hi)
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, response_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] == -200000
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_real_high_low(monkeypatch):
+    """Raw receive REAL with HIGH_LOW word order."""
+    enable = Bool("Enable", default=True)
+    dest = Real("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x300, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+
+    hi, lo = struct.unpack(">HH", struct.pack(">f", 3.14))
+    response_pdu = struct.pack(">BB", 3, 4) + struct.pack(">HH", hi, lo)
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, response_pdu, uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    expected = struct.unpack(">f", struct.pack(">f", 3.14))[0]
+    assert abs(ns["_t_Dest"] - expected) < 1e-6
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_input_register(monkeypatch):
+    """Raw receive from INPUT register → FC 4."""
+    enable = Bool("Enable", default=True)
+    dest = Int("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x50, RegisterType.INPUT),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    # FC 4 = read input registers
+    assert job["request"] == _mbap(1, struct.pack(">BHH", 4, 0x50, 1), uid=17)
+
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBH", 4, 2, 789), uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] == 789
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_discrete_input(monkeypatch):
+    """Raw receive from DISCRETE_INPUT → FC 2."""
+    enable = Bool("Enable", default=True)
+    dest = Bool("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x20, RegisterType.DISCRETE_INPUT),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    # FC 2 = read discrete inputs
+    assert job["request"] == _mbap(1, struct.pack(">BHH", 2, 0x20, 1), uid=17)
+
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBB", 2, 1, 0x01), uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] is True
+    assert ns["_t_Success"] is True
+
+
+def test_raw_receive_coil(monkeypatch):
+    """Raw receive from COIL → FC 1."""
+    enable = Bool("Enable", default=True)
+    dest = Bool("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x30, RegisterType.COIL),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    # FC 1 = read coils
+    assert job["request"] == _mbap(1, struct.pack(">BHH", 1, 0x30, 1), uid=17)
+
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBB", 1, 1, 0x01), uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] is True
+    assert ns["_t_Success"] is True
+
+
+def test_raw_rtu_target_rejected():
+    """ModbusRtuTarget must raise ValueError for CircuitPython codegen."""
+    import pytest
+
+    enable = Bool("Enable", default=True)
+    source = Int("Source", default=1)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    rtu_target = ModbusRtuTarget(name="meter", serial_port="/dev/ttyUSB0")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=rtu_target,
+                remote_start=ModbusAddress(0x100),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    with pytest.raises(ValueError, match="ModbusRtuTarget is not yet supported"):
+        generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_client=ModbusClientConfig(
+                targets=(ModbusTcpTarget(name="meter", ip="192.168.1.99"),)
+            ),
+            tag_map=TagMap(),
+        )
+
+
+def test_raw_send_signed_int_negative(monkeypatch):
+    """Raw send negative INT — verify signed-to-unsigned conversion."""
+    enable = Bool("Enable", default=True)
+    source = Int("Source", default=-456)
+    sending = Bool("Sending")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            send(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100),
+                source=source,
+                sending=sending,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    job = next(v for k, v in ns.items() if k.startswith("_mb_client_i") and isinstance(v, dict))
+    raw = struct.unpack("<H", struct.pack("<h", -456))[0]
+    expected_pdu = struct.pack(">BHH", 6, 0x100, raw)
+    assert job["request"] == _mbap(1, expected_pdu, uid=17)
+
+
+def test_raw_receive_signed_int_negative(monkeypatch):
+    """Raw receive negative INT — verify unsigned-to-signed conversion."""
+    enable = Bool("Enable", default=True)
+    dest = Int("Dest")
+    receiving = Bool("Receiving")
+    success = Bool("Success")
+    error = Bool("Error")
+    ex_code = Int("ExCode")
+
+    with Program(strict=False) as prog:
+        with Rung(enable):
+            receive(
+                target=_RAW_TARGET,
+                remote_start=ModbusAddress(0x100, RegisterType.HOLDING),
+                dest=dest,
+                receiving=receiving,
+                success=success,
+                error=error,
+                exception_response=ex_code,
+            )
+
+    ns, sockets = _run_raw_client_job(monkeypatch, prog)
+    raw = struct.unpack("<H", struct.pack("<h", -456))[0]
+    ns["service_modbus_client"]()  # connect
+    ns["service_modbus_client"]()  # send
+    sockets[-1].recv_chunks.append(_mbap(1, struct.pack(">BBH", 3, 2, raw), uid=17))
+    ns["service_modbus_client"]()  # receive
+
+    assert ns["_t_Dest"] == -456
+    assert ns["_t_Success"] is True

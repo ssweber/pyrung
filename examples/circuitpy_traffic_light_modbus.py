@@ -5,6 +5,9 @@ Generates CircuitPython for a P1AM-200 intersection controller:
 - Slot 2: P1-08TRS  (relay outputs — red, yellow, green lights)
 - Modbus TCP server  — SCADA/HMI reads current light state and timer values
 - Modbus TCP client  — reads walk-request bit from a remote pedestrian panel PLC
+
+The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Click
+bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
 from pyrung import Bool, Char, Int, Program, Rung, Tms, copy, on_delay, out, rise
@@ -15,6 +18,7 @@ from pyrung.circuitpy import (
     generate_circuitpy,
 )
 from pyrung.click import ModbusTcpTarget, TagMap, c, ds, t, td, txt, receive, send
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
 # ── Hardware ──────────────────────────────────────────────────────────────
 hw = P1AM()
@@ -81,10 +85,12 @@ with Program() as logic:
         out(YellowLight)
 
     # --- Modbus client: read walk request from remote panel ---
+    # Uses a raw Modbus address (coil 0) instead of Click "C1".
+    # This talks to any Modbus device, not just a Click PLC.
     with Rung():
         receive(
             target="ped_panel",
-            remote_start="C1",
+            remote_start=ModbusAddress(0, RegisterType.COIL),
             dest=WalkRequest,
             receiving=RxBusy,
             success=RxOk,

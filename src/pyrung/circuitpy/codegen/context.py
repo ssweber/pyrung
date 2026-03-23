@@ -83,7 +83,7 @@ class ModbusClientJobSpec:
     var_name: str
     kind: str
     target_name: str
-    bank: str
+    bank: str | None
     plc_start: int
     modbus_start: int
     modbus_quantity: int
@@ -94,6 +94,8 @@ class ModbusClientJobSpec:
     success: ModbusClientSymbolSpec
     error: ModbusClientSymbolSpec
     exception_response: ModbusClientSymbolSpec
+    is_coil: bool = False
+    word_order: str | None = None
 
 
 @dataclass

@@ -111,6 +111,62 @@ source = generate_circuitpy(
 
 `send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTcpTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
 
+### Raw Modbus addresses
+
+When the remote device isn't a Click PLC, use `ModbusAddress` instead of a Click address string. This gives direct control over the register address, register type, and word order.
+
+```python
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, WordOrder
+
+vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
+
+with Program() as logic:
+    # Read a 32-bit speed value from holding registers 0x200–0x201, high word first
+    with Rung(Enable):
+        receive(
+            target="vfd",
+            remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+            dest=Speed,
+            receiving=CommReceiving,
+            success=CommSuccess,
+            error=CommError,
+            exception_response=CommEx,
+        )
+
+    # Write a setpoint to a single holding register at 0x100
+    with Rung(Enable):
+        send(
+            target="vfd",
+            remote_start=ModbusAddress(0x100),
+            source=Setpoint,
+            sending=CommSending,
+            success=CommSuccess,
+            error=CommError,
+            exception_response=CommEx,
+        )
+```
+
+`ModbusAddress` fields:
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `address` | `int` | — | Modbus register/coil address (0–0xFFFE) |
+| `register_type` | `RegisterType` | `HOLDING` | `HOLDING`, `INPUT`, `COIL`, or `DISCRETE_INPUT` |
+| `word_order` | `WordOrder` | `HIGH_LOW` | Word ordering for 32-bit types (DINT, REAL) |
+
+The codegen maps `register_type` to the correct Modbus function code:
+
+| Type | Send | Receive |
+|------|------|---------|
+| `HOLDING` | FC 6 (single) / FC 16 (multiple) | FC 3 |
+| `INPUT` | — | FC 4 |
+| `COIL` | FC 5 (single) / FC 15 (multiple) | FC 1 |
+| `DISCRETE_INPUT` | — | FC 2 |
+
+`word_order` controls how DINT and REAL values are split across register pairs. `HIGH_LOW` puts the high word at the lower address (big-endian, common in VFDs and power meters). `LOW_HIGH` matches Click PLC native ordering.
+
+RTU (serial) targets are not yet supported for CircuitPython code generation.
+
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `name` | `str` | — | Unique identifier, referenced by `target=` in send/receive |
