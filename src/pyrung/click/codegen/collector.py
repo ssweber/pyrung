@@ -275,7 +275,7 @@ def _scan_af_token(
 
     if func_name in {"send", "receive"}:
         # Check for ModbusTarget
-        if "ModbusTarget(" in args_str:
+        if "ModbusTcpTarget(" in args_str:
             collection.has_modbus_target = True
 
     if func_name == "call":

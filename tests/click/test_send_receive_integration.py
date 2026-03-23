@@ -13,7 +13,7 @@ from pyclickplc.server import ClickServer
 
 from pyrung.click import (
     ClickDataProvider,
-    ModbusTarget,
+    ModbusTcpTarget,
     TagMap,
     c,
     dd,
@@ -133,7 +133,7 @@ def _build_node_a(port_b: int) -> _NodeConfig:
         "recv_int": _status("A_RecvInt", busy_kind="Receiving"),
     }
 
-    node_b = ModbusTarget("node_b", "127.0.0.1", port=port_b)
+    node_b = ModbusTcpTarget("node_b", "127.0.0.1", port=port_b)
 
     with Program() as logic:
         with Rung(enable):
@@ -273,7 +273,7 @@ def _build_node_b(port_a: int) -> _NodeConfig:
         "send_int": _status("B_SendInt", busy_kind="Sending"),
     }
 
-    node_a = ModbusTarget("node_a", "127.0.0.1", port=port_a)
+    node_a = ModbusTcpTarget("node_a", "127.0.0.1", port=port_a)
 
     with Program() as logic:
         with Rung(enable):
@@ -409,7 +409,7 @@ def _build_outage_node_a(port_b: int) -> _OutageNodeAConfig:
     send_value = 314
     recv_sentinel = -999
 
-    target_b = ModbusTarget("node_b", "127.0.0.1", port=port_b)
+    target_b = ModbusTcpTarget("node_b", "127.0.0.1", port=port_b)
 
     with Program() as logic:
         with Rung(enable):

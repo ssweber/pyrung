@@ -16,7 +16,7 @@ from pyrung.circuitpy import (
     generate_circuitpy,
 )
 from pyrung.click import (
-    ModbusTarget,
+    ModbusTcpTarget,
     TagMap,
     c,
     ctd,
@@ -59,7 +59,7 @@ def _client_source(program: Program, mapping: TagMap | None = None) -> str:
         hw,
         target_scan_ms=10.0,
         modbus_client=ModbusClientConfig(
-            targets=(ModbusTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17),)
+            targets=(ModbusTcpTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17),)
         ),
         tag_map=TagMap() if mapping is None else mapping,
     )

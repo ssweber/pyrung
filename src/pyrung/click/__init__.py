@@ -187,17 +187,21 @@ from pyrung.click.codegen import csv_to_pyrung
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.core.instruction.send_receive import (
-    ModbusReceiveInstruction,
-    ModbusSendInstruction,
-    ModbusTarget,
-    receive,
-    send,
-)
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
     ValidationMode,
     validate_click_program,
+)
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusReceiveInstruction,
+    ModbusRtuTarget,
+    ModbusSendInstruction,
+    ModbusTcpTarget,
+    RegisterType,
+    WordOrder,
+    receive,
+    send,
 )
 
 
@@ -244,9 +248,13 @@ __all__ = [
     "LadderExportError",
     "ClickDataProvider",
     "validate_click_program",
+    "ModbusAddress",
     "ModbusReceiveInstruction",
+    "ModbusRtuTarget",
     "ModbusSendInstruction",
-    "ModbusTarget",
+    "ModbusTcpTarget",
+    "RegisterType",
+    "WordOrder",
     "send",
     "receive",
     "RawInstruction",

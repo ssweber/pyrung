@@ -173,7 +173,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     for bv in sorted(collection.used_blocks):
         click_imports.append(bv)
     if collection.has_modbus_target:
-        click_imports.append("ModbusTarget")
+        click_imports.append("ModbusTcpTarget")
     if collection.has_subroutine:
         # send/receive are imported from click
         pass

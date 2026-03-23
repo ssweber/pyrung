@@ -61,7 +61,7 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 ```python
 from pyrung import Bool, Int, Block, Program, Rung, TagType
 from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
-from pyrung.click import ModbusTarget, TagMap, send, receive
+from pyrung.click import ModbusTcpTarget, TagMap, send, receive
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")
@@ -103,13 +103,13 @@ source = generate_circuitpy(
     logic, hw,
     target_scan_ms=10.0,
     modbus_client=ModbusClientConfig(
-        targets=(ModbusTarget(name="plc1", ip="192.168.1.20"),)
+        targets=(ModbusTcpTarget(name="plc1", ip="192.168.1.20"),)
     ),
     tag_map=TagMap(),
 )
 ```
 
-`send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
+`send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTcpTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -155,7 +155,7 @@ source = generate_circuitpy(
     target_scan_ms=10.0,
     modbus_server=ModbusServerConfig(ip="192.168.1.200"),
     modbus_client=ModbusClientConfig(
-        targets=(ModbusTarget(name="plc1", ip="192.168.1.20"),)
+        targets=(ModbusTcpTarget(name="plc1", ip="192.168.1.20"),)
     ),
     tag_map=mapping,
 )

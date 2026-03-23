@@ -29,6 +29,15 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusRtuTarget,
+    ModbusTcpTarget,
+    RegisterType,
+    WordOrder,
+    receive,
+    send,
+)
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -79,7 +88,6 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.instruction.send_receive import ModbusTarget, receive, send
 from pyrung.core.runner import PLCRunner
 from pyrung.core.state import SystemState
 from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
@@ -188,7 +196,11 @@ __all__ = [
     "time_drum",
     "send",
     "receive",
-    "ModbusTarget",
+    "ModbusAddress",
+    "ModbusRtuTarget",
+    "ModbusTcpTarget",
+    "RegisterType",
+    "WordOrder",
     # Conditions
     "rise",
     "fall",

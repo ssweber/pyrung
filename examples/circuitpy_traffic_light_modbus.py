@@ -14,7 +14,7 @@ from pyrung.circuitpy import (
     P1AM,
     generate_circuitpy,
 )
-from pyrung.click import ModbusTarget, TagMap, c, ds, t, td, txt, receive, send
+from pyrung.click import ModbusTcpTarget, TagMap, c, ds, t, td, txt, receive, send
 
 # ── Hardware ──────────────────────────────────────────────────────────────
 hw = P1AM()
@@ -114,7 +114,7 @@ mapping = TagMap({
 # ── Modbus configs ────────────────────────────────────────────────────────
 server_cfg = ModbusServerConfig(ip="192.168.1.200")
 
-ped_panel = ModbusTarget(name="ped_panel", ip="192.168.1.50", port=502, device_id=1)
+ped_panel = ModbusTcpTarget(name="ped_panel", ip="192.168.1.50", port=502, device_id=1)
 client_cfg = ModbusClientConfig(targets=(ped_panel,))
 
 # ── Generate ──────────────────────────────────────────────────────────────

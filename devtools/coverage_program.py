@@ -63,7 +63,7 @@ from pyrung import (
     unpack_to_words,
 )
 from pyrung.click import (
-    ModbusTarget,
+    ModbusTcpTarget,
     TagMap,
     c,
     ct,
@@ -611,7 +611,7 @@ with Program(strict=False) as coverage_program:
     with Rung(trigger) as r:
         r.comment = "send__basic"
         send(
-            target=ModbusTarget(name="plc2", ip="192.168.1.10"),
+            target=ModbusTcpTarget(name="plc2", ip="192.168.1.10"),
             remote_start="DS1",
             source=src.select(1, 4),
             sending=sending,
@@ -626,7 +626,7 @@ with Program(strict=False) as coverage_program:
     with Rung(trigger) as r:
         r.comment = "receive__basic"
         receive(
-            target=ModbusTarget(name="plc2", ip="192.168.1.10"),
+            target=ModbusTcpTarget(name="plc2", ip="192.168.1.10"),
             remote_start="DS1",
             dest=dst.select(1, 4),
             receiving=receiving,

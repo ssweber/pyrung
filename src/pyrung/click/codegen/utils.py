@@ -166,12 +166,12 @@ def _sub_operand(
     if match:
         func_name = match.group(2)
         inner_args_str = match.group(3) or ""
-        if func_name == "ModbusTarget":
+        if func_name == "ModbusTcpTarget":
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             for k, v in kwargs:
                 rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
-            return f"ModbusTarget({', '.join(rendered)})"
+            return f"ModbusTcpTarget({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]

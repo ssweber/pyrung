@@ -30,10 +30,6 @@ from pyrung.circuitpy.codegen.context import (
     ModbusClientJobSpec,
     ModbusClientSymbolSpec,
 )
-from pyrung.core.instruction.send_receive import (
-    ModbusReceiveInstruction,
-    ModbusSendInstruction,
-)
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -112,6 +108,10 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
+)
+from pyrung.core.instruction.send_receive import (
+    ModbusReceiveInstruction,
+    ModbusSendInstruction,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -385,6 +385,12 @@ def _modbus_client_spec_for_instruction(
     targets = {target.name: target for target in ctx.modbus_client.targets}
     if instr.target_name not in targets:
         raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
+
+    if instr.bank is None:
+        raise ValueError(
+            f"{type(instr).__name__} with raw ModbusAddress is not yet supported "
+            "for CircuitPython code generation"
+        )
 
     mapping = MODBUS_MAPPINGS[instr.bank]
     modbus_start, _ = plc_to_modbus(instr.bank, instr.addresses[0])

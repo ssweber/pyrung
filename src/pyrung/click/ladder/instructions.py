@@ -556,7 +556,7 @@ class _InstructionMixin:
 
 # ---- External target helper ----
 def _render_modbus_target(instruction: object) -> str:
-    """Render a ModbusTarget(...) constructor for the ladder export."""
+    """Render a ModbusTcpTarget(...) constructor for the ladder export."""
     name = getattr(instruction, "target_name", "")
     host = getattr(instruction, "host", None)
     if host is None:
@@ -569,7 +569,7 @@ def _render_modbus_target(instruction: object) -> str:
         f"port={port}",
         f"device_id={device_id}",
     ]
-    return f"ModbusTarget({','.join(parts)})"
+    return f"ModbusTcpTarget({','.join(parts)})"
 
 
 __all__ = ["_InstructionMixin"]

@@ -30,7 +30,7 @@ from pyrung.circuitpy.hardware import (
 from pyrung.circuitpy.modbus import (
     ModbusClientConfig,
     ModbusServerConfig,
-    ModbusTarget,
+    ModbusTcpTarget,
 )
 from pyrung.circuitpy.p1am import RunStopConfig, board
 from pyrung.circuitpy.validation import (
@@ -61,7 +61,7 @@ __all__ = [
     "MODULE_CATALOG",
     "ModbusClientConfig",
     "ModbusServerConfig",
-    "ModbusTarget",
+    "ModbusTcpTarget",
     "ModuleDirection",
     "ModuleSpec",
     "P1AM",

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from pyrung.click import (
-    ModbusTarget,
+    ModbusTcpTarget,
     TagMap,
     c,
     ct,
@@ -250,7 +250,7 @@ def _build_program_and_mapping():
         # R17: Send
         with Rung():
             send(
-                target=ModbusTarget("plc1", "10.0.0.1", port=502, device_id=1),
+                target=ModbusTcpTarget("plc1", "10.0.0.1", port=502, device_id=1),
                 remote_start="DS1",
                 source=CalcOut,
                 sending=SendBusy,
@@ -263,7 +263,7 @@ def _build_program_and_mapping():
         # R18: Receive
         with Rung():
             receive(
-                target=ModbusTarget("plc1", "10.0.0.1", port=502, device_id=1),
+                target=ModbusTcpTarget("plc1", "10.0.0.1", port=502, device_id=1),
                 remote_start="DS10",
                 dest=RecvDest,
                 receiving=RecvBusy,

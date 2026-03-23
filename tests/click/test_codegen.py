@@ -1276,8 +1276,8 @@ class TestRoundTrip:
         assert orig == repro
 
     def test_send(self, tmp_path: Path):
-        """Send instruction with ModbusTarget."""
-        from pyrung.click import ModbusTarget, send
+        """Send instruction with ModbusTcpTarget."""
+        from pyrung.click import ModbusTcpTarget, send
 
         Enable = Bool("Enable")
         Source = Int("Source")
@@ -1286,7 +1286,7 @@ class TestRoundTrip:
         Error = Bool("Error")
         ExCode = Int("ExCode")
 
-        target = ModbusTarget("plc2", "192.168.1.2")
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
 
         with Program() as logic:
             with Rung(Enable):
@@ -1317,8 +1317,8 @@ class TestRoundTrip:
         assert orig == repro
 
     def test_receive(self, tmp_path: Path):
-        """Receive instruction with ModbusTarget."""
-        from pyrung.click import ModbusTarget, receive
+        """Receive instruction with ModbusTcpTarget."""
+        from pyrung.click import ModbusTcpTarget, receive
 
         Enable = Bool("Enable")
         Dest = Int("Dest")
@@ -1327,7 +1327,7 @@ class TestRoundTrip:
         Error = Bool("Error")
         ExCode = Int("ExCode")
 
-        target = ModbusTarget("plc2", "192.168.1.2")
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
 
         with Program() as logic:
             with Rung(Enable):

@@ -368,12 +368,16 @@ Reads return the current committed state. Writes queue a `runner.patch()` for th
 
 ## Communication instructions
 
-`send` and `receive` implement Modbus TCP communication between Click PLCs. The `target` parameter accepts a `ModbusTarget` (live Modbus I/O during simulation) or a plain string name (codegen placeholder resolved via `ModbusClientConfig` at code generation time):
+`send` and `receive` implement Modbus communication with remote devices. Two addressing modes are supported:
+
+### Click addresses (Click-to-Click)
+
+Use a Click address string for `remote_start` when talking to another Click PLC:
 
 ```python
-from pyrung.click import ModbusTarget, send, receive
+from pyrung.click import ModbusTcpTarget, send, receive
 
-plc = ModbusTarget("plc1", "192.168.1.20")
+plc = ModbusTcpTarget("plc1", "192.168.1.20")
 
 send(
     target=plc,
@@ -396,4 +400,50 @@ receive(
 )
 ```
 
-When `target` is a `ModbusTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a string, the instruction is inert during simulation and exists only for CircuitPython code generation.
+Click handles word swap and character order natively — no configuration needed on the pyrung side.
+
+### Raw Modbus addresses (any device)
+
+Use `ModbusAddress` for `remote_start` when talking to non-Click Modbus devices (VFDs, meters, sensors, etc.):
+
+```python
+from pyrung import ModbusAddress, ModbusTcpTarget, ModbusRtuTarget, RegisterType, WordOrder, send, receive
+
+vfd = ModbusTcpTarget("vfd", "192.168.1.50")
+
+send(
+    target=vfd,
+    remote_start=ModbusAddress(0x2000),
+    source=SpeedSetpoint,
+    sending=VfdSending,
+    success=VfdSuccess,
+    error=VfdError,
+    exception_response=VfdEx,
+)
+
+meter = ModbusRtuTarget("meter", "/dev/ttyUSB0", device_id=3, baudrate=19200)
+
+receive(
+    target=meter,
+    remote_start=ModbusAddress(0x100, RegisterType.INPUT, word_order=WordOrder.LOW_HIGH),
+    dest=MeterReading,
+    receiving=MeterReceiving,
+    success=MeterSuccess,
+    error=MeterError,
+    exception_response=MeterEx,
+)
+```
+
+`word_order` controls how 32-bit values (DINT, REAL) are packed across register pairs. It lives on `ModbusAddress` because it describes the remote device's register layout — different register ranges on the same device could use different orders. Defaults to `HIGH_LOW`. Only relevant for raw addresses; Click addresses handle this automatically.
+
+`RegisterType` selects the Modbus function code: `HOLDING` (FC 3/6/16, default), `INPUT` (FC 4, read-only), `COIL` (FC 1/5/15), `DISCRETE_INPUT` (FC 2, read-only). Sending to `INPUT` or `DISCRETE_INPUT` raises `ValueError`.
+
+### Target types
+
+| Type | Transport | Live I/O | Codegen |
+|------|-----------|----------|---------|
+| `ModbusTcpTarget` | Ethernet | Yes (pymodbus for raw, pyclickplc for Click addresses) | Yes |
+| `ModbusRtuTarget` | Serial | Yes (pymodbus) | Not yet |
+| `str` (name only) | — | No (inert) | Yes (resolved via `ModbusClientConfig`) |
+
+When `target` is a `ModbusTcpTarget` or `ModbusRtuTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a plain string, the instruction is inert during simulation and exists only for CircuitPython code generation.
