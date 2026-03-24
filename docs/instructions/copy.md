@@ -85,9 +85,21 @@ blockcopy(CH.select(1, 3), DS.select(1, 3), convert=to_ascii)
 ## Pack / unpack
 
 ```python
-pack_bits(C.select(1, 16), DS[1])          # Pack 16 BOOLs into one WORD
-unpack_to_bits(DS[1], C.select(1, 16))     # Unpack WORD into 16 BOOLs
+pack_bits(C.select(1, 16), DS[1])                         # C1 -> bit 0, C16 -> bit 15
+unpack_to_bits(DS[1], C.select(1, 16))                    # bit 0 -> C1, bit 15 -> C16
 
-pack_words(DS.select(1, 2), DD[1])         # Pack two INTs into DINT (low-word first)
-unpack_to_words(DD[1], DS.select(1, 2))    # Unpack DINT into two INTs
+pack_words(DS.select(1, 2), DD[1])                        # DS1 = low word, DS2 = high word
+unpack_to_words(DD[1], DS.select(1, 2))                   # DD low word -> DS1, high word -> DS2
+
+pack_text(Txt.select(1, 4), DH[1])                        # "ABCD" -> 0xABCD
+pack_text(Txt.select(1, 6), DF[1])                        # "1e-2" -> 0.01
+pack_text(Txt.select(1, 3), DS[1], allow_whitespace=True) # " 12" -> 12
 ```
+
+- `pack_bits()` packs a BOOL range into an `INT`, `WORD`, `DINT`, or `REAL`. Use up to 16 bits for `INT`/`WORD`, up to 32 bits for `DINT`/`REAL`. `REAL` destinations use the raw IEEE-754 bit pattern.
+- `unpack_to_bits()` reverses that mapping. `REAL` sources are unpacked from their raw IEEE-754 bit pattern.
+- `pack_words()` packs exactly two `INT`/`WORD` tags into one `DINT` or `REAL`. The first source is the low word.
+- `unpack_to_words()` reverses that mapping. It requires exactly two `INT`/`WORD` destinations.
+- `pack_text()` parses a `TXT`/`CHAR` range into an `INT`, `WORD`, `DINT`, or `REAL`. `INT`/`DINT` parse signed decimal, `WORD` parses hex, and `REAL` parses float text including exponential notation. Leading or trailing whitespace sets the out-of-range fault unless you pass `allow_whitespace=True`, which trims before parsing.
+- All pack/unpack instructions accept `oneshot=True`.
+- There is no `unpack_text()`. To write a text literal into `TXT`/`CHAR` memory, use plain `copy()` and it fans out across sequential tags: `copy("HELLO", Txt[1])`. For numeric → text, use `copy(..., convert=to_text())` or `copy(..., convert=to_binary)`.
