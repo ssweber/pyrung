@@ -213,8 +213,13 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append(bv)
     if collection.has_modbus_target:
         click_imports.append("ModbusTcpTarget")
+    if collection.has_modbus_rtu_target:
+        click_imports.append("ModbusRtuTarget")
+    if collection.has_modbus_address:
+        click_imports.append("ModbusAddress")
+        click_imports.append("RegisterType")
+        click_imports.append("WordOrder")
     if collection.has_subroutine:
-        # send/receive are imported from click
         pass
     if "send" in collection.used_instructions:
         click_imports.append("send")

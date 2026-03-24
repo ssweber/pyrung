@@ -1393,7 +1393,6 @@ class TestRoundTrip:
                     success=Success,
                     error=Error,
                     exception_response=ExCode,
-                    count=1,
                 )
 
         mapping = TagMap(
@@ -1434,7 +1433,166 @@ class TestRoundTrip:
                     success=Success,
                     error=Error,
                     exception_response=ExCode,
-                    count=1,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Dest: ds[1],
+                Receiving: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_send_rtu(self, tmp_path: Path):
+        """Send instruction with ModbusRtuTarget."""
+        from pyrung.click import ModbusRtuTarget, send
+
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Source: ds[1],
+                Sending: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_receive_rtu(self, tmp_path: Path):
+        """Receive instruction with ModbusRtuTarget."""
+        from pyrung.click import ModbusRtuTarget, receive
+
+        Enable = Bool("Enable")
+        Dest = Int("Dest")
+        Receiving = Bool("Receiving")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1")
+
+        with Program() as logic:
+            with Rung(Enable):
+                receive(
+                    target=target,
+                    remote_start="DS1",
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Dest: ds[1],
+                Receiving: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_send_modbus_address(self, tmp_path: Path):
+        """Send instruction with ModbusAddress remote_start."""
+        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, send
+
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Source: ds[1],
+                Sending: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_receive_modbus_address(self, tmp_path: Path):
+        """Receive instruction with ModbusAddress remote_start."""
+        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, receive
+
+        Enable = Bool("Enable")
+        Dest = Int("Dest")
+        Receiving = Bool("Receiving")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                receive(
+                    target=target,
+                    remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
                 )
 
         mapping = TagMap(

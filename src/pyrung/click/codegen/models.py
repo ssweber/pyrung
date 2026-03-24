@@ -156,5 +156,7 @@ class _OperandCollection:
     has_subroutine: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
+    has_modbus_rtu_target: bool = False
+    has_modbus_address: bool = False
     structures: list[_StructureDecl] = field(default_factory=list)
     structure_owned_operands: set[str] = field(default_factory=set)

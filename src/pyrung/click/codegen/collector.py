@@ -274,9 +274,12 @@ def _scan_af_token(
         collection.used_instructions.add(func_name)
 
     if func_name in {"send", "receive"}:
-        # Check for ModbusTarget
         if "ModbusTcpTarget(" in args_str:
             collection.has_modbus_target = True
+        if "ModbusRtuTarget(" in args_str:
+            collection.has_modbus_rtu_target = True
+        if "ModbusAddress(" in args_str:
+            collection.has_modbus_address = True
 
     if func_name == "call":
         collection.has_subroutine = True

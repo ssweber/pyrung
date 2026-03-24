@@ -236,6 +236,23 @@ def _sub_operand(
             for k, v in kwargs:
                 rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
             return f"ModbusTcpTarget({', '.join(rendered)})"
+        if func_name == "ModbusRtuTarget":
+            args, kwargs = _parse_af_args(inner_args_str)
+            rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
+            for k, v in kwargs:
+                rendered.append(f"{k}={_sub_operand(v, collection, nicknames, structured_map)}")
+            return f"ModbusRtuTarget({', '.join(rendered)})"
+        if func_name == "ModbusAddress":
+            args, kwargs = _parse_af_args(inner_args_str)
+            rendered: list[str] = []
+            for k, v in kwargs:
+                if k == "register_type":
+                    rendered.append(f"{k}=RegisterType.{v.upper()}")
+                elif k == "word_order":
+                    rendered.append(f"{k}=WordOrder.{v.upper()}")
+                else:
+                    rendered.append(f"{k}={v}")
+            return f"ModbusAddress({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]

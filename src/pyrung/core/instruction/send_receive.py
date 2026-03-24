@@ -138,18 +138,22 @@ class ModbusTcpTarget:
             raise ValueError("timeout_ms must be > 0")
 
 
+VALID_COM_PORTS = frozenset({"cpu1", "cpu2", "slot0_1", "slot0_2", "slot1_1", "slot1_2"})
+
+
 @dataclass(frozen=True)
 class ModbusRtuTarget:
     """Connection details for a remote Modbus RTU (serial) device."""
 
     name: str
-    serial_port: str
+    serial_port: str = ""
     device_id: int = 1
     baudrate: int = 9600
     bytesize: int = 8
     parity: str = "N"
     stopbits: int = 1
     timeout_ms: int = 1000
+    com_port: str = "cpu2"
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str):
@@ -158,8 +162,6 @@ class ModbusRtuTarget:
             raise ValueError("name must not be empty")
         if not isinstance(self.serial_port, str):
             raise TypeError(f"serial_port must be str, got {type(self.serial_port).__name__}")
-        if not self.serial_port:
-            raise ValueError("serial_port must not be empty")
         if not isinstance(self.device_id, int):
             raise TypeError(f"device_id must be int, got {type(self.device_id).__name__}")
         if self.device_id < 0 or self.device_id > 255:
@@ -184,6 +186,12 @@ class ModbusRtuTarget:
             raise TypeError(f"timeout_ms must be int, got {type(self.timeout_ms).__name__}")
         if self.timeout_ms <= 0:
             raise ValueError("timeout_ms must be > 0")
+        if not isinstance(self.com_port, str):
+            raise TypeError(f"com_port must be str, got {type(self.com_port).__name__}")
+        if self.com_port not in VALID_COM_PORTS:
+            raise ValueError(
+                f"com_port must be one of {sorted(VALID_COM_PORTS)}, got {self.com_port!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -982,8 +990,6 @@ def _resolve_remote_start(
     effective_count = _normalize_operand_count(operand, count)
 
     if isinstance(remote_start, str):
-        if isinstance(target, ModbusRtuTarget):
-            raise ValueError("ModbusRtuTarget requires ModbusAddress, not Click address string")
         bank, start_addr = parse_address(remote_start)
         addresses = _addresses_for_count(bank, start_addr, effective_count)
         return (bank, start_addr, addresses, None, WordOrder.HIGH_LOW, 0)
@@ -1128,6 +1134,7 @@ __all__ = [
     "ModbusSendInstruction",
     "ModbusTcpTarget",
     "RegisterType",
+    "VALID_COM_PORTS",
     "WordOrder",
     "receive",
     "send",

@@ -11,7 +11,10 @@ import pytest
 
 from pyrung.click import (
     LadderExportError,
+    ModbusAddress,
+    ModbusRtuTarget,
     ModbusTcpTarget,
+    RegisterType,
     TagMap,
     c,
     ct,
@@ -1564,3 +1567,177 @@ def test_summary_str_format():
     assert len(lines) == 2
     assert lines[0].startswith("Renamed:")
     assert lines[1].startswith("Added:")
+
+
+def test_send_rtu_target_token():
+    """Send with ModbusRtuTarget renders com_port and device_id."""
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Sending = Bool("Sending")
+    Success = Bool("Success")
+    Error = Bool("Error")
+    ExCode = Int("ExCode")
+
+    target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1")
+
+    with Program() as logic:
+        with Rung(Enable):
+            send(
+                target=target,
+                remote_start="DS1",
+                source=Source,
+                sending=Sending,
+                success=Success,
+                error=Error,
+                exception_response=ExCode,
+            )
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Source: ds[1],
+            Sending: c[1],
+            Success: c[2],
+            Error: c[3],
+            ExCode: ds[2],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens[0] == (
+        'send(target=ModbusRtuTarget(name="vfd1",com_port="slot0_1",device_id=5),'
+        'remote_start="DS1",source=DS1,sending=C1,success=C2,error=C3,'
+        "exception_response=DS2)"
+    )
+
+
+def test_receive_rtu_target_token():
+    """Receive with ModbusRtuTarget renders com_port and device_id."""
+    Enable = Bool("Enable")
+    Dest = Int("Dest")
+    Receiving = Bool("Receiving")
+    Success = Bool("Success")
+    Error = Bool("Error")
+    ExCode = Int("ExCode")
+
+    target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=3, com_port="cpu2")
+
+    with Program() as logic:
+        with Rung(Enable):
+            receive(
+                target=target,
+                remote_start="DS1",
+                dest=Dest,
+                receiving=Receiving,
+                success=Success,
+                error=Error,
+                exception_response=ExCode,
+            )
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Dest: ds[1],
+            Receiving: c[1],
+            Success: c[2],
+            Error: c[3],
+            ExCode: ds[2],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens[0] == (
+        'receive(target=ModbusRtuTarget(name="vfd1",com_port="cpu2",device_id=3),'
+        'remote_start="DS1",dest=DS1,receiving=C1,success=C2,error=C3,'
+        "exception_response=DS2)"
+    )
+
+
+def test_send_modbus_address_token():
+    """Send with ModbusAddress remote_start renders address and register_type."""
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Sending = Bool("Sending")
+    Success = Bool("Success")
+    Error = Bool("Error")
+    ExCode = Int("ExCode")
+
+    target = ModbusTcpTarget("plc2", "192.168.1.2", device_id=1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            send(
+                target=target,
+                remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                source=Source,
+                sending=Sending,
+                success=Success,
+                error=Error,
+                exception_response=ExCode,
+            )
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Source: ds[1],
+            Sending: c[1],
+            Success: c[2],
+            Error: c[3],
+            ExCode: ds[2],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens[0] == (
+        'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
+        "remote_start=ModbusAddress(address=0,register_type=holding),"
+        "source=DS1,sending=C1,success=C2,error=C3,"
+        "exception_response=DS2)"
+    )
+
+
+def test_receive_modbus_address_token():
+    """Receive with ModbusAddress remote_start renders address and register_type."""
+    Enable = Bool("Enable")
+    Dest = Int("Dest")
+    Receiving = Bool("Receiving")
+    Success = Bool("Success")
+    Error = Bool("Error")
+    ExCode = Int("ExCode")
+
+    target = ModbusTcpTarget("plc2", "192.168.1.2", device_id=1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            receive(
+                target=target,
+                remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                dest=Dest,
+                receiving=Receiving,
+                success=Success,
+                error=Error,
+                exception_response=ExCode,
+            )
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            Dest: ds[1],
+            Receiving: c[1],
+            Success: c[2],
+            Error: c[3],
+            ExCode: ds[2],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert tokens[0] == (
+        'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
+        "remote_start=ModbusAddress(address=0,register_type=holding),"
+        "dest=DS1,receiving=C1,success=C2,error=C3,"
+        "exception_response=DS2)"
+    )

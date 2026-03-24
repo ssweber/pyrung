@@ -111,9 +111,10 @@ class TestModbusRtuTarget:
         with pytest.raises(ValueError, match="name must not be empty"):
             ModbusRtuTarget("", "/dev/ttyUSB0")
 
-    def test_empty_serial_port_raises(self):
-        with pytest.raises(ValueError, match="serial_port must not be empty"):
-            ModbusRtuTarget("meter", "")
+    def test_empty_serial_port_allowed(self):
+        """Empty serial_port is valid (codegen-only / non-simulation targets)."""
+        t = ModbusRtuTarget("meter")
+        assert t.serial_port == ""
 
     def test_bad_bytesize(self):
         with pytest.raises(ValueError, match="bytesize"):
@@ -330,7 +331,8 @@ class TestDslConstruction:
         assert submissions[0]["register_type"] == RegisterType.HOLDING
         assert runner.current_state.tags["Sending"] is True
 
-    def test_rtu_with_click_address_raises(self):
+    def test_rtu_with_click_address_accepted(self):
+        """RTU targets may use Click address strings (Click-to-Click serial)."""
         import pyrung.core.instruction.send_receive as mod
 
         Source = Int("Source")
@@ -340,18 +342,20 @@ class TestDslConstruction:
         Error = Bool("Error")
         ExCode = Int("ExCode")
 
-        with pytest.raises(ValueError, match="ModbusRtuTarget requires ModbusAddress"):
-            with Program():
-                with Rung(Enable):
-                    mod.send(
-                        target=_RTU_TARGET,
-                        remote_start="DS1",
-                        source=Source,
-                        sending=Sending,
-                        success=Success,
-                        error=Error,
-                        exception_response=ExCode,
-                    )
+        with Program() as logic:
+            with Rung(Enable):
+                mod.send(
+                    target=_RTU_TARGET,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        # Should create the instruction without error
+        assert len(logic.rungs) == 1
 
     def test_send_to_input_register_raises(self):
         import pyrung.core.instruction.send_receive as mod

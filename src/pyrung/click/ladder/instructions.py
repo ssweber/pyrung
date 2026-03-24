@@ -471,12 +471,12 @@ class _InstructionMixin:
                 ),
             )
         if instruction_type == "ModbusSendInstruction":
-            remote_start = f"{instruction.bank}{instruction.start}"
+            remote_start_expr = _render_remote_start(instruction)
             target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "send",
                 target=target_expr,
-                remote_start=_quote(remote_start),
+                remote_start=remote_start_expr,
                 source=self._render_operand(
                     instruction.source, path=f"{path}.source", source=instruction
                 ),
@@ -500,12 +500,12 @@ class _InstructionMixin:
                 ),
             )
         if instruction_type == "ModbusReceiveInstruction":
-            remote_start = f"{instruction.bank}{instruction.start}"
+            remote_start_expr = _render_remote_start(instruction)
             target_expr = _render_modbus_target(instruction)
             return self._fn(
                 "receive",
                 target=target_expr,
-                remote_start=_quote(remote_start),
+                remote_start=remote_start_expr,
                 dest=self._render_operand(
                     instruction.dest, path=f"{path}.dest", source=instruction
                 ),
@@ -550,9 +550,20 @@ class _InstructionMixin:
         return f"{name}({','.join(parts)})"
 
 
-# ---- External target helper ----
+# ---- External target / remote-start helpers ----
 def _render_modbus_target(instruction: object) -> str:
-    """Render a ModbusTcpTarget(...) constructor for the ladder export."""
+    """Render target constructor for the ladder export."""
+    from pyrung.core.instruction.send_receive import ModbusRtuTarget
+
+    raw_target = getattr(instruction, "raw_target", None)
+    if isinstance(raw_target, ModbusRtuTarget):
+        parts = [
+            f"name={_quote(raw_target.name)}",
+            f"com_port={_quote(raw_target.com_port)}",
+            f"device_id={raw_target.device_id}",
+        ]
+        return f"ModbusRtuTarget({','.join(parts)})"
+
     name = getattr(instruction, "target_name", "")
     host = getattr(instruction, "host", None)
     if host is None:
@@ -566,6 +577,25 @@ def _render_modbus_target(instruction: object) -> str:
         f"device_id={device_id}",
     ]
     return f"ModbusTcpTarget({','.join(parts)})"
+
+
+def _render_remote_start(instruction: object) -> str:
+    """Render remote_start as Click address string or ModbusAddress(...)."""
+    from pyrung.core.instruction.send_receive import WordOrder
+
+    remote_address = getattr(instruction, "remote_address", None)
+    if remote_address is not None:
+        parts = [
+            f"address={remote_address.address}",
+            f"register_type={remote_address.register_type.value}",
+        ]
+        if remote_address.word_order != WordOrder.HIGH_LOW:
+            parts.append(f"word_order={remote_address.word_order.value}")
+        return f"ModbusAddress({','.join(parts)})"
+
+    bank = getattr(instruction, "bank", "")
+    start = getattr(instruction, "start", 0)
+    return _quote(f"{bank}{start}")
 
 
 __all__ = ["_InstructionMixin"]
