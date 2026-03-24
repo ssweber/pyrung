@@ -63,7 +63,7 @@ _INSTRUCTION_NAMES = {
     "copy",
     "blockcopy",
     "fill",
-    "calc",
+    "math",
     "on_delay",
     "off_delay",
     "count_up",

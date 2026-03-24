@@ -317,7 +317,7 @@ Producer may emit:
 - `copy(source,target)` or `copy(source,target,oneshot=1)`
 - `blockcopy(source,dest)` or `blockcopy(source,dest,oneshot=1)`
 - `fill(value,dest)` or `fill(value,dest,oneshot=1)`
-- `calc(expression,dest,mode=decimal)` or `calc(...,mode=hex,oneshot=1)`
+- `math(expression,dest,mode=decimal)` or `math(...,mode=hex,oneshot=1)`
 - `search(range cond value,result,found)` or `search(...,continuous=1,oneshot=1)`
 - `pack_bits(bit_block,dest)` or `pack_bits(bit_block,dest,oneshot=1)`
 - `pack_words(word_block,dest)` or `pack_words(word_block,dest,oneshot=1)`
@@ -393,7 +393,7 @@ Rules:
   - `out(...)`, `latch(...)`, `reset(...)` target operands.
 - Immediate is not allowed in:
   - edge contacts (`rise(...)`, `fall(...)`),
-  - non-coil instruction operands (`copy`, `calc`, `search`, etc.).
+  - non-coil instruction operands (`copy`, `math`, `search`, etc.).
 - Immediate coil targets must resolve to `Y` bank addresses.
 - Immediate-wrapped ranges must resolve to one contiguous address span to emit compact `BANKstart..BANKend` form.
   - Non-contiguous mappings fail strict validation/export with explicit diagnostics.

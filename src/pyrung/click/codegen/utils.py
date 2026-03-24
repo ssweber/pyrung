@@ -106,7 +106,7 @@ def _parse_af_args(args_str: str) -> tuple[list[str], list[tuple[str, str]]]:
 
     Handles nested parens and brackets for things like:
         out(Y001)
-        calc(DS1+DS2,DS3,mode=int)
+        math(DS1+DS2,DS3,mode=int)
         event_drum(outputs=[C1,C2],events=[X001,X002],pattern=[[1,0],[0,1]],...)
     """
     args: list[str] = []

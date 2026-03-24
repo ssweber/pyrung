@@ -9,7 +9,7 @@ from pyrung.core.rung import Rung
 from .instructions import _InstructionMixin
 from .layout import _HEADER, _LayoutMixin
 from .translator import _TranslatorMixin
-from .types import LadderBundle, LadderExportError, _RenderError
+from .types import ExportSummary, LadderBundle, LadderExportError, _RenderError
 from .validator import _ValidationMixin
 
 if TYPE_CHECKING:
@@ -32,9 +32,19 @@ class _LadderExporter(
 ):
     """Facade that orchestrates validation, layout, and token rendering."""
 
+    # DSL name → CSV token name (only entries where names differ)
+    _RENAME_TABLE: tuple[tuple[str, str, str], ...] = (
+        # (instruction_class_name, dsl_name, csv_name)
+        ("CalcInstruction", "calc", "math"),
+        ("ReturnInstruction", "return_early", "return"),
+        ("ForLoopInstruction", "forloop", "for"),
+    )
+
     def __init__(self, *, tag_map: TagMap, program: Program) -> None:
         self._tag_map = tag_map
         self._program = program
+        self._forloop_count = 0
+        self._added_return_count = 0
 
     def export(self) -> LadderBundle:
         try:
@@ -61,7 +71,12 @@ class _LadderExporter(
                 rows = self._ensure_subroutine_return_tail(rows, subroutine_name=subroutine_name)
                 subroutine_rows.append((subroutine_name, tuple(rows)))
 
-            return LadderBundle(main_rows=tuple(main_rows), subroutine_rows=tuple(subroutine_rows))
+            summary = self._build_summary()
+            return LadderBundle(
+                main_rows=tuple(main_rows),
+                subroutine_rows=tuple(subroutine_rows),
+                export_summary=summary,
+            )
         except _RenderError as exc:
             raise LadderExportError([exc.issue]) from None
 
@@ -108,6 +123,7 @@ class _LadderExporter(
                     ),
                     source=rung,
                 )
+            self._forloop_count += 1
             return comment_rows + self._render_forloop_instruction(
                 instruction=rung._instructions[0],
                 conditions=rung._conditions,
@@ -164,6 +180,7 @@ class _LadderExporter(
         if last_token == "return()":
             return rows
 
+        self._added_return_count += 1
         return_rows = self._single_output_rows(
             self._expand_conditions([], path=f"subroutine[{subroutine_name}].return"),
             output_token=self._fn("return"),
@@ -179,6 +196,37 @@ class _LadderExporter(
             output_token=self._fn("end"),
             first_marker="R",
         )
+
+    def _build_summary(self) -> ExportSummary:
+        used_types = self._collect_instruction_types(self._program)
+        renames: list[tuple[str, str]] = []
+        for class_name, dsl_name, csv_name in self._RENAME_TABLE:
+            if class_name in used_types:
+                renames.append((dsl_name, csv_name))
+        return ExportSummary(
+            renames=tuple(renames),
+            added_next=self._forloop_count,
+            added_return=self._added_return_count,
+            added_end=True,
+        )
+
+    @staticmethod
+    def _collect_instruction_types(program: Program) -> set[str]:
+        """Collect all instruction class names used across the program."""
+        types: set[str] = set()
+        all_rungs = list(program.rungs)
+        for sub_rungs in program.subroutines.values():
+            all_rungs.extend(sub_rungs)
+        for rung in all_rungs:
+            for instr in rung._instructions:
+                types.add(type(instr).__name__)
+                # ForLoopInstruction has nested instructions
+                for child in getattr(instr, "instructions", ()):
+                    types.add(type(child).__name__)
+            for branch_block in rung._branches:
+                for instr in branch_block._instructions:
+                    types.add(type(instr).__name__)
+        return types
 
     def _raise_issue(self, *, path: str, message: str, source: Any) -> NoReturn:
         source_file = getattr(source, "source_file", None) if source is not None else None

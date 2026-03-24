@@ -531,7 +531,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
 
     assert "out(Y001)" in tokens
     assert any(token.startswith("copy(") and "oneshot" not in token for token in tokens)
-    assert any(",mode=decimal)" in token for token in tokens if token.startswith("calc("))
+    assert any(",mode=decimal)" in token for token in tokens if token.startswith("math("))
     assert any(token.startswith("search(") and "continuous" not in token for token in tokens)
     assert any(
         token.startswith("pack_text(") and "allow_whitespace" not in token for token in tokens
@@ -560,7 +560,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert any(",mode=hex)" in token for token in tokens if token.startswith("calc("))
+    assert any(",mode=hex)" in token for token in tokens if token.startswith("math("))
 
 
 def test_calc_token_uses_click_native_operators():
@@ -616,17 +616,17 @@ def test_calc_token_uses_click_native_operators():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert "calc(DS1 ^ 2,DS3,mode=decimal)" in tokens
-    assert "calc(DS1 MOD DS2,DS3,mode=decimal)" in tokens
-    assert "calc(DS1 + DS2,DS3,mode=decimal)" in tokens
-    assert "calc(SQRT(DS1),DS3,mode=decimal)" in tokens
-    assert "calc(LSH(DH1,3),DH3,mode=hex)" in tokens
-    assert "calc(RSH(DH1,1),DH3,mode=hex)" in tokens
-    assert "calc(LSH(DH1,4),DH3,mode=hex)" in tokens
-    assert "calc(RSH(DH1,2),DH3,mode=hex)" in tokens
-    assert "calc(DH1 AND DH2,DH3,mode=hex)" in tokens
-    assert "calc(DH1 OR DH2,DH3,mode=hex)" in tokens
-    assert "calc(DH1 XOR DH2,DH3,mode=hex)" in tokens
+    assert "math(DS1 ^ 2,DS3,mode=decimal)" in tokens
+    assert "math(DS1 MOD DS2,DS3,mode=decimal)" in tokens
+    assert "math(DS1 + DS2,DS3,mode=decimal)" in tokens
+    assert "math(SQRT(DS1),DS3,mode=decimal)" in tokens
+    assert "math(LSH(DH1,3),DH3,mode=hex)" in tokens
+    assert "math(RSH(DH1,1),DH3,mode=hex)" in tokens
+    assert "math(LSH(DH1,4),DH3,mode=hex)" in tokens
+    assert "math(RSH(DH1,2),DH3,mode=hex)" in tokens
+    assert "math(DH1 AND DH2,DH3,mode=hex)" in tokens
+    assert "math(DH1 OR DH2,DH3,mode=hex)" in tokens
+    assert "math(DH1 XOR DH2,DH3,mode=hex)" in tokens
 
 
 def test_calc_math_func_names_use_click_convention():
@@ -677,7 +677,7 @@ def test_calc_math_func_names_use_click_convention():
         )
         bundle = mapping.to_ladder(logic)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-        expected_prefix = f"calc({click_name}(DF1),"
+        expected_prefix = f"math({click_name}(DF1),"
         assert any(token.startswith(expected_prefix) for token in tokens), (
             f"{func.__name__} should export as {click_name}, tokens={tokens}"
         )
@@ -1404,3 +1404,165 @@ def test_calc_sum_expr_decimal_mode():
     bundle = mapping.to_ladder(logic)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert any("mode=decimal" in token for token in tokens), f"tokens={tokens}"
+
+
+# ---- ExportSummary tests ----
+
+
+def test_summary_includes_calc_rename():
+    """Summary reports calc → math when program uses calc."""
+    Enable = Bool("Enable")
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(A + B, Result)
+
+    mapping = TagMap(
+        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    s = bundle.export_summary
+    assert ("calc", "math") in s.renames
+    assert s.added_end is True
+    assert "calc \u2192 math" in s.summary()
+
+
+def test_summary_omits_calc_rename_when_unused():
+    """Summary does not include calc → math when program has no calc."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            out(Light)
+
+    mapping = TagMap(
+        {Enable: x[1], Light: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    s = bundle.export_summary
+    assert ("calc", "math") not in s.renames
+    assert "calc" not in s.summary()
+
+
+def test_summary_counts_forloop_next():
+    """Summary reports correct count of next() additions."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            with forloop(3):
+                out(Light)
+        with Rung(Enable):
+            with forloop(2):
+                out(Light)
+
+    mapping = TagMap(
+        {Enable: x[1], Light: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    s = bundle.export_summary
+    assert s.added_next == 2
+    assert ("forloop", "for") in s.renames
+    assert "next() closing 2 for-loops" in s.summary()
+
+
+def test_summary_counts_subroutine_return():
+    """Summary reports return() additions on subroutines."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            call("MySub")
+        with subroutine("MySub"):
+            with Rung(Enable):
+                out(Light)
+
+    mapping = TagMap(
+        {Enable: x[1], Light: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    s = bundle.export_summary
+    assert s.added_return == 1
+    assert "return() on 1 subroutine" in s.summary()
+
+
+def test_summary_return_not_counted_when_explicit():
+    """Summary does not count return() when subroutine already ends with one."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            call("MySub")
+        with subroutine("MySub"):
+            with Rung(Enable):
+                out(Light)
+            with Rung():
+                return_early()
+
+    mapping = TagMap(
+        {Enable: x[1], Light: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    s = bundle.export_summary
+    assert s.added_return == 0
+
+
+def test_summary_end_always_present():
+    """Summary always reports end() on main."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            out(Light)
+
+    mapping = TagMap(
+        {Enable: x[1], Light: y[1]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    assert bundle.export_summary.added_end is True
+    assert "end() on main" in bundle.export_summary.summary()
+
+
+def test_summary_str_format():
+    """Summary string format matches expected two-line layout."""
+    Enable = Bool("Enable")
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(A + B, Result)
+        with Rung(Enable):
+            with forloop(3):
+                out(A)
+        with Rung(Enable):
+            call("MySub")
+        with subroutine("MySub"):
+            with Rung(Enable):
+                out(A)
+
+    mapping = TagMap(
+        {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    text = str(bundle.export_summary)
+    lines = text.split("\n")
+    assert len(lines) == 2
+    assert lines[0].startswith("Renamed:")
+    assert lines[1].startswith("Added:")

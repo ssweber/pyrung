@@ -109,6 +109,8 @@ This DSL follows Click PLC instruction naming as closely as possible, departing 
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
+The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [CSV contract](click-ladder-csv.md) for full token grammar.
+
 ## Writing a Click program
 
 ```python

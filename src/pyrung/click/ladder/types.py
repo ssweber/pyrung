@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import csv
+import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,39 @@ class LadderExportError(RuntimeError):
         super().__init__(preview)
 
 
+# ---- Export summary ----
+@dataclass(frozen=True)
+class ExportSummary:
+    """Summary of transformations applied during ladder export."""
+
+    renames: tuple[tuple[str, str], ...]  # (dsl_name, csv_name) pairs
+    added_next: int  # number of for-loops closed with next()
+    added_return: int  # number of subroutines given a return() tail
+    added_end: bool  # whether end() was appended to main
+
+    def summary(self) -> str:
+        """Render a human-readable summary string."""
+        lines: list[str] = []
+        if self.renames:
+            parts = [f"{dsl} \u2192 {csv}" for dsl, csv in self.renames]
+            lines.append(f"Renamed: {', '.join(parts)}")
+        added: list[str] = []
+        if self.added_next:
+            s = "s" if self.added_next != 1 else ""
+            added.append(f"next() closing {self.added_next} for-loop{s}")
+        if self.added_return:
+            s = "s" if self.added_return != 1 else ""
+            added.append(f"return() on {self.added_return} subroutine{s}")
+        if self.added_end:
+            added.append("end() on main")
+        if added:
+            lines.append(f"Added:   {', '.join(added)}")
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return self.summary()
+
+
 # ---- Export payload ----
 @dataclass(frozen=True)
 class LadderBundle:
@@ -57,6 +91,11 @@ class LadderBundle:
 
     main_rows: tuple[tuple[str, ...], ...]
     subroutine_rows: tuple[tuple[str, tuple[tuple[str, ...], ...]], ...]
+    export_summary: ExportSummary = field(
+        default_factory=lambda: ExportSummary(
+            renames=(), added_next=0, added_return=0, added_end=False
+        )
+    )
 
     def write(self, directory: str | Path) -> None:
         output_dir = Path(directory)
@@ -77,6 +116,10 @@ class LadderBundle:
             with (output_dir / f"sub_{slug}.csv").open("w", encoding="utf-8", newline="") as handle:
                 writer = csv.writer(handle)
                 writer.writerows(rows)
+
+        summary_text = self.export_summary.summary()
+        if summary_text:
+            logging.getLogger("pyrung.click.ladder").info(summary_text)
 
 
 class _RenderError(RuntimeError):
@@ -112,6 +155,7 @@ def _slugify(name: str) -> str:
 
 
 __all__ = [
+    "ExportSummary",
     "Issue",
     "LadderBundle",
     "LadderExportError",

@@ -168,7 +168,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         "copy": "copy",
         "blockcopy": "blockcopy",
         "fill": "fill",
-        "calc": "calc",
+        "math": "calc",
         "on_delay": "on_delay",
         "off_delay": "off_delay",
         "count_up": "count_up",
@@ -648,8 +648,9 @@ def _render_af_token(
     func_name = match.group(2)
     args_str = match.group(3) or ""
 
-    # Map 'return' → 'return_early'
-    py_func = "return_early" if func_name == "return" else func_name
+    # Map CSV token names → Python DSL names
+    _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
+    py_func = _CSV_TO_DSL.get(func_name, func_name)
 
     # raw(ClassName,hex) → raw("ClassName", blob=bytes.fromhex("hex"))
     if func_name == "raw":

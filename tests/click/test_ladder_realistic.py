@@ -394,7 +394,7 @@ def test_realistic_instruction_surface_coverage():
         "count_up(",
         "count_down(",
         "copy(",
-        "calc(",
+        "math(",
         "blockcopy(",
         "fill(",
         "search(",

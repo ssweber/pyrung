@@ -235,7 +235,7 @@ class _InstructionMixin:
         if instruction_type == "CalcInstruction":
             mode = infer_calc_mode(instruction.expression, instruction.dest).mode
             return self._fn(
-                "calc",
+                "math",
                 self._render_operand(
                     instruction.expression,
                     path=f"{path}.expression",
