@@ -54,6 +54,7 @@ from pyrung.core.expression import (
     RShiftExpr,
     ShiftFuncExpr,
     SubExpr,
+    SumExpr,
     TagExpr,
     XorExpr,
 )
@@ -500,6 +501,12 @@ class _TranslatorMixin:
             if isinstance(expression.right, _BINARY_EXPR_TYPES):
                 right = f"({right})"
             return f"{left}{symbol}{right}"
+        if isinstance(expression, SumExpr):
+            br = expression.block_range
+            tags = br.tags()
+            first = self._resolve_tag(tags[0], path=f"{path}.block_range[0]", source=source)
+            last = self._resolve_tag(tags[-1], path=f"{path}.block_range[-1]", source=source)
+            return f"SUM ( {first} : {last} )"
         self._raise_issue(
             path=path,
             message=f"Unsupported expression type: {type(expression).__name__}.",

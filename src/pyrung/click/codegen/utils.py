@@ -37,7 +37,6 @@ _CLICK_FUNC_TO_PYTHON: dict[str, str] = {
     "RSH": "rsh",
     "LRO": "lro",
     "RRO": "rro",
-    "SUM": "sum",
 }
 
 # Regex matching Click function calls like SQRT(, LSH(, etc.
@@ -46,11 +45,11 @@ _CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_
 # Regex matching standalone PI (not followed by digits, which would be a prefix match)
 _CLICK_PI_RE = re.compile(r"\bPI\b")
 
+# Regex matching SUM with colon-range: SUM ( DS1 : DS10 ) or SUM(DS1:DS10)
+_SUM_RE = re.compile(r"SUM\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)")
+
 # Expression function names that require import from pyrung.core.expression
-# (excludes 'sum' which is a Python builtin, and 'PI' which is a constant)
-_EXPR_FUNC_IMPORT_NAMES = frozenset(v for v in _CLICK_FUNC_TO_PYTHON.values() if v != "sum") | {
-    "PI"
-}
+_EXPR_FUNC_IMPORT_NAMES = frozenset(_CLICK_FUNC_TO_PYTHON.values()) | {"PI"}
 
 # Regex matching Python expression-function calls (lowercase) in generated code
 _PYTHON_EXPR_FUNC_RE = re.compile(
@@ -241,6 +240,17 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             return f"{func_name}({', '.join(rendered)})"
+        # SUM with colon-range: SUM ( DS1 : DS10 ) → ds.select(1, 10).sum()
+        if func_name == "SUM":
+            sum_match = _SUM_RE.match(text)
+            if sum_match:
+                prefix = sum_match.group(1)
+                start_num = int(sum_match.group(2))
+                end_num = int(sum_match.group(4))
+                parsed = _parse_operand_prefix(f"{prefix}{start_num}")
+                if parsed:
+                    _, _, block_var, _ = parsed
+                    return f"{block_var}.select({start_num}, {end_num}).sum()"
         # Click expression functions (SQRT, LSH, SIN, etc.)
         py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
         if py_name is not None:
@@ -276,7 +286,20 @@ def _sub_operand(
 
     # Expression with operators: convert Click-native operators to Python,
     # then substitute operand tokens within.
-    result = _click_expr_to_python(text)
+
+    # Convert SUM colon-ranges first (before general expression conversion)
+    def _sub_sum(m: re.Match[str]) -> str:
+        prefix = m.group(1)
+        start_num = int(m.group(2))
+        end_num = int(m.group(4))
+        parsed = _parse_operand_prefix(f"{prefix}{start_num}")
+        if parsed:
+            _, _, block_var, _ = parsed
+            return f"{block_var}.select({start_num}, {end_num}).sum()"
+        return m.group(0)
+
+    result = _SUM_RE.sub(_sub_sum, text)
+    result = _click_expr_to_python(result)
     result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
 
     def _sub_operand_token(m: re.Match[str]) -> str:

@@ -45,3 +45,23 @@ For Click portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
 | Division by zero | Result = 0, fault flag set |
+
+## `BlockRange.sum()` — sum a range
+
+```python
+calc(DS.select(1, 10).sum(), Result)    # Result = DS1 + DS2 + … + DS10
+calc(DH.select(1, 5).sum(), HDest)      # hex mode (WORD range)
+```
+
+`.sum()` on a `BlockRange` returns a `SumExpr` — a lazy expression node that sums all tag values in the range at scan time. It's a full `Expression`, so it works anywhere expressions are accepted:
+
+```python
+calc(DS.select(1, 10).sum() + Offset, Result)
+copy(DS.select(1, 5).sum(), Total)
+with Rung(DS.select(1, 10).sum() > 1000):
+    out(Alarm)
+```
+
+Mode inference applies normally: WORD-only ranges infer hex mode, anything else infers decimal.
+
+Click ladder export renders as `SUM ( DS1 : DS10 )` with the native colon-range syntax.

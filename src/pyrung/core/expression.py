@@ -15,6 +15,7 @@ from pyrung.core._source import _capture_source
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
+    from pyrung.core.memory_block import BlockRange
     from pyrung.core.tag import Tag
 
 Numeric = int | float
@@ -679,6 +680,24 @@ def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 
 
 # =============================================================================
+# Aggregate Functions
+# =============================================================================
+
+
+class SumExpr(Expression):
+    """Sum of all tag values in a block range."""
+
+    def __init__(self, block_range: BlockRange) -> None:
+        self.block_range = block_range
+
+    def evaluate(self, ctx: ScanContext) -> Numeric:
+        return sum(ctx.get_tag(tag.name, 0) for tag in self.block_range)
+
+    def __repr__(self) -> str:
+        return f"sum({self.block_range!r})"
+
+
+# =============================================================================
 # Expression Formatting (DSL-friendly text)
 # =============================================================================
 
@@ -740,6 +759,9 @@ def format_expr(expr: Expression) -> str:
         return expr.tag.name
     if isinstance(expr, LiteralExpr):
         return repr(expr.value)
+    # SumExpr — aggregate over block range
+    if isinstance(expr, SumExpr):
+        return f"sum({expr.block_range!r})"
     # ShiftFuncExpr — two-argument shift/rotate functions (before MathFuncExpr)
     if isinstance(expr, ShiftFuncExpr):
         return f"{expr.name}({format_expr(expr.value)}, {format_expr(expr.count)})"

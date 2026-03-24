@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         IndirectCompareLt,
     )
     from pyrung.core.context import ScanContext
-    from pyrung.core.expression import Expression
+    from pyrung.core.expression import Expression, SumExpr
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
 
@@ -611,6 +611,12 @@ class BlockRange:
     def reverse(self) -> BlockRange:
         """Return this same window with address iteration reversed."""
         return BlockRange(self.block, self.start, self.end, not self.reverse_order)
+
+    def sum(self) -> SumExpr:
+        """Return a SumExpr that evaluates to the sum of all tag values in this range."""
+        from pyrung.core.expression import SumExpr
+
+        return SumExpr(self)
 
     def __len__(self) -> int:
         return len(self.addresses)

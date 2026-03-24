@@ -1191,6 +1191,27 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_calc_sum_round_trip(self, tmp_path: Path):
+        """Calc with SUM(range) round-trips through colon-range syntax."""
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        DH = Block("DH", TagType.WORD, 1, 10)
+        Dest = Block("Dest", TagType.WORD, 1, 1)
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(DH.select(1, 5).sum(), Dest[1])
+
+        mapping = TagMap(
+            {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "SUM" in code or ".sum()" in code
+        assert orig == repro
+
     def test_fill(self, tmp_path: Path):
         """Fill instruction."""
         from pyrung.core import Block, TagType

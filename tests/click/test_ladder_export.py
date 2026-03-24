@@ -1347,3 +1347,60 @@ def test_native_pattern_8_series_ors_plus_branch():
         _row("", ["X002", "", "C2", "", "X003"], "out(Y002)"),
     )
     _assert_native_pattern(pattern_id=8, bundle_rows=bundle.main_rows, expected_rows=expected)
+
+
+def test_calc_sum_expr_renders_colon_range():
+    """SumExpr renders as SUM ( first : last ) with spaced colon syntax."""
+    Enable = Bool("Enable")
+    DH = Block("DH", TagType.WORD, 1, 10)
+    Dest = Block("Dest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(DH.select(1, 5).sum(), Dest[1])
+
+    mapping = TagMap(
+        {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert any("SUM ( DH1 : DH5 )" in token for token in tokens), f"tokens={tokens}"
+
+
+def test_calc_sum_expr_hex_mode():
+    """SumExpr on WORD block infers hex mode."""
+    Enable = Bool("Enable")
+    DH = Block("DH", TagType.WORD, 1, 10)
+    Dest = Block("Dest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(DH.select(1, 3).sum(), Dest[1])
+
+    mapping = TagMap(
+        {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert any("mode=hex" in token for token in tokens), f"tokens={tokens}"
+
+
+def test_calc_sum_expr_decimal_mode():
+    """SumExpr on INT block infers decimal mode."""
+    Enable = Bool("Enable")
+    DS = Block("DS", TagType.INT, 1, 10)
+    Result = Int("Result")
+
+    with Program() as logic:
+        with Rung(Enable):
+            calc(DS.select(1, 5).sum(), Result)
+
+    mapping = TagMap(
+        {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert any("mode=decimal" in token for token in tokens), f"tokens={tokens}"
