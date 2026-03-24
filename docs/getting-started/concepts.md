@@ -97,7 +97,7 @@ count_up(Done, Acc, preset=100)              # Counter: increment on rising edge
 
 `out` vs `latch`: `out` follows the rung — true when the rung is true, false when it's false. `latch` is sticky — once set, it stays set until explicitly `reset`.
 
-The full instruction set (branching, subroutines, shift registers, edge detection, and more) is in the [Instruction Reference](../instructions/conditions.md).
+The full instruction set (branching, subroutines, shift registers, edge detection, and more) is in the [Instruction Reference](../instructions/index.md).
 
 ## Timers and counters
 
@@ -263,6 +263,6 @@ runner.remove_force("Button")
 ## Next steps
 
 - [Quickstart](quickstart.md) — build and test a traffic light
-- [Instruction Reference](../instructions/conditions.md) — full instruction reference
+- [Instruction Reference](../instructions/index.md) — full instruction reference
 - [Testing Guide](../guides/testing.md) — patterns for deterministic testing
 - [Architecture](../guides/architecture.md) — engine internals, scan phases, SystemState

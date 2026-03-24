@@ -8,6 +8,7 @@ theme:
   features:
     - navigation.tabs
     - navigation.sections
+    - navigation.indexes
     - navigation.top
     - content.code.copy
     - content.code.annotate
@@ -19,11 +20,12 @@ nav:
       - Quickstart: getting-started/quickstart.md
       - Core Concepts: getting-started/concepts.md
   - Instruction Reference:
+      - instructions/index.md
       - Rungs: instructions/rungs.md
       - Conditions: instructions/conditions.md
       - Coils: instructions/coils.md
       - Timers & Counters: instructions/timers-counters.md
-      - Copy: instructions/copy.md
+      - Data Movement: instructions/copy.md
       - Math: instructions/math.md
       - Drum, Shift & Search: instructions/drum-shift-search.md
       - Program Control: instructions/program-control.md

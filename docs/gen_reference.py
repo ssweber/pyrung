@@ -106,6 +106,8 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.csv_to_pyrung",
     "pyrung.click.send",
     "pyrung.click.receive",
+    "pyrung.click.RawInstruction",
+    "pyrung.click.raw",
 )
 
 
@@ -147,6 +149,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.Block",
             "pyrung.InputBlock",
             "pyrung.OutputBlock",
+            "pyrung.RangeComparison",
             "pyrung.SlotConfig",
         ),
     ),
@@ -194,6 +197,13 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.on_delay",
             "pyrung.off_delay",
             "pyrung.time_drum",
+            "pyrung.send",
+            "pyrung.receive",
+            "pyrung.ModbusAddress",
+            "pyrung.ModbusRtuTarget",
+            "pyrung.ModbusTcpTarget",
+            "pyrung.RegisterType",
+            "pyrung.WordOrder",
             "pyrung.rise",
             "pyrung.fall",
             "pyrung.all_of",

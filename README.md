@@ -92,7 +92,7 @@ tags.export_nicknames("motor.csv")  # For Click programming software
 
 ## What's included
 
-### [Core engine](docs/instructions/conditions.md)
+### [Core engine](docs/instructions/index.md)
 
 Pure `f(state) → new_state` scan cycle with immutable snapshots. Coils, latches, timers, counters, branching, subroutines, structured tags, edge detection, and more. Built to match real Click behavior — no surprises when you move to hardware.
 
@@ -113,7 +113,7 @@ Step through scans rung by rung, set breakpoints, force tags, diff states, and t
 | | |
 |---|---|
 | [Core Concepts](docs/getting-started/concepts.md) | Scan cycle, SystemState, tags, blocks |
-| [Instruction Reference](docs/instructions/conditions.md) | Full DSL reference |
+| [Instruction Reference](docs/instructions/index.md) | Full DSL reference |
 | [Tag Structures](docs/guides/tag-structures.md) | UDTs, named arrays, cloning, block config |
 | [Runner Guide](docs/guides/runner.md) | Execution, time modes, history, fork |
 | [Testing Guide](docs/guides/testing.md) | Unit testing with deterministic time |
