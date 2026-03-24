@@ -24,11 +24,13 @@ from pyrung.click.codegen.analyzer import _analyze_rungs
 from pyrung.click.codegen.parser import _parse_csv
 from pyrung.click.codegen.utils import _parse_af_args
 from pyrung.core import (
+    Block,
     Bool,
     Dint,
     Int,
     Program,
     Rung,
+    TagType,
     Tms,
     any_of,
     fall,
@@ -1603,6 +1605,166 @@ class TestRoundTrip:
                 Success: c[2],
                 Error: c[3],
                 ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_send_rtu_modbus_address(self, tmp_path: Path):
+        """Send with ModbusRtuTarget and ModbusAddress remote_start."""
+        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, send
+
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
+
+        with Program() as logic:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start=ModbusAddress(100, RegisterType.HOLDING),
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Source: ds[1],
+                Sending: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_receive_rtu_modbus_address(self, tmp_path: Path):
+        """Receive with ModbusRtuTarget and ModbusAddress remote_start."""
+        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, receive
+
+        Enable = Bool("Enable")
+        Dest = Int("Dest")
+        Receiving = Bool("Receiving")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
+
+        with Program() as logic:
+            with Rung(Enable):
+                receive(
+                    target=target,
+                    remote_start=ModbusAddress(100, RegisterType.HOLDING),
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Dest: ds[1],
+                Receiving: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[2],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_send_block_range(self, tmp_path: Path):
+        """Send with BlockRange source round-trips through DS1..DS3."""
+        from pyrung.click import ModbusTcpTarget, send
+
+        Enable = Bool("Enable")
+        Source = Block("Source", TagType.INT, 1, 3)
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source.select(1, 3),
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Source: ds.select(1, 3),
+                Sending: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[4],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_receive_block_range(self, tmp_path: Path):
+        """Receive with BlockRange dest round-trips through DS1..DS3."""
+        from pyrung.click import ModbusTcpTarget, receive
+
+        Enable = Bool("Enable")
+        Dest = Block("Dest", TagType.INT, 1, 3)
+        Receiving = Bool("Receiving")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        target = ModbusTcpTarget("plc2", "192.168.1.2")
+
+        with Program() as logic:
+            with Rung(Enable):
+                receive(
+                    target=target,
+                    remote_start="DS1",
+                    dest=Dest.select(1, 3),
+                    receiving=Receiving,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        mapping = TagMap(
+            {
+                Enable: x[1],
+                Dest: ds.select(1, 3),
+                Receiving: c[1],
+                Success: c[2],
+                Error: c[3],
+                ExCode: ds[4],
             },
             include_system=False,
         )
