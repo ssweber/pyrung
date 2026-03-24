@@ -257,7 +257,6 @@ def _build_program_and_mapping():
                 success=SendOk,
                 error=SendErr,
                 exception_response=SendEx,
-                count=1,
             )
 
         # R18: Receive
@@ -270,7 +269,6 @@ def _build_program_and_mapping():
                 success=RecvOk,
                 error=RecvErr,
                 exception_response=RecvEx,
-                count=1,
             )
 
         # R19: OR condition

@@ -800,7 +800,6 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
                 success=SendSuccess,
                 error=SendError,
                 exception_response=SendEx,
-                count=1,
             )
         with Rung(Enable):
             receive(
@@ -811,7 +810,6 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
                 success=RecvSuccess,
                 error=RecvError,
                 exception_response=RecvEx,
-                count=1,
             )
 
     mapping = TagMap(
@@ -881,8 +879,8 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         ".reset()",
         ".jump(DS10)",
         ".jog()",
-        'send(target=ModbusTcpTarget(name="plc1",ip="127.0.0.1",port=502,device_id=3),remote_start="DS1",source=DS20,sending=C3,success=C4,error=C5,exception_response=DS21,count=1)',
-        'receive(target=ModbusTcpTarget(name="plc2",ip="127.0.0.1",port=502,device_id=4),remote_start="DS2",dest=DS22,receiving=C6,success=C7,error=C8,exception_response=DS23,count=1)',
+        'send(target=ModbusTcpTarget(name="plc1",ip="127.0.0.1",port=502,device_id=3),remote_start="DS1",source=DS20,sending=C3,success=C4,error=C5,exception_response=DS21)',
+        'receive(target=ModbusTcpTarget(name="plc2",ip="127.0.0.1",port=502,device_id=4),remote_start="DS2",dest=DS22,receiving=C6,success=C7,error=C8,exception_response=DS23)',
         "end()",
     ]
 

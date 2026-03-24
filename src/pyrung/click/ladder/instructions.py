@@ -471,7 +471,6 @@ class _InstructionMixin:
                 ),
             )
         if instruction_type == "ModbusSendInstruction":
-            count = len(instruction.addresses)
             remote_start = f"{instruction.bank}{instruction.start}"
             target_expr = _render_modbus_target(instruction)
             return self._fn(
@@ -499,10 +498,8 @@ class _InstructionMixin:
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                count=str(count),
             )
         if instruction_type == "ModbusReceiveInstruction":
-            count = len(instruction.addresses)
             remote_start = f"{instruction.bank}{instruction.start}"
             target_expr = _render_modbus_target(instruction)
             return self._fn(
@@ -530,7 +527,6 @@ class _InstructionMixin:
                     path=f"{path}.exception_response",
                     source=instruction,
                 ),
-                count=str(count),
             )
         if instruction_type == "CallInstruction":
             return self._fn("call", _quote(str(instruction.subroutine_name)))
