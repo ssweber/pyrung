@@ -5,15 +5,26 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.expression import (
+    AbsExpr,
+    AddExpr,
     AndExpr,
+    DivExpr,
     Expression,
     FloorDivExpr,
+    InvertExpr,
+    LiteralExpr,
     LShiftExpr,
     MathFuncExpr,
+    ModExpr,
+    MulExpr,
+    NegExpr,
     OrExpr,
+    PosExpr,
     PowExpr,
     RShiftExpr,
     ShiftFuncExpr,
+    SubExpr,
+    TagExpr,
     XorExpr,
 )
 from pyrung.core.instruction.calc import CalcMode, infer_calc_mode
@@ -25,6 +36,7 @@ from .findings import (
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
     CLK_CALC_MODE_MIXED,
+    CLK_CALC_NESTING_DEPTH,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -394,6 +406,73 @@ def _expr_contains_floor_div(expr: Any) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Click formula-pad parenthesization depth
+# ---------------------------------------------------------------------------
+# The translator wraps binary sub-expressions of binary/unary-prefix nodes in
+# explicit parens, and function calls (SQRT, LSH, abs, …) each add one paren
+# level.  This mirrors the rendered Click formula string.
+
+_BINARY_EXPR_TYPES: tuple[type[Expression], ...] = (
+    AddExpr,
+    SubExpr,
+    MulExpr,
+    DivExpr,
+    FloorDivExpr,
+    ModExpr,
+    PowExpr,
+    AndExpr,
+    OrExpr,
+    XorExpr,
+)
+
+_UNARY_PREFIX_TYPES: tuple[type[Expression], ...] = (NegExpr, PosExpr, InvertExpr)
+
+# Maximum parenthetical nesting the Click formula pad accepts.
+_CLICK_MAX_PAREN_DEPTH = 8
+
+
+def _expr_paren_depth(expr: Any) -> int:
+    """Return the max parenthesization depth the Click formula would have."""
+    if not isinstance(expr, Expression):
+        return 0
+
+    # Leaves
+    if isinstance(expr, (TagExpr, LiteralExpr)):
+        return 0
+
+    # Function calls: FUNC(args) — one paren level
+    if isinstance(expr, (ShiftFuncExpr, LShiftExpr, RShiftExpr)):
+        if isinstance(expr, ShiftFuncExpr):
+            return max(_expr_paren_depth(expr.value), _expr_paren_depth(expr.count)) + 1
+        return max(_expr_paren_depth(expr.left), _expr_paren_depth(expr.right)) + 1
+
+    if isinstance(expr, MathFuncExpr):
+        return _expr_paren_depth(expr.operand) + 1
+
+    if isinstance(expr, AbsExpr):
+        return _expr_paren_depth(expr.operand) + 1
+
+    # Unary prefix: parens added only when operand is a binary expression
+    if isinstance(expr, _UNARY_PREFIX_TYPES):
+        child_depth = _expr_paren_depth(expr.operand)
+        if isinstance(expr.operand, _BINARY_EXPR_TYPES):
+            return child_depth + 1
+        return child_depth
+
+    # Binary operators: parens added around each child that is itself binary
+    if isinstance(expr, _BINARY_EXPR_TYPES):
+        left_depth = _expr_paren_depth(expr.left)
+        if isinstance(expr.left, _BINARY_EXPR_TYPES):
+            left_depth += 1
+        right_depth = _expr_paren_depth(expr.right)
+        if isinstance(expr.right, _BINARY_EXPR_TYPES):
+            right_depth += 1
+        return max(left_depth, right_depth)
+
+    return 0
+
+
 # Click formula-pad mode restrictions:
 #   decimal: +, -, *, /, MOD, ^, SUM, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
 #   hex:     +, -, *, /, MOD, SUM, AND, OR, XOR, LSH, RSH, LRO, RRO
@@ -528,6 +607,26 @@ def _evaluate_instruction_portability(
                         ),
                     )
                 )
+        depth = _expr_paren_depth(instruction.expression)
+        if depth > _CLICK_MAX_PAREN_DEPTH:
+            location = _instruction_location(base_location, "instruction.expression")
+            location_text = _format_location(location)
+            findings.append(
+                ClickFinding(
+                    code=CLK_CALC_NESTING_DEPTH,
+                    severity=_route_severity(CLK_CALC_NESTING_DEPTH, mode),
+                    message=(
+                        f"calc() expression has {depth} levels of parenthetical nesting "
+                        f"at {location_text}; Click allows at most "
+                        f"{_CLICK_MAX_PAREN_DEPTH}."
+                    ),
+                    location=location_text,
+                    suggestion=(
+                        "Break the expression into intermediate calc() steps "
+                        "with temporary tags to reduce nesting depth."
+                    ),
+                )
+            )
 
     if instruction_type in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
         location_text = _format_location(base_location)

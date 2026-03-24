@@ -7,6 +7,7 @@ from pyrung.click.validation import (
     CLK_CALC_FLOOR_DIV,
     CLK_CALC_FUNC_MODE_MISMATCH,
     CLK_CALC_MODE_MIXED,
+    CLK_CALC_NESTING_DEPTH,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -554,6 +555,140 @@ class TestCalcFuncModeMismatch:
 
         report = validate_click_program(prog, tag_map, mode="strict")
         assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.errors)
+
+
+class TestCalcNestingDepth:
+    def _deeply_nested_expr(self, tag, levels):
+        """Build a left-nested binary expression tree with *levels* paren levels.
+
+        Each additional binary-inside-binary adds one paren level in the Click
+        formula:  (((...) + tag) + tag) + tag
+        """
+        expr = tag + tag  # depth 0 binary — no parens yet
+        for _ in range(levels):
+            # wrapping a binary child inside another binary adds one ( )
+            expr = expr + tag
+        return expr
+
+    def test_depth_8_is_accepted(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = self._deeply_nested_expr(a, 8 - 1)  # depth exactly 7 child-wraps → 7 paren levels
+
+        # A binary inside a binary produces 1 level.  We need exactly 8.
+        # depth 0: a + a  (no parens)
+        # depth 1: (a + a) + a
+        # ...
+        # depth 7: 7 levels of nesting from 7 extra wraps
+        # We actually want 8 levels.  Let me re-derive:
+        # _deeply_nested_expr(tag, 0) → tag + tag → 0 levels (no child is binary)
+        # _deeply_nested_expr(tag, 1) → (tag + tag) + tag → 1 level
+        # _deeply_nested_expr(tag, N) → N levels
+        # So levels=8 → exactly 8.
+        expr_8 = self._deeply_nested_expr(a, 8)
+
+        def logic():
+            with Rung():
+                calc(expr_8, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_NESTING_DEPTH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_depth_9_gives_finding(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = self._deeply_nested_expr(a, 9)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+
+    def test_strict_mode_gives_error(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = self._deeply_nested_expr(a, 9)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.errors)
+
+    def test_function_calls_count_as_paren_level(self):
+        """SQRT(…) adds one paren level; deeply nested args can exceed the limit."""
+        from pyrung.core.expression import sqrt
+
+        a = Tag("A", TagType.REAL)
+        dest = Tag("Dest", TagType.REAL)
+
+        # 8 levels of binary nesting + sqrt wrapping = 9 total
+        inner = self._deeply_nested_expr(a, 8)
+        expr = sqrt(inner)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        from pyrung.click import df
+
+        tag_map = TagMap(
+            [a.map_to(df[1]), dest.map_to(df[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+
+    def test_flat_expression_no_finding(self):
+        """Simple a + b has depth 0 — well within limits."""
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a + b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_NESTING_DEPTH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
 
 
 class TestTildeExpressionPortability:

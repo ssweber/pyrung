@@ -28,6 +28,7 @@ CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
 CLK_CALC_MODE_MIXED = "CLK_CALC_MODE_MIXED"
 CLK_CALC_FLOOR_DIV = "CLK_CALC_FLOOR_DIV"
 CLK_CALC_FUNC_MODE_MISMATCH = "CLK_CALC_FUNC_MODE_MISMATCH"
+CLK_CALC_NESTING_DEPTH = "CLK_CALC_NESTING_DEPTH"
 
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
@@ -196,6 +197,12 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_CALC_FUNC_MODE_MISMATCH:
         return ""  # suggestion is built inline with context
 
+    if code == CLK_CALC_NESTING_DEPTH:
+        return (
+            "Click limits parenthetical nesting to 8 levels. "
+            "Break the expression into intermediate calc() steps with temporary tags."
+        )
+
     if code == CLK_COPY_CONVERTER_INCOMPATIBLE:
         return (
             "Converters require specific bank types: "
@@ -233,6 +240,7 @@ __all__ = [
     "CLK_CALC_MODE_MIXED",
     "CLK_CALC_FLOOR_DIV",
     "CLK_CALC_FUNC_MODE_MISMATCH",
+    "CLK_CALC_NESTING_DEPTH",
     "CLK_PROFILE_UNAVAILABLE",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",
