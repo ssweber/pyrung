@@ -4,12 +4,26 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.instruction.calc import infer_calc_mode
+from pyrung.core.expression import (
+    AndExpr,
+    Expression,
+    FloorDivExpr,
+    LShiftExpr,
+    MathFuncExpr,
+    OrExpr,
+    PowExpr,
+    RShiftExpr,
+    ShiftFuncExpr,
+    XorExpr,
+)
+from pyrung.core.instruction.calc import CalcMode, infer_calc_mode
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.validation.walker import ProgramLocation
 
 from .findings import (
+    CLK_CALC_FLOOR_DIV,
+    CLK_CALC_FUNC_MODE_MISMATCH,
     CLK_CALC_MODE_MIXED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
@@ -371,6 +385,79 @@ def _evaluate_immediate_usage(
     return findings
 
 
+def _expr_contains_floor_div(expr: Any) -> bool:
+    """Return True if the expression tree contains a FloorDivExpr node."""
+    if isinstance(expr, FloorDivExpr):
+        return True
+    if isinstance(expr, Expression):
+        return any(_expr_contains_floor_div(v) for v in vars(expr).values())
+    return False
+
+
+# Click formula-pad mode restrictions:
+#   decimal: +, -, *, /, MOD, ^, SUM, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
+#   hex:     +, -, *, /, MOD, SUM, AND, OR, XOR, LSH, RSH, LRO, RRO
+
+_DECIMAL_ONLY_EXPR_TYPES: tuple[type[Expression], ...] = (PowExpr,)
+_DECIMAL_ONLY_MATH_FUNCS = frozenset(
+    {"sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "radians", "degrees", "log10", "log"}
+)
+
+_HEX_ONLY_EXPR_TYPES: tuple[type[Expression], ...] = (
+    AndExpr,
+    OrExpr,
+    XorExpr,
+    LShiftExpr,
+    RShiftExpr,
+)
+_HEX_ONLY_SHIFT_FUNCS = frozenset({"lsh", "rsh", "lro", "rro"})
+
+# Click name for human-readable messages
+_CLICK_OP_NAME: dict[type[Expression], str] = {
+    PowExpr: "^ (power)",
+    AndExpr: "AND",
+    OrExpr: "OR",
+    XorExpr: "XOR",
+    LShiftExpr: "LSH",
+    RShiftExpr: "RSH",
+}
+
+
+def _collect_mode_violations(expr: Any, calc_mode: CalcMode) -> list[str]:
+    """Return Click-native names of operators/functions that violate the calc mode."""
+    violations: list[str] = []
+    _walk_mode_violations(expr, calc_mode, violations, set())
+    return violations
+
+
+def _walk_mode_violations(
+    expr: Any, calc_mode: CalcMode, violations: list[str], seen: set[int]
+) -> None:
+    expr_id = id(expr)
+    if expr_id in seen:
+        return
+    seen.add(expr_id)
+
+    if not isinstance(expr, Expression):
+        return
+
+    if calc_mode == "decimal":
+        if isinstance(expr, _HEX_ONLY_EXPR_TYPES):
+            violations.append(_CLICK_OP_NAME.get(type(expr), type(expr).__name__))
+        if isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
+            violations.append(expr.name.upper())
+    elif calc_mode == "hex":
+        if isinstance(expr, _DECIMAL_ONLY_EXPR_TYPES):
+            violations.append(_CLICK_OP_NAME.get(type(expr), type(expr).__name__))
+        if isinstance(expr, MathFuncExpr) and expr.name in _DECIMAL_ONLY_MATH_FUNCS:
+            from pyrung.click.ladder.translator import _MATH_FUNC_CLICK_NAME
+
+            violations.append(_MATH_FUNC_CLICK_NAME.get(expr.name, expr.name.upper()))
+
+    for child in vars(expr).values():
+        _walk_mode_violations(child, calc_mode, violations, seen)
+
+
 def _evaluate_instruction_portability(
     instruction: Any, base_location: ProgramLocation, mode: ValidationMode
 ) -> list[ClickFinding]:
@@ -396,6 +483,51 @@ def _evaluate_instruction_portability(
                     ),
                 )
             )
+        if _expr_contains_floor_div(instruction.expression):
+            location = _instruction_location(base_location, "instruction.expression")
+            location_text = _format_location(location)
+            findings.append(
+                ClickFinding(
+                    code=CLK_CALC_FLOOR_DIV,
+                    severity=_route_severity(CLK_CALC_FLOOR_DIV, mode),
+                    message=(
+                        f"calc() uses floor division (//) which Click does not support "
+                        f"at {location_text}."
+                    ),
+                    location=location_text,
+                    suggestion=(
+                        "Click has no floor-division operator. "
+                        "Use calc(a / b, int_dest) instead — "
+                        "copying the result to an Int or Dint tag truncates toward zero automatically."
+                    ),
+                )
+            )
+        if not mode_info.mixed_families:
+            violations = _collect_mode_violations(instruction.expression, mode_info.mode)
+            if violations:
+                location = _instruction_location(base_location, "instruction.expression")
+                location_text = _format_location(location)
+                unique = list(dict.fromkeys(violations))  # dedupe, preserve order
+                names = ", ".join(unique)
+                other_mode = "hex" if mode_info.mode == "decimal" else "decimal"
+                findings.append(
+                    ClickFinding(
+                        code=CLK_CALC_FUNC_MODE_MISMATCH,
+                        severity=_route_severity(CLK_CALC_FUNC_MODE_MISMATCH, mode),
+                        message=(
+                            f"calc() in {mode_info.mode} mode uses {names} "
+                            f"which {'is' if len(unique) == 1 else 'are'} "
+                            f"only available in {other_mode} mode at {location_text}."
+                        ),
+                        location=location_text,
+                        suggestion=(
+                            f"Move {names} into a separate calc() with "
+                            f"{other_mode}-family tags, or remap operands to "
+                            f"{'WORD (DH)' if other_mode == 'hex' else 'INT/DINT/REAL (DS/DD/DF)'} "
+                            f"addresses."
+                        ),
+                    )
+                )
 
     if instruction_type in {"FunctionCallInstruction", "EnabledFunctionCallInstruction"}:
         location_text = _format_location(base_location)

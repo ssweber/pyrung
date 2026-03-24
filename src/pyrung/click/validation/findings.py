@@ -26,6 +26,8 @@ CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED = "CLK_INDIRECT_BLOCK_RANGE_NOT_ALLOWED"
 CLK_PTR_DS_UNVERIFIED = "CLK_PTR_DS_UNVERIFIED"
 CLK_FUNCTION_CALL_NOT_PORTABLE = "CLK_FUNCTION_CALL_NOT_PORTABLE"
 CLK_CALC_MODE_MIXED = "CLK_CALC_MODE_MIXED"
+CLK_CALC_FLOOR_DIV = "CLK_CALC_FLOOR_DIV"
+CLK_CALC_FUNC_MODE_MISMATCH = "CLK_CALC_FUNC_MODE_MISMATCH"
 
 CLK_PROFILE_UNAVAILABLE = "CLK_PROFILE_UNAVAILABLE"
 CLK_BANK_UNRESOLVED = "CLK_BANK_UNRESOLVED"
@@ -185,6 +187,15 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
             "or convert through an intermediate tag so each calc() stays one family."
         )
 
+    if code == CLK_CALC_FLOOR_DIV:
+        return (
+            "Click has no floor-division operator. Use calc(a / b, int_dest) instead — "
+            "copying the result to an Int or Dint tag truncates toward zero automatically."
+        )
+
+    if code == CLK_CALC_FUNC_MODE_MISMATCH:
+        return ""  # suggestion is built inline with context
+
     if code == CLK_COPY_CONVERTER_INCOMPATIBLE:
         return (
             "Converters require specific bank types: "
@@ -220,6 +231,8 @@ __all__ = [
     "CLK_PTR_DS_UNVERIFIED",
     "CLK_FUNCTION_CALL_NOT_PORTABLE",
     "CLK_CALC_MODE_MIXED",
+    "CLK_CALC_FLOOR_DIV",
+    "CLK_CALC_FUNC_MODE_MISMATCH",
     "CLK_PROFILE_UNAVAILABLE",
     "CLK_BANK_UNRESOLVED",
     "CLK_BANK_NOT_WRITABLE",

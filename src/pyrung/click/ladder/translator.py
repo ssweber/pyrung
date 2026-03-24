@@ -66,18 +66,31 @@ if TYPE_CHECKING:
 
 # ---- Expression/condition operator maps ----
 _BINARY_OP_SYMBOL: dict[type[Expression], str] = {
-    AddExpr: "+",
-    SubExpr: "-",
-    MulExpr: "*",
-    DivExpr: "/",
+    AddExpr: " + ",
+    SubExpr: " - ",
+    MulExpr: " * ",
+    DivExpr: " / ",
     FloorDivExpr: "//",
-    ModExpr: "%",
-    PowExpr: "**",
-    AndExpr: "&",
-    OrExpr: "|",
-    XorExpr: "^",
-    LShiftExpr: "<<",
-    RShiftExpr: ">>",
+    ModExpr: " MOD ",
+    PowExpr: " ^ ",
+    AndExpr: " AND ",
+    OrExpr: " OR ",
+    XorExpr: " XOR ",
+}
+
+# Python math-function name → Click formula-pad name
+_MATH_FUNC_CLICK_NAME: dict[str, str] = {
+    "sqrt": "SQRT",
+    "sin": "SIN",
+    "cos": "COS",
+    "tan": "TAN",
+    "asin": "ASIN",
+    "acos": "ACOS",
+    "atan": "ATAN",
+    "radians": "RAD",
+    "degrees": "DEG",
+    "log10": "LOG",
+    "log": "LN",
 }
 
 _UNARY_PREFIX: dict[type[Expression], str] = {
@@ -434,15 +447,20 @@ class _TranslatorMixin:
             if isinstance(expression.value, bool):
                 return _bool_bit(expression.value)
             return repr(expression.value)
-        if isinstance(expression, ShiftFuncExpr):
-            return self._fn(
-                expression.name,
-                self._render_expression(expression.value, path=f"{path}.value", source=source),
-                self._render_expression(expression.count, path=f"{path}.count", source=source),
-            )
+        if isinstance(expression, (ShiftFuncExpr, LShiftExpr, RShiftExpr)):
+            if isinstance(expression, ShiftFuncExpr):
+                click_name = expression.name.upper()
+                val = self._render_expression(expression.value, path=f"{path}.value", source=source)
+                cnt = self._render_expression(expression.count, path=f"{path}.count", source=source)
+            else:
+                click_name = "LSH" if isinstance(expression, LShiftExpr) else "RSH"
+                val = self._render_expression(expression.left, path=f"{path}.left", source=source)
+                cnt = self._render_expression(expression.right, path=f"{path}.right", source=source)
+            return self._fn(click_name, val, cnt)
         if isinstance(expression, MathFuncExpr):
+            click_name = _MATH_FUNC_CLICK_NAME.get(expression.name, expression.name.upper())
             return self._fn(
-                expression.name,
+                click_name,
                 self._render_expression(expression.operand, path=f"{path}.operand", source=source),
             )
         if isinstance(expression, AbsExpr):
@@ -471,8 +489,6 @@ class _TranslatorMixin:
                 AndExpr,
                 OrExpr,
                 XorExpr,
-                LShiftExpr,
-                RShiftExpr,
             ),
         ):
             symbol = _BINARY_OP_SYMBOL[type(expression)]

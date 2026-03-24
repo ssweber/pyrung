@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pyrung.click import TagMap, c, dd, dh, ds, x, y
 from pyrung.click.validation import (
+    CLK_CALC_FLOOR_DIV,
+    CLK_CALC_FUNC_MODE_MISMATCH,
     CLK_CALC_MODE_MIXED,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
@@ -393,6 +395,165 @@ class TestCalcModeMixedValidation:
         assert not any(
             f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
         )
+
+
+class TestFloorDivisionPortability:
+    def test_warn_mode_gives_hint_for_floor_div_in_calc(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a // b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.hints)
+
+    def test_strict_mode_gives_error_for_floor_div_in_calc(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a // b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.errors)
+
+    def test_regular_division_has_no_floor_div_finding(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a / b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FLOOR_DIV for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+
+class TestCalcFuncModeMismatch:
+    def test_lsh_in_decimal_mode_gives_finding(self):
+        """LSH is hex-only; using it with INT tags (decimal) is a mismatch."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a << 3, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+
+    def test_sqrt_in_hex_mode_gives_finding(self):
+        """SQRT is decimal-only; using it with WORD tags (hex) is a mismatch."""
+        from pyrung.core.expression import sqrt
+
+        h = Tag("H", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(sqrt(h), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [h.map_to(dh[1]), dest.map_to(dh[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+
+    def test_and_in_hex_mode_no_finding(self):
+        """AND in hex mode is valid."""
+        h1 = Tag("H1", TagType.WORD)
+        h2 = Tag("H2", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(h1 & h2, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [h1.map_to(dh[1]), h2.map_to(dh[2]), dest.map_to(dh[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_power_in_decimal_mode_no_finding(self):
+        """Power (^) in decimal mode is valid."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a**2, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_strict_mode_gives_error(self):
+        """Strict mode escalates mismatch to error."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a << 3, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.errors)
 
 
 class TestTildeExpressionPortability:

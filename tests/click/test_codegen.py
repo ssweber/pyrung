@@ -13,6 +13,7 @@ from pyrung.click import (
     csv_to_pyrung,
     ct,
     ctd,
+    dh,
     ds,
     t,
     td,
@@ -1111,6 +1112,79 @@ class TestRoundTrip:
 
         mapping = TagMap(
             {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_calc_decimal_operators(self, tmp_path: Path):
+        """Calc with power, modulo, and math functions (decimal-mode) round-trips."""
+        from pyrung.core.expression import sqrt
+
+        Enable = Bool("Enable")
+        A = Int("A")
+        B = Int("B")
+        Result = Int("Result")
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(A**2, Result)
+            with Rung(Enable):
+                calc(A % B, Result)
+            with Rung(Enable):
+                calc(sqrt(A), Result)
+
+        mapping = TagMap(
+            {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_calc_hex_shift_operators(self, tmp_path: Path):
+        """Calc with LSH/RSH (hex-mode) round-trips."""
+        from pyrung.core import Block, TagType
+        from pyrung.core.expression import lsh
+
+        Enable = Bool("Enable")
+        H = Block("H", TagType.WORD, 1, 1)
+        HDest = Block("HDest", TagType.WORD, 1, 1)
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(H[1] << 3, HDest[1])
+            with Rung(Enable):
+                calc(lsh(H[1], 4), HDest[1])
+
+        mapping = TagMap(
+            {Enable: x[1], H[1]: dh[1], HDest[1]: dh[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
+    def test_calc_bitwise_round_trip(self, tmp_path: Path):
+        """Calc with AND/OR/XOR round-trips through Click-native operators."""
+        from pyrung.core import Block, TagType
+
+        Enable = Bool("Enable")
+        H1 = Block("H1", TagType.WORD, 1, 1)
+        H2 = Block("H2", TagType.WORD, 1, 1)
+        HDest = Block("HDest", TagType.WORD, 1, 1)
+
+        with Program() as logic:
+            with Rung(Enable):
+                calc(H1[1] & H2[1], HDest[1])
+            with Rung(Enable):
+                calc(H1[1] | H2[1], HDest[1])
+            with Rung(Enable):
+                calc(H1[1] ^ H2[1], HDest[1])
+
+        mapping = TagMap(
+            {Enable: x[1], H1[1]: dh[1], H2[1]: dh[2], HDest[1]: dh[3]},
             include_system=False,
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)

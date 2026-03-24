@@ -168,7 +168,7 @@ def _build_program_and_mapping():
         # R7: copy + calc + indirect copy + blockcopy + fill
         with Rung(Running, RTonDone):
             copy(120, Source)
-            calc((Source * 2) + (Idx << 1) - 3, CalcOut)
+            calc((Source * 2) + (Idx * 2) - 3, CalcOut)
             copy(SrcBlk[Idx], DstBlk[Idx])
             blockcopy(SrcBlk.select(1, 4), DstBlk.select(1, 4))
             fill(CalcOut, DstBlk.select(1, 5))

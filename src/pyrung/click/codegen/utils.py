@@ -16,6 +16,71 @@ from pyrung.click.codegen.models import _OperandCollection
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
 
+# ---------------------------------------------------------------------------
+# Click-native expression → Python operator conversion
+# ---------------------------------------------------------------------------
+
+# Click function names → Python equivalents (must NOT be treated as operand addresses)
+_CLICK_FUNC_TO_PYTHON: dict[str, str] = {
+    "SQRT": "sqrt",
+    "SIN": "sin",
+    "COS": "cos",
+    "TAN": "tan",
+    "ASIN": "asin",
+    "ACOS": "acos",
+    "ATAN": "atan",
+    "RAD": "radians",
+    "DEG": "degrees",
+    "LOG": "log10",
+    "LN": "log",
+    "LSH": "lsh",
+    "RSH": "rsh",
+    "LRO": "lro",
+    "RRO": "rro",
+    "SUM": "sum",
+}
+
+# Regex matching Click function calls like SQRT(, LSH(, etc.
+_CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_TO_PYTHON) + r")\(")
+
+# Regex matching standalone PI (not followed by digits, which would be a prefix match)
+_CLICK_PI_RE = re.compile(r"\bPI\b")
+
+# Expression function names that require import from pyrung.core.expression
+# (excludes 'sum' which is a Python builtin, and 'PI' which is a constant)
+_EXPR_FUNC_IMPORT_NAMES = frozenset(v for v in _CLICK_FUNC_TO_PYTHON.values() if v != "sum") | {
+    "PI"
+}
+
+# Regex matching Python expression-function calls (lowercase) in generated code
+_PYTHON_EXPR_FUNC_RE = re.compile(
+    r"\b(" + "|".join(re.escape(n) for n in sorted(_EXPR_FUNC_IMPORT_NAMES) if n != "PI") + r")\("
+)
+
+
+def _click_expr_to_python(expr: str) -> str:
+    """Convert a Click-native expression string to Python operator syntax.
+
+    Handles infix operators (^ → **, MOD → %, AND → &, OR → |, XOR → ^)
+    and function names (SQRT → sqrt, LSH → lsh, etc.).
+    """
+    result = expr
+
+    # Infix operators — order matters: ^ before XOR to avoid double-conversion
+    result = result.replace(" ^ ", "**")
+    result = result.replace(" MOD ", " % ")
+    result = result.replace(" AND ", " & ")
+    result = result.replace(" OR ", " | ")
+    result = result.replace(" XOR ", " ^ ")
+
+    # Function names: SQRT( → sqrt(, etc.
+    result = _CLICK_FUNC_RE.sub(lambda m: _CLICK_FUNC_TO_PYTHON[m.group(1)] + "(", result)
+
+    # PI constant
+    result = _CLICK_PI_RE.sub("PI", result)
+
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Token Parsing Helpers
@@ -176,6 +241,14 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
             return f"{func_name}({', '.join(rendered)})"
+        # Click expression functions (SQRT, LSH, SIN, etc.)
+        py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
+        if py_name is not None:
+            if py_name in _EXPR_FUNC_IMPORT_NAMES:
+                collection.used_expr_funcs.add(py_name)
+            args, _ = _parse_af_args(inner_args_str)
+            rendered = [_sub_operand(a, collection, nicknames, structured_map) for a in args]
+            return f"{py_name}({', '.join(rendered)})"
 
     # Check for list/array: [C1,C2,C3]
     if text.startswith("[") and text.endswith("]"):
@@ -201,9 +274,10 @@ def _sub_operand(
             _, _, block_var, _ = parsed
             return f"{block_var}.select({start_num}, {end_num})"
 
-    # Expression with operators: substitute operands within
-    # Use regex replacement for operand tokens
-    result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), text)
+    # Expression with operators: convert Click-native operators to Python,
+    # then substitute operand tokens within.
+    result = _click_expr_to_python(text)
+    result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
 
     def _sub_operand_token(m: re.Match[str]) -> str:
         op = m.group(0)
@@ -219,6 +293,13 @@ def _sub_operand(
         return op
 
     result = _OPERAND_RE.sub(_sub_operand_token, result)
+
+    # Track expression function names for imports
+    for m in _PYTHON_EXPR_FUNC_RE.finditer(result):
+        collection.used_expr_funcs.add(m.group(1))
+    if _CLICK_PI_RE.search(result):
+        collection.used_expr_funcs.add("PI")
+
     return result
 
 

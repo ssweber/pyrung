@@ -563,6 +563,126 @@ def test_calc_hex_token_uses_inferred_hex_mode():
     assert any(",mode=hex)" in token for token in tokens if token.startswith("calc("))
 
 
+def test_calc_token_uses_click_native_operators():
+    """Calc expressions use Click-native operator syntax in CSV tokens."""
+    from pyrung.core.expression import lsh, rsh, sqrt
+
+    Enable = Bool("Enable")
+    A = Int("A")
+    B = Int("B")
+    Result = Int("Result")
+    H1 = Block("H1", TagType.WORD, 1, 1)
+    H2 = Block("H2", TagType.WORD, 1, 1)
+    HDest = Block("HDest", TagType.WORD, 1, 1)
+
+    with Program() as logic:
+        # Decimal-mode operators
+        with Rung(Enable):
+            calc(A**2, Result)  # Power → ^
+        with Rung(Enable):
+            calc(A % B, Result)  # Modulo → MOD
+        with Rung(Enable):
+            calc(A + B, Result)  # Addition with spaces
+        with Rung(Enable):
+            calc(sqrt(A), Result)  # MathFuncExpr → uppercase Click name
+        # Hex-mode operators (WORD tags)
+        with Rung(Enable):
+            calc(H1[1] << 3, HDest[1])  # Left shift operator → LSH
+        with Rung(Enable):
+            calc(H1[1] >> 1, HDest[1])  # Right shift operator → RSH
+        with Rung(Enable):
+            calc(lsh(H1[1], 4), HDest[1])  # ShiftFuncExpr
+        with Rung(Enable):
+            calc(rsh(H1[1], 2), HDest[1])  # ShiftFuncExpr
+        with Rung(Enable):
+            calc(H1[1] & H2[1], HDest[1])  # AND
+        with Rung(Enable):
+            calc(H1[1] | H2[1], HDest[1])  # OR
+        with Rung(Enable):
+            calc(H1[1] ^ H2[1], HDest[1])  # XOR
+
+    mapping = TagMap(
+        {
+            Enable: x[1],
+            A: ds[1],
+            B: ds[2],
+            Result: ds[3],
+            H1[1]: dh[1],
+            H2[1]: dh[2],
+            HDest[1]: dh[3],
+        },
+        include_system=False,
+    )
+    bundle = mapping.to_ladder(logic)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+
+    assert "calc(DS1 ^ 2,DS3,mode=decimal)" in tokens
+    assert "calc(DS1 MOD DS2,DS3,mode=decimal)" in tokens
+    assert "calc(DS1 + DS2,DS3,mode=decimal)" in tokens
+    assert "calc(SQRT(DS1),DS3,mode=decimal)" in tokens
+    assert "calc(LSH(DH1,3),DH3,mode=hex)" in tokens
+    assert "calc(RSH(DH1,1),DH3,mode=hex)" in tokens
+    assert "calc(LSH(DH1,4),DH3,mode=hex)" in tokens
+    assert "calc(RSH(DH1,2),DH3,mode=hex)" in tokens
+    assert "calc(DH1 AND DH2,DH3,mode=hex)" in tokens
+    assert "calc(DH1 OR DH2,DH3,mode=hex)" in tokens
+    assert "calc(DH1 XOR DH2,DH3,mode=hex)" in tokens
+
+
+def test_calc_math_func_names_use_click_convention():
+    """All math function names map to Click formula-pad names."""
+    from pyrung.core.expression import (
+        acos,
+        asin,
+        atan,
+        cos,
+        degrees,
+        log,
+        log10,
+        radians,
+        sin,
+        sqrt,
+        tan,
+    )
+    from pyrung.core.tag import Real
+
+    Enable = Bool("Enable")
+    A = Real("A")
+    Result = Real("Result")
+
+    func_and_click_name = [
+        (sqrt, "SQRT"),
+        (sin, "SIN"),
+        (cos, "COS"),
+        (tan, "TAN"),
+        (asin, "ASIN"),
+        (acos, "ACOS"),
+        (atan, "ATAN"),
+        (radians, "RAD"),
+        (degrees, "DEG"),
+        (log10, "LOG"),
+        (log, "LN"),
+    ]
+
+    from pyrung.click import df
+
+    for func, click_name in func_and_click_name:
+        with Program() as logic:
+            with Rung(Enable):
+                calc(func(A), Result)
+
+        mapping = TagMap(
+            {Enable: x[1], A: df[1], Result: df[2]},
+            include_system=False,
+        )
+        bundle = mapping.to_ladder(logic)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+        expected_prefix = f"calc({click_name}(DF1),"
+        assert any(token.startswith(expected_prefix) for token in tokens), (
+            f"{func.__name__} should export as {click_name}, tokens={tokens}"
+        )
+
+
 def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
     Enable = Bool("Enable")
     A = Int("A")

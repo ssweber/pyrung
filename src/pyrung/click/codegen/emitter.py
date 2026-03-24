@@ -18,7 +18,15 @@ from pyrung.click.codegen.models import (
     _StructureDecl,
     _SubroutineInfo,
 )
-from pyrung.click.codegen.utils import _parse_af_args, _sub_operand, _sub_operand_kwarg
+from pyrung.click.codegen.utils import (
+    _CLICK_FUNC_RE,
+    _CLICK_FUNC_TO_PYTHON,
+    _CLICK_PI_RE,
+    _EXPR_FUNC_IMPORT_NAMES,
+    _parse_af_args,
+    _sub_operand,
+    _sub_operand_kwarg,
+)
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -27,6 +35,34 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Phase 4: Generate Code
 # ---------------------------------------------------------------------------
+
+
+def _prescan_expr_funcs(
+    rungs: list[_AnalyzedRung],
+    collection: _OperandCollection,
+    subroutines: list[_SubroutineInfo] | None,
+) -> None:
+    """Scan AF tokens for Click expression function names before emitting."""
+
+    def _scan_token(token: str) -> None:
+        # Check for Click-uppercase function names (SQRT, LSH, etc.)
+        for m in _CLICK_FUNC_RE.finditer(token):
+            py_name = _CLICK_FUNC_TO_PYTHON[m.group(1)]
+            if py_name in _EXPR_FUNC_IMPORT_NAMES:
+                collection.used_expr_funcs.add(py_name)
+        if _CLICK_PI_RE.search(token):
+            collection.used_expr_funcs.add("PI")
+
+    for rung in rungs:
+        for instr in rung.instructions:
+            if instr.af_token:
+                _scan_token(instr.af_token)
+    if subroutines:
+        for sub in subroutines:
+            for rung in sub.analyzed:
+                for instr in rung.instructions:
+                    if instr.af_token:
+                        _scan_token(instr.af_token)
 
 
 def _generate_code(
@@ -38,6 +74,9 @@ def _generate_code(
     structured_map: TagMap | None = None,
 ) -> str:
     """Generate the complete Python source file."""
+    # Pre-scan AF tokens for expression function names so imports are complete.
+    _prescan_expr_funcs(rungs, collection, subroutines)
+
     lines: list[str] = []
 
     # Module docstring
@@ -183,6 +222,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("receive")
 
     lines.append(f"from pyrung.click import {', '.join(click_imports)}")
+
+    # Expression function imports (sqrt, lsh, etc.)
+    if collection.used_expr_funcs:
+        expr_imports = sorted(collection.used_expr_funcs)
+        lines.append(f"from pyrung.core.expression import {', '.join(expr_imports)}")
 
 
 def _emit_tag_declarations(lines: list[str], collection: _OperandCollection) -> None:
