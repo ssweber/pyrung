@@ -655,12 +655,13 @@ def _render_af_token(
     _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
     py_func = _CSV_TO_DSL.get(func_name, func_name)
 
-    # raw(ClassName,hex) → raw("ClassName", blob=bytes.fromhex("hex"))
+    # raw(ClassName,fields...) → raw("ClassName", 'fields...')
+    # Single-quote fields because values may contain double quotes (e.g. "TEST").
     if func_name == "raw":
         parts = args_str.split(",", 1)
         class_name = parts[0].strip()
-        hex_blob = parts[1].strip() if len(parts) > 1 else ""
-        return f'raw("{class_name}", blob=bytes.fromhex("{hex_blob}"))'
+        fields = parts[1].strip() if len(parts) > 1 else ""
+        return f"""raw("{class_name}", '{fields}')"""
 
     if not args_str:
         return f"{py_func}()"

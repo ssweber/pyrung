@@ -13,7 +13,7 @@ def test_raw_attaches_instruction_and_is_noop():
 
     with Program() as logic:
         with Rung(Enable):
-            raw("Copy", blob=bytes.fromhex("0a1b2c3d"))
+            raw("Copy", "0x2711,1,6066=Y001,3218=8193,0000=")
 
     runner = PLCRunner(logic=logic)
     runner.patch({"Enable": True})
@@ -26,7 +26,7 @@ def test_raw_attaches_instruction_and_is_noop():
     instr = rung._instructions[0]
     assert isinstance(instr, RawInstruction)
     assert instr.class_name == "Copy"
-    assert instr.blob == bytes.fromhex("0a1b2c3d")
+    assert instr.fields == "0x2711,1,6066=Y001,3218=8193,0000="
 
 
 def test_raw_disabled_is_noop():
@@ -34,7 +34,7 @@ def test_raw_disabled_is_noop():
 
     with Program() as logic:
         with Rung(Enable):
-            raw("Cnt", blob=b"\x00\x01\x02")
+            raw("Cnt", "0x2719,1,6068=CT1,3218=8300,0000=")
 
     runner = PLCRunner(logic=logic)
     runner.patch({"Enable": False})
@@ -43,7 +43,7 @@ def test_raw_disabled_is_noop():
 
 def test_raw_outside_rung_raises():
     with pytest.raises(RuntimeError):
-        raw("Copy", blob=b"\x00")
+        raw("Copy", "0x2711,1,0000=")
 
 
 def test_raw_importable_from_pyrung_click():

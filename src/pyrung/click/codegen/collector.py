@@ -284,7 +284,7 @@ def _scan_af_token(
     if func_name == "call":
         collection.has_subroutine = True
 
-    # raw() args are class name + hex blob, not operands — skip scanning.
+    # raw() args are class name + field specs, not operands — skip scanning.
     if func_name == "raw":
         return
 

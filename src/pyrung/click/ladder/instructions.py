@@ -538,7 +538,7 @@ class _InstructionMixin:
             return self._fn("return")
 
         if instruction_type == "RawInstruction":
-            return f"raw({instruction.class_name},{instruction.blob.hex()})"
+            return f"raw({instruction.class_name},{instruction.fields})"
 
         self._raise_issue(
             path=path,
