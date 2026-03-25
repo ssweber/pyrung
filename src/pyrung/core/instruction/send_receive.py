@@ -63,41 +63,75 @@ class RegisterType(enum.Enum):
 
 
 # ---------------------------------------------------------------------------
-# ModbusAddress — raw register address
+# ModbusAddress — Modbus register address
 # ---------------------------------------------------------------------------
+
+# MODBUS 984 address ranges (prefix encodes register type).
+_984_RANGES: tuple[tuple[int, int, RegisterType], ...] = (
+    (400001, 465536, RegisterType.HOLDING),
+    (300001, 365536, RegisterType.INPUT),
+    (100001, 165536, RegisterType.DISCRETE_INPUT),
+)
+
+
+def _infer_984(address: int) -> tuple[int, RegisterType] | None:
+    """If *address* falls in a MODBUS 984 range, return (raw, register_type)."""
+    for lo, hi, rt in _984_RANGES:
+        if lo <= address < hi:
+            return address - lo, rt
+    return None
 
 
 @dataclass(frozen=True)
 class ModbusAddress:
-    """Raw Modbus register address.
+    """Modbus register address.
 
-    ``address`` accepts ``int`` or hex ``str`` (parsed via ``int(addr, 16)``).
+    ``address`` accepts:
+
+    * **MODBUS 984** ``int`` — e.g. ``400001`` (prefix encodes register type)
+    * **MODBUS Hex** ``str`` with ``h`` suffix — e.g. ``"0h"``, ``"FFFEh"``
+    * **Raw** ``int`` 0–0xFFFE — low-level register offset
     """
 
     address: int
     register_type: RegisterType = RegisterType.HOLDING
-    word_order: WordOrder = WordOrder.HIGH_LOW
 
     def __post_init__(self) -> None:
         addr = self.address
+        # --- hex string with "h" suffix (e.g. "0h", "FFFEh") ---
         if isinstance(addr, str):
+            raw = addr.rstrip("hH")
             try:
-                addr = int(addr, 16)
+                addr = int(raw, 16)
             except ValueError:
                 raise ValueError(
-                    f"address string must be valid hex, got {self.address!r}"
+                    f"address string must be valid hex with 'h' suffix, got {self.address!r}"
                 ) from None
             object.__setattr__(self, "address", addr)
         if not isinstance(addr, int):
             raise TypeError(f"address must be int or hex str, got {type(self.address).__name__}")
+        # --- MODBUS 984 range ---
+        result = _infer_984(addr)
+        if result is not None:
+            raw_addr, inferred_rt = result
+            object.__setattr__(self, "address", raw_addr)
+            if self.register_type != RegisterType.HOLDING:
+                # Caller explicitly set register_type — must match
+                if self.register_type != inferred_rt:
+                    raise ValueError(
+                        f"984 address {addr} implies {inferred_rt.name}, "
+                        f"but register_type={self.register_type.name}"
+                    )
+            else:
+                object.__setattr__(self, "register_type", inferred_rt)
+            addr = raw_addr
+        # --- range check on resolved raw address ---
         if addr < 0 or addr > 0xFFFE:
             raise ValueError(f"address must be in 0..0xFFFE, got {addr}")
         if not isinstance(self.register_type, RegisterType):
             raise TypeError(
                 f"register_type must be RegisterType, got {type(self.register_type).__name__}"
             )
-        if not isinstance(self.word_order, WordOrder):
-            raise TypeError(f"word_order must be WordOrder, got {type(self.word_order).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +172,7 @@ class ModbusTcpTarget:
             raise ValueError("timeout_ms must be > 0")
 
 
-VALID_COM_PORTS = frozenset({"cpu1", "cpu2", "slot0_1", "slot0_2", "slot1_1", "slot1_2"})
+VALID_COM_PORTS = frozenset({"cpu2", "slot0_1", "slot0_2", "slot1_1", "slot1_2"})
 
 
 @dataclass(frozen=True)
@@ -701,7 +735,7 @@ class ModbusSendInstruction(Instruction):
     device_id: int = 1
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
-    word_order: WordOrder = WordOrder.HIGH_LOW
+    word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
     _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
@@ -727,8 +761,9 @@ class ModbusSendInstruction(Instruction):
             )
         assert self.remote_address is not None
         assert self.raw_target is not None
+        word_order = WordOrder.LOW_HIGH if self.word_swap else WordOrder.HIGH_LOW
         registers = _pack_values_to_registers(
-            values, source_tags, self.word_order, self.remote_address.register_type
+            values, source_tags, word_order, self.remote_address.register_type
         )
         return _submit_raw_send_request(
             target=self.raw_target,
@@ -818,7 +853,7 @@ class ModbusReceiveInstruction(Instruction):
     device_id: int = 1
     timeout_s: float = 1.0
     remote_address: ModbusAddress | None = None
-    word_order: WordOrder = WordOrder.HIGH_LOW
+    word_swap: bool = False
     register_count: int = 0
     raw_target: ModbusTcpTarget | ModbusRtuTarget | None = None
     _pending: _PendingRequest | None = field(default=None, init=False, repr=False)
@@ -856,8 +891,9 @@ class ModbusReceiveInstruction(Instruction):
         if self.bank is not None:
             return result.values
         assert self.remote_address is not None
+        word_order = WordOrder.LOW_HIGH if self.word_swap else WordOrder.HIGH_LOW
         return _unpack_registers_to_values(
-            list(result.values), target_tags, self.word_order, self.remote_address.register_type
+            list(result.values), target_tags, word_order, self.remote_address.register_type
         )
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
@@ -982,17 +1018,17 @@ def _resolve_remote_start(
     target: str | ModbusTcpTarget | ModbusRtuTarget,
     *,
     is_send: bool,
-) -> tuple[str | None, int, tuple[int, ...], ModbusAddress | None, WordOrder, int]:
+) -> tuple[str | None, int, tuple[int, ...], ModbusAddress | None, int]:
     """Resolve remote address for Click or raw Modbus.
 
-    Returns ``(bank, start_addr, addresses, remote_address, word_order, register_count)``.
+    Returns ``(bank, start_addr, addresses, remote_address, register_count)``.
     """
     effective_count = _normalize_operand_count(operand, count)
 
     if isinstance(remote_start, str):
         bank, start_addr = parse_address(remote_start)
         addresses = _addresses_for_count(bank, start_addr, effective_count)
-        return (bank, start_addr, addresses, None, WordOrder.HIGH_LOW, 0)
+        return (bank, start_addr, addresses, None, 0)
 
     if isinstance(remote_start, ModbusAddress):
         if is_send and remote_start.register_type in {
@@ -1004,7 +1040,7 @@ def _resolve_remote_start(
         register_count = _calculate_register_count(tag_types, remote_start.register_type)
         start_addr = remote_start.address
         addresses = tuple(range(start_addr, start_addr + register_count))
-        return (None, start_addr, addresses, remote_start, remote_start.word_order, register_count)
+        return (None, start_addr, addresses, remote_start, register_count)
 
     raise TypeError(f"remote_start must be str or ModbusAddress, got {type(remote_start).__name__}")
 
@@ -1019,6 +1055,7 @@ def send(
     error: Tag,
     exception_response: Tag,
     count: int | None = None,
+    word_swap: bool = False,
 ) -> None:
     """Modbus send instruction (write local values to a remote device).
 
@@ -1039,7 +1076,7 @@ def send(
         raise TypeError(f"source must be Tag or BlockRange, got {type(source).__name__}")
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
-    bank, start_addr, addresses, remote_address, word_order, register_count = _resolve_remote_start(
+    bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, source, count, target, is_send=True
     )
 
@@ -1060,7 +1097,7 @@ def send(
         device_id=device_id,
         timeout_s=timeout_s,
         remote_address=remote_address,
-        word_order=word_order,
+        word_swap=word_swap,
         register_count=register_count,
         raw_target=raw_target,
     )
@@ -1078,6 +1115,7 @@ def receive(
     error: Tag,
     exception_response: Tag,
     count: int | None = None,
+    word_swap: bool = False,
 ) -> None:
     """Modbus receive instruction (read remote device values into local tags).
 
@@ -1098,7 +1136,7 @@ def receive(
         raise TypeError(f"dest must be Tag or BlockRange, got {type(dest).__name__}")
 
     target_name, host, port, device_id, timeout_s, raw_target = _resolve_target(target)
-    bank, start_addr, addresses, remote_address, word_order, register_count = _resolve_remote_start(
+    bank, start_addr, addresses, remote_address, register_count = _resolve_remote_start(
         remote_start, dest, count, target, is_send=False
     )
 
@@ -1119,7 +1157,7 @@ def receive(
         device_id=device_id,
         timeout_s=timeout_s,
         remote_address=remote_address,
-        word_order=word_order,
+        word_swap=word_swap,
         register_count=register_count,
         raw_target=raw_target,
     )

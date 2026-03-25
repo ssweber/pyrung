@@ -169,6 +169,9 @@ def _sub_operand_kwarg(
     # oneshot=1 → oneshot=True
     if key == "oneshot" and value == "1":
         return "True"
+    # word_swap=1 → word_swap=True, word_swap=0 → word_swap=False
+    if key == "word_swap":
+        return "True" if value == "1" else "False"
     # convert=to_value or convert=to_text(suppress_zero=0,...) — pass through
     if key == "convert":
         return value
@@ -246,12 +249,7 @@ def _sub_operand(
             args, kwargs = _parse_af_args(inner_args_str)
             rendered: list[str] = []
             for k, v in kwargs:
-                if k == "register_type":
-                    rendered.append(f"{k}=RegisterType.{v.upper()}")
-                elif k == "word_order":
-                    rendered.append(f"{k}=WordOrder.{v.upper()}")
-                else:
-                    rendered.append(f"{k}={v}")
+                rendered.append(f"{k}={v}")
             return f"ModbusAddress({', '.join(rendered)})"
         if func_name in {"all", "any"}:
             args, kwargs = _parse_af_args(inner_args_str)

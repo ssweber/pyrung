@@ -409,13 +409,13 @@ Click handles word swap and character order natively — no configuration needed
 Use `ModbusAddress` for `remote_start` when talking to non-Click Modbus devices (VFDs, meters, sensors, etc.):
 
 ```python
-from pyrung import ModbusAddress, ModbusTcpTarget, ModbusRtuTarget, RegisterType, WordOrder, send, receive
+from pyrung import ModbusAddress, ModbusTcpTarget, ModbusRtuTarget, RegisterType, send, receive
 
 vfd = ModbusTcpTarget("vfd", "192.168.1.50")
 
 send(
     target=vfd,
-    remote_start=ModbusAddress(0x2000),
+    remote_start=ModbusAddress(400001),
     source=SpeedSetpoint,
     sending=VfdSending,
     success=VfdSuccess,
@@ -427,16 +427,19 @@ meter = ModbusRtuTarget("meter", "/dev/ttyUSB0", device_id=3, baudrate=19200)
 
 receive(
     target=meter,
-    remote_start=ModbusAddress(0x100, RegisterType.INPUT, word_order=WordOrder.LOW_HIGH),
+    remote_start=ModbusAddress(300001),
     dest=MeterReading,
     receiving=MeterReceiving,
     success=MeterSuccess,
     error=MeterError,
     exception_response=MeterEx,
+    word_swap=True,
 )
 ```
 
-`word_order` controls how 32-bit values (DINT, REAL) are packed across register pairs. It lives on `ModbusAddress` because it describes the remote device's register layout — different register ranges on the same device could use different orders. Defaults to `HIGH_LOW`. Only relevant for raw addresses; Click addresses handle this automatically.
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
+
+`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit Click types (DD, DF, etc.).
 
 `RegisterType` selects the Modbus function code: `HOLDING` (FC 3/6/16, default), `INPUT` (FC 4, read-only), `COIL` (FC 1/5/15), `DISCRETE_INPUT` (FC 2, read-only). Sending to `INPUT` or `DISCRETE_INPUT` raises `ValueError`.
 

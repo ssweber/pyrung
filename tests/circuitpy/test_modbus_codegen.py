@@ -35,7 +35,6 @@ from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
     RegisterType,
-    WordOrder,
 )
 from tests.circuitpy.test_codegen import _run_single_scan_source
 
@@ -1382,7 +1381,7 @@ def test_raw_send_dint_high_low(monkeypatch):
         with Rung(enable):
             send(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x200, word_order=WordOrder.HIGH_LOW),
+                remote_start=ModbusAddress(0x200),
                 source=source,
                 sending=sending,
                 success=success,
@@ -1410,12 +1409,13 @@ def test_raw_send_dint_low_high(monkeypatch):
         with Rung(enable):
             send(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x200, word_order=WordOrder.LOW_HIGH),
+                remote_start=ModbusAddress(0x200),
                 source=source,
                 sending=sending,
                 success=success,
                 error=error,
                 exception_response=ex_code,
+                word_swap=True,
             )
 
     ns, sockets = _run_raw_client_job(monkeypatch, prog)
@@ -1438,7 +1438,7 @@ def test_raw_send_real_high_low(monkeypatch):
         with Rung(enable):
             send(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x300, word_order=WordOrder.HIGH_LOW),
+                remote_start=ModbusAddress(0x300),
                 source=source,
                 sending=sending,
                 success=success,
@@ -1527,7 +1527,7 @@ def test_raw_receive_dint_high_low(monkeypatch):
         with Rung(enable):
             receive(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+                remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
                 dest=dest,
                 receiving=receiving,
                 success=success,
@@ -1563,12 +1563,13 @@ def test_raw_receive_dint_low_high(monkeypatch):
         with Rung(enable):
             receive(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.LOW_HIGH),
+                remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
                 dest=dest,
                 receiving=receiving,
                 success=success,
                 error=error,
                 exception_response=ex_code,
+                word_swap=True,
             )
 
     ns, sockets = _run_raw_client_job(monkeypatch, prog)
@@ -1597,7 +1598,7 @@ def test_raw_receive_real_high_low(monkeypatch):
         with Rung(enable):
             receive(
                 target=_RAW_TARGET,
-                remote_start=ModbusAddress(0x300, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+                remote_start=ModbusAddress(0x300, RegisterType.HOLDING),
                 dest=dest,
                 receiving=receiving,
                 success=success,

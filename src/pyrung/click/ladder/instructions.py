@@ -473,8 +473,7 @@ class _InstructionMixin:
         if instruction_type == "ModbusSendInstruction":
             remote_start_expr = _render_remote_start(instruction)
             target_expr = _render_modbus_target(instruction)
-            return self._fn(
-                "send",
+            kwargs: dict[str, str] = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
                 source=self._render_operand(
@@ -499,11 +498,13 @@ class _InstructionMixin:
                     source=instruction,
                 ),
             )
+            if instruction.word_swap:
+                kwargs["word_swap"] = "1"
+            return self._fn("send", **kwargs)
         if instruction_type == "ModbusReceiveInstruction":
             remote_start_expr = _render_remote_start(instruction)
             target_expr = _render_modbus_target(instruction)
-            return self._fn(
-                "receive",
+            kwargs = dict(
                 target=target_expr,
                 remote_start=remote_start_expr,
                 dest=self._render_operand(
@@ -528,6 +529,9 @@ class _InstructionMixin:
                     source=instruction,
                 ),
             )
+            if instruction.word_swap:
+                kwargs["word_swap"] = "1"
+            return self._fn("receive", **kwargs)
         if instruction_type == "CallInstruction":
             return self._fn("call", _quote(str(instruction.subroutine_name)))
         if instruction_type == "ReturnInstruction":
@@ -579,19 +583,21 @@ def _render_modbus_target(instruction: object) -> str:
     return f"ModbusTcpTarget({','.join(parts)})"
 
 
+_984_BASES = {
+    "holding": 400001,
+    "input": 300001,
+    "discrete_input": 100001,
+    "coil": 1,
+}
+
+
 def _render_remote_start(instruction: object) -> str:
     """Render remote_start as Click address string or ModbusAddress(...)."""
-    from pyrung.core.instruction.send_receive import WordOrder
-
     remote_address = getattr(instruction, "remote_address", None)
     if remote_address is not None:
-        parts = [
-            f"address={remote_address.address}",
-            f"register_type={remote_address.register_type.value}",
-        ]
-        if remote_address.word_order != WordOrder.HIGH_LOW:
-            parts.append(f"word_order={remote_address.word_order.value}")
-        return f"ModbusAddress({','.join(parts)})"
+        base = _984_BASES[remote_address.register_type.value]
+        addr_984 = base + remote_address.address
+        return f"ModbusAddress(address={addr_984})"
 
     bank = getattr(instruction, "bank", "")
     start = getattr(instruction, "start", 0)

@@ -217,8 +217,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         click_imports.append("ModbusRtuTarget")
     if collection.has_modbus_address:
         click_imports.append("ModbusAddress")
-        click_imports.append("RegisterType")
-        click_imports.append("WordOrder")
     if collection.has_subroutine:
         pass
     if "send" in collection.used_instructions:

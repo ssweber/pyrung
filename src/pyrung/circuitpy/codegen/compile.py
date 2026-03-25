@@ -440,7 +440,7 @@ def _modbus_client_spec_for_instruction(
             item_count=len(item_specs),
             items=item_specs,
             is_coil=is_coil,
-            word_order=ra.word_order.value,
+            word_order="low_high" if instr.word_swap else "high_low",
             busy=_modbus_client_symbol_spec(busy_tag, ctx),
             success=_modbus_client_symbol_spec(instr.success, ctx),
             error=_modbus_client_symbol_spec(instr.error, ctx),

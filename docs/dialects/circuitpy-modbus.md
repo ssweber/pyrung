@@ -113,24 +113,25 @@ source = generate_circuitpy(
 
 ### Raw Modbus addresses
 
-When the remote device isn't a Click PLC, use `ModbusAddress` instead of a Click address string. This gives direct control over the register address, register type, and word order.
+When the remote device isn't a Click PLC, use `ModbusAddress` instead of a Click address string. This gives direct control over the register address and register type.
 
 ```python
-from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType, WordOrder
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
 vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
 
 with Program() as logic:
-    # Read a 32-bit speed value from holding registers 0x200–0x201, high word first
+    # Read a 32-bit speed value from holding registers 0x200–0x201, word-swapped
     with Rung(Enable):
         receive(
             target="vfd",
-            remote_start=ModbusAddress(0x200, RegisterType.HOLDING, WordOrder.HIGH_LOW),
+            remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
             dest=Speed,
             receiving=CommReceiving,
             success=CommSuccess,
             error=CommError,
             exception_response=CommEx,
+            word_swap=True,
         )
 
     # Write a setpoint to a single holding register at 0x100
@@ -146,13 +147,12 @@ with Program() as logic:
         )
 ```
 
-`ModbusAddress` fields:
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input) or raw register offsets (0–0xFFFE). Hex strings with an `h` suffix (e.g. `"0h"`) are also supported — these require an explicit `register_type` since the offset alone is ambiguous.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `address` | `int` | — | Modbus register/coil address (0–0xFFFE) |
-| `register_type` | `RegisterType` | `HOLDING` | `HOLDING`, `INPUT`, `COIL`, or `DISCRETE_INPUT` |
-| `word_order` | `WordOrder` | `HIGH_LOW` | Word ordering for 32-bit types (DINT, REAL) |
+| `address` | `int` or `str` | — | 984-style int (400001), raw int (0–0xFFFE), or hex str ("0h") |
+| `register_type` | `RegisterType` | `HOLDING` | Inferred for 984 addresses; required for hex |
 
 The codegen maps `register_type` to the correct Modbus function code:
 
@@ -163,7 +163,7 @@ The codegen maps `register_type` to the correct Modbus function code:
 | `COIL` | FC 5 (single) / FC 15 (multiple) | FC 1 |
 | `DISCRETE_INPUT` | — | FC 2 |
 
-`word_order` controls how DINT and REAL values are split across register pairs. `HIGH_LOW` puts the high word at the lower address (big-endian, common in VFDs and power meters). `LOW_HIGH` matches Click PLC native ordering.
+`word_swap` on `send()`/`receive()` controls how 32-bit values (DINT, REAL) are split across register pairs. `False` (default) = high word first (big-endian, common in VFDs and power meters). `True` = low word first.
 
 RTU (serial) targets are not yet supported for CircuitPython code generation.
 

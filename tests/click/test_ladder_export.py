@@ -1693,7 +1693,7 @@ def test_send_modbus_address_token():
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        "remote_start=ModbusAddress(address=0,register_type=holding),"
+        "remote_start=ModbusAddress(address=400001),"
         "source=DS1,sending=C1,success=C2,error=C3,"
         "exception_response=DS2)"
     )
@@ -1737,7 +1737,7 @@ def test_receive_modbus_address_token():
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        "remote_start=ModbusAddress(address=0,register_type=holding),"
+        "remote_start=ModbusAddress(address=400001),"
         "dest=DS1,receiving=C1,success=C2,error=C3,"
         "exception_response=DS2)"
     )
@@ -1781,7 +1781,7 @@ def test_send_rtu_modbus_address_token():
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
-        "remote_start=ModbusAddress(address=100,register_type=holding),"
+        "remote_start=ModbusAddress(address=400101),"
         "source=DS1,sending=C1,success=C2,error=C3,"
         "exception_response=DS2)"
     )
@@ -1825,7 +1825,7 @@ def test_receive_rtu_modbus_address_token():
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
-        "remote_start=ModbusAddress(address=100,register_type=holding),"
+        "remote_start=ModbusAddress(address=400101),"
         "dest=DS1,receiving=C1,success=C2,error=C3,"
         "exception_response=DS2)"
     )

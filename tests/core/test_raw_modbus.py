@@ -33,13 +33,41 @@ class TestModbusAddress:
         assert addr.address == 100
         assert addr.register_type == RegisterType.HOLDING
 
-    def test_hex_string(self):
-        addr = ModbusAddress("64")  # type: ignore[arg-type]  # str accepted at runtime
+    def test_hex_h_suffix(self):
+        addr = ModbusAddress("64h")  # type: ignore[arg-type]  # str accepted at runtime
         assert addr.address == 0x64
 
-    def test_hex_string_0x_prefix(self):
-        addr = ModbusAddress("0x64")  # type: ignore[arg-type]  # str accepted at runtime
-        assert addr.address == 0x64
+    def test_hex_h_suffix_upper(self):
+        addr = ModbusAddress("FFFEh")  # type: ignore[arg-type]  # str accepted at runtime
+        assert addr.address == 0xFFFE
+
+    def test_hex_zero_h(self):
+        addr = ModbusAddress("0h")  # type: ignore[arg-type]  # str accepted at runtime
+        assert addr.address == 0
+
+    def test_984_holding(self):
+        addr = ModbusAddress(400001)
+        assert addr.address == 0
+        assert addr.register_type == RegisterType.HOLDING
+
+    def test_984_holding_high(self):
+        addr = ModbusAddress(465535)
+        assert addr.address == 65534
+        assert addr.register_type == RegisterType.HOLDING
+
+    def test_984_input(self):
+        addr = ModbusAddress(300001)
+        assert addr.address == 0
+        assert addr.register_type == RegisterType.INPUT
+
+    def test_984_discrete_input(self):
+        addr = ModbusAddress(100001)
+        assert addr.address == 0
+        assert addr.register_type == RegisterType.DISCRETE_INPUT
+
+    def test_984_register_type_conflict(self):
+        with pytest.raises(ValueError, match="implies HOLDING"):
+            ModbusAddress(400001, RegisterType.INPUT)
 
     def test_max_valid(self):
         addr = ModbusAddress(0xFFFE)
@@ -69,20 +97,6 @@ class TestModbusAddress:
         addr = ModbusAddress(100)
         with pytest.raises(AttributeError):
             addr.address = 200  # type: ignore[misc]
-
-
-class TestModbusAddressWordOrder:
-    def test_default_word_order(self):
-        addr = ModbusAddress(100)
-        assert addr.word_order == WordOrder.HIGH_LOW
-
-    def test_custom_word_order(self):
-        addr = ModbusAddress(100, word_order=WordOrder.LOW_HIGH)
-        assert addr.word_order == WordOrder.LOW_HIGH
-
-    def test_bad_word_order(self):
-        with pytest.raises(TypeError, match="WordOrder"):
-            ModbusAddress(100, word_order="high_low")  # type: ignore[arg-type]
 
 
 class TestModbusRtuTarget:
@@ -610,7 +624,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["Local1"] == 11
         assert runner.current_state.tags["Local2"] == 22
 
-    def test_receive_dint_with_word_order(self, monkeypatch: pytest.MonkeyPatch):
+    def test_receive_dint_with_word_swap(self, monkeypatch: pytest.MonkeyPatch):
         import pyrung.core.instruction.send_receive as mod
 
         future: Future[_RequestResult] = Future()
@@ -632,12 +646,13 @@ class TestRawExecuteStateMachine:
             with Rung(Enable):
                 mod.receive(
                     target=target,
-                    remote_start=ModbusAddress(0x100, word_order=WordOrder.LOW_HIGH),
+                    remote_start=ModbusAddress(0x100),
                     dest=Dest,
                     receiving=Receiving,
                     success=Success,
                     error=Error,
                     exception_response=ExCode,
+                    word_swap=True,
                 )
 
         runner = PLCRunner(logic=logic)
