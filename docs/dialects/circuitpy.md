@@ -1,8 +1,8 @@
 # CircuitPython Dialect
 
-`pyrung.circuitpy` adds a P1AM-200 hardware model, module catalog, program validation, and CircuitPython code generation on top of the hardware-agnostic core.
+`pyrung.circuitpy` generates a self-contained CircuitPython scan loop from the same program you already tested in simulation. The same pyrung logic runs in Python *and* on real hardware — write once, simulate, deploy.
 
-> **Aspirational PoC.** The CircuitPython dialect demonstrates the "write once, simulate and deploy" thesis end-to-end: the same pyrung program runs in Python simulation *and* generates a self-contained CircuitPython `while True` scan loop that runs directly on the hardware. The hardware model (35 modules) and code generator are fully implemented and tested. The P1AM-200 is the natural target: tinkerer-friendly PLC hardware with a CircuitPython runtime, and currently the only PLC-class controller where this kind of codegen is this straightforward.
+It targets the [ProductivityOpen P1AM-200](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html): tinkerer-friendly PLC hardware with a CircuitPython runtime, and currently the only PLC-class controller where this kind of codegen is this straightforward. The hardware model (35 modules), code generator, and validation are fully implemented and tested.
 
 ## Installation
 
@@ -229,6 +229,15 @@ The generated code uses the [CircuitPython P1AM library](https://github.com/fact
 4. Insert an SD card for retentive tag storage (FAT-formatted)
 
 If your program uses `FunctionCallInstruction`, the callable's source is embedded verbatim. Ensure it only uses CircuitPython-compatible modules and APIs.
+
+## CircuitPython constraints
+
+The P1AM-200 runs CircuitPython, which imposes limits beyond what the pyrung simulator allows:
+
+- **No hardware interrupts.** All I/O is polled each scan. Fast external signals can be missed between scans — choose `target_scan_ms` accordingly.
+- **No TLS.** Modbus TCP and any network traffic run unencrypted. Keep the P1AM-200 on a trusted, isolated network.
+- **Single-threaded.** The scan loop is cooperative. Long-running `FunctionCallInstruction` callables block the entire scan (and may trip the watchdog).
+- **Limited memory.** CircuitPython has a small heap. Programs with many tags or large blocks may hit memory limits — test on hardware early.
 
 ## External resources
 

@@ -1,6 +1,6 @@
 # pyrung
 
-**Write ladder logic in Python. Simulate it. Test it. Deploy it.**
+**Write ladder logic in Python. Simulate it. Test it. Deploy to Click PLCs or P1AM-200 hardware.**
 
 pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
 
@@ -28,9 +28,11 @@ with runner.active():
 
 ## Why?
 
-AutomationDirect Click PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, transpose it to Click.
+AutomationDirect Click PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, encode it with `to_ladder()` and paste via [clicknick](https://ssweber.github.io/).
 
-Or don't transpose at all. Run your logic as an **emulated Click over Modbus** to test send/receive, no hardware required. You can even spin up two pyrung programs and test them talking to each other. Or generate a CircuitPython scan loop for a ProductivityOpen P1AM-200 and run it on actual I/O.
+Or skip the Click editor entirely — generate a **CircuitPython scan loop** for a ProductivityOpen P1AM-200 and run your tested logic on open hardware.
+
+Or run your logic as an **emulated Click over Modbus** to test send/receive, no hardware required. You can even spin up two pyrung programs and test them talking to each other.
 
 ## Quick start
 
@@ -79,15 +81,16 @@ with runner.active():
 ### Map to Click hardware when you're ready
 
 ```python
-from pyrung.click import TagMap
+from pyrung.click import TagMap, x, y
 
-tags = TagMap()
-tags.map(Start, "X001")    # Physical input
-tags.map(Stop, "X002")     # Physical input
-tags.map(Running, "Y001")  # Physical output
+mapping = TagMap({
+    Start:   x[1],    # Physical input  → X001
+    Stop:    x[2],    # Physical input  → X002
+    Running: y[1],    # Physical output → Y001
+})
 
-tags.validate(logic)  # Checks against Click constraints
-tags.export_nicknames("motor.csv")  # For Click programming software
+mapping.validate(logic)                # Checks against Click constraints
+mapping.to_nickname_file("motor.csv")  # For Click programming software
 ```
 
 ## What's included
@@ -102,7 +105,7 @@ Hardware address mapping, memory bank validation, Modbus instructions, and nickn
 
 ### [CircuitPython dialect](docs/dialects/circuitpy.md)
 
-Gives the P1AM-200 what it's missing — a real scan cycle, Click-compatible instructions and Modbus interface, and SD persistence for state across power cycles.
+Generate a self-contained CircuitPython scan loop from the same program you already tested. Targets the ProductivityOpen P1AM-200 with 35 supported I/O modules, SD-backed retentive storage, watchdog, Modbus TCP, and RUN/STOP control.
 
 ### [VS Code debugger](docs/guides/dap-vscode.md)
 
@@ -118,3 +121,8 @@ Step through scans rung by rung, set breakpoints, force tags, diff states, and t
 | [Runner Guide](docs/guides/runner.md) | Execution, time modes, history, fork |
 | [Testing Guide](docs/guides/testing.md) | Unit testing with deterministic time |
 | [Forces & Debug](docs/guides/forces-debug.md) | Force values, breakpoints, time travel |
+
+## Disclaimers
+
+- **Simulation is best-effort.** pyrung models Click PLC behavior as closely as practical, but it is not a certified simulator. You are responsible for verifying your program on real hardware before production use.
+- **Modbus is unauthenticated.** The emulated Click Modbus interface and CircuitPython Modbus TCP server listen on the network with no encryption or access control — standard for Modbus, but keep them off untrusted networks.
