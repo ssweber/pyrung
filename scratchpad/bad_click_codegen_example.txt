@@ -1,0 +1,14 @@
+R,rise(C1),T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(1,DS1)"
+,fall(C2),|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"copy(C2,C4)"
+,,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"call(""SubName"")"
+
+should be:
+
+with Rung(rise(c1) | fall(c2):
+    copy(1, DS1)
+    copy(C2, C4)
+    call(SubName) # or whatever
+
+also, should our ladder codec collapse that row[4] that is just a continuation line to pad the copy?
