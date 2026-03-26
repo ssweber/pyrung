@@ -2579,3 +2579,129 @@ def test_shutdown_clears_monitor_and_data_breakpoint_registrations(tmp_path: Pat
     assert adapter._monitor_values == {}
     assert adapter._data_bp_handles == {}
     assert adapter._data_bp_meta == {}
+
+
+# ---------------------------------------------------------------------------
+# pyrungHistoryInfo / pyrungSeek
+# ---------------------------------------------------------------------------
+
+
+def test_pyrung_history_info_returns_range_at_entry(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungHistoryInfo")
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["minScanId"] == 0
+    assert body["maxScanId"] == 0
+    assert body["playhead"] == 0
+    assert body["count"] == 1
+
+
+def test_pyrung_history_info_grows_after_stepping(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=4, command="pyrungHistoryInfo")
+    response = _single_response(messages)
+    body = response["body"]
+    assert body["minScanId"] == 0
+    assert body["maxScanId"] > 0
+    assert body["count"] > 1
+
+
+def test_pyrung_seek_returns_tags_at_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _unconditional_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    # Step a couple of scans so history accumulates.
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    # Seek back to scan 0.
+    messages = _send_request(
+        adapter, out_stream, seq=4, command="pyrungSeek", arguments={"scanId": 0}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["scanId"] == 0
+    assert "tags" in response["body"]
+
+
+def test_pyrung_seek_requires_integer_scan_id(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungSeek", arguments={"scanId": "abc"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "integer" in response["message"]
+
+
+def test_pyrung_seek_rejects_evicted_scan(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungSeek", arguments={"scanId": 999}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "not retained" in response["message"]
+
+
+def test_pyrung_seek_updates_playhead(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _unconditional_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+
+    # Playhead should be at the latest scan after stepping.
+    messages = _send_request(adapter, out_stream, seq=3, command="pyrungHistoryInfo")
+    info_after_step = _single_response(messages)["body"]
+    assert info_after_step["playhead"] == info_after_step["maxScanId"]
+
+    # Seek to scan 0.
+    _send_request(adapter, out_stream, seq=4, command="pyrungSeek", arguments={"scanId": 0})
+    _drain_messages(out_stream)
+
+    # Playhead should now be 0.
+    messages = _send_request(adapter, out_stream, seq=5, command="pyrungHistoryInfo")
+    info_after_seek = _single_response(messages)["body"]
+    assert info_after_seek["playhead"] == 0
