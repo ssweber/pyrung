@@ -574,8 +574,6 @@ class TestCalcNestingDepth:
         a = Tag("A", TagType.INT)
         dest = Tag("Dest", TagType.INT)
 
-        expr = self._deeply_nested_expr(a, 8 - 1)  # depth exactly 7 child-wraps → 7 paren levels
-
         # A binary inside a binary produces 1 level.  We need exactly 8.
         # depth 0: a + a  (no parens)
         # depth 1: (a + a) + a
