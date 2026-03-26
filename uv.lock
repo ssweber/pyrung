@@ -179,6 +179,7 @@ dependencies = [
     { name = "griffecli" },
     { name = "griffelib" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/04/56/28a0accac339c164b52a92c6cfc45a903acc0c174caa5c1713803467b533/griffe-2.0.0.tar.gz", hash = "sha256:c68979cd8395422083a51ea7cf02f9c119d889646d99b7b656ee43725de1b80f", size = 293906, upload-time = "2026-03-23T21:06:53.402Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/94/ee21d41e7eb4f823b94603b9d40f86d3c7fde80eacc2c3c71845476dddaa/griffe-2.0.0-py3-none-any.whl", hash = "sha256:5418081135a391c3e6e757a7f3f156f1a1a746cc7b4023868ff7d5e2f9a980aa", size = 5214, upload-time = "2026-02-09T19:09:44.105Z" },
 ]
@@ -191,6 +192,7 @@ dependencies = [
     { name = "colorama" },
     { name = "griffelib" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/f8/2e129fd4a86e52e58eefe664de05e7d502decf766e7316cc9e70fdec3e18/griffecli-2.0.0.tar.gz", hash = "sha256:312fa5ebb4ce6afc786356e2d0ce85b06c1c20d45abc42d74f0cda65e159f6ef", size = 56213, upload-time = "2026-03-23T21:06:54.8Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/ed/d93f7a447bbf7a935d8868e9617cbe1cadf9ee9ee6bd275d3040fbf93d60/griffecli-2.0.0-py3-none-any.whl", hash = "sha256:9f7cd9ee9b21d55e91689358978d2385ae65c22f307a63fb3269acf3f21e643d", size = 9345, upload-time = "2026-02-09T19:09:42.554Z" },
 ]
@@ -199,6 +201,7 @@ wheels = [
 name = "griffelib"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/06/eccbd311c9e2b3ca45dbc063b93134c57a1ccc7607c5e545264ad092c4a9/griffelib-2.0.0.tar.gz", hash = "sha256:e504d637a089f5cab9b5daf18f7645970509bf4f53eda8d79ed71cce8bd97934", size = 166312, upload-time = "2026-03-23T21:06:55.954Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/51/c936033e16d12b627ea334aaaaf42229c37620d0f15593456ab69ab48161/griffelib-2.0.0-py3-none-any.whl", hash = "sha256:01284878c966508b6d6f1dbff9b6fa607bc062d8261c5c7253cb285b06422a7f", size = 142004, upload-time = "2026-02-09T19:09:40.561Z" },
 ]
@@ -577,14 +580,14 @@ wheels = [
 
 [[package]]
 name = "pyclickplc"
-version = "0.1.0"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymodbus" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/ed/003596602158fbc859a03d7b710c9f9be3d35e3a5cadfd0a9906f08c1285/pyclickplc-0.1.0.tar.gz", hash = "sha256:e8832a81b92c829e5d0691c9516720af72cef7d8bdd794f785b16a034e4c118d", size = 122353, upload-time = "2026-02-27T14:23:49.066Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/25/47d81ccf9b0a03cfbb479dafd430b7d69d903f8e78edf919993b4f5842ea/pyclickplc-0.3.0.tar.gz", hash = "sha256:54f972d9248d7f1b2d2fa921a55dcea387552a355d2d5796e1123eb64539ea93", size = 137740, upload-time = "2026-03-26T17:18:36.456Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/06/34/92814d0c31dcbfa9e3861625cfd0b248249f5ac6d47c2030f09eeea226e8/pyclickplc-0.1.0-py3-none-any.whl", hash = "sha256:148d20d14b0a512cf610440b21ff49215c2d70471ddcf660b93e5d9407d0d6da", size = 49203, upload-time = "2026-02-27T14:23:47.605Z" },
+    { url = "https://files.pythonhosted.org/packages/f1/9d/341c982d27e263215893f7a03d0425bb0ee620c96e61390a82665e822682/pyclickplc-0.3.0-py3-none-any.whl", hash = "sha256:8b111806033de1695360d7ba9afd494070c3c06a8918ec0a5ad817d9ac5c7cda", size = 52503, upload-time = "2026-03-26T17:18:34.863Z" },
 ]
 
 [[package]]
@@ -666,7 +669,7 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "pyclickplc" },
+    { name = "pyclickplc", specifier = ">=0.3.0" },
     { name = "pyrsistent", specifier = ">=0.20.0" },
 ]
 
