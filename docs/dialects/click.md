@@ -234,25 +234,42 @@ Common findings:
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
-## Ladder CSV export contract
+## Ladder CSV export
 
-`TagMap.to_ladder(program)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+`to_ladder(program, tag_map)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+
+```python
+from pyrung.click import to_ladder
+
+bundle = to_ladder(logic, mapping)
+bundle.main_rows          # inspect rows in-memory
+bundle.write("./output")  # write main.csv + sub_*.csv to disk
+```
 
 For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see:
 
 - [Click Ladder CSV Contract](click-ladder-csv.md)
 
-## CSV to Python codegen
+## Python codegen
 
-`csv_to_pyrung()` converts a Click ladder CSV (v2 format) back into executable pyrung Python source. The generated code round-trips: run it and call `to_ladder()` to reproduce the original CSV.
+`to_pyrung()` converts Click ladder data back into executable pyrung Python source. Accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
 
 ```python
-from pyrung.click import csv_to_pyrung
+from pyrung.click import to_pyrung
 
-code = csv_to_pyrung("main.csv")
+code = to_pyrung("main.csv")                    # from CSV file
+code = to_pyrung("ladder_dir/")                  # from directory with sub_*.csv
+code = to_pyrung(bundle)                         # from LadderBundle (no disk)
+code = to_pyrung("main.csv", output_path="generated.py")  # write to file
+```
 
-# or write to file:
-code = csv_to_pyrung("main.csv", output_path="generated.py")
+### Round-trip
+
+```python
+from pyrung.click import to_ladder, to_pyrung
+
+bundle = to_ladder(logic, mapping)
+code = to_pyrung(bundle)          # no CSV files needed
 ```
 
 ### Nickname substitution
@@ -266,9 +283,9 @@ Three ways to provide nicknames for readable variable names:
 Cannot provide both `nickname_csv` and `nicknames`.
 
 ```python
-code = csv_to_pyrung("main.csv", nickname_csv="Address.csv")
+code = to_pyrung("main.csv", nickname_csv="Address.csv")
 
-code = csv_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
+code = to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
 ```
 
 ### Structured type inference
@@ -329,14 +346,6 @@ Singleton structures (count=1) use dotted access without indexing: `Config.timeo
 
 For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md).
 
-### Subroutines
-
-Pass a directory containing `main.csv` and `sub_*.csv` files:
-
-```python
-code = csv_to_pyrung("ladder_dir/")
-```
-
 ### What codegen infers
 
 Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `any_of()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
@@ -345,7 +354,7 @@ For the CSV format that codegen reads, see the [Click Ladder CSV Contract](click
 
 ### Round-trip guarantee
 
-The generated code is designed to round-trip: `exec()` the output, then `mapping.to_ladder(logic)` reproduces the original CSV. This is tested extensively.
+The generated code is designed to round-trip: `exec()` the output, then `to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
 
 ## ClickDataProvider — soft PLC
 

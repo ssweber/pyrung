@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from pyrung.click.ladder import LadderBundle
     from pyrung.click.profile import HardwareProfile
     from pyrung.click.validation import ClickValidationReport, ValidationMode
     from pyrung.core.program import Program
@@ -1155,12 +1154,6 @@ class TagMap:
         from pyrung.click.validation import validate_click_program
 
         return validate_click_program(program, self, mode=mode, profile=profile)
-
-    def to_ladder(self, program: Program) -> LadderBundle:
-        """Render program logic as deterministic Click ladder CSV row matrices."""
-        from pyrung.click.ladder import build_ladder_bundle
-
-        return build_ladder_bundle(self, program)
 
     def mapped_slots(self) -> tuple[MappedSlot, ...]:
         """Return all mapped slots for runtime hardware-facing consumers."""

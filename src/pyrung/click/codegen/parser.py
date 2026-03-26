@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from pyrung.click.codegen.analyzer import _analyze_rungs
@@ -14,17 +15,18 @@ from pyrung.click.codegen.utils import _slugify
 # ---------------------------------------------------------------------------
 
 
-def _parse_csv(csv_path: Path) -> list[_RawRung]:
-    """Read a CSV v2 file and segment into raw rungs."""
-    with csv_path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f)
-        all_rows = list(reader)
+def _parse_rows(all_rows: Iterable[Iterable[str]]) -> list[_RawRung]:
+    """Segment header+data rows (strings) into raw rungs.
 
-    if not all_rows:
+    Accepts any iterable of string sequences — CSV reader output,
+    ``LadderBundle.main_rows``, or ``LadderBundle.subroutine_rows`` entries.
+    """
+    rows_list = [list(row) for row in all_rows]
+
+    if not rows_list:
         return []
 
-    # Validate header
-    header = all_rows[0]
+    header = rows_list[0]
     if len(header) != _HEADER_WIDTH:
         raise ValueError(f"Expected {_HEADER_WIDTH}-column header, got {len(header)} columns.")
 
@@ -32,20 +34,17 @@ def _parse_csv(csv_path: Path) -> list[_RawRung]:
     pending_comments: list[str] = []
     current_rung: _RawRung | None = None
 
-    for row in all_rows[1:]:
-        # Pad short rows
+    for row in rows_list[1:]:
         while len(row) < _HEADER_WIDTH:
             row.append("")
 
         marker = row[0]
 
         if marker == "#":
-            # Comment row — collect for the next rung
             pending_comments.append(row[1] if len(row) > 1 else "")
             continue
 
         if marker == "R":
-            # Start of a new rung
             if current_rung is not None:
                 rungs.append(current_rung)
             current_rung = _RawRung(
@@ -55,7 +54,6 @@ def _parse_csv(csv_path: Path) -> list[_RawRung]:
             pending_comments = []
             continue
 
-        # Continuation row (marker == "" or anything else)
         if current_rung is not None:
             current_rung.rows.append(row)
 
@@ -63,6 +61,14 @@ def _parse_csv(csv_path: Path) -> list[_RawRung]:
         rungs.append(current_rung)
 
     return rungs
+
+
+def _parse_csv(csv_path: Path) -> list[_RawRung]:
+    """Read a CSV v2 file and segment into raw rungs."""
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        all_rows = list(reader)
+    return _parse_rows(all_rows)
 
 
 # ---------------------------------------------------------------------------

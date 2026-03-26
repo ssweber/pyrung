@@ -183,9 +183,9 @@ ctd: Block = _block_from_bank_config(BANKS["CTD"])
 sd: Block = _block_from_bank_config(BANKS["SD"])
 txt: Block = _block_from_bank_config(BANKS["TXT"])
 
-from pyrung.click.codegen import csv_to_pyrung
+from pyrung.click.codegen import csv_to_pyrung, to_pyrung
 from pyrung.click.data_provider import ClickDataProvider
-from pyrung.click.ladder import LadderBundle, LadderExportError
+from pyrung.click.ladder import LadderBundle, LadderExportError, to_ladder
 from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
@@ -260,4 +260,6 @@ __all__ = [
     "RawInstruction",
     "raw",
     "csv_to_pyrung",
+    "to_ladder",
+    "to_pyrung",
 ]

@@ -2,7 +2,7 @@
 
 This document specifies the CSV contract emitted by Click ladder export:
 
-- API entrypoint: `TagMap.to_ladder(program)`
+- API entrypoint: `to_ladder(program, tag_map)`
 - File writer: `LadderBundle.write(directory)`
 
 It is intended for implementers building a CSV consumer/decoder.

@@ -1,4 +1,4 @@
-"""Tests for Click ladder CSV export (`TagMap.to_ladder`)."""
+"""Tests for Click ladder CSV export (`to_ladder`)."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from pyrung.click import (
     send,
     t,
     td,
+    to_ladder,
     txt,
     x,
     y,
@@ -96,7 +97,7 @@ def test_header_and_width_invariants():
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[0] == _header()
     assert all(len(row) == 33 for row in bundle.main_rows)
@@ -112,7 +113,7 @@ def test_and_example_golden():
             out(Y)
 
     mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -132,7 +133,7 @@ def test_or_expansion_with_trailing_and_golden():
             out(Y)
 
     mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -155,7 +156,7 @@ def test_branch_row_is_continuation_after_parent_conditions():
                 out(Y2)
 
     mapping = TagMap({A: x[1], Mode: x[2], Y1: y[1], Y2: y[2]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -185,7 +186,7 @@ def test_multiple_branches_stack_vertical_markers():
         {A: x[1], Mode1: x[2], Mode2: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[1][2] == "T"
     assert bundle.main_rows[2][2] == "T:X002"
@@ -213,7 +214,7 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
         {A: x[1], Mode: x[2], Y1: y[1], Y2: y[2], Y3: y[3]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -247,7 +248,7 @@ def test_multiple_instruction_rows_share_powered_path():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -279,7 +280,7 @@ def test_immediate_contact_and_coils_render_canonical_tokens():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -305,7 +306,7 @@ def test_immediate_contiguous_range_renders_compact_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[1][-1] == "out(immediate(Y001..Y004))"
 
@@ -325,7 +326,7 @@ def test_vertical_wire_stack_for_three_or_branches():
         {A: x[1], B: x[2], C: x[3], Ready: c[1], Y: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[1][2] == "T"
     assert bundle.main_rows[2][2] == "|"
@@ -358,7 +359,7 @@ def test_builder_pin_rows_are_independent_continuations():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[1][-1] == "count_up(CT1,CTD1,preset=5)"
     assert bundle.main_rows[2][-1] == ".down()"
@@ -377,7 +378,7 @@ def test_forloop_lowers_to_for_body_and_next_rows():
                 out(Light)
 
     mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows[1][-1] == "for(3,oneshot=1)"
     assert bundle.main_rows[2][0] == "R"
@@ -404,7 +405,7 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
                 return_early()
 
     mapping = TagMap({Start: x[1], SubOut: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert [name for name, _ in bundle.subroutine_rows] == ["alpha", "beta-two"]
@@ -442,7 +443,7 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)' in tokens
@@ -469,7 +470,7 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)'
     assert bundle.main_rows[1][-1] == expected
 
@@ -529,7 +530,7 @@ def test_tokens_include_explicit_defaults_and_oneshot():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert "out(Y001)" in tokens
@@ -560,7 +561,7 @@ def test_calc_hex_token_uses_inferred_hex_mode():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert any(",mode=hex)" in token for token in tokens if token.startswith("math("))
@@ -616,7 +617,7 @@ def test_calc_token_uses_click_native_operators():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert "math(DS1 ^ 2,DS3,mode=decimal)" in tokens
@@ -678,7 +679,7 @@ def test_calc_math_func_names_use_click_convention():
             {Enable: x[1], A: df[1], Result: df[2]},
             include_system=False,
         )
-        bundle = mapping.to_ladder(logic)
+        bundle = to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
         expected_prefix = f"math({click_name}(DF1),"
         assert any(token.startswith(expected_prefix) for token in tokens), (
@@ -707,7 +708,7 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
     )
 
     with pytest.raises(LadderExportError) as exc_info:
-        mapping.to_ladder(logic)
+        to_ladder(logic, mapping)
 
     assert any("CLK_CALC_MODE_MIXED" in str(issue["message"]) for issue in exc_info.value.issues)
 
@@ -856,7 +857,7 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
     assert tokens == [
@@ -903,7 +904,7 @@ def test_precheck_and_issue_payload():
     mapping = TagMap({A: ds[1], Dest: ds[2]}, include_system=False)
 
     with pytest.raises(LadderExportError) as exc_info:
-        mapping.to_ladder(logic)
+        to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
     assert "main.rung[0]" in str(issue["path"])
@@ -930,7 +931,7 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
     )
 
     with pytest.raises(LadderExportError) as exc_info:
-        mapping.to_ladder(logic)
+        to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
     assert "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS" in str(issue["message"])
@@ -955,7 +956,7 @@ def test_immediate_in_copy_fails_with_context_diagnostic():
     )
 
     with pytest.raises(LadderExportError) as exc_info:
-        mapping.to_ladder(logic)
+        to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
     assert "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED" in str(issue["message"])
@@ -980,7 +981,7 @@ def test_nested_subroutine_call_issue_includes_source_location():
     mapping = TagMap({A: x[1], SubOut: y[1]}, include_system=False)
 
     with pytest.raises(LadderExportError) as exc_info:
-        mapping.to_ladder(logic)
+        to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
     assert "subroutine[outer]" in str(issue["path"])
@@ -1001,7 +1002,7 @@ def test_comment_single_line():
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -1021,7 +1022,7 @@ def test_comment_multi_line():
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -1041,7 +1042,7 @@ def test_no_comment_no_extra_rows():
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (
         _header(),
@@ -1065,7 +1066,7 @@ def test_comment_with_branches():
                 out(Y2)
 
     mapping = TagMap({A: x[1], Mode: c[1], Y1: y[1], Y2: y[2]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     # Comment row should be first, before the R row
     assert bundle.main_rows[1] == ("#", "Branching rung.")
@@ -1083,7 +1084,7 @@ def test_comment_not_emitted_for_empty_branches():
                 pass
 
     mapping = TagMap({A: x[1], Mode: c[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
 
     assert bundle.main_rows == (_header(), _END_ROW)
 
@@ -1149,7 +1150,7 @@ def test_native_pattern_1_mid_rung_or():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
         _blank_row("", ["", "C1"]),
@@ -1169,7 +1170,7 @@ def test_native_pattern_2_series_ors():
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T", "T:C1", "T"], "out(Y001)"),
         _blank_row("", ["X002", "", "C2"]),
@@ -1194,7 +1195,7 @@ def test_native_pattern_3_or_plus_branch():
         {X001: x[1], X002: x[2], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
         _row("", ["X002", "", "C1"], "out(Y002)"),
@@ -1220,7 +1221,7 @@ def test_native_pattern_4_three_way_or_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
         _row("", ["X002", "|", "C1"], "out(Y002)"),
@@ -1259,7 +1260,7 @@ def test_native_pattern_5_combined_or_multi_output_branch():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "T", "T"], "out(Y001)"),
         _row("", ["", "T:X003", "|", "T:C1"], "out(Y002)"),
@@ -1285,7 +1286,7 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], C3: c[3], Y001: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T:X002", "-", "-", "T:X003"], "out(Y001)"),
         _blank_row("", ["", "C1", "C2", "C3"]),
@@ -1314,7 +1315,7 @@ def test_native_pattern_7_or_with_two_branches():
         {X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2], Y003: y[3]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T", "T"], "out(Y001)"),
         _row("", ["X002", "", "T:C1"], "out(Y002)"),
@@ -1342,7 +1343,7 @@ def test_native_pattern_8_series_ors_plus_branch():
         {X001: x[1], X002: x[2], X003: x[3], C1: c[1], C2: c[2], Y001: y[1], Y002: y[2]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     expected = (
         _row("R", ["X001", "T", "T:C1", "T", "T"], "out(Y001)"),
         _row("", ["X002", "", "C2", "", "X003"], "out(Y002)"),
@@ -1364,7 +1365,7 @@ def test_calc_sum_expr_renders_colon_range():
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert any("SUM ( DH1 : DH5 )" in token for token in tokens), f"tokens={tokens}"
 
@@ -1383,7 +1384,7 @@ def test_calc_sum_expr_hex_mode():
         {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert any("mode=hex" in token for token in tokens), f"tokens={tokens}"
 
@@ -1402,7 +1403,7 @@ def test_calc_sum_expr_decimal_mode():
         {Enable: x[1], Result: ds[100], **{DS[i]: ds[i] for i in range(1, 11)}},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert any("mode=decimal" in token for token in tokens), f"tokens={tokens}"
 
@@ -1425,7 +1426,7 @@ def test_summary_includes_calc_rename():
         {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     s = bundle.export_summary
     assert ("calc", "math") in s.renames
     assert s.added_end is True
@@ -1445,7 +1446,7 @@ def test_summary_omits_calc_rename_when_unused():
         {Enable: x[1], Light: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     s = bundle.export_summary
     assert ("calc", "math") not in s.renames
     assert "calc" not in s.summary()
@@ -1468,7 +1469,7 @@ def test_summary_counts_forloop_next():
         {Enable: x[1], Light: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     s = bundle.export_summary
     assert s.added_next == 2
     assert ("forloop", "for") in s.renames
@@ -1491,7 +1492,7 @@ def test_summary_counts_subroutine_return():
         {Enable: x[1], Light: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     s = bundle.export_summary
     assert s.added_return == 1
     assert "return() on 1 subroutine" in s.summary()
@@ -1515,7 +1516,7 @@ def test_summary_return_not_counted_when_explicit():
         {Enable: x[1], Light: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     s = bundle.export_summary
     assert s.added_return == 0
 
@@ -1533,7 +1534,7 @@ def test_summary_end_always_present():
         {Enable: x[1], Light: y[1]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     assert bundle.export_summary.added_end is True
     assert "end() on main" in bundle.export_summary.summary()
 
@@ -1561,7 +1562,7 @@ def test_summary_str_format():
         {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     text = str(bundle.export_summary)
     lines = text.split("\n")
     assert len(lines) == 2
@@ -1603,7 +1604,7 @@ def test_send_rtu_target_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusRtuTarget(name="vfd1",com_port="slot0_1",device_id=5),'
@@ -1646,7 +1647,7 @@ def test_receive_rtu_target_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusRtuTarget(name="vfd1",com_port="cpu2",device_id=3),'
@@ -1689,7 +1690,7 @@ def test_send_modbus_address_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
@@ -1733,7 +1734,7 @@ def test_receive_modbus_address_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
@@ -1777,7 +1778,7 @@ def test_send_rtu_modbus_address_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
@@ -1821,7 +1822,7 @@ def test_receive_rtu_modbus_address_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
@@ -1865,7 +1866,7 @@ def test_send_block_range_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
@@ -1908,7 +1909,7 @@ def test_receive_block_range_token():
         },
         include_system=False,
     )
-    bundle = mapping.to_ladder(logic)
+    bundle = to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
     assert tokens[0] == (
         'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'

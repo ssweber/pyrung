@@ -1,4 +1,4 @@
-"""Tests for CSV v2 → pyrung codegen (``csv_to_pyrung``)."""
+"""Tests for CSV v2 → pyrung codegen (``to_pyrung``)."""
 
 from __future__ import annotations
 
@@ -10,13 +10,14 @@ import pytest
 from pyrung.click import (
     TagMap,
     c,
-    csv_to_pyrung,
     ct,
     ctd,
     dh,
     ds,
     t,
     td,
+    to_ladder,
+    to_pyrung,
     x,
     y,
 )
@@ -62,7 +63,7 @@ from pyrung.core.program import (
 
 def _export_csv(program: Program, tag_map: TagMap, tmp_path: Path) -> Path:
     """Export a program to CSV bundle and return the main.csv path."""
-    bundle = tag_map.to_ladder(program)
+    bundle = to_ladder(program, tag_map)
     bundle.write(tmp_path)
     return tmp_path / "main.csv"
 
@@ -78,7 +79,7 @@ def _round_trip(
 
     Returns (generated_code, original_rows, reproduced_rows).
     """
-    bundle = tag_map.to_ladder(program)
+    bundle = to_ladder(program, tag_map)
     original_rows = list(bundle.main_rows)
 
     # Write full bundle (main.csv + sub_*.csv)
@@ -88,7 +89,7 @@ def _round_trip(
     # If subroutines exist, pass directory; otherwise pass main.csv
     has_subs = bool(bundle.subroutine_rows)
     csv_input = csv_dir if has_subs else csv_dir / "main.csv"
-    code = csv_to_pyrung(csv_input, nicknames=nicknames)
+    code = to_pyrung(csv_input, nicknames=nicknames)
 
     # Execute the generated code
     ns: dict = {}
@@ -97,7 +98,7 @@ def _round_trip(
     # Re-export
     logic2 = ns["logic"]
     mapping2 = ns["mapping"]
-    bundle2 = mapping2.to_ladder(logic2)
+    bundle2 = to_ladder(logic2, mapping2)
     reproduced_rows = list(bundle2.main_rows)
 
     return code, original_rows, reproduced_rows
@@ -1828,6 +1829,68 @@ class TestRoundTrip:
 
 
 # ---------------------------------------------------------------------------
+# In-memory round-trip tests (LadderBundle → to_pyrung, no disk I/O)
+# ---------------------------------------------------------------------------
+
+
+class TestInMemoryRoundTrip:
+    def test_bundle_round_trip_no_disk(self):
+        """to_pyrung(bundle) produces valid code without writing CSV to disk."""
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        bundle = to_ladder(logic, mapping)
+        code = to_pyrung(bundle)
+
+        ns: dict = {}
+        exec(code, ns)
+
+        logic2 = ns["logic"]
+        mapping2 = ns["mapping"]
+        bundle2 = to_ladder(logic2, mapping2)
+
+        assert list(bundle.main_rows) == list(bundle2.main_rows)
+
+    def test_bundle_round_trip_with_subroutines(self, tmp_path: Path):
+        """to_pyrung(bundle) handles subroutine rows in-memory."""
+        from pyrung.core.program import call, subroutine
+
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(A):
+                call("my_sub")
+
+            with subroutine("my_sub"):
+                with Rung(A):
+                    out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+
+        # First via disk (reference)
+        bundle = to_ladder(logic, mapping)
+        csv_dir = tmp_path / "ref"
+        bundle.write(csv_dir)
+        code_disk = to_pyrung(csv_dir)
+
+        # Then via in-memory
+        code_mem = to_pyrung(bundle)
+
+        assert code_disk == code_mem
+
+    def test_bundle_round_trip_type_error(self):
+        """to_pyrung rejects unsupported source types."""
+        with pytest.raises(TypeError, match="source must be"):
+            to_pyrung(42)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # Nickname merge tests
 # ---------------------------------------------------------------------------
 
@@ -1846,7 +1909,7 @@ class TestNicknameMerge:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         nicks = {"X001": "start_button", "Y001": "motor_out"}
-        code = csv_to_pyrung(csv_path, nicknames=nicks)
+        code = to_pyrung(csv_path, nicknames=nicks)
 
         assert 'start_button = Bool("start_button")' in code
         assert 'motor_out = Bool("motor_out")' in code
@@ -1880,7 +1943,7 @@ class TestNicknameMerge:
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
-        code = csv_to_pyrung(csv_path)
+        code = to_pyrung(csv_path)
 
         assert 'X001 = Bool("X001")' in code
         assert 'Y001 = Bool("Y001")' in code
@@ -1892,7 +1955,7 @@ class TestNicknameMerge:
         csv_path.write_text("marker,A\n")
 
         with pytest.raises(ValueError, match="not both"):
-            csv_to_pyrung(csv_path, nickname_csv="foo.csv", nicknames={"X001": "a"})
+            to_pyrung(csv_path, nickname_csv="foo.csv", nicknames={"X001": "a"})
 
 
 # ---------------------------------------------------------------------------
@@ -1912,7 +1975,7 @@ class TestCodeGeneration:
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
-        code = csv_to_pyrung(csv_path)
+        code = to_pyrung(csv_path)
 
         assert "from pyrung import" in code
         assert "Program" in code
@@ -1935,7 +1998,7 @@ class TestCodeGeneration:
         csv_path = _export_csv(logic, mapping, tmp_path)
 
         out_path = tmp_path / "generated.py"
-        code = csv_to_pyrung(csv_path, output_path=out_path)
+        code = to_pyrung(csv_path, output_path=out_path)
 
         assert out_path.exists()
         assert out_path.read_text(encoding="utf-8") == code
@@ -1951,7 +2014,7 @@ class TestCodeGeneration:
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
-        code = csv_to_pyrung(csv_path)
+        code = to_pyrung(csv_path)
 
         assert "mapping = TagMap({" in code
         assert "x[1]" in code
@@ -1990,7 +2053,7 @@ class TestStructuredCodegen:
             {Enable: x[1], Channel_id_1: ds[101], Channel_id_2: ds[103]},
             include_system=False,
         )
-        bundle = mapping.to_ladder(logic)
+        bundle = to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv_out"
         bundle.write(csv_dir)
 
@@ -2046,7 +2109,7 @@ class TestStructuredCodegen:
             },
         )
 
-        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        code = to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "@named_array(" in code
         assert "class Channel:" in code
@@ -2072,7 +2135,7 @@ class TestStructuredCodegen:
             {Enable: x[1], Motor_running: c[101], Motor_speed: ds[1001]},
             include_system=False,
         )
-        bundle = mapping.to_ladder(logic)
+        bundle = to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv_out"
         bundle.write(csv_dir)
 
@@ -2127,7 +2190,7 @@ class TestStructuredCodegen:
             },
         )
 
-        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        code = to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "@udt(" in code
         assert "class Motor:" in code
@@ -2153,7 +2216,7 @@ class TestStructuredCodegen:
             {Enable: x[1], Ch_id: ds[101], Flat: ds[200]},
             include_system=False,
         )
-        bundle = mapping.to_ladder(logic)
+        bundle = to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv_out"
         bundle.write(csv_dir)
 
@@ -2199,7 +2262,7 @@ class TestStructuredCodegen:
             },
         )
 
-        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        code = to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         # Should have both structure and flat tags
         assert "@named_array(" in code
@@ -2224,7 +2287,7 @@ class TestStructuredCodegen:
             {Enable: x[1], Config_timeout: ds[301]},
             include_system=False,
         )
-        bundle = mapping.to_ladder(logic)
+        bundle = to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv_out"
         bundle.write(csv_dir)
 
@@ -2261,7 +2324,7 @@ class TestStructuredCodegen:
             },
         )
 
-        code = csv_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+        code = to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         # Singleton → should use Config.timeout not Config[1].timeout
         assert "Config.timeout" in code
