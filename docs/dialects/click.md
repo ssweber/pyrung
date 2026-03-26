@@ -109,7 +109,7 @@ This DSL follows Click PLC instruction naming as closely as possible, departing 
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
-The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [CSV contract](click-ladder-csv.md) for full token grammar.
+The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/) for the full token grammar.
 
 ## Writing a Click program
 
@@ -246,9 +246,7 @@ bundle.main_rows          # inspect rows in-memory
 bundle.write("./output")  # write main.csv + sub_*.csv to disk
 ```
 
-For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see:
-
-- [Click Ladder CSV Contract](click-ladder-csv.md)
+For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
 
 ## Python codegen
 
@@ -350,7 +348,7 @@ For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](
 
 Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `any_of()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
 
-For the CSV format that codegen reads, see the [Click Ladder CSV Contract](click-ladder-csv.md).
+For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
 
 ### Round-trip guarantee
 
