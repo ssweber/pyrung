@@ -811,6 +811,22 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "_scan_overrun_count += 1" in source_code
         assert "PRINT_SCAN_OVERRUNS" in source_code
 
+    def test_gc_management_emitted(self):
+        hw, di, do = _basic_hw()
+        with Program(strict=False) as prog:
+            with Rung(di[1]):
+                out(do[1])
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "import gc\n" in source_code
+        assert "\ngc.disable()\n" in source_code
+        # gc.disable() must appear before the scan loop
+        assert source_code.index("gc.disable()") < source_code.index("while True:")
+        # gc.collect() must appear inside the scan loop, after scan pacing
+        loop_body = source_code[source_code.index("while True:") :]
+        assert "    gc.collect()" in loop_body
+        assert loop_body.index("sleep_ms") < loop_body.index("gc.collect()")
+
 
 class TestIOMappingAndBranching:
     def test_discrete_analog_temperature_and_combo_mapping(self):
