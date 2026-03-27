@@ -50,6 +50,7 @@ class Rung:
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
         self._branch_condition_start = 0
+        self._use_prior_snapshot = False
         self.source_file = source_file
         self.source_line = source_line
         self.end_line = end_line
@@ -120,12 +121,26 @@ class Rung:
         A ConditionView is frozen at rung entry so that all branch conditions
         — at every nesting depth — evaluate against the same snapshot.
 
+        If ``_use_prior_snapshot`` is set (via ``.continued()``), the
+        ConditionView from the previous rung is reused instead of creating
+        a fresh one — all conditions evaluate against the same pre-instruction
+        state as that earlier rung.
+
         Args:
             ctx: ScanContext for reading/writing with batched updates.
         """
         from pyrung.core.context import ConditionView
 
-        condition_view = ConditionView(ctx)
+        if self._use_prior_snapshot:
+            condition_view = ctx._condition_snapshot
+            if condition_view is None:
+                raise RuntimeError(
+                    "Rung.continued() used but no prior condition snapshot exists. "
+                    "continued() cannot be used on the first rung."
+                )
+        else:
+            condition_view = ConditionView(ctx)
+            ctx._condition_snapshot = condition_view
         conditions_true = self._evaluate_conditions(condition_view)
         self.execute(ctx, conditions_true, condition_view=condition_view)
 

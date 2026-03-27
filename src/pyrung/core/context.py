@@ -100,6 +100,7 @@ class ScanContext:
         "_memory_pending",
         "_resolver",
         "_read_only_tags",
+        "_condition_snapshot",
     )
 
     def __init__(
@@ -121,6 +122,7 @@ class ScanContext:
         self._memory_pending: dict[str, Any] = {}
         self._resolver = resolver
         self._read_only_tags = read_only_tags
+        self._condition_snapshot: ConditionView | None = None
 
     # =========================================================================
     # Read operations (with pending visibility)
