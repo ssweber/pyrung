@@ -109,7 +109,6 @@ class TestContinueWithBranch:
     def test_continue_rung_with_branch(self):
         """Branches within a continue rung share the same snapshot."""
         A = Bool("A")
-        B = Bool("B")
         X = Bool("X")
         Y = Bool("Y")
         Z = Bool("Z")
@@ -123,7 +122,7 @@ class TestContinueWithBranch:
                     # X was False in the snapshot, so branch is unpowered
                     out(Z)
 
-        state = SystemState().with_tags({"A": True, "B": False, "X": False, "Y": False, "Z": False})
+        state = SystemState().with_tags({"A": True, "X": False, "Y": False, "Z": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is True  # rung 1 set it
@@ -140,7 +139,7 @@ class TestContinueStaticValidation:
         X = Bool("X")
 
         with pytest.raises(RuntimeError, match="cannot be the first rung in a program"):
-            with Program() as logic:
+            with Program():
                 with Rung(A).continued():
                     out(X)
 
@@ -153,7 +152,7 @@ class TestContinueStaticValidation:
         Y = Bool("Y")
 
         with pytest.raises(RuntimeError, match="cannot be the first rung in a subroutine"):
-            with Program() as logic:
+            with Program():
                 with Rung(A):
                     out(X)
                 with subroutine("my_sub"):
