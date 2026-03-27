@@ -119,9 +119,7 @@ def _parse_subroutines(
         )
 
     sub_entries = sorted(
-        (p, p.stem)
-        for p in subroutine_dir.iterdir()
-        if p.is_file() and p.suffix.lower() == ".csv"
+        (p, p.stem) for p in subroutine_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"
     )
     present_slugs = {slug for _, slug in sub_entries}
     missing = sorted(slug for slug in call_names if slug not in present_slugs)
