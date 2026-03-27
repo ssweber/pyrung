@@ -290,7 +290,7 @@ from pyrung.click import to_ladder
 
 bundle = to_ladder(logic, mapping)
 bundle.main_rows          # inspect rows in-memory
-bundle.write("./output")  # write main.csv + sub_*.csv to disk
+bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 ```
 
 For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
@@ -303,7 +303,7 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 from pyrung.click import to_pyrung
 
 code = to_pyrung("main.csv")                    # from CSV file
-code = to_pyrung("ladder_dir/")                  # from directory with sub_*.csv
+code = to_pyrung("ladder_dir/")                  # from directory with subroutines/*.csv
 code = to_pyrung(bundle)                         # from LadderBundle (no disk)
 code = to_pyrung("main.csv", output_path="generated.py")  # write to file
 ```

@@ -105,17 +105,23 @@ class LadderBundle:
             writer = csv.writer(handle)
             writer.writerows(self.main_rows)
 
-        slug_counts: dict[str, int] = {}
-        for subroutine_name, rows in self.subroutine_rows:
-            base_slug = _slugify(subroutine_name)
-            count = slug_counts.get(base_slug, 0)
-            slug_counts[base_slug] = count + 1
-            # Keep filenames unique when multiple subroutines slugify to the same value.
-            slug = base_slug if count == 0 else f"{base_slug}_{count + 1}"
+        if self.subroutine_rows:
+            subroutine_dir = output_dir / "subroutines"
+            subroutine_dir.mkdir(parents=True, exist_ok=True)
 
-            with (output_dir / f"sub_{slug}.csv").open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.writer(handle)
-                writer.writerows(rows)
+            slug_counts: dict[str, int] = {}
+            for subroutine_name, rows in self.subroutine_rows:
+                base_slug = _slugify(subroutine_name)
+                count = slug_counts.get(base_slug, 0)
+                slug_counts[base_slug] = count + 1
+                # Keep filenames unique when multiple subroutines slugify to the same value.
+                slug = base_slug if count == 0 else f"{base_slug}_{count + 1}"
+
+                with (subroutine_dir / f"{slug}.csv").open(
+                    "w", encoding="utf-8", newline=""
+                ) as handle:
+                    writer = csv.writer(handle)
+                    writer.writerows(rows)
 
         summary_text = self.export_summary.summary()
         if summary_text:

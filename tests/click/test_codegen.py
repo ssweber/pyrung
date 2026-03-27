@@ -82,7 +82,7 @@ def _round_trip(
     bundle = to_ladder(program, tag_map)
     original_rows = list(bundle.main_rows)
 
-    # Write full bundle (main.csv + sub_*.csv)
+    # Write full bundle (main.csv + subroutines/*.csv)
     csv_dir = tmp_path / "original"
     bundle.write(csv_dir)
 
@@ -2027,6 +2027,58 @@ class TestInMemoryRoundTrip:
         code_mem = to_pyrung(bundle)
 
         assert code_disk == code_mem
+
+    def test_disk_round_trip_with_subroutines_from_main_csv_path(self, tmp_path: Path):
+        """Passing main.csv still loads sibling subroutine CSV files."""
+        from pyrung.core.program import call, subroutine
+
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(A):
+                call("my_sub")
+
+            with subroutine("my_sub"):
+                with Rung(A):
+                    out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        bundle = to_ladder(logic, mapping)
+        csv_dir = tmp_path / "ref"
+        bundle.write(csv_dir)
+
+        assert (csv_dir / "subroutines" / "my_sub.csv").exists()
+        assert to_pyrung(csv_dir / "main.csv") == to_pyrung(csv_dir)
+
+    def test_disk_import_requires_subroutines_directory(self, tmp_path: Path):
+        """Subroutine imports require the sibling subroutines directory."""
+        from pyrung.core.program import call, subroutine
+
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(A):
+                call("my_sub")
+
+            with subroutine("my_sub"):
+                with Rung(A):
+                    out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        bundle = to_ladder(logic, mapping)
+        csv_dir = tmp_path / "missing_subs"
+        bundle.write(csv_dir)
+
+        (csv_dir / "subroutines" / "my_sub.csv").unlink()
+        (csv_dir / "subroutines").rmdir()
+
+        with pytest.raises(ValueError, match="subroutines directory not found"):
+            to_pyrung(csv_dir)
+
+        with pytest.raises(ValueError, match="subroutines directory not found"):
+            to_pyrung(csv_dir / "main.csv")
 
     def test_bundle_round_trip_type_error(self):
         """to_pyrung rejects unsupported source types."""

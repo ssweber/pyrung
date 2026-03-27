@@ -17,7 +17,7 @@ class _RawRung:
 
 @dataclass
 class _SubroutineInfo:
-    """A subroutine parsed from a sub_*.csv file."""
+    """A subroutine parsed from a subroutine CSV file."""
 
     name: str  # original subroutine name (from call() match or slug)
     analyzed: list[_AnalyzedRung]

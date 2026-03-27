@@ -499,7 +499,7 @@ def test_realistic_csv_roundtrip(tmp_path: Path):
     bundle.write(out_dir)
 
     assert (out_dir / "main.csv").exists()
-    assert (out_dir / "sub_service.csv").exists()
+    assert (out_dir / "subroutines" / "service.csv").exists()
 
     # Read back and compare row-by-row.
     with (out_dir / "main.csv").open("r", encoding="utf-8", newline="") as f:

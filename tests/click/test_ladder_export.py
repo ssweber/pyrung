@@ -418,8 +418,8 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
     out_dir = tmp_path / "ladder"
     bundle.write(out_dir)
     assert (out_dir / "main.csv").exists()
-    assert (out_dir / "sub_alpha.csv").exists()
-    assert (out_dir / "sub_beta_two.csv").exists()
+    assert (out_dir / "subroutines" / "alpha.csv").exists()
+    assert (out_dir / "subroutines" / "beta_two.csv").exists()
 
 
 def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():

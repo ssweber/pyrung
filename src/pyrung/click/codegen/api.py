@@ -29,8 +29,8 @@ def to_pyrung(
 
     Args:
         source: A file path (to main.csv or a directory containing main.csv
-            and optional sub_*.csv files), or a :class:`LadderBundle` for
-            in-memory round-trip without disk I/O.
+            and optional ``subroutines/*.csv`` files), or a
+            :class:`LadderBundle` for in-memory round-trip without disk I/O.
         nickname_csv: Optional path to a Click nickname CSV file (Address.csv).
             Read via ``pyclickplc.read_csv()``, extracts ``{display_address: nickname}``
             pairs for variable name substitution.
@@ -44,7 +44,8 @@ def to_pyrung(
 
     Raises:
         ValueError: If both ``nickname_csv`` and ``nicknames`` are provided,
-            or if the CSV format is invalid.
+            if required subroutine CSV files are missing, or if the CSV
+            format is invalid.
         TypeError: If ``source`` is not a supported type.
     """
     if nickname_csv is not None and nicknames is not None:

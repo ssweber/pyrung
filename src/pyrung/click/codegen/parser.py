@@ -111,16 +111,26 @@ def _parse_subroutines(
     dir_path: Path,
     call_names: dict[str, str],
 ) -> list[_SubroutineInfo]:
-    """Parse sub_*.csv files and match to call() names."""
-    sub_paths = sorted(
-        p
-        for p in dir_path.iterdir()
-        if p.is_file() and p.suffix.lower() == ".csv" and p.name.startswith("sub_")
+    """Parse ``subroutines/{slug}.csv`` files and match them to call() names."""
+    subroutine_dir = dir_path / "subroutines"
+    if not subroutine_dir.is_dir():
+        raise ValueError(
+            f"subroutines directory not found in {dir_path}; expected {subroutine_dir}"
+        )
+
+    sub_entries = sorted(
+        (p, p.stem)
+        for p in subroutine_dir.iterdir()
+        if p.is_file() and p.suffix.lower() == ".csv"
     )
+    present_slugs = {slug for _, slug in sub_entries}
+    missing = sorted(slug for slug in call_names if slug not in present_slugs)
+    if missing:
+        expected = ", ".join(f"{slug}.csv" for slug in missing)
+        raise ValueError(f"Missing subroutine CSV file(s) in {subroutine_dir}: {expected}")
 
     subs: list[_SubroutineInfo] = []
-    for sub_path in sub_paths:
-        slug = sub_path.stem[4:]  # remove "sub_" prefix
+    for sub_path, slug in sub_entries:
         name = call_names.get(slug, slug)
         raw = _parse_csv(sub_path)
         analyzed = _analyze_rungs(raw)
