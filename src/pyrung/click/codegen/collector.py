@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.click.codegen.constants import (
@@ -13,10 +14,13 @@ from pyrung.click.codegen.constants import (
     _TIME_UNITS,
 )
 from pyrung.click.codegen.models import (
+    Leaf,
+    Parallel,
+    Series,
+    SPNode,
     _AnalyzedRung,
     _FieldHw,
     _OperandCollection,
-    _OrLevel,
     _RangeDecl,
     _StructureDecl,
     _TagDecl,
@@ -25,6 +29,48 @@ from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_stri
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
+
+
+# ---------------------------------------------------------------------------
+# SP tree helpers
+# ---------------------------------------------------------------------------
+
+
+def _walk_tree_labels(node: SPNode | None) -> Iterator[str]:
+    """Yield all Leaf labels from an SP tree."""
+    if node is None:
+        return
+    if isinstance(node, Leaf):
+        yield node.label
+    elif isinstance(node, (Series, Parallel)):
+        for child in node.children:
+            yield from _walk_tree_labels(child)
+
+
+def _tree_has_parallel(node: SPNode | None) -> bool:
+    """Check if tree contains any Parallel node."""
+    if node is None:
+        return False
+    if isinstance(node, Parallel):
+        return True
+    if isinstance(node, Series):
+        return any(_tree_has_parallel(c) for c in node.children)
+    return False
+
+
+def _tree_has_all_of(node: SPNode | None) -> bool:
+    """Check if tree has a multi-child Series inside a Parallel."""
+    if node is None:
+        return False
+    if isinstance(node, Parallel):
+        for child in node.children:
+            if isinstance(child, Series) and len(child.children) > 1:
+                return True
+            if _tree_has_all_of(child):
+                return True
+    if isinstance(node, Series):
+        return any(_tree_has_all_of(c) for c in node.children)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -42,30 +88,28 @@ def _collect_operands(
     collection = _OperandCollection()
 
     for rung in rungs:
-        if any(isinstance(e, _OrLevel) for e in rung.condition_seq):
+        if _tree_has_parallel(rung.condition_tree):
             collection.has_any_of = True
+        if _tree_has_all_of(rung.condition_tree):
+            collection.has_all_of = True
 
         if rung.is_forloop_start:
             collection.has_forloop = True
 
-        # Scan conditions
-        all_conditions: list[str] = []
-        for elem in rung.condition_seq:
-            if isinstance(elem, str):
-                all_conditions.append(elem)
-            else:
-                for group in elem.groups:
-                    all_conditions.extend(group.conditions)
-
-        for cond in all_conditions:
+        # Scan conditions from tree
+        for cond in _walk_tree_labels(rung.condition_tree):
             _scan_token_for_operands(cond, collection, nicknames)
 
         # Scan instructions
         for instr in rung.instructions:
             _scan_af_token(instr.af_token, collection, nicknames)
-            for cond in instr.branch_conditions:
+            for cond in _walk_tree_labels(instr.branch_tree):
                 _scan_token_for_operands(cond, collection, nicknames)
-            if instr.branch_conditions:
+            if _tree_has_parallel(instr.branch_tree):
+                collection.has_any_of = True
+            if _tree_has_all_of(instr.branch_tree):
+                collection.has_all_of = True
+            if instr.branch_tree is not None:
                 collection.has_branch = True
             for pin in instr.pins:
                 for cond in pin.conditions:

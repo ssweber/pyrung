@@ -38,26 +38,38 @@ class _PinInfo:
 
 
 @dataclass
+class Leaf:
+    """A single condition token in the SP tree."""
+
+    label: str
+    row: int = 0
+    col: int = 0
+
+
+@dataclass
+class Series:
+    """AND: children evaluated left-to-right."""
+
+    children: list[Leaf | Series | Parallel]
+
+
+@dataclass
+class Parallel:
+    """OR: children evaluated top-to-bottom."""
+
+    children: list[Leaf | Series | Parallel]
+
+
+SPNode = Leaf | Series | Parallel
+
+
+@dataclass
 class _InstructionInfo:
-    """One instruction (AF token) with optional branch conditions and pins."""
+    """One instruction (AF token) with optional branch tree and pins."""
 
     af_token: str
-    branch_conditions: list[str]  # conditions after split column (branch-local)
+    branch_tree: SPNode | None  # branch-local conditions (SP tree)
     pins: list[_PinInfo]
-
-
-@dataclass
-class _OrGroup:
-    """One OR alternative: a list of condition tokens."""
-
-    conditions: list[str]
-
-
-@dataclass
-class _OrLevel:
-    """One ``any_of()`` grouping in the condition sequence."""
-
-    groups: list[_OrGroup]
 
 
 @dataclass
@@ -65,20 +77,11 @@ class _AnalyzedRung:
     """Fully analyzed rung topology."""
 
     comment: str | None
-    condition_seq: list[str | _OrLevel]  # ordered AND conditions and OR levels
+    condition_tree: SPNode | None  # shared conditions (SP tree)
     instructions: list[_InstructionInfo]
     is_forloop_start: bool = False
     is_forloop_body: bool = False
     is_forloop_next: bool = False
-
-
-@dataclass
-class _PathResult:
-    """One path through the grid: collected conditions → AF instruction."""
-
-    conditions: list[str]
-    af_token: str
-    af_row: int
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +155,7 @@ class _OperandCollection:
     used_copy_converters: set[str] = field(default_factory=set)  # to_value, to_text, etc.
     used_expr_funcs: set[str] = field(default_factory=set)  # sqrt, lsh, etc.
     has_any_of: bool = False
+    has_all_of: bool = False
     has_branch: bool = False
     has_subroutine: bool = False
     has_forloop: bool = False

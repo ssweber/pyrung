@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
+import warnings
+from collections import defaultdict
+from dataclasses import dataclass
+
+from pyrung.click.codegen.constants import _CONDITION_COLS, _PIN_RE
 from pyrung.click.codegen.models import (
+    Leaf,
+    Parallel,
+    Series,
+    SPNode,
     _AnalyzedRung,
     _InstructionInfo,
-    _OrGroup,
-    _OrLevel,
-    _PathResult,
     _PinInfo,
     _RawRung,
 )
@@ -33,15 +38,6 @@ def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     return tokens
 
 
-def _cell_exits(cell: str) -> tuple[str, ...]:
-    """Exit directions for a cell type (content tokens default to left/right)."""
-    if not cell:
-        return ()
-    if cell.startswith("T:"):
-        return ("left", "right", "down")
-    return _ADJACENCY.get(cell, ("left", "right"))
-
-
 def _cell_at(rows: list[list[str]], r: int, c: int) -> str:
     """Cell value at condition column *c* on row *r* (empty if out of bounds)."""
     if 0 <= r < len(rows) and 0 <= c < _CONDITION_COLS:
@@ -55,335 +51,513 @@ def _is_pin_row(row: list[str]) -> bool:
     return bool(af and af.startswith("."))
 
 
-def _walk_grid(
+# ---------------------------------------------------------------------------
+# Union-Find
+# ---------------------------------------------------------------------------
+
+
+class _UF:
+    """Lightweight Union-Find for wire port merging."""
+
+    def __init__(self) -> None:
+        self._parent: list[int] = []
+
+    def make(self) -> int:
+        n = len(self._parent)
+        self._parent.append(n)
+        return n
+
+    def find(self, x: int) -> int:
+        while self._parent[x] != x:
+            self._parent[x] = self._parent[self._parent[x]]
+            x = self._parent[x]
+        return x
+
+    def union(self, a: int, b: int) -> None:
+        a, b = self.find(a), self.find(b)
+        if a != b:
+            self._parent[b] = a
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Grid → Multigraph
+# ---------------------------------------------------------------------------
+
+_WIRE_CELLS = {"-", "T", "|"}
+
+
+@dataclass
+class _Edge:
+    """A labeled edge in the multigraph."""
+
+    src: int
+    dst: int
+    tree: SPNode
+    min_row: int
+    min_col: int
+
+
+def _cell_has_down(cell: str) -> bool:
+    """Does this cell have a down exit?"""
+    if not cell:
+        return False
+    if cell.startswith("T:"):
+        return True
+    return cell in ("T", "|")
+
+
+def _grid_to_graph(
     rows: list[list[str]],
     pin_row_set: set[int],
-) -> list[_PathResult]:
-    """Find root cells and DFS-walk from each."""
-    n_rows = len(rows)
-    paths: list[_PathResult] = []
+) -> tuple[int | None, list[tuple[int, str, int]], list[_Edge]]:
+    """Convert grid to multigraph.
 
-    # Primary roots: first non-blank cell in column 0 per non-pin row.
-    roots: list[tuple[int, int]] = []
-    primary_col0_root_rows: set[int] = set()
+    Returns ``(source_node, sinks, edges)`` where sinks is a list of
+    ``(node_id, af_token, af_row)`` tuples.
+    """
+    uf = _UF()
+    n_rows = len(rows)
+
+    # Port IDs for each occupied cell: (r, c) -> (left, right, down)
+    # down is only meaningful for T/|/T:token cells.
+    left_port: dict[tuple[int, int], int] = {}
+    right_port: dict[tuple[int, int], int] = {}
+    down_port: dict[tuple[int, int], int] = {}
+
+    # 1. Assign ports
     for r in range(n_rows):
         if r in pin_row_set:
             continue
-        if _cell_at(rows, r, 0):
-            roots.append((r, 0))
-            primary_col0_root_rows.add(r)
-
-    # Supplemental roots: AF-blank rows with blank column 0 whose first
-    # non-blank cell is a T/T: vertical-chain head.
-    for r in range(n_rows):
-        if r in pin_row_set or r in primary_col0_root_rows:
-            continue
-        if _cell_at(rows, r, 0):
-            continue
-        if rows[r][-1]:
-            continue
-
-        first_col = -1
-        first_cell = ""
         for c in range(_CONDITION_COLS):
             cell = _cell_at(rows, r, c)
-            if cell:
-                first_col = c
-                first_cell = cell
-                break
-        if first_col < 0:
-            continue
-        if not (first_cell == "T" or first_cell.startswith("T:")):
-            continue
-
-        # Only root at the head of a vertical chain.
-        if r > 0 and (r - 1) not in pin_row_set:
-            above = _cell_at(rows, r - 1, first_col)
-            if above and "down" in _cell_exits(above):
+            if not cell:
                 continue
+            if cell in _WIRE_CELLS:
+                # Wire cell: single conductor (left = right)
+                p = uf.make()
+                left_port[r, c] = p
+                right_port[r, c] = p
+                if cell in ("T", "|"):
+                    down_port[r, c] = p
+            elif cell.startswith("T:"):
+                # T:token — left = down (input side), right is separate (output)
+                lp = uf.make()
+                rp = uf.make()
+                left_port[r, c] = lp
+                right_port[r, c] = rp
+                down_port[r, c] = lp
+            else:
+                # Content cell — condition separates left from right
+                lp = uf.make()
+                rp = uf.make()
+                left_port[r, c] = lp
+                right_port[r, c] = rp
 
-        roots.append((r, first_col))
+    # 2. Claim down-connections.
+    # Straight-down (same col) claims target's left-port (input bus).
+    # Diagonal (c-1 fallback) claims target's right-port (output bus).
+    # These are independent — a target can have both a left and right claim.
+    left_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
+    right_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        for c in range(_CONDITION_COLS):
+            cell = _cell_at(rows, r, c)
+            if not _cell_has_down(cell):
+                continue
+            # Try target at (r+1, c), fallback (r+1, c-1)
+            for tc in (c, c - 1):
+                target = (r + 1, tc)
+                if target[0] in pin_row_set:
+                    continue
+                if target not in left_port:
+                    continue
+                is_diagonal = tc != c
+                if is_diagonal:
+                    if target not in right_claimed:
+                        right_claimed[target] = (r, c)
+                        break
+                else:
+                    if target not in left_claimed:
+                        left_claimed[target] = (r, c)
+                        break
 
-    # Fallback: if column 0 is entirely blank, scan for the leftmost occupied
-    # column (handles non-canonical decoded grids).
-    if not roots:
+    # Union down-port of claimant with target port.
+    for target, claimant in left_claimed.items():
+        dp = down_port.get(claimant)
+        tp = left_port.get(target)
+        if dp is not None and tp is not None:
+            uf.union(dp, tp)
+    for target, claimant in right_claimed.items():
+        dp = down_port.get(claimant)
+        tp = right_port.get(target)
+        if dp is not None and tp is not None:
+            uf.union(dp, tp)
+
+    # 2b. Left power rail: all column-0 cells share the same left-port
+    rail_port: int | None = None
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        if (r, 0) in left_port:
+            if rail_port is None:
+                rail_port = left_port[r, 0]
+            else:
+                uf.union(rail_port, left_port[r, 0])
+
+    # 3. Merge horizontal adjacency
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        for c in range(_CONDITION_COLS - 1):
+            if (r, c) in right_port and (r, c + 1) in left_port:
+                uf.union(right_port[r, c], left_port[r, c + 1])
+
+    # 4. Build edges from content cells
+    edges: list[_Edge] = []
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        for c in range(_CONDITION_COLS):
+            cell = _cell_at(rows, r, c)
+            if not cell or cell in _WIRE_CELLS:
+                continue
+            label = _strip_wire_prefix(cell)
+            src = uf.find(left_port[r, c])
+            dst = uf.find(right_port[r, c])
+            if src != dst:
+                edges.append(_Edge(src, dst, Leaf(label, r, c), r, c))
+
+    # 5. Identify source and sinks
+    # Source = left power rail if any column-0 cells exist, else leftmost port
+    source: int | None = None
+    if rail_port is not None:
+        source = uf.find(rail_port)
+    else:
         for r in range(n_rows):
             if r in pin_row_set:
                 continue
             for c in range(_CONDITION_COLS):
-                if _cell_at(rows, r, c):
-                    roots.append((r, c))
+                if (r, c) in left_port:
+                    source = uf.find(left_port[r, c])
                     break
+            if source is not None:
+                break
 
-    for root_r, root_c in roots:
-        _dfs(
-            rows,
-            root_r,
-            root_c,
-            set(),
-            pin_row_set,
-            paths,
-            (),
-            primary_col0_root_rows,
+    # Sinks = right-port of the last occupied condition column on each AF row
+    sinks: list[tuple[int, str, int]] = []
+    for r in range(n_rows):
+        if r in pin_row_set:
+            continue
+        af = rows[r][-1]
+        if not af or af.startswith("."):
+            continue
+        # Find rightmost occupied condition column
+        last_c = -1
+        for c in range(_CONDITION_COLS - 1, -1, -1):
+            if (r, c) in right_port:
+                last_c = c
+                break
+        if last_c >= 0:
+            sink_node = uf.find(right_port[r, last_c])
+            sinks.append((sink_node, af, r))
+
+    return source, sinks, edges
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: SP Reduction
+# ---------------------------------------------------------------------------
+
+
+def _min_row(tree: SPNode) -> int:
+    """Minimum row position in an SP tree (for sort stability)."""
+    if isinstance(tree, Leaf):
+        return tree.row
+    return min(_min_row(c) for c in tree.children) if tree.children else 0
+
+
+def _min_col(tree: SPNode) -> int:
+    """Minimum column position in an SP tree (for sort stability)."""
+    if isinstance(tree, Leaf):
+        return tree.col
+    return min(_min_col(c) for c in tree.children) if tree.children else 0
+
+
+def _flatten_series(node: SPNode) -> list[SPNode]:
+    """Flatten nested Series into a single list."""
+    if isinstance(node, Series):
+        result: list[SPNode] = []
+        for child in node.children:
+            result.extend(_flatten_series(child))
+        return result
+    return [node]
+
+
+def _flatten_parallel(node: SPNode) -> list[SPNode]:
+    """Flatten nested Parallel into a single list."""
+    if isinstance(node, Parallel):
+        result: list[SPNode] = []
+        for child in node.children:
+            result.extend(_flatten_parallel(child))
+        return result
+    return [node]
+
+
+def _make_series(children: list[SPNode]) -> SPNode:
+    """Create a Series, flattening nested Series nodes."""
+    flat: list[SPNode] = []
+    for c in children:
+        flat.extend(_flatten_series(c))
+    if len(flat) == 1:
+        return flat[0]
+    return Series(flat)
+
+
+def _make_parallel(children: list[SPNode]) -> SPNode:
+    """Create a Parallel, flattening nested Parallel nodes."""
+    flat: list[SPNode] = []
+    for c in children:
+        flat.extend(_flatten_parallel(c))
+    if len(flat) == 1:
+        return flat[0]
+    return Parallel(flat)
+
+
+def _sp_reduce(
+    source: int,
+    sink: int,
+    all_edges: list[_Edge],
+) -> SPNode | None:
+    """Reduce subgraph between *source* and *sink* to an SP tree."""
+    if source == sink:
+        return None
+
+    # Extract reachable subgraph: forward from source AND backward from sink
+    def _reachable_forward(start: int, edges: list[_Edge]) -> set[int]:
+        adj: dict[int, list[int]] = defaultdict(list)
+        for e in edges:
+            adj[e.src].append(e.dst)
+        visited: set[int] = set()
+        stack = [start]
+        while stack:
+            n = stack.pop()
+            if n in visited:
+                continue
+            visited.add(n)
+            stack.extend(adj[n])
+        return visited
+
+    def _reachable_backward(start: int, edges: list[_Edge]) -> set[int]:
+        adj: dict[int, list[int]] = defaultdict(list)
+        for e in edges:
+            adj[e.dst].append(e.src)
+        visited: set[int] = set()
+        stack = [start]
+        while stack:
+            n = stack.pop()
+            if n in visited:
+                continue
+            visited.add(n)
+            stack.extend(adj[n])
+        return visited
+
+    fwd = _reachable_forward(source, all_edges)
+    bwd = _reachable_backward(sink, all_edges)
+    reachable = fwd & bwd
+
+    edges = [e for e in all_edges if e.src in reachable and e.dst in reachable]
+    if not edges:
+        return None
+
+    # Reduction loop
+    for _ in range(len(edges) * len(edges) + 10):
+        changed = False
+
+        # Rule A: Parallel — merge edges between same (src, dst)
+        groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for i, e in enumerate(edges):
+            groups[e.src, e.dst].append(i)
+
+        new_edges: list[_Edge] = []
+        consumed: set[int] = set()
+        for key, indices in groups.items():
+            if len(indices) >= 2:
+                changed = True
+                consumed.update(indices)
+                children = [edges[i].tree for i in indices]
+                children.sort(key=_min_row)
+                merged = _make_parallel(children)
+                mr = min(edges[i].min_row for i in indices)
+                mc = min(edges[i].min_col for i in indices)
+                new_edges.append(_Edge(key[0], key[1], merged, mr, mc))
+        for i, e in enumerate(edges):
+            if i not in consumed:
+                new_edges.append(e)
+        edges = new_edges
+
+        # Rule B: Series — degree-2 non-terminal node
+        in_edges: dict[int, list[int]] = defaultdict(list)
+        out_edges: dict[int, list[int]] = defaultdict(list)
+        for i, e in enumerate(edges):
+            out_edges[e.src].append(i)
+            in_edges[e.dst].append(i)
+
+        series_node: int | None = None
+        for node in set(in_edges.keys()) | set(out_edges.keys()):
+            if node == source or node == sink:
+                continue
+            if len(in_edges[node]) == 1 and len(out_edges[node]) == 1:
+                series_node = node
+                break
+
+        if series_node is not None:
+            changed = True
+            in_idx = in_edges[series_node][0]
+            out_idx = out_edges[series_node][0]
+            e_in = edges[in_idx]
+            e_out = edges[out_idx]
+            children = [e_in.tree, e_out.tree]
+            merged = _make_series(children)
+            mr = min(e_in.min_row, e_out.min_row)
+            mc = min(e_in.min_col, e_out.min_col)
+            new_edge = _Edge(e_in.src, e_out.dst, merged, mr, mc)
+            drop = {in_idx, out_idx}
+            edges = [e for i, e in enumerate(edges) if i not in drop] + [new_edge]
+
+        # Check termination
+        if len(edges) == 1 and edges[0].src == source and edges[0].dst == sink:
+            return edges[0].tree
+
+        if not changed:
+            break
+
+    # Check if we're done after the loop
+    if len(edges) == 1 and edges[0].src == source and edges[0].dst == sink:
+        return edges[0].tree
+
+    # Non-SP fallback: Shannon expansion
+    if edges:
+        warnings.warn(
+            "Rung contains bridge topology; resolved via Shannon expansion",
+            stacklevel=2,
         )
+        e = edges[0]
 
-    # Preserve walk order, but drop exact duplicates.
-    deduped: list[_PathResult] = []
-    seen: set[tuple[tuple[str, ...], str, int]] = set()
-    for p in paths:
-        key = (tuple(p.conditions), p.af_token, p.af_row)
-        if key not in seen:
-            seen.add(key)
-            deduped.append(p)
+        # True branch: short-circuit edge (merge src and dst)
+        true_edges: list[_Edge] = []
+        for ed in edges[1:]:
+            s = e.src if ed.src == e.dst else ed.src
+            d = e.src if ed.dst == e.dst else ed.dst
+            true_edges.append(_Edge(s, d, ed.tree, ed.min_row, ed.min_col))
+        true_sink = e.src if sink == e.dst else sink
+        true_tree = _sp_reduce(source, true_sink, true_edges)
 
-    return deduped
+        # False branch: delete edge
+        false_edges = list(edges[1:])
+        false_tree = _sp_reduce(source, sink, false_edges)
+
+        if true_tree is not None and false_tree is not None:
+            return _make_parallel(
+                [
+                    _make_series([e.tree, true_tree]),
+                    false_tree,
+                ]
+            )
+        if true_tree is not None:
+            return _make_series([e.tree, true_tree])
+        if false_tree is not None:
+            return false_tree
+        return e.tree
+
+    return None
 
 
-def _dfs(
-    rows: list[list[str]],
-    r: int,
-    c: int,
-    visited: set[tuple[int, int]],
-    pin_row_set: set[int],
-    paths: list[_PathResult],
-    conditions: tuple[str, ...],
-    primary_col0_root_rows: set[int],
-) -> None:
-    """Recursive DFS walk. Priority: right → down → up → up-right."""
-    cell = _cell_at(rows, r, c)
-    if not cell or (r, c) in visited:
-        return
-    visited.add((r, c))
+# ---------------------------------------------------------------------------
+# Phase 3: Multi-Output Grouping
+# ---------------------------------------------------------------------------
 
-    # Record meaningful tokens (skip wire markers)
-    is_content = cell not in {"-", "|", "T"}
-    token = _strip_wire_prefix(cell) if is_content else cell
-    conds = conditions + (token,) if is_content else conditions
 
-    exits = _cell_exits(cell)
-    has_right = "right" in exits
-    has_down = "down" in exits
+def _trees_equal(a: SPNode | None, b: SPNode | None) -> bool:
+    """Structural equality of two SP trees (labels only, ignoring row/col)."""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, Leaf) and isinstance(b, Leaf):
+        return a.label == b.label
+    if isinstance(a, (Series, Parallel)) and isinstance(b, (Series, Parallel)):
+        if len(a.children) != len(b.children):
+            return False
+        return all(_trees_equal(ac, bc) for ac, bc in zip(a.children, b.children, strict=True))
+    return False
 
-    # --- RIGHT ---
-    if has_right:
-        nc = c + 1
-        if nc < _CONDITION_COLS:
-            next_cell = _cell_at(rows, r, nc)
-            if next_cell and (r, nc) not in visited:
-                _dfs(
-                    rows,
-                    r,
-                    nc,
-                    visited,
-                    pin_row_set,
-                    paths,
-                    conds,
-                    primary_col0_root_rows,
-                )
-            elif not next_cell:
-                # End of horizontal run — check AF on this row
-                af = rows[r][-1]
-                if af and not af.startswith("."):
-                    paths.append(_PathResult(list(conds), af, r))
-        else:
-            # Past last condition column → AF exit
-            af = rows[r][-1]
-            if af and not af.startswith("."):
-                paths.append(_PathResult(list(conds), af, r))
 
-    # --- DOWN (forced bidirectional from T) ---
-    if has_down:
-        nr = r + 1
-        if 0 <= nr < len(rows) and nr not in pin_row_set:
-            below = _cell_at(rows, nr, c)
-            if below and (nr, c) not in visited:
-                # T:-prefixed contacts represent OR fork inputs. Stepping down
-                # from them starts a parallel branch and must not carry the
-                # current contact token into that branch.
-                down_conds = conditions if cell.startswith("T:") else conds
+def _group_outputs(
+    trees: list[tuple[SPNode | None, str, int]],
+) -> tuple[SPNode | None, list[_InstructionInfo], list[int]]:
+    """Group per-output SP trees into condition_tree + instructions."""
+    if not trees:
+        return None, [], []
 
-                if cell.startswith("T:"):
-                    below_is_content = below not in {"-", "|", "T"}
-                    below_is_plain_content = below_is_content and not below.startswith("T:")
-                    if not (below_is_plain_content and nr in primary_col0_root_rows):
-                        _dfs(
-                            rows,
-                            nr,
-                            c,
-                            visited,
-                            pin_row_set,
-                            paths,
-                            down_conds,
-                            primary_col0_root_rows,
-                        )
+    if len(trees) == 1:
+        tree, af, af_row = trees[0]
+        return tree, [_InstructionInfo(af, None, [])], [af_row]
+
+    # Check if all outputs have identical trees
+    all_same = all(_trees_equal(trees[0][0], t[0]) for t in trees[1:])
+    if all_same:
+        cond_tree = trees[0][0]
+        instructions = [_InstructionInfo(af, None, []) for _, af, _ in trees]
+        af_rows = [af_row for _, _, af_row in trees]
+        return cond_tree, instructions, af_rows
+
+    # Normalize all trees to Series for lockstep prefix comparison.
+    # Leaf → Series([Leaf]), Parallel → Series([Parallel]), Series stays.
+    def _as_series_children(t: SPNode | None) -> list[SPNode]:
+        if t is None:
+            return []
+        if isinstance(t, Series):
+            return list(t.children)
+        return [t]
+
+    child_lists = [_as_series_children(t[0]) for t in trees]
+    if all(child_lists):
+        min_len = min(len(cl) for cl in child_lists)
+        shared_count = 0
+        for i in range(min_len):
+            ref = child_lists[0][i]
+            if all(_trees_equal(ref, cl[i]) for cl in child_lists):
+                shared_count += 1
+            else:
+                break
+
+        if shared_count > 0:
+            shared_children = child_lists[0][:shared_count]
+            cond_tree = _make_series(shared_children)
+
+            instructions: list[_InstructionInfo] = []
+            af_rows: list[int] = []
+            for idx, (_tree, af, af_row) in enumerate(trees):
+                remaining = child_lists[idx][shared_count:]
+                if remaining:
+                    branch_tree = _make_series(remaining)
                 else:
-                    _dfs(
-                        rows,
-                        nr,
-                        c,
-                        visited,
-                        pin_row_set,
-                        paths,
-                        down_conds,
-                        primary_col0_root_rows,
-                    )
+                    branch_tree = None
+                instructions.append(_InstructionInfo(af, branch_tree, []))
+                af_rows.append(af_row)
+            return cond_tree, instructions, af_rows
 
-    # --- UP (forced bidirectional — a T above pulls us up) ---
-    if r > 0 and (r - 1) not in pin_row_set:
-        above = _cell_at(rows, r - 1, c)
-        if (
-            above
-            and "down" in _cell_exits(above)
-            and not above.startswith("T:")
-            and (r - 1, c) not in visited
-        ):
-            _dfs(
-                rows,
-                r - 1,
-                c,
-                visited,
-                pin_row_set,
-                paths,
-                conds,
-                primary_col0_root_rows,
-            )
-
-    # --- UP-RIGHT diagonal (T's down-wire drawn at left edge of its cell) ---
-    # A cell connects diagonally up-right to a T when the cell directly to the
-    # right is blank (gap), meaning there is no bridge occupying that position.
-    if r > 0 and c + 1 < _CONDITION_COLS and (r - 1) not in pin_row_set:
-        diag = _cell_at(rows, r - 1, c + 1)
-        right_cell = _cell_at(rows, r, c + 1)
-        if diag and "down" in _cell_exits(diag) and not right_cell:
-            if (r - 1, c + 1) not in visited:
-                _dfs(
-                    rows,
-                    r - 1,
-                    c + 1,
-                    visited,
-                    pin_row_set,
-                    paths,
-                    conds,
-                    primary_col0_root_rows,
-                )
-
-    visited.discard((r, c))
-
-
-# --- Path grouping helpers ---------------------------------------------------
-
-
-def _longest_common_prefix(lists: list[list[str]]) -> list[str]:
-    """Return the longest list that is a prefix of every element in *lists*."""
-    if not lists:
-        return []
-    prefix = lists[0]
-    for lst in lists[1:]:
-        i = 0
-        while i < len(prefix) and i < len(lst) and prefix[i] == lst[i]:
-            i += 1
-        prefix = prefix[:i]
-    return list(prefix)
-
-
-def _longest_common_suffix(lists: list[list[str]]) -> list[str]:
-    """Return the longest list that is a suffix of every element in *lists*."""
-    if not lists:
-        return []
-    reversed_lists = [lst[::-1] for lst in lists]
-    return _longest_common_prefix(reversed_lists)[::-1]
-
-
-def _build_condition_tree(cond_lists: list[list[str]]) -> list[str | _OrLevel]:
-    """Build an ordered sequence of AND conditions and OR levels from path lists.
-
-    Recursively groups paths by common prefix tokens.  When all paths share the
-    same first token it becomes a plain AND condition; when they diverge the
-    distinct first tokens form an ``_OrLevel``.
-    """
-    # Drop fully-consumed (empty) paths
-    active = [cl for cl in cond_lists if cl]
-    if not active:
-        return []
-
-    # Group by first token (preserving insertion order)
-    groups: dict[str, list[list[str]]] = {}
-    for cl in active:
-        groups.setdefault(cl[0], []).append(cl[1:])
-
-    if len(groups) == 1:
-        # All paths share the same first token → shared AND condition
-        token = next(iter(groups))
-        return [token] + _build_condition_tree(groups[token])
-
-    # Multiple distinct first tokens → OR level
-    or_groups: list[_OrGroup] = [_OrGroup(conditions=[tok]) for tok in groups]
-    result: list[str | _OrLevel] = [_OrLevel(groups=or_groups)]
-
-    # Collect remaining tails from all groups and recurse
-    all_remainders: list[list[str]] = []
-    for remainders in groups.values():
-        all_remainders.extend(remainders)
-    result.extend(_build_condition_tree(all_remainders))
-    return result
-
-
-def _group_paths(
-    paths: list[_PathResult],
-) -> tuple[list[str | _OrLevel], list[_InstructionInfo], list[int]]:
-    """Determine OR vs branch structure from walk paths.
-
-    Returns ``(condition_seq, instructions, af_rows)``.
-    """
-    if not paths:
-        return [], [], []
-
-    unique_afs = list(dict.fromkeys(p.af_token for p in paths))
-
-    if len(unique_afs) == 1:
-        # All paths reach the same AF → possible OR
-        if len(paths) == 1:
-            p = paths[0]
-            return (
-                list(p.conditions),
-                [_InstructionInfo(p.af_token, [], [])],
-                [p.af_row],
-            )
-
-        # Multiple paths → build condition tree (handles prefix, suffix, nested ORs)
-        cond_lists = [p.conditions for p in paths]
-
-        # Extract common trailing AND (suffix) first
-        suffix = _longest_common_suffix(cond_lists)
-        n_suffix = len(suffix)
-        trimmed = [cl[: len(cl) - n_suffix] if n_suffix else list(cl) for cl in cond_lists]
-
-        # Build tree from remaining conditions
-        seq = _build_condition_tree(trimmed)
-        # Append suffix as trailing AND conditions
-        seq.extend(suffix)
-
-        af = unique_afs[0]
-        af_row = paths[0].af_row
-        return (
-            seq,
-            [_InstructionInfo(af, [], [])],
-            [af_row],
-        )
-
-    # Different AFs → branch.  Shared conditions = common prefix.
-    cond_lists = [p.conditions for p in paths]
-    prefix = _longest_common_prefix(cond_lists)
-    n_prefix = len(prefix)
-
-    instructions: list[_InstructionInfo] = []
-    af_rows: list[int] = []
-    for p in paths:
-        branch_conds = p.conditions[n_prefix:]
-        instructions.append(_InstructionInfo(p.af_token, branch_conds, []))
-        af_rows.append(p.af_row)
-
-    return list(prefix), instructions, af_rows
+    # No shared structure
+    instructions = []
+    af_rows = []
+    for tree, af, af_row in trees:
+        instructions.append(_InstructionInfo(af, tree, []))
+        af_rows.append(af_row)
+    return None, instructions, af_rows
 
 
 # --- Top-level Phase 2 entry points -----------------------------------------
@@ -434,26 +608,25 @@ def _analyze_single_rung(
     is_forloop_body: bool = False,
     is_forloop_next: bool = False,
 ) -> _AnalyzedRung:
-    """Analyze a single rung's topology via graph walk."""
+    """Analyze a single rung's topology via SP graph reduction."""
     comment = "\n".join(rung.comment_lines) if rung.comment_lines else None
     rows = rung.rows
 
     if not rows:
         return _AnalyzedRung(
             comment=comment,
-            condition_seq=[],
+            condition_tree=None,
             instructions=[],
         )
 
     # Separate pin rows from content rows
     pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
 
-    # Walk the grid
-    paths = _walk_grid(rows, pin_row_set)
+    # Phase 1: Grid → Graph
+    source, sinks, edges = _grid_to_graph(rows, pin_row_set)
 
-    if not paths:
-        # No paths discovered — handle rows with only an AF and no conditions,
-        # or rows that are entirely blank in the condition columns.
+    if source is None or not sinks:
+        # No graph built — handle rows with only an AF and no conditions
         for i, row in enumerate(rows):
             if i not in pin_row_set:
                 af = row[-1]
@@ -461,22 +634,26 @@ def _analyze_single_rung(
                     pins = _collect_pins([rows[j] for j in sorted(pin_row_set)])
                     return _AnalyzedRung(
                         comment=comment,
-                        condition_seq=[],
-                        instructions=[
-                            _InstructionInfo(af_token=af, branch_conditions=[], pins=pins)
-                        ],
+                        condition_tree=None,
+                        instructions=[_InstructionInfo(af_token=af, branch_tree=None, pins=pins)],
                         is_forloop_start=is_forloop_start,
                         is_forloop_body=is_forloop_body,
                         is_forloop_next=is_forloop_next,
                     )
         return _AnalyzedRung(
             comment=comment,
-            condition_seq=[],
+            condition_tree=None,
             instructions=[],
         )
 
-    # Group walk results into OR / branch structure
-    condition_seq, instructions, af_rows = _group_paths(paths)
+    # Phase 2: SP Reduction (per output)
+    output_trees: list[tuple[SPNode | None, str, int]] = []
+    for sink_node, af_token, af_row in sinks:
+        tree = _sp_reduce(source, sink_node, edges)
+        output_trees.append((tree, af_token, af_row))
+
+    # Phase 3: Multi-Output Grouping
+    condition_tree, instructions, af_rows = _group_outputs(output_trees)
 
     # Attach pin rows to their nearest preceding instruction (by row index)
     if pin_row_set and instructions:
@@ -501,7 +678,7 @@ def _analyze_single_rung(
 
     return _AnalyzedRung(
         comment=comment,
-        condition_seq=condition_seq,
+        condition_tree=condition_tree,
         instructions=instructions,
         is_forloop_start=is_forloop_start,
         is_forloop_body=is_forloop_body,

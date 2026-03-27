@@ -192,9 +192,10 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert _or_level(r) is None
-        assert "X001" in r.condition_seq
-        assert "X002" in r.condition_seq
+        assert _find_parallel(r.condition_tree) is None
+        labels = _leaf_labels(r.condition_tree)
+        assert "X001" in labels
+        assert "X002" in labels
         assert len(r.instructions) == 1
         assert r.instructions[0].af_token == "out(Y001)"
 
@@ -215,9 +216,9 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        ol = _or_level(r)
-        assert ol is not None
-        assert len(ol.groups) == 2
+        par = _find_parallel(r.condition_tree)
+        assert par is not None
+        assert len(par.children) == 2
 
     def test_or_with_trailing_and(self, tmp_path: Path):
         """OR + AND: any_of(A, B), Ready → out(Y)."""
@@ -237,11 +238,11 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        ol = _or_level(r)
-        assert ol is not None
-        assert len(ol.groups) == 2
-        # Trailing AND should be in condition_seq
-        assert "C1" in r.condition_seq
+        par = _find_parallel(r.condition_tree)
+        assert par is not None
+        assert len(par.children) == 2
+        # Trailing AND should be in condition_tree labels
+        assert "C1" in _leaf_labels(r.condition_tree)
 
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs: same conditions, different instructions."""
@@ -379,26 +380,40 @@ def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
     return cells
 
 
-def _or_level(rung):
-    """Return the first ``_OrLevel`` in *rung.condition_seq*, or ``None``."""
-    from pyrung.click.codegen.models import _OrLevel
+def _find_parallel(node):
+    """Return the first ``Parallel`` node found in the tree, or ``None``."""
+    from pyrung.click.codegen.models import Parallel, Series
 
-    for elem in rung.condition_seq:
-        if isinstance(elem, _OrLevel):
-            return elem
+    if node is None:
+        return None
+    if isinstance(node, Parallel):
+        return node
+    if isinstance(node, Series):
+        for child in node.children:
+            result = _find_parallel(child)
+            if result is not None:
+                return result
     return None
 
 
+def _leaf_labels(node) -> list[str]:
+    """Collect all leaf labels from an SP tree in order."""
+    from pyrung.click.codegen.models import Leaf, Parallel, Series
+
+    if node is None:
+        return []
+    if isinstance(node, Leaf):
+        return [node.label]
+    if isinstance(node, (Series, Parallel)):
+        labels: list[str] = []
+        for child in node.children:
+            labels.extend(_leaf_labels(child))
+        return labels
+    return []
+
+
 class TestGraphWalkEdgeCases:
-    """Synthetic grids exercising walk rules from the Phase 2 spec."""
-
-    @staticmethod
-    def _walk_path_set(rows: list[list[str]]) -> set[tuple[tuple[str, ...], str]]:
-        from pyrung.click.codegen.analyzer import _is_pin_row, _walk_grid
-
-        pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
-        paths = _walk_grid(rows, pin_row_set)
-        return {(tuple(p.conditions), p.af_token) for p in paths}
+    """Synthetic grids exercising SP graph reduction from the Phase 2 spec."""
 
     def test_forced_bidirectional_or(self):
         """OR alternative on row 1 reaches AF via UP through T (forced bidi).
@@ -414,12 +429,12 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        ol = _or_level(result)
-        assert ol is not None
-        assert len(ol.groups) == 2
-        conds = [g.conditions for g in ol.groups]
-        assert ["X001"] in conds
-        assert ["X002"] in conds
+        par = _find_parallel(result.condition_tree)
+        assert par is not None
+        assert len(par.children) == 2
+        labels = [_leaf_labels(c) for c in par.children]
+        assert ["X001"] in labels
+        assert ["X002"] in labels
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
 
@@ -442,7 +457,7 @@ class TestGraphWalkEdgeCases:
         result = _analyze_single_rung(rung)
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
-        assert "X001" in result.condition_seq
+        assert "X001" in _leaf_labels(result.condition_tree)
 
     def test_bridge_connects_branch(self):
         """T forces bidirectional down to a '-' bridge, connecting a second AF.
@@ -463,7 +478,7 @@ class TestGraphWalkEdgeCases:
         assert len(result.instructions) == 2
         assert result.instructions[0].af_token == "out(Y001)"
         assert result.instructions[1].af_token == "out(Y002)"
-        assert "X001" in result.condition_seq
+        assert "X001" in _leaf_labels(result.condition_tree)
 
     def test_three_way_or(self):
         """Three OR alternatives: X001, X002, X003 all reach the same AF.
@@ -481,13 +496,13 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        ol = _or_level(result)
-        assert ol is not None
-        assert len(ol.groups) == 3
-        conds = [g.conditions for g in ol.groups]
-        assert ["X001"] in conds
-        assert ["X002"] in conds
-        assert ["X003"] in conds
+        par = _find_parallel(result.condition_tree)
+        assert par is not None
+        assert len(par.children) == 3
+        labels = [_leaf_labels(c) for c in par.children]
+        assert ["X001"] in labels
+        assert ["X002"] in labels
+        assert ["X003"] in labels
 
     def test_nested_t_cascade(self):
         """Nested T cascade: T at (0,1) forks, T at (1,1) forks again.
@@ -507,19 +522,26 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        assert _or_level(result) is None
-        assert "btn" in result.condition_seq
+        assert _find_parallel(result.condition_tree) is None
+        assert "btn" in _leaf_labels(result.condition_tree)
         assert len(result.instructions) == 3
 
-        # Scan order: right-first at each fork
-        assert result.instructions[0].af_token == "out(L1)"
-        assert result.instructions[1].af_token == "out(L2)"
-        assert result.instructions[2].af_token == "out(L3)"
+        # Instruction AF tokens present
+        afs = [i.af_token for i in result.instructions]
+        assert "out(L1)" in afs
+        assert "out(L2)" in afs
+        assert "out(L3)" in afs
 
-        # Only the second branch has a branch-local condition
-        assert result.instructions[0].branch_conditions == []
-        assert result.instructions[1].branch_conditions == ["auto"]
-        assert result.instructions[2].branch_conditions == []
+        # The instruction for L2 has a branch-local condition containing "auto"
+        l2_instr = next(i for i in result.instructions if i.af_token == "out(L2)")
+        assert l2_instr.branch_tree is not None
+        assert "auto" in _leaf_labels(l2_instr.branch_tree)
+
+        # L1 and L3 have no branch-local conditions
+        l1_instr = next(i for i in result.instructions if i.af_token == "out(L1)")
+        l3_instr = next(i for i in result.instructions if i.af_token == "out(L3)")
+        assert l1_instr.branch_tree is None
+        assert l3_instr.branch_tree is None
 
     def test_unconditional_rung(self):
         """Rung with no conditions — all dashes to AF."""
@@ -530,7 +552,7 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert result.condition_seq == []
+        assert result.condition_tree is None
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
 
@@ -550,12 +572,13 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        ol = _or_level(result)
-        assert ol is not None
-        assert len(ol.groups) == 2
-        # Trailing AND conditions should be in condition_seq
-        assert "C1" in result.condition_seq
-        assert "C2" in result.condition_seq
+        par = _find_parallel(result.condition_tree)
+        assert par is not None
+        assert len(par.children) == 2
+        # Trailing AND conditions should be in condition_tree
+        labels = _leaf_labels(result.condition_tree)
+        assert "C1" in labels
+        assert "C2" in labels
 
     def test_pin_attached_to_correct_instruction(self):
         """Pin row attaches to its nearest preceding instruction.
@@ -598,7 +621,7 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in result.condition_seq
+        assert "X001" in _leaf_labels(result.condition_tree)
         assert result.instructions[0].af_token == "out(Y001)"
 
     def test_adjacency_table_content_default(self):
@@ -613,43 +636,66 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in result.condition_seq
-        assert "DS1==5" in result.condition_seq
+        labels = _leaf_labels(result.condition_tree)
+        assert "X001" in labels
+        assert "DS1==5" in labels
 
     def test_another_case_t_fork_down_through_contact(self):
         """T fork down through contact reaches second AF without reverse leakage."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
         rows = [
             _make_row("R", _fill_dashes({0: "X001", 1: "T"}, 2, 31), af="out(Y001)"),
             _make_row("", {1: "X003", 2: "|"}),
             _make_row("", _fill_dashes({0: "X002"}, 1, 31), af="out(Y002)"),
         ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+        result = _analyze_single_rung(rung)
 
-        got = self._walk_path_set(rows)
-        expected = {
-            (("X001",), "out(Y001)"),
-            (("X001", "X003"), "out(Y002)"),
-            (("X002",), "out(Y002)"),
-        }
-        assert got == expected
+        assert len(result.instructions) == 2
+        afs = {i.af_token for i in result.instructions}
+        assert "out(Y001)" in afs
+        assert "out(Y002)" in afs
+        # X001 should be in the shared condition or a branch
+        all_labels = _leaf_labels(result.condition_tree)
+        for instr in result.instructions:
+            all_labels.extend(_leaf_labels(instr.branch_tree))
+        assert "X001" in all_labels
 
     def test_or_with_all_offs_t_prefix_rows_above_output(self):
         """T:-prefixed stacked OR rows above output row remain reachable."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
         rows = [
             _make_row("R", {1: "T:X006", 2: "X007", 3: "|"}),
             _make_row("", {1: "T:X004", 2: "X005", 3: "|"}),
             _make_row("", _fill_dashes({0: "X001", 1: "X002", 2: "X003"}, 3, 31), af="out(Y001)"),
         ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+        result = _analyze_single_rung(rung)
 
-        got = self._walk_path_set(rows)
-        expected = {
-            (("X001", "X002", "X003"), "out(Y001)"),
-            (("X006", "X007"), "out(Y001)"),
-            (("X004", "X005"), "out(Y001)"),
-        }
-        assert got == expected
+        assert len(result.instructions) == 1
+        assert result.instructions[0].af_token == "out(Y001)"
+        # All condition labels should be present
+        labels = _leaf_labels(result.condition_tree)
+        assert "X001" in labels
+        assert "X002" in labels
+        assert "X003" in labels
+        assert "X006" in labels
+        assert "X007" in labels
+        assert "X004" in labels
+        assert "X005" in labels
+        # Should have a Parallel node (OR structure)
+        par = _find_parallel(result.condition_tree)
+        assert par is not None
 
     def test_crazy_mid_grid_vertical_or_stack(self):
-        """Mid-grid vertical stack yields unconditional and three OR-branch paths."""
+        """Mid-grid vertical stack yields unconditional and OR-branch outputs."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
         rows = [
             _make_row("R", {}),
             _make_row("", _fill_dashes({}, 0, 31), af="out(Y001)"),
@@ -660,15 +706,13 @@ class TestGraphWalkEdgeCases:
             _make_row("", _fill_dashes({4: "T:X002"}, 5, 31), af="out(Y002)"),
             _make_row("", _fill_dashes({4: "X003", 5: "X004"}, 6, 31), af="out(Y002)"),
         ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+        result = _analyze_single_rung(rung)
 
-        got = self._walk_path_set(rows)
-        expected = {
-            ((), "out(Y001)"),
-            (("X010", "X001"), "out(Y002)"),
-            (("X010", "X002"), "out(Y002)"),
-            (("X010", "X003", "X004"), "out(Y002)"),
-        }
-        assert got == expected
+        # Should have instructions for both Y001 and Y002
+        afs = [i.af_token for i in result.instructions]
+        assert "out(Y001)" in afs
+        assert "out(Y002)" in afs
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,10 @@ from pyrung.click.codegen.constants import (
     _OPERAND_PREFIXES,
 )
 from pyrung.click.codegen.models import (
+    Leaf,
+    Parallel,
+    Series,
+    SPNode,
     _AnalyzedRung,
     _InstructionInfo,
     _OperandCollection,
@@ -157,6 +161,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     # Condition helpers
     if collection.has_any_of:
         core_imports.append("any_of")
+    if collection.has_all_of:
+        core_imports.append("all_of")
     for cw in sorted(collection.used_conditions):
         core_imports.append(cw)
 
@@ -485,17 +491,16 @@ def _emit_rung(
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
 
     # Check if we need branch() blocks
-    has_branches = any(instr.branch_conditions for instr in rung.instructions)
+    has_branches = any(instr.branch_tree is not None for instr in rung.instructions)
     multi_output = len(rung.instructions) > 1
 
     if has_branches and multi_output:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
         for instr in rung.instructions:
-            if instr.branch_conditions:
-                branch_cond = ", ".join(
-                    _render_condition(c, collection, nicknames, structured_map)
-                    for c in instr.branch_conditions
+            if instr.branch_tree is not None:
+                branch_cond = _render_sp_node(
+                    instr.branch_tree, collection, nicknames, structured_map
                 )
                 lines.append(f"{pad}    with branch({branch_cond}):")
                 _emit_instruction(lines, instr, collection, nicknames, indent + 2, structured_map)
@@ -513,6 +518,36 @@ def _emit_rung(
             _emit_instruction(lines, instr, collection, nicknames, indent + 1, structured_map)
 
 
+def _render_sp_node(
+    node: SPNode,
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None = None,
+) -> str:
+    """Render an SP tree node to Python condition syntax."""
+    if isinstance(node, Leaf):
+        return _render_condition(node.label, collection, nicknames, structured_map)
+
+    if isinstance(node, Series):
+        return ", ".join(
+            _render_sp_node(child, collection, nicknames, structured_map) for child in node.children
+        )
+
+    if isinstance(node, Parallel):
+        parts: list[str] = []
+        for child in node.children:
+            rendered = _render_sp_node(child, collection, nicknames, structured_map)
+            if isinstance(child, Series) and len(child.children) > 1:
+                parts.append(f"all_of({rendered})")
+            else:
+                parts.append(rendered)
+        if len(parts) == 1:
+            return parts[0]
+        return f"any_of({', '.join(parts)})"
+
+    return ""
+
+
 def _build_conditions_str(
     rung: _AnalyzedRung,
     collection: _OperandCollection,
@@ -520,29 +555,9 @@ def _build_conditions_str(
     structured_map: TagMap | None = None,
 ) -> str:
     """Build the condition string for a Rung() constructor."""
-    parts: list[str] = []
-
-    for elem in rung.condition_seq:
-        if isinstance(elem, str):
-            parts.append(_render_condition(elem, collection, nicknames, structured_map))
-        else:
-            # _OrLevel — render any_of(...)
-            or_parts: list[str] = []
-            for group in elem.groups:
-                group_rendered = [
-                    _render_condition(c, collection, nicknames, structured_map)
-                    for c in group.conditions
-                ]
-                if len(group_rendered) == 1:
-                    or_parts.append(group_rendered[0])
-                elif group_rendered:
-                    or_parts.append(", ".join(group_rendered))
-            if len(or_parts) == 1:
-                parts.append(or_parts[0])
-            else:
-                parts.append(f"any_of({', '.join(or_parts)})")
-
-    return ", ".join(parts)
+    if rung.condition_tree is None:
+        return ""
+    return _render_sp_node(rung.condition_tree, collection, nicknames, structured_map)
 
 
 def _render_condition(
