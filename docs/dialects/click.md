@@ -193,15 +193,60 @@ Load an existing Click nickname CSV:
 mapping = TagMap.from_nickname_file("project.csv")
 ```
 
-The importer reconstructs blocks from paired `<Name>`/`</Name>` markers, infers block start indices from hardware spans, and groups dotted names (`Base.field`) into UDT structures. Standalone nicknames become individual `Tag` objects.
+The importer reconstructs blocks, structures, and standalone tags from CSV comment markers and nickname patterns. Standalone nicknames become individual `Tag` objects.
 
-For strict grouping validation, pass `mode="strict"` — this fails fast on dotted UDT grouping mismatches instead of falling back to plain blocks with a warning.
+For strict grouping validation, pass `mode="strict"` — this fails fast on structure grouping mismatches instead of falling back to plain blocks with a warning.
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv", mode="strict")
 ```
 
 Imported structure metadata is available via `mapping.structures` and `mapping.structure_by_name("Base")`.
+
+#### CSV marker format
+
+The comment field on CSV rows carries block and structure boundaries. Three marker types:
+
+| Marker | Example | Meaning |
+|--------|---------|---------|
+| Opening | `<Alarms>` | Start of a plain block |
+| Closing | `</Alarms>` | End of a plain block |
+| Self-closing | `<Alarms />` | Single-slot block (open + close on same row) |
+
+**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span.
+
+**Named arrays** encode count and stride in the marker:
+
+```
+<Channel:named_array(count,stride)>
+</Channel:named_array(count,stride)>
+```
+
+Nicknames must follow the pattern `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+
+Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS101 | `Channel1_id` | `<Channel:named_array(2,3)>` |
+| DS102 | `Channel1_val` | |
+| DS103 | `Channel1_name` | |
+| DS104 | `Channel2_id` | |
+| DS105 | `Channel2_val` | |
+| DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
+
+If stride exceeds the field count, the extra slots are gaps (empty nicknames):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS101 | `Sensor1_raw` | `<Sensor:named_array(2,3)>` |
+| DS102 | `Sensor1_scaled` | |
+| DS103 | | *(gap)* |
+| DS104 | `Sensor2_raw` | |
+| DS105 | `Sensor2_scaled` | |
+| DS106 | | `</Sensor:named_array(2,3)>` |
+
+**UDTs** use dotted nicknames (`Base.field`) within plain block markers per memory bank. Fields spanning different banks each get their own block marker pair. The importer groups them by base name.
 
 ### To nickname file
 
