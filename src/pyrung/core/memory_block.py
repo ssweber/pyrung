@@ -27,7 +27,7 @@ if TYPE_CHECKING:
         IndirectCompareLe,
         IndirectCompareLt,
     )
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.expression import Expression, SumExpr
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
@@ -675,7 +675,7 @@ class IndirectBlockRange:
     end_expr: int | Tag | Any
     reverse_order: bool = False
 
-    def resolve_ctx(self, ctx: ScanContext) -> BlockRange:
+    def resolve_ctx(self, ctx: ScanContext | ConditionView) -> BlockRange:
         """Resolve expressions to concrete BlockRange using ScanContext."""
         start = self._resolve_one(self.start_expr, ctx)
         end = self._resolve_one(self.end_expr, ctx)
@@ -721,7 +721,7 @@ class IndirectBlockRange:
         return hash((id(self.block), self.reverse_order))
 
     @staticmethod
-    def _resolve_one(expr: int | Tag | Any, ctx: ScanContext) -> int:
+    def _resolve_one(expr: int | Tag | Any, ctx: ScanContext | ConditionView) -> int:
         from pyrung.core.expression import Expression
 
         if isinstance(expr, int):
@@ -779,7 +779,7 @@ class IndirectRef:
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
 
-    def resolve_ctx(self, ctx: ScanContext) -> Tag:
+    def resolve_ctx(self, ctx: ScanContext | ConditionView) -> Tag:
         """Resolve pointer value to concrete Tag using ScanContext.
 
         Args:
@@ -855,7 +855,7 @@ class IndirectExprRef:
     block: Block
     expr: Any  # Expression type - use Any to avoid circular import
 
-    def resolve_ctx(self, ctx: ScanContext) -> Tag:
+    def resolve_ctx(self, ctx: ScanContext | ConditionView) -> Tag:
         """Resolve expression value to concrete Tag using ScanContext.
 
         Args:

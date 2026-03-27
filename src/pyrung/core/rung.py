@@ -16,7 +16,7 @@ from pyrung.core.condition import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.instruction import Instruction
 
 
@@ -108,7 +108,7 @@ class Rung:
             def __init__(self, conditions: list[Condition]):
                 self.conditions = conditions
 
-            def evaluate(self, ctx: ScanContext) -> bool:
+            def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
                 return all(cond.evaluate(ctx) for cond in self.conditions)
 
         return CombinedCondition(self._conditions)
@@ -117,17 +117,23 @@ class Rung:
         """Evaluate this rung within a ScanContext.
 
         Writes are batched in the context and committed at scan end.
+        A ConditionView is frozen at rung entry so that all branch conditions
+        — at every nesting depth — evaluate against the same snapshot.
 
         Args:
             ctx: ScanContext for reading/writing with batched updates.
         """
-        conditions_true = self._evaluate_conditions(ctx)
-        self.execute(ctx, conditions_true)
+        from pyrung.core.context import ConditionView
 
-    def _evaluate_conditions(self, ctx: ScanContext) -> bool:
+        condition_view = ConditionView(ctx)
+        conditions_true = self._evaluate_conditions(condition_view)
+        self.execute(ctx, conditions_true, condition_view=condition_view)
+
+    def _evaluate_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate all conditions (AND logic).
 
         Returns True if all conditions are true, or if there are no conditions.
+        Accepts either a live ScanContext or a frozen ConditionView.
         """
         if not self._conditions:
             return True
@@ -141,7 +147,7 @@ class Rung:
         """Execute instructions/branches in source order."""
         self.execute(ctx, True)
 
-    def _evaluate_local_conditions(self, ctx: ScanContext) -> bool:
+    def _evaluate_local_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate only this branch's local conditions (not inherited parent conditions)."""
         if self._branch_condition_start >= len(self._conditions):
             return True
@@ -150,23 +156,45 @@ class Rung:
                 return False
         return True
 
-    def _compute_branch_enable_map(self, ctx: ScanContext, parent_enabled: bool) -> dict[int, bool]:
-        """Compute direct branch enable states before executing any items."""
+    def _compute_branch_enable_map(
+        self,
+        condition_view: ConditionView,
+        parent_enabled: bool,
+    ) -> dict[int, bool]:
+        """Compute direct branch enable states using the rung-entry snapshot."""
         branch_enable_map: dict[int, bool] = {}
         for item in self._execution_items:
             if isinstance(item, Rung):
                 branch_enable_map[id(item)] = parent_enabled and item._evaluate_local_conditions(
-                    ctx
+                    condition_view
                 )
         return branch_enable_map
 
-    def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        """Execute this rung with the provided power state."""
-        branch_enable_map = self._compute_branch_enable_map(ctx, parent_enabled=enabled)
+    def execute(
+        self,
+        ctx: ScanContext,
+        enabled: bool,
+        *,
+        condition_view: ConditionView | None = None,
+    ) -> None:
+        """Execute this rung with the provided power state.
+
+        Args:
+            ctx: Live ScanContext for instruction read-after-write.
+            enabled: Whether this rung/branch is powered.
+            condition_view: Frozen snapshot from rung entry for condition evaluation.
+                If None, a fresh snapshot is created (top-level entry via evaluate()).
+        """
+        if condition_view is None:
+            from pyrung.core.context import ConditionView
+
+            condition_view = ConditionView(ctx)
+
+        branch_enable_map = self._compute_branch_enable_map(condition_view, parent_enabled=enabled)
 
         for item in self._execution_items:
             if isinstance(item, Rung):
                 branch_power = branch_enable_map.get(id(item), False)
-                item.execute(ctx, branch_power)
+                item.execute(ctx, branch_power, condition_view=condition_view)
             else:
                 item.execute(ctx, enabled)

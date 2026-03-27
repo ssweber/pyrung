@@ -1916,3 +1916,32 @@ def test_receive_block_range_token():
         'remote_start="DS1",dest=DS1..DS3,receiving=C1,success=C2,error=C3,'
         "exception_response=DS4)"
     )
+
+
+# --- Nested branch export rejection ---
+
+
+def test_nested_branch_export_raises_clear_error():
+    """Nested branches produce a clear LadderExportError, not a generic failure."""
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(A):
+            with branch(B):
+                with branch(C):
+                    out(Light)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], Light: y[1]},
+        include_system=False,
+    )
+
+    with pytest.raises(LadderExportError) as exc_info:
+        to_ladder(logic, mapping)
+
+    issue = exc_info.value.issues[0]
+    assert "Nested branch" in str(issue["message"])
+    assert "branch" in str(issue["path"])

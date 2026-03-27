@@ -16,7 +16,7 @@ from pyrung.core.debug_trace import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.debug_handlers import InstructionDebugHandler
     from pyrung.core.debugger_protocol import DebugRunner
     from pyrung.core.instruction import Instruction
@@ -41,6 +41,7 @@ class DebugExecutionState:
     enabled: bool
     parent_enabled: bool
     enabled_state: EnabledState
+    condition_view: Any = None
 
     def with_overrides(self, **changes: Any) -> DebugExecutionState:
         """Return a copied state with selected fields replaced."""
@@ -95,11 +96,14 @@ class PLCDebugger:
 
     def scan_steps_debug(self, runner: DebugRunner) -> Generator[Any, None, None]:
         """Execute one scan cycle and yield debug steps."""
+        from pyrung.core.context import ConditionView
+
         ctx, dt = runner.prepare_scan()
 
         for i, rung in enumerate(runner.iter_top_level_rungs()):
+            condition_view = ConditionView(ctx)
             enabled, rung_condition_traces = self._evaluate_conditions_with_trace(
-                runner, rung._conditions, ctx
+                runner, rung._conditions, condition_view
             )
             execution = DebugExecutionState(
                 runner=runner,
@@ -116,6 +120,7 @@ class PLCDebugger:
                     enabled=enabled,
                     parent_enabled=True,
                 ),
+                condition_view=condition_view,
             )
             yield from self._iter_rung_steps(
                 self._make_rung_state(
@@ -419,7 +424,7 @@ class PLCDebugger:
         self,
         runner: DebugRunner,
         conditions: list[Any],
-        ctx: ScanContext,
+        ctx: ScanContext | ConditionView,
     ) -> tuple[bool, list[ConditionTrace]]:
         if not conditions:
             return True, []
@@ -553,7 +558,7 @@ class PLCDebugger:
                 local_enabled, local_traces = self._evaluate_conditions_with_trace(
                     execution.runner,
                     local_conditions,
-                    execution.ctx,
+                    execution.condition_view,
                 )
                 branch_state: EnabledState = "enabled" if local_enabled else "disabled_local"
             else:

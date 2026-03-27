@@ -1404,6 +1404,368 @@ class TestBranch:
         assert runner.current_state.tags["SubLight"] is True
 
 
+class TestNestedBranches:
+    """Test nested branch (branch inside branch) support."""
+
+    def test_2_deep_nesting_all_conditions_true(self):
+        """Nested branch executes when rung, parent branch, and nested branch are all true."""
+        from pyrung.core.program import Program, Rung, branch, out
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+                with branch(B):
+                    out(Y)
+                    with branch(C):
+                        out(Z)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": True})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is True
+        assert runner.current_state.tags["Z"] is True
+
+    def test_2_deep_nesting_inner_false(self):
+        """Inner nested branch does not execute when its condition is false."""
+        from pyrung.core.program import Program, Rung, branch, out
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+                with branch(B):
+                    out(Y)
+                    with branch(C):
+                        out(Z)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": False})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is True
+        assert runner.current_state.tags["Z"] is False
+
+    def test_2_deep_nesting_middle_false_disables_inner(self):
+        """When middle branch is false, nested branch also does not execute."""
+        from pyrung.core.program import Program, Rung, branch, out
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+                with branch(B):
+                    out(Y)
+                    with branch(C):
+                        out(Z)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": False, "C": True})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is False
+        assert runner.current_state.tags["Z"] is False
+
+    def test_3_deep_nesting(self):
+        """Three levels of branch nesting works correctly."""
+        from pyrung.core.program import Program, Rung, branch, out
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+        W = Bool("W")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+                with branch(B):
+                    out(Y)
+                    with branch(C):
+                        out(Z)
+                        with branch(D):
+                            out(W)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": True, "D": True})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is True
+        assert runner.current_state.tags["Z"] is True
+        assert runner.current_state.tags["W"] is True
+
+        # Disable deepest level only
+        runner.patch({"D": False})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is True
+        assert runner.current_state.tags["Z"] is True
+        assert runner.current_state.tags["W"] is False
+
+    def test_instruction_interleaving_preserved_with_nesting(self):
+        """Instructions execute in source order regardless of nesting depth.
+
+        Structure:
+            with Rung(A):
+                copy(1, Order)          # 1st
+                with branch(B):
+                    copy(2, Order)      # 2nd
+                    with branch(C):
+                        copy(3, Order)  # 3rd
+                    copy(4, Order)      # 4th
+                copy(5, Order)          # 5th
+
+        Each copy overwrites Order, so the final value proves execution order.
+        Intermediate values are captured via a sequence tag.
+        """
+        from pyrung.core.program import Program, Rung, branch, copy
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Order = Int("Order")
+        # Use a Dint to accumulate a bitmask proving each step ran in order
+        Trace = Dint("Trace")
+
+        with Program() as logic:
+            with Rung(A):
+                copy(1, Order)
+                with branch(B):
+                    # Shift trace left and OR in current Order to prove we saw 1
+                    copy(Trace * 10 + Order, Trace)
+                    copy(2, Order)
+                    with branch(C):
+                        copy(Trace * 10 + Order, Trace)
+                        copy(3, Order)
+                    # Back in parent branch after nested branch
+                    copy(Trace * 10 + Order, Trace)
+                    copy(4, Order)
+                # Back in rung after branch
+                copy(Trace * 10 + Order, Trace)
+                copy(5, Order)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": True, "Order": 0, "Trace": 0})
+        runner.step()
+
+        # Final Order value is 5 (last write wins)
+        assert runner.current_state.tags["Order"] == 5
+        # Trace accumulates: 1, then 12, then 123, then 1234 (each *10 + current Order)
+        assert runner.current_state.tags["Trace"] == 1234
+
+    def test_nested_branch_conditions_see_rung_entry_snapshot(self):
+        """All branch conditions at every nesting depth evaluate against the
+        same frozen snapshot taken at rung entry — not the live mutable state."""
+        from pyrung.core.program import Program, Rung, branch, copy, out
+
+        A = Bool("A")
+        Flag = Bool("Flag")
+        Light = Bool("Light")
+
+        with Program() as logic:
+            with Rung(A):
+                # This copy mutates Flag before the nested branch is reached
+                # in source order, but the condition snapshot was frozen at
+                # rung entry when Flag was still False.
+                copy(True, Flag)
+                with branch(A):
+                    with branch(Flag):
+                        out(Light)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "Flag": False, "Light": False})
+        runner.step()
+
+        # Flag was mutated to True by copy(), but the nested branch's
+        # condition was evaluated against the rung-entry snapshot where
+        # Flag was False — so Light should be False.
+        assert runner.current_state.tags["Flag"] is True
+        assert runner.current_state.tags["Light"] is False
+
+        # On the NEXT scan, Flag is True at rung entry, so it fires
+        runner.step()
+        assert runner.current_state.tags["Light"] is True
+
+    def test_snapshot_applies_across_all_nesting_levels(self):
+        """Even a deeply nested branch's condition sees the rung-entry state,
+        not mutations from parent-level instructions."""
+        from pyrung.core.program import Program, Rung, branch, copy, out
+
+        A = Bool("A")
+        B = Bool("B")
+        Flag = Bool("Flag")
+        Deep = Bool("Deep")
+
+        with Program() as logic:
+            with Rung(A):
+                copy(True, Flag)  # mutates Flag early in source order
+                with branch(B):
+                    copy(True, Deep)  # mutates Deep inside parent branch
+                    with branch(Flag):
+                        # Flag was False at rung entry — should not fire
+                        out(Bool("L1"))
+                    with branch(Deep):
+                        # Deep was False at rung entry — should not fire
+                        out(Bool("L2"))
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "Flag": False, "Deep": False})
+        runner.step()
+
+        assert runner.current_state.tags["Flag"] is True
+        assert runner.current_state.tags["Deep"] is True
+        assert runner.current_state.tags.get("L1", False) is False
+        assert runner.current_state.tags.get("L2", False) is False
+
+        # Second scan: both are true at rung entry
+        runner.step()
+        assert runner.current_state.tags.get("L1", False) is True
+        assert runner.current_state.tags.get("L2", False) is True
+
+    def test_sibling_branches_at_nested_level(self):
+        """Multiple sibling branches inside a parent branch work independently."""
+        from pyrung.core.program import Program, Rung, branch, out
+
+        A = Bool("A")
+        B = Bool("B")
+        C1 = Bool("C1")
+        C2 = Bool("C2")
+        X = Bool("X")
+        Y = Bool("Y")
+        Z = Bool("Z")
+
+        with Program() as logic:
+            with Rung(A):
+                with branch(B):
+                    out(X)
+                    with branch(C1):
+                        out(Y)
+                    with branch(C2):
+                        out(Z)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C1": True, "C2": False})
+        runner.step()
+
+        assert runner.current_state.tags["X"] is True
+        assert runner.current_state.tags["Y"] is True
+        assert runner.current_state.tags["Z"] is False
+
+    def test_nested_branch_combined_condition(self):
+        """A nested branch's combined condition ANDs rung + parent branch + own condition."""
+        from pyrsistent import pmap
+
+        from pyrung.core.program import Program, Rung, branch
+        from pyrung.core.state import SystemState
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+
+        captured = None
+
+        def capture():
+            nonlocal captured
+            from pyrung.core.program.context import _require_rung_context
+
+            ctx = _require_rung_context("test")
+            captured = ctx._rung._get_combined_condition()
+
+        with Program():
+            with Rung(A):
+                with branch(B):
+                    with branch(C):
+                        capture()
+
+        def state(**tags):
+            return SystemState(scan_id=1, timestamp=0.0, tags=pmap(tags), memory=pmap())
+
+        assert captured is not None
+        # All three must be true
+        assert evaluate_condition(captured, state(A=True, B=True, C=True)) is True
+        # Any single false → combined false
+        assert evaluate_condition(captured, state(A=False, B=True, C=True)) is False
+        assert evaluate_condition(captured, state(A=True, B=False, C=True)) is False
+        assert evaluate_condition(captured, state(A=True, B=True, C=False)) is False
+
+    def test_nested_branch_instructions_interleave_with_parent(self):
+        """Instructions in a nested branch between two parent instructions
+        execute in that source order."""
+        from pyrung.core.program import Program, Rung, branch, copy
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        V = Int("V")
+
+        with Program() as logic:
+            with Rung(A):
+                copy(10, V)  # parent: V = 10
+                with branch(B):
+                    with branch(C):
+                        copy(V + 1, V)  # nested: V = 11
+                copy(V * 2, V)  # parent: V = 22
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": True, "V": 0})
+        runner.step()
+
+        # 10 -> 11 -> 22
+        assert runner.current_state.tags["V"] == 22
+
+    def test_nested_branch_disabled_skips_instructions_but_continues_parent(self):
+        """When a nested branch is disabled, its instructions are skipped
+        but parent instructions after it still execute."""
+        from pyrung.core.program import Program, Rung, branch, copy
+
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        V = Int("V")
+
+        with Program() as logic:
+            with Rung(A):
+                copy(10, V)
+                with branch(B):
+                    with branch(C):
+                        copy(99, V)  # skipped — C is false
+                copy(V + 1, V)
+
+        runner = PLCRunner(logic)
+        runner.patch({"A": True, "B": True, "C": False, "V": 0})
+        runner.step()
+
+        # 10 -> (skip 99) -> 11
+        assert runner.current_state.tags["V"] == 11
+
+
 class TestSubroutineAndCall:
     """Test subroutine() and call() for modular program structure."""
 

@@ -26,7 +26,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.context import ScanContext
+from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.expression import (
     ExprCompareEq,
     ExprCompareGe,
@@ -123,12 +123,16 @@ class ConditionTraceEngine:
             right_details.append(self._detail("right", repr(right_operand)))
         return right_details
 
-    def evaluate(self, condition: Any, ctx: ScanContext) -> tuple[bool, list[dict[str, Any]]]:
+    def evaluate(
+        self, condition: Any, ctx: ScanContext | ConditionView
+    ) -> tuple[bool, list[dict[str, Any]]]:
         """Return condition value with trace details for debugger display."""
         return self._evaluate(condition, ctx)
 
     @singledispatchmethod
-    def _evaluate(self, condition: Any, ctx: ScanContext) -> tuple[bool, list[dict[str, Any]]]:
+    def _evaluate(
+        self, condition: Any, ctx: ScanContext | ConditionView
+    ) -> tuple[bool, list[dict[str, Any]]]:
         value = bool(condition.evaluate(ctx))
         return value, []
 
