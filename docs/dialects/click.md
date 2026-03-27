@@ -248,6 +248,8 @@ If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 
 **UDTs** use dotted nicknames (`Base.field`) within plain block markers per memory bank. Fields spanning different banks each get their own block marker pair. The importer groups them by base name.
 
+Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
+
 ### To nickname file
 
 Export to Click nickname CSV for import into CLICK Programming Software:
