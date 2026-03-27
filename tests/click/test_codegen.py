@@ -1102,6 +1102,78 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_branch_2_deep(self, tmp_path: Path):
+        """2-deep nesting emits flat branch(B, C)."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(B, C):
+                    out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "branch(" in code
+        assert orig == repro
+
+    def test_branch_3_deep(self, tmp_path: Path):
+        """3-deep nesting emits flat branch(B, C, D)."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(B, C, D):
+                    out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], D: c[2], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "branch(" in code
+        assert orig == repro
+
+    def test_branch_interleaved_across_depths(self, tmp_path: Path):
+        """Multiple branches at same level with different depths."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(B):
+                    out(Y2)
+                with branch(C):
+                    out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
     def test_forloop(self, tmp_path: Path):
         """For/next loop."""
         Enable = Bool("Enable")
@@ -2069,6 +2141,84 @@ class TestCodeGeneration:
 # ---------------------------------------------------------------------------
 # Structured codegen tests
 # ---------------------------------------------------------------------------
+
+
+class TestContinuedRoundTrip:
+    """Round-trip tests for .continued() rungs."""
+
+    def test_simple_continuation(self, tmp_path: Path):
+        """Two independent wires: primary rung + continued rung."""
+        A = Bool("A")
+        B = Bool("B")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B).continued():
+                out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert ".continued()" in code
+        assert orig == repro
+
+    def test_continued_chain(self, tmp_path: Path):
+        """Three consecutive continued rungs share the same snapshot."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B).continued():
+                out(Y2)
+            with Rung(C).continued():
+                out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert code.count(".continued()") == 2
+        assert orig == repro
+
+    def test_continuation_with_branch(self, tmp_path: Path):
+        """Continued rung with a branch inside it."""
+        A = Bool("A")
+        B = Bool("B")
+        Mode = Bool("Mode")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B).continued():
+                out(Y2)
+                with branch(Mode):
+                    out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], Mode: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert ".continued()" in code
+        assert orig == repro
 
 
 class TestStructuredCodegen:

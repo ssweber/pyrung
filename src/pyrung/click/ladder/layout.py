@@ -36,6 +36,7 @@ class _LayoutMixin:
         *,
         condition_rows: list[_ConditionRow],
         path: str,
+        first_marker: str = "R",
     ) -> list[tuple[str, ...]]:
         parent_cursor = condition_rows[0].cursor
         if parent_cursor >= _CONDITION_COLS:
@@ -53,7 +54,7 @@ class _LayoutMixin:
             condition_rows=condition_rows,
             slots=slots,
             split_col=parent_cursor,
-            first_marker="R",
+            first_marker=first_marker,
             path=f"{path}.branch",
         )
         rows.extend(pin_rows)

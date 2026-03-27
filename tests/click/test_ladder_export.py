@@ -1945,3 +1945,106 @@ def test_nested_branch_export_raises_clear_error():
     issue = exc_info.value.issues[0]
     assert "Nested branch" in str(issue["message"])
     assert "branch" in str(issue["path"])
+
+
+# ---------------------------------------------------------------------------
+# continued() export tests
+# ---------------------------------------------------------------------------
+
+
+class TestContinuedExport:
+    """Ladder export for .continued() rungs."""
+
+    def test_continued_rung_blank_marker(self):
+        """Continued rung rows use blank marker instead of R."""
+        A = Bool("A")
+        B = Bool("B")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B).continued():
+                out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        bundle = to_ladder(logic, mapping)
+
+        # Find data rows (skip header)
+        data_rows = bundle.main_rows[1:]
+
+        # First rung starts with "R"
+        r_markers = [row[0] for row in data_rows]
+
+        # Should have exactly one "R" (for the primary rung) before the end() rung
+        # and blank markers for continued rows.
+        # The end() rung also has "R".
+        assert r_markers.count("R") == 2  # primary rung + end()
+
+        # The continued rung's row should have blank marker
+        # Find the row with out(Y002) — it should NOT have "R" marker
+        y2_rows = [row for row in data_rows if row[-1] == "out(Y002)"]
+        assert len(y2_rows) == 1
+        assert y2_rows[0][0] == ""  # blank marker
+
+    def test_continued_after_branch(self):
+        """Continuation after a rung with branches."""
+        A = Bool("A")
+        B = Bool("B")
+        Mode = Bool("Mode")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(Mode):
+                    out(Y2)
+            with Rung(B).continued():
+                out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], Mode: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        bundle = to_ladder(logic, mapping)
+
+        # The continued rung's row should have blank marker
+        data_rows = bundle.main_rows[1:]
+        y3_rows = [row for row in data_rows if row[-1] == "out(Y003)"]
+        assert len(y3_rows) == 1
+        assert y3_rows[0][0] == ""
+
+    def test_continued_with_own_conditions(self):
+        """Continued rung with its own conditions exports correctly."""
+        A = Bool("A")
+        B = Bool("B")
+        Ready = Bool("Ready")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B, Ready).continued():
+                out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], Ready: c[1], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        bundle = to_ladder(logic, mapping)
+
+        data_rows = bundle.main_rows[1:]
+        y2_rows = [row for row in data_rows if row[-1] == "out(Y002)"]
+        assert len(y2_rows) == 1
+        assert y2_rows[0][0] == ""  # blank marker
+        # Conditions (B=X002, Ready=C001) should appear in the row
+        row_cells = y2_rows[0][1:-1]
+        assert "X002" in row_cells
+        assert "C1" in row_cells

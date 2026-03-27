@@ -109,6 +109,7 @@ class _LadderExporter(
             return []
 
         comment_rows = self._comment_rows(rung)
+        first_marker = "" if rung._use_prior_snapshot else "R"
 
         if any(
             type(instruction).__name__ == "ForLoopInstruction" for instruction in rung._instructions
@@ -137,6 +138,7 @@ class _LadderExporter(
                 rung,
                 condition_rows=condition_rows,
                 path=path,
+                first_marker=first_marker,
             )
             if not branch_rows:
                 return []
@@ -149,14 +151,14 @@ class _LadderExporter(
                 instructions=rung._instructions,
                 condition_rows=condition_rows,
                 path=path,
-                first_marker="R",
+                first_marker=first_marker,
                 source=rung,
             )
         else:
             output_rows = self._single_output_rows(
                 condition_rows,
                 output_token="",
-                first_marker="R",
+                first_marker=first_marker,
             )
             pin_rows = []
 

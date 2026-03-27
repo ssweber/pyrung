@@ -13,7 +13,6 @@ class TestContinueBasic:
         """Second rung with continued() evaluates conditions against snapshot
         taken before the first rung's instructions executed."""
         A = Bool("A")
-        B = Bool("B")
         X = Bool("X")
         Y = Bool("Y")
 
@@ -26,9 +25,7 @@ class TestContinueBasic:
                 # so this rung's condition should be False
                 out(Y)
 
-        state = SystemState().with_tags(
-            {"A": True, "B": False, "X": False, "Y": False}
-        )
+        state = SystemState().with_tags({"A": True, "B": False, "X": False, "Y": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is True  # rung 1 instruction executed
@@ -47,9 +44,7 @@ class TestContinueBasic:
             with Rung(B).continued():
                 out(Y)
 
-        state = SystemState().with_tags(
-            {"A": True, "B": True, "X": False, "Y": False}
-        )
+        state = SystemState().with_tags({"A": True, "B": True, "X": False, "Y": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is True
@@ -83,8 +78,8 @@ class TestContinueBasic:
 
         assert result.tags["Counter"] == 10
         assert result.tags["X"] is False  # Counter was 0, not 10
-        assert result.tags["Y"] is True   # Counter was 0
-        assert result.tags["Z"] is True   # A was True
+        assert result.tags["Y"] is True  # Counter was 0
+        assert result.tags["Z"] is True  # A was True
 
     def test_normal_rung_after_continue_takes_fresh_snapshot(self):
         """A normal (non-continue) rung after a continue chain takes a fresh snapshot."""
@@ -101,9 +96,7 @@ class TestContinueBasic:
             with Rung(Counter == 10):
                 out(Y)  # True: fresh snapshot sees Counter=10
 
-        state = SystemState().with_tags(
-            {"A": True, "Counter": 0, "X": False, "Y": False}
-        )
+        state = SystemState().with_tags({"A": True, "Counter": 0, "X": False, "Y": False})
         result = evaluate_program(logic, state)
 
         assert result.tags["X"] is False
@@ -130,13 +123,11 @@ class TestContinueWithBranch:
                     # X was False in the snapshot, so branch is unpowered
                     out(Z)
 
-        state = SystemState().with_tags(
-            {"A": True, "B": False, "X": False, "Y": False, "Z": False}
-        )
+        state = SystemState().with_tags({"A": True, "B": False, "X": False, "Y": False, "Z": False})
         result = evaluate_program(logic, state)
 
-        assert result.tags["X"] is True   # rung 1 set it
-        assert result.tags["Y"] is True   # A was True in snapshot
+        assert result.tags["X"] is True  # rung 1 set it
+        assert result.tags["Y"] is True  # A was True in snapshot
         assert result.tags["Z"] is False  # X was False in snapshot
 
 
@@ -248,7 +239,7 @@ class TestContinueSubroutineBoundary:
 
         assert runner.current_state.tags["Counter"] == 10
         assert runner.current_state.tags["X"] is False  # saw Counter=0
-        assert runner.current_state.tags["Y"] is True   # saw Counter=0
+        assert runner.current_state.tags["Y"] is True  # saw Counter=0
 
 
 class TestContinueMethodChaining:

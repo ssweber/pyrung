@@ -466,10 +466,11 @@ def _emit_rung_header(
     """Emit 'with Rung(...):' or 'with Rung(...) as r:' + comment lines."""
     pad = "    " * indent
     as_clause = " as r" if rung.comment else ""
+    continued = ".continued()" if rung.is_continued else ""
     if conditions_str:
-        lines.append(f"{pad}with Rung({conditions_str}){as_clause}:")
+        lines.append(f"{pad}with Rung({conditions_str}){continued}{as_clause}:")
     else:
-        lines.append(f"{pad}with Rung(){as_clause}:")
+        lines.append(f"{pad}with Rung(){continued}{as_clause}:")
     if rung.comment:
         _emit_comment(lines, rung.comment, indent + 1)
 

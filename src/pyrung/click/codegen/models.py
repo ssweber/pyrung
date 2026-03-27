@@ -82,6 +82,7 @@ class _AnalyzedRung:
     is_forloop_start: bool = False
     is_forloop_body: bool = False
     is_forloop_next: bool = False
+    is_continued: bool = False
 
 
 # ---------------------------------------------------------------------------

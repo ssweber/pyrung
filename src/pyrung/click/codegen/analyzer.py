@@ -563,6 +563,80 @@ def _group_outputs(
 # --- Top-level Phase 2 entry points -----------------------------------------
 
 
+def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
+    """Split a rung with independent wires into primary + continued rungs.
+
+    When ``condition_tree`` is None and every instruction carries its own
+    ``branch_tree``, the outputs are independent wires — not branches of a
+    shared condition.  The first instruction becomes the primary rung;
+    remaining instructions are re-grouped (they may share a prefix among
+    themselves, producing a continued rung with branches) and marked
+    ``is_continued=True``.
+    """
+    if rung.condition_tree is not None:
+        return [rung]
+    if len(rung.instructions) < 2:
+        return [rung]
+    if not all(instr.branch_tree is not None for instr in rung.instructions):
+        return [rung]
+
+    # First instruction → primary rung
+    first = rung.instructions[0]
+    result: list[_AnalyzedRung] = [
+        _AnalyzedRung(
+            comment=rung.comment,
+            condition_tree=first.branch_tree,
+            instructions=[_InstructionInfo(first.af_token, None, first.pins)],
+        )
+    ]
+
+    remaining = rung.instructions[1:]
+    if len(remaining) == 1:
+        instr = remaining[0]
+        result.append(
+            _AnalyzedRung(
+                comment=None,
+                condition_tree=instr.branch_tree,
+                instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
+                is_continued=True,
+            )
+        )
+    else:
+        # Re-group remaining outputs — they may share a prefix (→ branches)
+        trees = [(instr.branch_tree, instr.af_token, i) for i, instr in enumerate(remaining)]
+        cond_tree, grouped, _ = _group_outputs(trees)
+
+        if (
+            cond_tree is None
+            and len(grouped) > 1
+            and all(g.branch_tree is not None for g in grouped)
+        ):
+            # Still no shared prefix → each becomes its own continued rung
+            for instr in remaining:
+                result.append(
+                    _AnalyzedRung(
+                        comment=None,
+                        condition_tree=instr.branch_tree,
+                        instructions=[_InstructionInfo(instr.af_token, None, instr.pins)],
+                        is_continued=True,
+                    )
+                )
+        else:
+            # Shared prefix → single continued rung (may have branches)
+            for gi, orig in zip(grouped, remaining, strict=True):
+                gi.pins = orig.pins
+            result.append(
+                _AnalyzedRung(
+                    comment=None,
+                    condition_tree=cond_tree,
+                    instructions=grouped,
+                    is_continued=True,
+                )
+            )
+
+    return result
+
+
 def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
     """Analyze topology of each rung."""
     analyzed: list[_AnalyzedRung] = []
@@ -595,7 +669,7 @@ def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
                 analyzed.append(_analyze_single_rung(body_rung, is_forloop_body=True))
                 i += 1
         else:
-            analyzed.append(_analyze_single_rung(rung))
+            analyzed.extend(_split_continued(_analyze_single_rung(rung)))
             i += 1
 
     return analyzed
