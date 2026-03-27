@@ -1943,6 +1943,34 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_rise_fall_or_with_three_outputs(self, tmp_path: Path):
+        """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
+        from pyrung.core.program import call, subroutine
+
+        C1 = Bool("C1")
+        C2 = Bool("C2")
+        C4 = Bool("C4")
+        DS1 = Int("DS1")
+
+        with Program() as logic:
+            with Rung(any_of(rise(C1), fall(C2))):
+                copy(1, DS1)
+                copy(C2, C4)
+                call("SubName")
+
+            with subroutine("SubName"):
+                with Rung():
+                    out(C4)
+
+        mapping = TagMap(
+            {C1: c[1], C2: c[2], C4: c[4], DS1: ds[1]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "any_of(rise(C1), fall(C2))" in code
+        assert orig == repro
+
 
 # ---------------------------------------------------------------------------
 # In-memory round-trip tests (LadderBundle → to_pyrung, no disk I/O)
