@@ -165,3 +165,30 @@ class _OperandCollection:
     has_modbus_address: bool = False
     structures: list[_StructureDecl] = field(default_factory=list)
     structure_owned_operands: set[str] = field(default_factory=set)
+
+
+# ---------------------------------------------------------------------------
+# Per-file reference tracking (for multi-file project output)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FileRefs:
+    """Symbols referenced by a single generated file (main.py or a subroutine)."""
+
+    tag_var_names: set[str] = field(default_factory=set)
+    range_var_names: set[str] = field(default_factory=set)
+    structure_names: set[str] = field(default_factory=set)
+    used_instructions: set[str] = field(default_factory=set)
+    used_conditions: set[str] = field(default_factory=set)
+    used_time_units: set[str] = field(default_factory=set)
+    used_copy_converters: set[str] = field(default_factory=set)
+    used_expr_funcs: set[str] = field(default_factory=set)
+    has_any_of: bool = False
+    has_all_of: bool = False
+    has_branch: bool = False
+    has_forloop: bool = False
+    has_modbus_target: bool = False
+    has_modbus_rtu_target: bool = False
+    has_modbus_address: bool = False
+    subroutine_func_names: set[str] = field(default_factory=set)

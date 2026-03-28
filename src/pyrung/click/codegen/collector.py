@@ -20,6 +20,7 @@ from pyrung.click.codegen.models import (
     SPNode,
     _AnalyzedRung,
     _FieldHw,
+    _FileRefs,
     _OperandCollection,
     _RangeDecl,
     _StructureDecl,
@@ -419,3 +420,170 @@ def _register_operands_from_text(
             block_index=index,
             comment=comment_str,
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-file reference scanning (for multi-file project output)
+# ---------------------------------------------------------------------------
+
+
+def _scan_file_refs(
+    rungs: list[_AnalyzedRung],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+) -> _FileRefs:
+    """Scan rungs and record which symbols from *collection* they reference.
+
+    Unlike :func:`_collect_operands` (which builds the global collection),
+    this function only records hits against an already-populated collection.
+    """
+
+    refs = _FileRefs()
+
+    for rung in rungs:
+        if _tree_has_parallel(rung.condition_tree):
+            refs.has_any_of = True
+        if _tree_has_all_of(rung.condition_tree):
+            refs.has_all_of = True
+        if rung.is_forloop_start:
+            refs.has_forloop = True
+
+        for cond in _walk_tree_labels(rung.condition_tree):
+            _ref_token(cond, collection, refs)
+
+        for instr in rung.instructions:
+            _ref_af_token(instr.af_token, collection, refs)
+            for cond in _walk_tree_labels(instr.branch_tree):
+                _ref_token(cond, collection, refs)
+            if _tree_has_parallel(instr.branch_tree):
+                refs.has_any_of = True
+            if _tree_has_all_of(instr.branch_tree):
+                refs.has_all_of = True
+            if instr.branch_tree is not None:
+                refs.has_branch = True
+            for pin in instr.pins:
+                for cond in pin.conditions:
+                    _ref_token(cond, collection, refs)
+                if pin.arg:
+                    _ref_token(pin.arg, collection, refs)
+
+    return refs
+
+
+def _ref_token(
+    token: str,
+    collection: _OperandCollection,
+    refs: _FileRefs,
+) -> None:
+    """Record operand references in a condition token."""
+    match = _FUNC_RE.match(token)
+    if match:
+        func_name = match.group(2)
+        args_str = match.group(3) or ""
+        if func_name in _CONDITION_WRAPPERS:
+            refs.used_conditions.add(func_name)
+            _ref_operands_in_text(args_str, collection, refs)
+            return
+
+    cmp_match = _COMPARE_RE.match(token)
+    if cmp_match:
+        _ref_operands_in_text(cmp_match.group(1), collection, refs)
+        _ref_operands_in_text(cmp_match.group(3), collection, refs)
+        return
+
+    if token.startswith("~"):
+        _ref_operands_in_text(token[1:], collection, refs)
+        return
+
+    _ref_operands_in_text(token, collection, refs)
+
+
+def _ref_af_token(
+    token: str,
+    collection: _OperandCollection,
+    refs: _FileRefs,
+) -> None:
+    """Record references in an AF (instruction) token."""
+    if not token:
+        return
+
+    match = _FUNC_RE.match(token)
+    if not match:
+        return
+
+    func_name = match.group(2)
+    args_str = match.group(3) or ""
+
+    if func_name in _INSTRUCTION_NAMES:
+        refs.used_instructions.add(func_name)
+
+    if func_name in {"send", "receive"}:
+        if "ModbusTcpTarget(" in args_str:
+            refs.has_modbus_target = True
+        if "ModbusRtuTarget(" in args_str:
+            refs.has_modbus_rtu_target = True
+        if "ModbusAddress(" in args_str:
+            refs.has_modbus_address = True
+
+    if func_name == "call":
+        # Extract subroutine name for cross-file import tracking
+        sub_name = args_str.strip().strip('"')
+        if sub_name:
+            from pyrung.click.codegen.utils import _slugify as slugify
+
+            refs.subroutine_func_names.add(slugify(sub_name))
+
+    if func_name == "raw":
+        return
+
+    clean_args = _strip_quoted_strings(args_str)
+
+    for cw in _CONDITION_WRAPPERS:
+        if cw + "(" in clean_args:
+            refs.used_conditions.add(cw)
+
+    for tu in _TIME_UNITS:
+        if tu in clean_args:
+            refs.used_time_units.add(tu)
+
+    for cc in _COPY_CONVERTERS:
+        if f"convert={cc}" in clean_args:
+            refs.used_copy_converters.add(cc)
+
+    _ref_operands_in_text(clean_args, collection, refs)
+
+
+def _ref_operands_in_text(
+    text: str,
+    collection: _OperandCollection,
+    refs: _FileRefs,
+) -> None:
+    """Record which tags/ranges/structures from *collection* appear in *text*."""
+    # Check ranges
+    for range_match in _RANGE_RE.finditer(text):
+        range_str = range_match.group(0)
+        if range_str in collection.ranges:
+            refs.range_var_names.add(collection.ranges[range_str].var_name)
+
+    # Check individual operands
+    for op_match in _OPERAND_RE.finditer(text):
+        operand = op_match.group(0)
+        if operand in collection.structure_owned_operands:
+            # Find which structure owns it
+            for sdecl in collection.structures:
+                # Check if operand falls within structure's address space
+                parsed = _parse_operand_prefix(operand)
+                if parsed is None:
+                    continue
+                _, _, block_var, index = parsed
+                if sdecl.structure_type == "named_array":
+                    if block_var == sdecl.hw_block_var and sdecl.hw_start <= index <= sdecl.hw_end:
+                        refs.structure_names.add(sdecl.name)
+                        break
+                elif sdecl.structure_type == "udt":
+                    for fhw in sdecl.field_hw.values():
+                        if block_var == fhw.block_var and fhw.start <= index <= fhw.end:
+                            refs.structure_names.add(sdecl.name)
+                            break
+        elif operand in collection.tags:
+            refs.tag_var_names.add(collection.tags[operand].var_name)

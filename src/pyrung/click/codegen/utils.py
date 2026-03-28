@@ -14,6 +14,7 @@ from pyrung.click.codegen.constants import (
 from pyrung.click.codegen.models import _OperandCollection
 
 if TYPE_CHECKING:
+    from pyrung.click.codegen.models import _SubroutineInfo
     from pyrung.click.tag_map import TagMap
 
 # ---------------------------------------------------------------------------
@@ -370,3 +371,13 @@ def _slugify(name: str) -> str:
     """Convert a subroutine name to a filename slug (matching ladder.py)."""
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
     return slug if slug else "subroutine"
+
+
+def _build_sub_name_map(
+    subroutines: list[_SubroutineInfo],
+) -> dict[str, str]:
+    """Map subroutine display names to Python function identifiers.
+
+    Returns ``{"Alarm Handler": "alarm_handler", "startup": "startup", ...}``.
+    """
+    return {sub.name: _slugify(sub.name) for sub in subroutines}

@@ -401,6 +401,62 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 The generated code is designed to round-trip: `exec()` the output, then `to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
 
+## Multi-file project codegen
+
+`to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
+
+```python
+from pyrung.click import to_pyrung_project
+
+files = to_pyrung_project("ladder_dir/")
+files = to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
+files = to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
+```
+
+The return value is a `dict[str, str]` mapping relative paths to content:
+
+```
+tags.py                  # tag declarations, structures, TagMap
+main.py                  # Program context, main rungs, call() statements
+subroutines/
+  __init__.py
+  startup.py             # @subroutine("startup") decorated function
+  alarm_handler.py
+```
+
+### How subroutines are represented
+
+Each subroutine file defines a decorated function that auto-registers with the Program when called:
+
+```python
+# subroutines/startup.py
+from pyrung import Rung, subroutine, out
+from tags import SubLight
+
+@subroutine("startup")
+def startup():
+    with Rung():
+        out(SubLight)
+```
+
+`main.py` imports and calls it by reference (not by string name):
+
+```python
+from subroutines.startup import startup
+
+with Program() as logic:
+    with Rung(Button):
+        call(startup)
+```
+
+### Per-file imports
+
+Each generated file imports only what it uses. A subroutine that touches `X001` and `Y001` won't import `X002` or `DS1`. `tags.py` is the single source of truth for all tag declarations; other files import from it.
+
+### Nickname and structure support
+
+Same as `to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
+
 ## Loading PLC state
 
 Use Click Programming Software's **Data > Read Data from PLC** to dump the live state of a Click PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.

@@ -238,7 +238,12 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         lines.append(f"from pyrung.core.expression import {', '.join(expr_imports)}")
 
 
-def _emit_tag_declarations(lines: list[str], collection: _OperandCollection) -> None:
+def _emit_tag_declarations(
+    lines: list[str],
+    collection: _OperandCollection,
+    *,
+    suppress_comments: bool = False,
+) -> None:
     """Emit tag variable declarations."""
     # Sort by block order, then by index
     block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
@@ -250,7 +255,7 @@ def _emit_tag_declarations(lines: list[str], collection: _OperandCollection) -> 
         if decl.operand in collection.structure_owned_operands:
             continue
         line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
-        if decl.comment:
+        if decl.comment and not suppress_comments:
             line += decl.comment
         lines.append(line)
 
@@ -329,6 +334,7 @@ def _emit_program(
     *,
     subroutines: list[_SubroutineInfo] | None = None,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit the program body."""
     lines.append("with Program() as logic:")
@@ -338,7 +344,13 @@ def _emit_program(
         return
 
     _emit_rung_sequence(
-        lines, rungs, collection, nicknames, indent=1, structured_map=structured_map
+        lines,
+        rungs,
+        collection,
+        nicknames,
+        indent=1,
+        structured_map=structured_map,
+        call_func_map=call_func_map,
     )
 
     # Emit subroutine blocks
@@ -354,6 +366,7 @@ def _emit_program(
                     nicknames,
                     indent=2,
                     structured_map=structured_map,
+                    call_func_map=call_func_map,
                 )
             else:
                 lines.append("        pass")
@@ -366,6 +379,7 @@ def _emit_rung_sequence(
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit a sequence of rungs (main program or subroutine body)."""
     if not rungs:
@@ -386,6 +400,7 @@ def _emit_rung_sequence(
                 nicknames,
                 indent=indent,
                 structured_map=structured_map,
+                call_func_map=call_func_map,
             )
             # Skip to after next()
             i += 1
@@ -399,7 +414,15 @@ def _emit_rung_sequence(
             i += 1
             continue
 
-        _emit_rung(lines, rung, collection, nicknames, indent=indent, structured_map=structured_map)
+        _emit_rung(
+            lines,
+            rung,
+            collection,
+            nicknames,
+            indent=indent,
+            structured_map=structured_map,
+            call_func_map=call_func_map,
+        )
         i += 1
 
 
@@ -411,6 +434,7 @@ def _emit_forloop(
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit a for/next block."""
     pad = "    " * indent
@@ -450,7 +474,9 @@ def _emit_forloop(
             break
         body_rung = rungs[j]
         for instr in body_rung.instructions:
-            _emit_instruction(lines, instr, collection, nicknames, indent + 2, structured_map)
+            _emit_instruction(
+                lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
+            )
         body_count += 1
 
     if body_count == 0:
@@ -482,6 +508,7 @@ def _emit_rung(
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit a single rung."""
     pad = "    " * indent
@@ -504,19 +531,27 @@ def _emit_rung(
                     instr.branch_tree, collection, nicknames, structured_map
                 )
                 lines.append(f"{pad}    with branch({branch_cond}):")
-                _emit_instruction(lines, instr, collection, nicknames, indent + 2, structured_map)
+                _emit_instruction(
+                    lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
+                )
             else:
-                _emit_instruction(lines, instr, collection, nicknames, indent + 1, structured_map)
+                _emit_instruction(
+                    lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+                )
     elif multi_output and not has_branches:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
         for instr in rung.instructions:
-            _emit_instruction(lines, instr, collection, nicknames, indent + 1, structured_map)
+            _emit_instruction(
+                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+            )
     else:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
         for instr in rung.instructions:
-            _emit_instruction(lines, instr, collection, nicknames, indent + 1, structured_map)
+            _emit_instruction(
+                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+            )
 
 
 def _render_sp_node(
@@ -601,6 +636,7 @@ def _emit_instruction(
     nicknames: dict[str, str] | None,
     indent: int,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit a single instruction call."""
     pad = "    " * indent
@@ -609,7 +645,7 @@ def _emit_instruction(
     if not af:
         return
 
-    rendered = _render_af_token(af, collection, nicknames, structured_map)
+    rendered = _render_af_token(af, collection, nicknames, structured_map, call_func_map)
 
     # Handle pin chaining
     pin_strs: list[str] = []
@@ -658,6 +694,7 @@ def _render_af_token(
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
     structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
 ) -> str:
     """Render an AF token to a pyrung DSL call."""
     match = _FUNC_RE.match(token)
@@ -670,6 +707,14 @@ def _render_af_token(
     # Map CSV token names → Python DSL names
     _CSV_TO_DSL = {"return": "return_early", "math": "calc"}
     py_func = _CSV_TO_DSL.get(func_name, func_name)
+
+    # In project mode, call("name") → call(func_name) using bare identifier
+    if func_name == "call" and call_func_map is not None and args_str:
+        # Strip surrounding quotes from the subroutine name
+        sub_name = args_str.strip().strip('"')
+        func_id = call_func_map.get(sub_name)
+        if func_id is not None:
+            return f"call({func_id})"
 
     # raw(ClassName,fields...) → raw("ClassName", 'fields...')
     # Single-quote fields because values may contain double quotes (e.g. "TEST").
