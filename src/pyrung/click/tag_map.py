@@ -23,12 +23,14 @@ from pyclickplc.blocks import (
 from pyclickplc.blocks import (
     compute_all_block_ranges,
     format_block_tag,
+    parse_block_tag,
     parse_structured_block_name,
 )
 from pyclickplc.validation import validate_nickname
 
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
+from pyrung.core.memory_block import UNSET
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
 
@@ -353,6 +355,36 @@ def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -
     )
 
 
+def _extract_address_comment(comment: str) -> str:
+    parsed = parse_block_tag(comment)
+    if parsed.name is None:
+        return comment.strip()
+    return parsed.remaining_text.strip()
+
+
+def _compose_address_comment(comment: str, block_tag: str = "") -> str:
+    text = comment.strip()
+    if not block_tag:
+        return text
+    if not text:
+        return block_tag
+    return f"{block_tag} {text}"
+
+
+def _is_marker_only_boundary_row(row: AddressRecord, *, block_name: str) -> bool:
+    parsed = parse_block_tag(row.comment)
+    if parsed.name != block_name:
+        return False
+    if parsed.remaining_text.strip() != "":
+        return False
+    if row.nickname != "":
+        return False
+    if row.retentive != DEFAULT_RETENTIVE[row.memory_type]:
+        return False
+    logical_type = _tag_type_for_memory_type(row.memory_type)
+    return _parse_default(row.initial_value, logical_type) == _parse_default("", logical_type)
+
+
 class TagMap:
     """Maps logical Tags and Blocks to Click hardware addresses.
 
@@ -638,30 +670,38 @@ class TagMap:
                 logical_addr = hardware_to_logical.get(row.address)
                 if logical_addr is None:
                     continue
-
-                require_representable_block_nickname(
-                    memory_type=row.memory_type,
-                    address=row.address,
-                    name=row.nickname,
-                )
-                slot_name = logical_block.slot_config(logical_addr).name
-                if row.nickname != slot_name:
-                    logical_block.rename_slot(logical_addr, row.nickname)
-
                 slot_config = logical_block.slot_config(logical_addr)
+                if _is_marker_only_boundary_row(row, block_name=spec.name):
+                    continue
+
+                if row.nickname != "":
+                    require_representable_block_nickname(
+                        memory_type=row.memory_type,
+                        address=row.address,
+                        name=row.nickname,
+                    )
+                    if row.nickname != slot_config.name:
+                        logical_block.rename_slot(logical_addr, row.nickname)
+                        slot_config = logical_block.slot_config(logical_addr)
+                else:
+                    require_representable_block_nickname(
+                        memory_type=row.memory_type,
+                        address=row.address,
+                        name=row.nickname,
+                    )
+
                 default = _parse_default(row.initial_value, logical_block.type)
+                comment = _extract_address_comment(row.comment)
                 retentive_changed = row.retentive != slot_config.retentive
                 default_changed = default != slot_config.default
-                if retentive_changed and default_changed:
+                comment_changed = comment != slot_config.comment
+                if retentive_changed or default_changed or comment_changed:
                     logical_block.configure_slot(
                         logical_addr,
-                        retentive=row.retentive,
-                        default=default,
+                        retentive=row.retentive if retentive_changed else None,
+                        default=default if default_changed else UNSET,
+                        comment=comment if comment_changed else UNSET,
                     )
-                elif retentive_changed:
-                    logical_block.configure_slot(logical_addr, retentive=row.retentive)
-                elif default_changed:
-                    logical_block.configure_slot(logical_addr, default=default)
 
         def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
             if explicit_start is not None:
@@ -839,20 +879,20 @@ class TagMap:
                         slot_config = block.slot_config(instance)
                         if row.nickname != slot_config.name:
                             block.rename_slot(instance, row.nickname)
+                            slot_config = block.slot_config(instance)
 
                         default = _parse_default(row.initial_value, block.type)
+                        comment = _extract_address_comment(row.comment)
                         retentive_changed = row.retentive != slot_config.retentive
                         default_changed = default != slot_config.default
-                        if retentive_changed and default_changed:
+                        comment_changed = comment != slot_config.comment
+                        if retentive_changed or default_changed or comment_changed:
                             block.configure_slot(
                                 instance,
-                                retentive=row.retentive,
-                                default=default,
+                                retentive=row.retentive if retentive_changed else None,
+                                default=default if default_changed else UNSET,
+                                comment=comment if comment_changed else UNSET,
                             )
-                        elif retentive_changed:
-                            block.configure_slot(instance, retentive=row.retentive)
-                        elif default_changed:
-                            block.configure_slot(instance, default=default)
 
                 mappings.extend(runtime.map_to(spec.hardware_range))
                 append_structure(
@@ -953,6 +993,7 @@ class TagMap:
                 type=logical_type,
                 retentive=row.retentive,
                 default=_parse_default(row.initial_value, logical_type),
+                comment=_extract_address_comment(row.comment),
             )
             hardware = _hardware_block_for(memory_type)[row.address]
             mappings.append(logical.map_to(hardware))
@@ -986,7 +1027,7 @@ class TagMap:
                 memory_type=memory_type,
                 address=address,
                 nickname=entry.logical.name,
-                comment="",
+                comment=entry.logical.comment,
                 initial_value=_format_default(entry.logical.default, entry.logical.type),
                 retentive=entry.logical.retentive,
                 data_type=BANKS[memory_type].data_type,
@@ -1004,25 +1045,25 @@ class TagMap:
                 zip(entry.logical_addresses, entry.hardware_addresses, strict=True)
             ):
                 slot = entry.logical[logical_addr]
-                comment = ""
+                block_tag = ""
                 if block_len == 1:
-                    comment = format_block_tag(entry.logical.name, "self-closing")
+                    block_tag = format_block_tag(entry.logical.name, "self-closing")
                 elif i == 0:
-                    comment = format_block_tag(entry.logical.name, "open")
+                    block_tag = format_block_tag(entry.logical.name, "open")
                 elif i == block_len - 1:
-                    comment = format_block_tag(entry.logical.name, "close")
+                    block_tag = format_block_tag(entry.logical.name, "close")
 
                 records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                     memory_type=memory_type,
                     address=hardware_addr,
                     nickname=slot.name,
-                    comment=comment,
+                    comment=_compose_address_comment(slot.comment, block_tag),
                     initial_value=_format_default(slot.default, slot.type),
                     retentive=slot.retentive,
                     data_type=BANKS[memory_type].data_type,
                 )
 
-        def write_boundary_comment(memory_type: str, address: int, comment: str) -> None:
+        def write_boundary_comment(memory_type: str, address: int, block_tag: str) -> None:
             addr_key = get_addr_key(memory_type, address)
             existing = records.get(addr_key)
             if existing is None:
@@ -1030,13 +1071,19 @@ class TagMap:
                     memory_type=memory_type,
                     address=address,
                     nickname="",
-                    comment=comment,
+                    comment=block_tag,
                     initial_value="",
                     retentive=DEFAULT_RETENTIVE[memory_type],
                     data_type=BANKS[memory_type].data_type,
                 )
                 return
-            records[addr_key] = replace(existing, comment=comment)
+            records[addr_key] = replace(
+                existing,
+                comment=_compose_address_comment(
+                    _extract_address_comment(existing.comment),
+                    block_tag,
+                ),
+            )
 
         for structure in self._structures:
             if structure.kind != "named_array":
@@ -1185,11 +1232,11 @@ class TagMap:
 
         return tuple(slots)
 
-    def from_hardware(
+    def tags_from_plc_data(
         self,
         data: dict[str, bool | int | float | str],
     ) -> dict[str, bool | int | float | str]:
-        """Translate hardware-addressed values to logical tag names.
+        """Return logical tag values from a PLC data dump.
 
         Accepts a dict keyed by Click display addresses (e.g. from
         ``pyclickplc.read_plc_data``) and returns a dict keyed by the
@@ -1201,7 +1248,7 @@ class TagMap:
             from pyclickplc import read_plc_data
 
             data = read_plc_data("data.csv", skip_default=True)
-            tags = mapping.from_hardware(data)
+            tags = mapping.tags_from_plc_data(data)
             runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
 
         Args:

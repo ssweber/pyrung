@@ -142,24 +142,29 @@ class TestBlock:
         assert inherited.name == "DS3"
         assert inherited.retentive is False
         assert inherited.default == 30
+        assert inherited.comment == ""
         assert inherited.name_overridden is False
         assert inherited.retentive_overridden is False
         assert inherited.default_overridden is False
+        assert inherited.comment_overridden is False
 
         DS.rename_slot(3, "Speed_Command")
-        DS.configure_slot(3, retentive=True, default=999)
+        DS.configure_slot(3, retentive=True, default=999, comment="Speed command")
         configured = DS.slot_config(3)
         assert configured.name == "Speed_Command"
         assert configured.retentive is True
         assert configured.default == 999
+        assert configured.comment == "Speed command"
         assert configured.name_overridden is True
         assert configured.retentive_overridden is True
         assert configured.default_overridden is True
+        assert configured.comment_overridden is True
 
         tag = DS[3]
         assert tag.name == "Speed_Command"
         assert tag.retentive is True
         assert tag.default == 999
+        assert tag.comment == "Speed command"
 
     def test_slot_name_clear_restores_generated_name(self):
         DS = Block("DS", TagType.INT, 1, 10)
@@ -192,11 +197,12 @@ class TestBlock:
             retentive=False,
             default_factory=lambda addr: addr,
         )
-        DS.configure_slot(2, retentive=True, default=200)
+        DS.configure_slot(2, retentive=True, default=200, comment="Recipe")
         DS.clear_slot_config(2)
         after_clear_slot = DS.slot_config(2)
         assert after_clear_slot.retentive is False
         assert after_clear_slot.default == 2
+        assert after_clear_slot.comment == ""
 
         DS.configure_range(1, 6, retentive=True, default=100)
         DS.clear_range_config(1, 6)

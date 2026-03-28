@@ -43,9 +43,11 @@ class SlotConfig:
     name: str
     retentive: bool
     default: Any
+    comment: str
     name_overridden: bool
     retentive_overridden: bool
     default_overridden: bool
+    comment_overridden: bool
 
 
 @dataclass(eq=False)
@@ -108,6 +110,7 @@ class Block:
     _slot_name_overrides: dict[int, str] = field(default_factory=dict, repr=False)
     _slot_retentive_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_default_overrides: dict[int, Any] = field(default_factory=dict, repr=False)
+    _slot_comment_overrides: dict[int, str] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -175,17 +178,24 @@ class Block:
         """Get or create a Tag for the given address."""
         if addr not in self._tag_cache:
             retentive, default = self._effective_slot_policy(addr)
+            comment = self._effective_slot_comment(addr)
             self._tag_cache[addr] = self._new_tag_for_slot(
-                addr, retentive=retentive, default=default
+                addr,
+                retentive=retentive,
+                default=default,
+                comment=comment,
             )
         return cast(LiveTag, self._tag_cache[addr])
 
-    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveTag:
+    def _new_tag_for_slot(
+        self, addr: int, *, retentive: bool, default: Any, comment: str
+    ) -> LiveTag:
         return LiveTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
+            comment=comment,
         )
 
     def _type_default(self) -> Any:
@@ -208,6 +218,9 @@ class Block:
         else:
             default = self._type_default()
         return retentive, default
+
+    def _effective_slot_comment(self, addr: int) -> str:
+        return self._slot_comment_overrides.get(addr, "")
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
         if addr in self._tag_cache:
@@ -234,6 +247,7 @@ class Block:
         *,
         retentive: bool | None = None,
         default: object = UNSET,
+        comment: object = UNSET,
     ) -> None:
         """Set per-slot runtime policy before this slot is materialized."""
         self._validate_address(addr)
@@ -243,6 +257,13 @@ class Block:
             self._slot_retentive_overrides[addr] = bool(retentive)
         if default is not UNSET:
             self._slot_default_overrides[addr] = default
+        if comment is not UNSET:
+            if not isinstance(comment, str):
+                raise TypeError(f"comment must be a string, got {type(comment).__name__}.")
+            if comment == "":
+                self._slot_comment_overrides.pop(addr, None)
+            else:
+                self._slot_comment_overrides[addr] = comment
 
     def configure_range(
         self,
@@ -276,6 +297,7 @@ class Block:
         self._assert_not_materialized(addr, action="clear slot policy for")
         self._slot_retentive_overrides.pop(addr, None)
         self._slot_default_overrides.pop(addr, None)
+        self._slot_comment_overrides.pop(addr, None)
 
     def clear_range_config(self, start: int, end: int) -> None:
         """Clear per-slot policy overrides for all valid addresses in a window."""
@@ -293,6 +315,7 @@ class Block:
         for addr in addresses:
             self._slot_retentive_overrides.pop(addr, None)
             self._slot_default_overrides.pop(addr, None)
+            self._slot_comment_overrides.pop(addr, None)
 
     def slot_config(self, addr: int) -> SlotConfig:
         """Return the effective runtime slot policy without materializing a Tag."""
@@ -302,9 +325,11 @@ class Block:
             name=self._effective_slot_name(addr),
             retentive=retentive,
             default=default,
+            comment=self._effective_slot_comment(addr),
             name_overridden=addr in self._slot_name_overrides,
             retentive_overridden=addr in self._slot_retentive_overrides,
             default_overridden=addr in self._slot_default_overrides,
+            comment_overridden=addr in self._slot_comment_overrides,
         )
 
     def _effective_slot_name(self, addr: int) -> str:
@@ -492,12 +517,15 @@ class InputBlock(Block):
     ) -> LiveInputTag | IndirectRef | IndirectExprRef:
         return cast(LiveInputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
-    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveInputTag:
+    def _new_tag_for_slot(
+        self, addr: int, *, retentive: bool, default: Any, comment: str
+    ) -> LiveInputTag:
         return LiveInputTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
+            comment=comment,
         )
 
     def _get_tag(self, addr: int) -> LiveInputTag:
@@ -567,12 +595,15 @@ class OutputBlock(Block):
     ) -> LiveOutputTag | IndirectRef | IndirectExprRef:
         return cast(LiveOutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
-    def _new_tag_for_slot(self, addr: int, *, retentive: bool, default: Any) -> LiveOutputTag:
+    def _new_tag_for_slot(
+        self, addr: int, *, retentive: bool, default: Any, comment: str
+    ) -> LiveOutputTag:
         return LiveOutputTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
+            comment=comment,
         )
 
     def _get_tag(self, addr: int) -> LiveOutputTag:

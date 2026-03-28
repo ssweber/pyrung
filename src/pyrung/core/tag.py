@@ -49,12 +49,14 @@ class Tag:
         type: Data type (BOOL, INT, DINT, REAL, WORD, CHAR).
         default: Default value (None means use type default).
         retentive: Whether value survives power cycles.
+        comment: Optional address comment metadata for CSV round-tripping.
     """
 
     name: str
     type: TagType = TagType.BOOL
     default: Any = field(default=None)
     retentive: bool = False
+    comment: str = ""
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -577,16 +579,32 @@ class _TagTypeBase(LiveTag):
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
 
-    def __init__(self, name: str, *, default: Any = None, retentive: bool | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        default: Any = None,
+        retentive: bool | None = None,
+        comment: str = "",
+    ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
 
-    def __new__(cls, name: str, *, default: Any = None, retentive: bool | None = None) -> LiveTag:
+    def __new__(
+        cls,
+        name: str,
+        *,
+        default: Any = None,
+        retentive: bool | None = None,
+        comment: str = "",
+    ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
         if not isinstance(name, str):
             raise TypeError(f"{cls.__name__}() name must be a string.")
-        return LiveTag(name, cls._tag_type, default, retentive)
+        if not isinstance(comment, str):
+            raise TypeError(f"{cls.__name__}() comment must be a string.")
+        return LiveTag(name, cls._tag_type, default, retentive, comment)
 
 
 class Bool(_TagTypeBase):

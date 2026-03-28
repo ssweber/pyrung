@@ -193,7 +193,7 @@ Load an existing Click nickname CSV:
 mapping = TagMap.from_nickname_file("project.csv")
 ```
 
-The importer reconstructs blocks, structures, and standalone tags from CSV comment markers and nickname patterns. Standalone nicknames become individual `Tag` objects.
+The importer reconstructs blocks, structures, and standalone tags from CSV comment markers and nickname patterns. Standalone nicknames become individual `Tag` objects. Non-marker address-comment text is preserved on standalone tags and block slots for CSV round-trip export.
 
 For strict grouping validation, pass `mode="strict"` — this fails fast on structure grouping mismatches instead of falling back to plain blocks with a warning.
 
@@ -213,7 +213,7 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 | Closing | `</Alarms>` | End of a plain block |
 | Self-closing | `<Alarms />` | Single-slot block (open + close on same row) |
 
-**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span.
+**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
 
 **Named arrays** encode count and stride in the marker:
 
@@ -258,7 +258,7 @@ Export to Click nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-Mapped tags and blocks emit rows with canonical logical names, initial values, and retentive flags. Unmapped tags are omitted.
+Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. If a row needs both a block marker and user comment text, both are emitted in the same CSV comment field. Unmapped tags are omitted.
 
 ## Validation
 
@@ -410,11 +410,11 @@ from pyclickplc import read_plc_data
 from pyrung.core import PLCRunner, SystemState
 
 data = read_plc_data("data.csv", skip_default=True)
-tags = mapping.from_hardware(data)
+tags = mapping.tags_from_plc_data(data)
 runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
 ```
 
-`read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `from_hardware` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
+`read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
 
 `skip_default=True` omits zero/false/empty values — useful since PLC dumps are exhaustive and most addresses are at their default.
 
@@ -422,7 +422,7 @@ You can also inject a PLC snapshot mid-run:
 
 ```python
 data = read_plc_data("data.csv", skip_default=True)
-runner.patch(mapping.from_hardware(data))
+runner.patch(mapping.tags_from_plc_data(data))
 runner.step()  # applied at the start of this scan
 ```
 

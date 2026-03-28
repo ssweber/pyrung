@@ -258,7 +258,7 @@ def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
 def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 1, retentive=False)
     alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, retentive=True, default=True)
+    alarms.configure_slot(1, retentive=True, default=True, comment="First alarm")
     mapping = TagMap({alarms: c.select(101, 101)})
 
     path = tmp_path / "slot_metadata.csv"
@@ -269,6 +269,7 @@ def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path
     assert record.nickname == "Alarm_1"
     assert record.retentive is True
     assert record.initial_value == "1"
+    assert record.comment == "<Alarm /> First alarm"
 
 
 def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
@@ -286,10 +287,11 @@ def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
 
 
 def test_from_nickname_file_round_trip(tmp_path):
-    valve = Bool("Valve")
+    valve = Bool("Valve", comment="Main valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
     alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, default=True)
+    alarms.configure_slot(1, default=True, comment="First alarm")
+    alarms.configure_slot(2, comment="Last alarm")
     mapping = TagMap({valve: c[1], alarms: c.select(101, 102)})
 
     path = tmp_path / "round_trip.csv"
@@ -297,10 +299,13 @@ def test_from_nickname_file_round_trip(tmp_path):
     restored = TagMap.from_nickname_file(path)
 
     assert restored.resolve("Valve") == "C1"
+    assert restored.tags()[0].logical.comment == "Main valve"
     restored_block = next(block_entry.logical for block_entry in restored.blocks())
     assert restored.resolve(restored_block, 1) == "C101"
     assert restored_block[1].name == "Alarm_1"
     assert restored_block[1].default is True
+    assert restored_block[1].comment == "First alarm"
+    assert restored_block[2].comment == "Last alarm"
 
 
 def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
@@ -370,12 +375,12 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
 
 
 def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
-    path = tmp_path / "blank_block_name.csv"
+    path = tmp_path / "marker_only_boundary.csv"
     records = {
         get_addr_key("C", 401): AddressRecord(
             memory_type="C",
             address=401,
-            nickname="",
+            nickname="AlarmCfg1",
             comment="<AlarmCfg>",
             initial_value="0",
             retentive=False,
@@ -384,16 +389,49 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
         get_addr_key("C", 402): AddressRecord(
             memory_type="C",
             address=402,
-            nickname="AlarmCfg2",
+            nickname="",
             comment="</AlarmCfg>",
-            initial_value="0",
+            initial_value="",
             retentive=False,
             data_type=DataType.BIT,
         ),
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="C401"):
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+
+    assert restored.resolve(block, 1) == "C401"
+    assert restored.resolve(block, 2) == "C402"
+    assert block[1].name == "AlarmCfg1"
+    assert block[2].name == "AlarmCfg2"
+
+
+def test_from_nickname_file_rejects_blank_block_nickname_when_boundary_has_extra_metadata(tmp_path):
+    path = tmp_path / "blank_block_name.csv"
+    records = {
+        get_addr_key("C", 401): AddressRecord(
+            memory_type="C",
+            address=401,
+            nickname="AlarmCfg1",
+            comment="<AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 402): AddressRecord(
+            memory_type="C",
+            address=402,
+            nickname="",
+            comment="</AlarmCfg> Needs nickname",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="C402"):
         TagMap.from_nickname_file(path)
 
 
@@ -1337,63 +1375,63 @@ def test_owner_of_structure_wins_over_block(tmp_path):
     assert owner.structure_name == "Packed"
 
 
-# ── from_hardware ──────────────────────────────────────────────
+# ── tags_from_plc_data ──────────────────────────────────────────────
 
 
-def test_from_hardware_standalone_tags():
+def test_tags_from_plc_data_standalone_tags():
     valve = Bool("Valve")
     speed = Tag("Speed", TagType.INT)
     mapping = TagMap({valve: c[1], speed: ds[1]})
 
     data = {"C1": True, "DS1": 42, "DS999": 100}
-    result = mapping.from_hardware(data)
+    result = mapping.tags_from_plc_data(data)
 
     assert result == {"Valve": True, "Speed": 42}
 
 
-def test_from_hardware_block_slots():
+def test_tags_from_plc_data_block_slots():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})
 
     data = {"C101": True, "C102": False, "C103": True}
-    result = mapping.from_hardware(data)
+    result = mapping.tags_from_plc_data(data)
 
     assert result == {"Alarm1": True, "Alarm2": False, "Alarm3": True}
 
 
-def test_from_hardware_skips_unmapped():
+def test_tags_from_plc_data_skips_unmapped():
     valve = Bool("Valve")
     mapping = TagMap({valve: c[1]})
 
     data = {"C1": True, "C999": True, "DS50": 7, "X001": False}
-    result = mapping.from_hardware(data)
+    result = mapping.tags_from_plc_data(data)
 
     assert result == {"Valve": True}
 
 
-def test_from_hardware_empty_data():
+def test_tags_from_plc_data_empty_data():
     valve = Bool("Valve")
     mapping = TagMap({valve: c[1]})
 
-    assert mapping.from_hardware({}) == {}
+    assert mapping.tags_from_plc_data({}) == {}
 
 
-def test_from_hardware_skips_xd_yd():
-    """XD/YD are mirrored word views; from_hardware should skip them."""
+def test_tags_from_plc_data_skips_xd_yd():
+    """XD/YD are mirrored word views; tags_from_plc_data should skip them."""
     valve = Bool("Valve")
     mapping = TagMap({valve: x[1]})
 
     data = {"X001": True, "XD0u": 1}
-    result = mapping.from_hardware(data)
+    result = mapping.tags_from_plc_data(data)
 
     assert result == {"Valve": True}
 
 
-def test_from_hardware_includes_system_tags():
+def test_tags_from_plc_data_includes_system_tags():
     """System tags (SC/SD) should be translated when present."""
     mapping = TagMap({}, include_system=True)
 
     data = {"SC11": True}
-    result = mapping.from_hardware(data)
+    result = mapping.tags_from_plc_data(data)
 
     assert "_PLC_Mode" in result or len(result) == 1
