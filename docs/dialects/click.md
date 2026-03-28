@@ -401,6 +401,31 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 The generated code is designed to round-trip: `exec()` the output, then `to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
 
+## Loading PLC state
+
+Use Click Programming Software's **Data > Read Data from PLC** to dump the live state of a Click PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
+
+```python
+from pyclickplc import read_plc_data
+from pyrung.core import PLCRunner, SystemState
+
+data = read_plc_data("data.csv", skip_default=True)
+tags = mapping.from_hardware(data)
+runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+```
+
+`read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `from_hardware` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
+
+`skip_default=True` omits zero/false/empty values — useful since PLC dumps are exhaustive and most addresses are at their default.
+
+You can also inject a PLC snapshot mid-run:
+
+```python
+data = read_plc_data("data.csv", skip_default=True)
+runner.patch(mapping.from_hardware(data))
+runner.step()  # applied at the start of this scan
+```
+
 ## ClickDataProvider — soft PLC
 
 `ClickDataProvider` implements the `pyclickplc` `DataProvider` protocol, bridging pyrung's `SystemState` to a Modbus TCP server. This lets pyrung act as a soft PLC accessible from Click Programming Software or any Modbus client.

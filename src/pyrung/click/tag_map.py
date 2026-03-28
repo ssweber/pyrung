@@ -1185,6 +1185,41 @@ class TagMap:
 
         return tuple(slots)
 
+    def from_hardware(
+        self,
+        data: dict[str, bool | int | float | str],
+    ) -> dict[str, bool | int | float | str]:
+        """Translate hardware-addressed values to logical tag names.
+
+        Accepts a dict keyed by Click display addresses (e.g. from
+        ``pyclickplc.read_plc_data``) and returns a dict keyed by the
+        logical tag names in this mapping.  Unmapped addresses are
+        silently skipped.
+
+        .. code-block:: python
+
+            from pyclickplc import read_plc_data
+
+            data = read_plc_data("data.csv", skip_default=True)
+            tags = mapping.from_hardware(data)
+            runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+
+        Args:
+            data: ``{hardware_address: value}`` dict — keys are normalised
+                Click display addresses such as ``"X001"`` or ``"DS3"``.
+
+        Returns:
+            ``{logical_name: value}`` dict containing only the addresses
+            that appear in both *data* and this TagMap.
+        """
+        reverse: dict[str, str] = {}
+        for slot in self.mapped_slots():
+            if slot.memory_type in ("XD", "YD"):
+                continue
+            reverse[slot.hardware_address] = slot.logical_name
+
+        return {reverse[addr]: value for addr, value in data.items() if addr in reverse}
+
     @property
     def entries(self) -> tuple[_TagEntry | _BlockEntry, ...]:
         return self._entries_tuple

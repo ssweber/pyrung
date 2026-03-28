@@ -1335,3 +1335,65 @@ def test_owner_of_structure_wins_over_block(tmp_path):
     assert owner is not None
     assert owner.structure_type == "named_array"
     assert owner.structure_name == "Packed"
+
+
+# ── from_hardware ──────────────────────────────────────────────
+
+
+def test_from_hardware_standalone_tags():
+    valve = Bool("Valve")
+    speed = Tag("Speed", TagType.INT)
+    mapping = TagMap({valve: c[1], speed: ds[1]})
+
+    data = {"C1": True, "DS1": 42, "DS999": 100}
+    result = mapping.from_hardware(data)
+
+    assert result == {"Valve": True, "Speed": 42}
+
+
+def test_from_hardware_block_slots():
+    alarms = Block("Alarm", TagType.BOOL, 1, 3)
+    mapping = TagMap({alarms: c.select(101, 103)})
+
+    data = {"C101": True, "C102": False, "C103": True}
+    result = mapping.from_hardware(data)
+
+    assert result == {"Alarm1": True, "Alarm2": False, "Alarm3": True}
+
+
+def test_from_hardware_skips_unmapped():
+    valve = Bool("Valve")
+    mapping = TagMap({valve: c[1]})
+
+    data = {"C1": True, "C999": True, "DS50": 7, "X001": False}
+    result = mapping.from_hardware(data)
+
+    assert result == {"Valve": True}
+
+
+def test_from_hardware_empty_data():
+    valve = Bool("Valve")
+    mapping = TagMap({valve: c[1]})
+
+    assert mapping.from_hardware({}) == {}
+
+
+def test_from_hardware_skips_xd_yd():
+    """XD/YD are mirrored word views; from_hardware should skip them."""
+    valve = Bool("Valve")
+    mapping = TagMap({valve: x[1]})
+
+    data = {"X001": True, "XD0u": 1}
+    result = mapping.from_hardware(data)
+
+    assert result == {"Valve": True}
+
+
+def test_from_hardware_includes_system_tags():
+    """System tags (SC/SD) should be translated when present."""
+    mapping = TagMap({}, include_system=True)
+
+    data = {"SC11": True}
+    result = mapping.from_hardware(data)
+
+    assert "_PLC_Mode" in result or len(result) == 1
