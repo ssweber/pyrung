@@ -983,6 +983,8 @@ class TagMap:
                 continue
             if row.nickname == "":
                 continue
+            if row.memory_type in {"SC", "SD"}:
+                continue
 
             register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
 

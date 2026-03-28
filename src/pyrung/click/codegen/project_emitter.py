@@ -71,8 +71,8 @@ def _generate_project(
     if subroutines:
         files["subroutines/__init__.py"] = ""
         for sub in subroutines:
-            slug = _slugify(sub.name)
-            files[f"subroutines/{slug}.py"] = _generate_subroutine_file(
+            func_name = sub_name_map[sub.name]
+            files[f"subroutines/{func_name}.py"] = _generate_subroutine_file(
                 sub,
                 collection,
                 nicknames,
@@ -183,8 +183,8 @@ def _generate_subroutine_file(
     call_func_map: dict[str, str] | None = None,
 ) -> str:
     """Generate a single subroutine file with @subroutine decorator."""
-    slug = _slugify(sub.name)
-    refs = _scan_file_refs(sub.analyzed, collection, nicknames)
+    func_name = call_func_map[sub.name] if call_func_map else _slugify(sub.name)
+    refs = _scan_file_refs(sub.analyzed, collection, nicknames, call_func_map=call_func_map)
 
     lines: list[str] = [_GENERATED_HEADER, ""]
 
@@ -195,15 +195,15 @@ def _generate_subroutine_file(
     _emit_tags_import_line(lines, refs)
 
     # Cross-subroutine imports
-    for func_name in sorted(refs.subroutine_func_names):
-        lines.append(f"from subroutines.{func_name} import {func_name}")
+    for cross_func in sorted(refs.subroutine_func_names):
+        lines.append(f"from subroutines.{cross_func} import {cross_func}")
 
     lines.append("")
     lines.append("")
 
     # @subroutine("name") decorator + function
     lines.append(f'@subroutine("{sub.name}")')
-    lines.append(f"def {slug}():")
+    lines.append(f"def {func_name}():")
     if sub.analyzed:
         _emit_rung_sequence(
             lines,
@@ -236,7 +236,7 @@ def _generate_main_file(
     call_func_map: dict[str, str] | None = None,
 ) -> str:
     """Generate main.py: Program with main rungs + call() statements."""
-    refs = _scan_file_refs(rungs, collection, nicknames)
+    refs = _scan_file_refs(rungs, collection, nicknames, call_func_map=call_func_map)
 
     lines: list[str] = [_GENERATED_HEADER, ""]
 
@@ -255,8 +255,8 @@ def _generate_main_file(
     # from subroutines.X import X
     if subroutines:
         for sub in subroutines:
-            slug = _slugify(sub.name)
-            lines.append(f"from subroutines.{slug} import {slug}")
+            func_name = call_func_map[sub.name] if call_func_map else _slugify(sub.name)
+            lines.append(f"from subroutines.{func_name} import {func_name}")
 
     lines.append("")
 

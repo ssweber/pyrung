@@ -431,6 +431,8 @@ def _scan_file_refs(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
     nicknames: dict[str, str] | None,
+    *,
+    call_func_map: dict[str, str] | None = None,
 ) -> _FileRefs:
     """Scan rungs and record which symbols from *collection* they reference.
 
@@ -452,7 +454,7 @@ def _scan_file_refs(
             _ref_token(cond, collection, refs)
 
         for instr in rung.instructions:
-            _ref_af_token(instr.af_token, collection, refs)
+            _ref_af_token(instr.af_token, collection, refs, call_func_map=call_func_map)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _ref_token(cond, collection, refs)
             if _tree_has_parallel(instr.branch_tree):
@@ -502,6 +504,8 @@ def _ref_af_token(
     token: str,
     collection: _OperandCollection,
     refs: _FileRefs,
+    *,
+    call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Record references in an AF (instruction) token."""
     if not token:
@@ -529,9 +533,12 @@ def _ref_af_token(
         # Extract subroutine name for cross-file import tracking
         sub_name = args_str.strip().strip('"')
         if sub_name:
-            from pyrung.click.codegen.utils import _slugify as slugify
+            if call_func_map and sub_name in call_func_map:
+                refs.subroutine_func_names.add(call_func_map[sub_name])
+            else:
+                from pyrung.click.codegen.utils import _slugify as slugify
 
-            refs.subroutine_func_names.add(slugify(sub_name))
+                refs.subroutine_func_names.add(slugify(sub_name))
 
     if func_name == "raw":
         return

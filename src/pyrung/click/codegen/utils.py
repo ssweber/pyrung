@@ -373,11 +373,40 @@ def _slugify(name: str) -> str:
     return slug if slug else "subroutine"
 
 
+# Names imported from pyrung that a subroutine slug must not shadow.
+_RESERVED_IMPORT_NAMES: frozenset[str] = frozenset({
+    # DSL keywords / context managers
+    "Program", "Rung", "call", "subroutine", "branch", "forloop",
+    # Combinators
+    "any_of", "all_of",
+    # Instructions (Python import names, not Click AF names)
+    "out", "latch", "reset", "copy", "blockcopy", "fill", "calc",
+    "on_delay", "off_delay", "count_up", "count_down",
+    "shift", "search", "pack_bits", "pack_words", "pack_text",
+    "unpack_to_bits", "unpack_to_words",
+    "event_drum", "time_drum", "return_early",
+    "send", "receive",
+    # Tag types
+    "Bool", "Int", "Dint", "Real", "Word", "Char",
+    "Block", "TagType", "named_array", "udt", "Field",
+})
+
+
 def _build_sub_name_map(
     subroutines: list[_SubroutineInfo],
 ) -> dict[str, str]:
     """Map subroutine display names to Python function identifiers.
 
     Returns ``{"Alarm Handler": "alarm_handler", "startup": "startup", ...}``.
+
+    If a slug collides with a reserved pyrung import name (e.g. a
+    subroutine named "calc" would shadow the ``calc`` instruction),
+    the identifier is prefixed with ``sub_``.
     """
-    return {sub.name: _slugify(sub.name) for sub in subroutines}
+    result: dict[str, str] = {}
+    for sub in subroutines:
+        slug = _slugify(sub.name)
+        if slug in _RESERVED_IMPORT_NAMES:
+            slug = f"sub_{slug}"
+        result[sub.name] = slug
+    return result
