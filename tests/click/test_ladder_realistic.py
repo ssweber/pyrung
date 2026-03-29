@@ -25,11 +25,11 @@ from pyrung.click import (
     ctd,
     dd,
     ds,
+    pyrung_to_ladder,
     receive,
     send,
     t,
     td,
-    to_ladder,
     txt,
     x,
     y,
@@ -360,10 +360,10 @@ def _build_program_and_mapping():
 # ---------------------------------------------------------------------------
 
 
-def test_realistic_to_ladder_succeeds():
+def test_realistic_pyrung_to_ladder_succeeds():
     """The adapted codegen-review program exports without LadderExportError."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     # Every non-comment row must have exactly 33 columns.
     for row in bundle.main_rows:
@@ -379,7 +379,7 @@ def test_realistic_to_ladder_succeeds():
 def test_realistic_instruction_surface_coverage():
     """Every instruction family in the program appears in the AF column."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != "" and row[0] != "#"]
     sub_tokens = [row[-1] for row in bundle.subroutine_rows[0][1][1:] if row[-1] != ""]
@@ -428,7 +428,7 @@ def test_realistic_instruction_surface_coverage():
 def test_realistic_branch_wiring():
     """The branch rung (R15) has correct continuation rows and T/- wiring."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     # Find the branch rung: parent instruction is copy(DS1,DS203)
     # DS1 = Idx, DstBlk[4] = DS203
@@ -468,7 +468,7 @@ def test_realistic_branch_wiring():
 def test_realistic_or_condition_expansion():
     """OR conditions expand into continuation rows with T/- wiring."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     # R1: any_of(Enable, rise(Start), fall(Stop)) — 3-way OR
     # First rung row should have latch(Y001) as AF token.
@@ -493,7 +493,7 @@ def test_realistic_or_condition_expansion():
 def test_realistic_csv_roundtrip(tmp_path: Path):
     """Write CSV files and read them back; verify content survives roundtrip."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     out_dir = tmp_path / "ladder"
     bundle.write(out_dir)
@@ -518,7 +518,7 @@ def test_realistic_csv_roundtrip(tmp_path: Path):
 def test_realistic_indirect_ref_tokens():
     """Indirect refs render as BANK[pointer+offset] in AF tokens."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
@@ -530,7 +530,7 @@ def test_realistic_indirect_ref_tokens():
 def test_realistic_compare_condition():
     """The compare rung has DS3>0 in a condition cell."""
     logic, mapping = _build_program_and_mapping()
-    bundle = to_ladder(logic, mapping)
+    bundle = pyrung_to_ladder(logic, mapping)
 
     # R19: CalcOut > 0 → out(StepDone)
     # CalcOut maps to DS3 → condition cell should be DS3>0

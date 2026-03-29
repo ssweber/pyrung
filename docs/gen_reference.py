@@ -103,7 +103,7 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.RegisterType",
     "pyrung.click.WordOrder",
     "pyrung.click.validate_click_program",
-    "pyrung.click.csv_to_pyrung",
+    "pyrung.click.ladder_to_pyrung",
     "pyrung.click.send",
     "pyrung.click.receive",
     "pyrung.click.RawInstruction",

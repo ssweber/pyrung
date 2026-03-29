@@ -283,12 +283,12 @@ Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hint
 
 ## Ladder CSV export
 
-`to_ladder(program, tag_map)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+`pyrung_to_ladder(program, tag_map)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
 
 ```python
-from pyrung.click import to_ladder
+from pyrung.click import pyrung_to_ladder
 
-bundle = to_ladder(logic, mapping)
+bundle = pyrung_to_ladder(logic, mapping)
 bundle.main_rows          # inspect rows in-memory
 bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 ```
@@ -297,24 +297,24 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 ## Python codegen
 
-`to_pyrung()` converts Click ladder data back into executable pyrung Python source. Accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
+`ladder_to_pyrung()` converts Click ladder data back into executable pyrung Python source. Accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
 
 ```python
-from pyrung.click import to_pyrung
+from pyrung.click import ladder_to_pyrung
 
-code = to_pyrung("main.csv")                    # from CSV file
-code = to_pyrung("ladder_dir/")                  # from directory with subroutines/*.csv
-code = to_pyrung(bundle)                         # from LadderBundle (no disk)
-code = to_pyrung("main.csv", output_path="generated.py")  # write to file
+code = ladder_to_pyrung("main.csv")                    # from CSV file
+code = ladder_to_pyrung("ladder_dir/")                  # from directory with subroutines/*.csv
+code = ladder_to_pyrung(bundle)                         # from LadderBundle (no disk)
+code = ladder_to_pyrung("main.csv", output_path="generated.py")  # write to file
 ```
 
 ### Round-trip
 
 ```python
-from pyrung.click import to_ladder, to_pyrung
+from pyrung.click import pyrung_to_ladder, ladder_to_pyrung
 
-bundle = to_ladder(logic, mapping)
-code = to_pyrung(bundle)          # no CSV files needed
+bundle = pyrung_to_ladder(logic, mapping)
+code = ladder_to_pyrung(bundle)          # no CSV files needed
 ```
 
 ### Nickname substitution
@@ -328,9 +328,9 @@ Three ways to provide nicknames for readable variable names:
 Cannot provide both `nickname_csv` and `nicknames`.
 
 ```python
-code = to_pyrung("main.csv", nickname_csv="Address.csv")
+code = ladder_to_pyrung("main.csv", nickname_csv="Address.csv")
 
-code = to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
+code = ladder_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
 ```
 
 ### Structured type inference
@@ -399,18 +399,18 @@ For the CSV format that codegen reads, see the [laddercodec CSV format guide](ht
 
 ### Round-trip guarantee
 
-The generated code is designed to round-trip: `exec()` the output, then `to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
+The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
 
 ## Multi-file project codegen
 
-`to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
+`ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
 
 ```python
-from pyrung.click import to_pyrung_project
+from pyrung.click import ladder_to_pyrung_project
 
-files = to_pyrung_project("ladder_dir/")
-files = to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
-files = to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
+files = ladder_to_pyrung_project("ladder_dir/")
+files = ladder_to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
+files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
 ```
 
 The return value is a `dict[str, str]` mapping relative paths to content:
@@ -455,7 +455,7 @@ Each generated file imports only what it uses. A subroutine that touches `X001` 
 
 ### Nickname and structure support
 
-Same as `to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
+Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
 
 ## Loading PLC state
 

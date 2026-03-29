@@ -660,8 +660,8 @@ mapping = a.tagmap()
 
 if __name__ == "__main__":
     out_dir = Path("fixtures/coverage")
-    from pyrung.click import to_ladder
+    from pyrung.click import pyrung_to_ladder
 
-    bundle = to_ladder(coverage_program, mapping)
+    bundle = pyrung_to_ladder(coverage_program, mapping)
     bundle.write(out_dir)
     print(f"Wrote {len(coverage_program.rungs)} rungs to {out_dir}/main.csv")

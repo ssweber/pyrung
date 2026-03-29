@@ -28,7 +28,7 @@ with runner.active():
 
 ## Why?
 
-AutomationDirect Click PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, encode it with `to_ladder()` and paste via [clicknick](https://ssweber.github.io/).
+AutomationDirect Click PLCs have no built-in simulator. You write logic, download it to hardware, and hope. pyrung lets you **test first** — same tag names, deterministic scans, real assertions. When it works, encode it with `pyrung_to_ladder()` and paste via [clicknick](https://ssweber.github.io/).
 
 Or skip the Click editor entirely — generate a **CircuitPython scan loop** for a ProductivityOpen P1AM-200 and run your tested logic on open hardware.
 

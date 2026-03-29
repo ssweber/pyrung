@@ -641,7 +641,7 @@ def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
     """Analyze topology of each rung."""
     analyzed: list[_AnalyzedRung] = []
 
-    # Strip trailing end() rung (auto-appended by to_ladder, not part of user logic).
+    # Strip trailing end() rung (auto-appended by pyrung_to_ladder, not part of user logic).
     if raw_rungs:
         last = raw_rungs[-1]
         last_af = last.rows[0][-1] if last.rows else ""

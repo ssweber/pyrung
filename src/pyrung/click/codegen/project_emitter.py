@@ -1,4 +1,4 @@
-"""Multi-file project output for to_pyrung_project().
+"""Multi-file project output for ladder_to_pyrung_project().
 
 Generates a Python project layout::
 
@@ -125,13 +125,13 @@ def _generate_export_file() -> str:
 import shutil
 from pathlib import Path
 
-from pyrung.click import to_ladder
+from pyrung.click import pyrung_to_ladder
 from main import logic
 from tags import mapping
 
 here = Path(__file__).parent
 output_dir = here / "csv_output"
-bundle = to_ladder(logic, mapping)
+bundle = pyrung_to_ladder(logic, mapping)
 bundle.write(output_dir)
 
 nicknames = here / "nicknames.csv"

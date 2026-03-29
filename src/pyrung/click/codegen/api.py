@@ -90,7 +90,7 @@ def _prepare_codegen(
     return analyzed, collection, nick_map, subroutines, structured_map
 
 
-def to_pyrung(
+def ladder_to_pyrung(
     source: str | Path | LadderBundle,
     *,
     nickname_csv: str | Path | None = None,
@@ -154,7 +154,7 @@ def _parse_subroutines_from_bundle(
     return subs
 
 
-def to_pyrung_project(
+def ladder_to_pyrung_project(
     source: str | Path | LadderBundle,
     *,
     nickname_csv: str | Path | None = None,
@@ -207,7 +207,3 @@ def to_pyrung_project(
             fpath.write_text(content, encoding="utf-8")
 
     return files
-
-
-# Backwards-compatible alias
-csv_to_pyrung = to_pyrung

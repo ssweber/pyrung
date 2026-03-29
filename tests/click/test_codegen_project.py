@@ -1,4 +1,4 @@
-"""Tests for multi-file project output (``to_pyrung_project``)."""
+"""Tests for multi-file project output (``ladder_to_pyrung_project``)."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from pyrung.click import (
     c,
     ct,
     ctd,
+    ladder_to_pyrung_project,
+    pyrung_to_ladder,
     t,
     td,
-    to_ladder,
-    to_pyrung_project,
     x,
     y,
 )
@@ -46,11 +46,11 @@ def _project_from_program(
     *,
     nicknames: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Program -> CSV -> to_pyrung_project -> files dict."""
-    bundle = to_ladder(program, tag_map)
+    """Program -> CSV -> ladder_to_pyrung_project -> files dict."""
+    bundle = pyrung_to_ladder(program, tag_map)
     csv_dir = tmp_path / "csv"
     bundle.write(csv_dir)
-    return to_pyrung_project(csv_dir, nicknames=nicknames)
+    return ladder_to_pyrung_project(csv_dir, nicknames=nicknames)
 
 
 def _exec_project(files: dict[str, str], tmp_path: Path) -> dict:
@@ -172,7 +172,7 @@ class TestProjectBasic:
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
         # Use nicknames so that comments would normally appear
         files = (
-            to_pyrung_project(
+            ladder_to_pyrung_project(
                 tmp_path / "csv",  # doesn't exist yet, use direct bundle
                 nicknames={"X001": "Button", "Y001": "Light"},
             )
@@ -202,7 +202,7 @@ class TestProjectBasic:
 
         ns = _exec_project(files, tmp_path)
         # Re-export and verify
-        bundle = to_ladder(ns["logic"], ns["mapping"])
+        bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert len(bundle.main_rows) > 0
 
 
@@ -265,14 +265,14 @@ class TestProjectWithSubroutines:
         logic, mapping = self._make_program_with_sub()
 
         # Get original CSV
-        original_bundle = to_ladder(logic, mapping)
+        original_bundle = pyrung_to_ladder(logic, mapping)
         original_rows = list(original_bundle.main_rows)
 
         files = _project_from_program(logic, mapping, tmp_path)
         ns = _exec_project(files, tmp_path)
 
         # Re-export
-        reproduced_bundle = to_ladder(ns["logic"], ns["mapping"])
+        reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         reproduced_rows = list(reproduced_bundle.main_rows)
 
         assert original_rows == reproduced_rows
@@ -299,13 +299,13 @@ class TestProjectWithSubroutines:
             include_system=False,
         )
 
-        original_bundle = to_ladder(logic, mapping)
+        original_bundle = pyrung_to_ladder(logic, mapping)
         original_rows = list(original_bundle.main_rows)
 
         files = _project_from_program(logic, mapping, tmp_path)
         ns = _exec_project(files, tmp_path)
 
-        reproduced_bundle = to_ladder(ns["logic"], ns["mapping"])
+        reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         reproduced_rows = list(reproduced_bundle.main_rows)
 
         assert original_rows == reproduced_rows
@@ -465,7 +465,7 @@ class TestDiskWrite:
     """Writing project to disk."""
 
     def test_output_dir(self, tmp_path: Path):
-        """to_pyrung_project writes files to output_dir."""
+        """ladder_to_pyrung_project writes files to output_dir."""
         Button = Bool("Button")
         Light = Bool("Light")
 
@@ -474,12 +474,12 @@ class TestDiskWrite:
                 out(Light)
 
         mapping = TagMap({Button: x[1], Light: y[1]}, include_system=False)
-        bundle = to_ladder(logic, mapping)
+        bundle = pyrung_to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv"
         bundle.write(csv_dir)
 
         out_dir = tmp_path / "output"
-        files = to_pyrung_project(csv_dir, output_dir=out_dir)
+        files = ladder_to_pyrung_project(csv_dir, output_dir=out_dir)
 
         assert (out_dir / "main.py").exists()
         assert (out_dir / "tags.py").exists()
@@ -506,8 +506,8 @@ class TestTimerCounterInstructions:
         files = _project_from_program(logic, mapping, tmp_path)
         ns = _exec_project(files, tmp_path)
 
-        original_bundle = to_ladder(logic, mapping)
-        reproduced_bundle = to_ladder(ns["logic"], ns["mapping"])
+        original_bundle = pyrung_to_ladder(logic, mapping)
+        reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert list(original_bundle.main_rows) == list(reproduced_bundle.main_rows)
 
     def test_counter_round_trip(self, tmp_path: Path):
@@ -528,6 +528,6 @@ class TestTimerCounterInstructions:
         files = _project_from_program(logic, mapping, tmp_path)
         ns = _exec_project(files, tmp_path)
 
-        original_bundle = to_ladder(logic, mapping)
-        reproduced_bundle = to_ladder(ns["logic"], ns["mapping"])
+        original_bundle = pyrung_to_ladder(logic, mapping)
+        reproduced_bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert list(original_bundle.main_rows) == list(reproduced_bundle.main_rows)

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 
-def to_ladder(program: Program, tag_map: TagMap) -> LadderBundle:
+def pyrung_to_ladder(program: Program, tag_map: TagMap) -> LadderBundle:
     """Render a Program into Click ladder CSV row matrices.
 
     Args:
@@ -24,4 +24,4 @@ def to_ladder(program: Program, tag_map: TagMap) -> LadderBundle:
     return build_ladder_bundle(tag_map, program)
 
 
-__all__ = ["LadderBundle", "LadderExportError", "build_ladder_bundle", "to_ladder"]
+__all__ = ["LadderBundle", "LadderExportError", "build_ladder_bundle", "pyrung_to_ladder"]
