@@ -39,6 +39,7 @@ nav:
       - DAP Debugger in VS Code: guides/dap-vscode.md
   - Dialects:
       - Click PLC: dialects/click.md
+      - Click Python Codegen: dialects/click-codegen.md
       - CircuitPython: dialects/circuitpy.md
       - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:
