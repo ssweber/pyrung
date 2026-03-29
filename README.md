@@ -21,8 +21,6 @@ with runner.active():
     assert Light.value is True
 ```
 
-> **Status:** Core engine, Click PLC dialect, CircuitPython dialect, and VS Code debugger are implemented and tested (~30k lines, 1,700+ tests). API may still change.
-
 - Documentation: https://ssweber.github.io/pyrung/
 - LLM docs index: https://ssweber.github.io/pyrung/llms.txt
 
