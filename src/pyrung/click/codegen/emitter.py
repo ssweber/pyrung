@@ -785,12 +785,13 @@ def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
     """Emit a rung comment assignment."""
     pad = "    " * indent
     if "\n" in comment:
-        # Multi-line comment
-        escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        comment_lines = escaped.split("\n")
-        lines.append(
-            f'{pad}r.comment = "' + comment_lines[0] + "\\n" + "\\n".join(comment_lines[1:]) + '"'
-        )
+        # Multi-line → triple-quoted string
+        escaped = comment.replace("\\", "\\\\")
+        parts = escaped.split("\n")
+        lines.append(f'{pad}r.comment = """\\')
+        for part in parts[:-1]:
+            lines.append(part)
+        lines.append(f'{parts[-1]}"""')
     else:
         escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'{pad}r.comment = "{escaped}"')
