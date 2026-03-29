@@ -2215,7 +2215,6 @@ class TestCodeGeneration:
         assert "mapping = TagMap({" in code
         assert "x[1]" in code
         assert "y[1]" in code
-        assert "include_system=False" in code
 
 
 # ---------------------------------------------------------------------------

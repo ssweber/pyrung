@@ -12,6 +12,7 @@ from pyrung.click.codegen.constants import (
     _TIME_UNITS,
 )
 from pyrung.click.codegen.models import _OperandCollection
+from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
 if TYPE_CHECKING:
     from pyrung.click.codegen.models import _SubroutineInfo
@@ -192,6 +193,10 @@ def _sub_operand(
     if not text:
         return text
 
+    # System operands (SC/SD → system.* path)
+    if text in SYSTEM_OPERAND_PATHS:
+        return SYSTEM_OPERAND_PATHS[text]
+
     # Check structured ownership first
     if structured_map is not None and text in collection.structure_owned_operands:
         owner = structured_map.owner_of(text)
@@ -320,6 +325,8 @@ def _sub_operand(
 
     def _sub_operand_token(m: re.Match[str]) -> str:
         op = m.group(0)
+        if op in SYSTEM_OPERAND_PATHS:
+            return SYSTEM_OPERAND_PATHS[op]
         if structured_map is not None and op in collection.structure_owned_operands:
             owner = structured_map.owner_of(op)
             if owner is not None and owner.structure_type in ("named_array", "udt"):
@@ -374,22 +381,56 @@ def _slugify(name: str) -> str:
 
 
 # Names imported from pyrung that a subroutine slug must not shadow.
-_RESERVED_IMPORT_NAMES: frozenset[str] = frozenset({
-    # DSL keywords / context managers
-    "Program", "Rung", "call", "subroutine", "branch", "forloop",
-    # Combinators
-    "any_of", "all_of",
-    # Instructions (Python import names, not Click AF names)
-    "out", "latch", "reset", "copy", "blockcopy", "fill", "calc",
-    "on_delay", "off_delay", "count_up", "count_down",
-    "shift", "search", "pack_bits", "pack_words", "pack_text",
-    "unpack_to_bits", "unpack_to_words",
-    "event_drum", "time_drum", "return_early",
-    "send", "receive",
-    # Tag types
-    "Bool", "Int", "Dint", "Real", "Word", "Char",
-    "Block", "TagType", "named_array", "udt", "Field",
-})
+_RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
+    {
+        # DSL keywords / context managers
+        "Program",
+        "Rung",
+        "call",
+        "subroutine",
+        "branch",
+        "forloop",
+        # Combinators
+        "any_of",
+        "all_of",
+        # Instructions (Python import names, not Click AF names)
+        "out",
+        "latch",
+        "reset",
+        "copy",
+        "blockcopy",
+        "fill",
+        "calc",
+        "on_delay",
+        "off_delay",
+        "count_up",
+        "count_down",
+        "shift",
+        "search",
+        "pack_bits",
+        "pack_words",
+        "pack_text",
+        "unpack_to_bits",
+        "unpack_to_words",
+        "event_drum",
+        "time_drum",
+        "return_early",
+        "send",
+        "receive",
+        # Tag types
+        "Bool",
+        "Int",
+        "Dint",
+        "Real",
+        "Word",
+        "Char",
+        "Block",
+        "TagType",
+        "named_array",
+        "udt",
+        "Field",
+    }
+)
 
 
 def _build_sub_name_map(

@@ -163,6 +163,7 @@ class _OperandCollection:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_system_operands: bool = False
     structures: list[_StructureDecl] = field(default_factory=list)
     structure_owned_operands: set[str] = field(default_factory=set)
 
@@ -191,4 +192,5 @@ class _FileRefs:
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
+    has_system_import: bool = False
     subroutine_func_names: set[str] = field(default_factory=set)

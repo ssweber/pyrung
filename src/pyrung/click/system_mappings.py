@@ -119,3 +119,8 @@ SYSTEM_CLICK_SLOTS = (
 SYSTEM_TAG_NAMES_BY_HARDWARE = {
     slot.hardware.name: slot.logical.name for slot in SYSTEM_CLICK_SLOTS
 }
+
+# Hardware operand → Python expression for codegen (e.g. "SC5" → "system.sys.clock_100ms")
+SYSTEM_OPERAND_PATHS: dict[str, str] = {
+    slot.hardware.name: f"system.{slot.logical.name}" for slot in SYSTEM_CLICK_SLOTS
+}

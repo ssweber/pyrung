@@ -27,6 +27,7 @@ from pyrung.click.codegen.models import (
     _TagDecl,
 )
 from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
+from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -397,6 +398,9 @@ def _register_operands_from_text(
             continue
         if operand in range_spans:
             continue
+        if operand in SYSTEM_OPERAND_PATHS:
+            collection.has_system_operands = True
+            continue
 
         parsed = _parse_operand_prefix(operand)
         if parsed is None:
@@ -575,6 +579,9 @@ def _ref_operands_in_text(
     # Check individual operands
     for op_match in _OPERAND_RE.finditer(text):
         operand = op_match.group(0)
+        if operand in SYSTEM_OPERAND_PATHS:
+            refs.has_system_import = True
+            continue
         if operand in collection.structure_owned_operands:
             # Find which structure owns it
             for sdecl in collection.structures:

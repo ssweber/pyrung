@@ -49,13 +49,6 @@ def _prepare_codegen(
             for slot in structured_map.mapped_slots()
             if slot.source == "user"
         }
-        # Include system tag nicknames so the collector can substitute
-        # raw SC/SD operands (e.g. SC5 → _100ms_Clock) instead of
-        # generating opaque tag names.
-        from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
-
-        for sys_slot in SYSTEM_CLICK_SLOTS:
-            nick_map[sys_slot.hardware.name] = sys_slot.click_nickname
     elif nicknames is not None:
         nick_map = nicknames
 
@@ -199,6 +192,12 @@ def to_pyrung_project(
         subroutines,
         structured_map=structured_map,
     )
+
+    # Include nickname CSV in output for round-trip support
+    if nickname_csv is not None:
+        nick_path = Path(nickname_csv)
+        if nick_path.exists():
+            files["nicknames.csv"] = nick_path.read_text(encoding="utf-8")
 
     if output_dir is not None:
         out_dir = Path(output_dir)

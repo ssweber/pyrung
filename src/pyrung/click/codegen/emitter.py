@@ -41,6 +41,17 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+def _is_trailing_return(rung: _AnalyzedRung) -> bool:
+    """True if rung is an unconditional return_early() — implicit in pyrung subroutines."""
+    return (
+        rung.condition_tree is None
+        and len(rung.instructions) == 1
+        and rung.instructions[0].af_token.startswith("return(")
+        and rung.instructions[0].branch_tree is None
+        and not rung.instructions[0].pins
+    )
+
+
 def _prescan_expr_funcs(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
@@ -237,6 +248,9 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         expr_imports = sorted(collection.used_expr_funcs)
         lines.append(f"from pyrung.core.expression import {', '.join(expr_imports)}")
 
+    if collection.has_system_operands:
+        lines.append("from pyrung.core.system_points import system")
+
 
 def _emit_tag_declarations(
     lines: list[str],
@@ -356,12 +370,15 @@ def _emit_program(
     # Emit subroutine blocks
     if subroutines:
         for sub in subroutines:
+            sub_rungs = sub.analyzed
+            if sub_rungs and _is_trailing_return(sub_rungs[-1]):
+                sub_rungs = sub_rungs[:-1]
             lines.append("")
             lines.append(f'    with subroutine("{sub.name}"):')
-            if sub.analyzed:
+            if sub_rungs:
                 _emit_rung_sequence(
                     lines,
-                    sub.analyzed,
+                    sub_rungs,
                     collection,
                     nicknames,
                     indent=2,
@@ -826,7 +843,7 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(
                 f"    {decl.var_name}.map_to({decl.block_var}.select({decl.start}, {decl.end})),"
             )
-        lines.append("], include_system=False)")
+        lines.append("])")
     else:
         for decl in sorted_tags:
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
@@ -835,4 +852,4 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
             lines.append(f"    {decl.var_name}: {decl.block_var}.select({decl.start}, {decl.end}),")
 
-        lines.append("}, include_system=False)")
+        lines.append("})")
