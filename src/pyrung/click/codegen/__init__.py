@@ -1,4 +1,4 @@
-"""CSV v2 → pyrung source code generator."""
+"""laddercodec CSV → pyrung source code generator."""
 
 from __future__ import annotations
 

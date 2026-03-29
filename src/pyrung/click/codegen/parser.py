@@ -64,7 +64,7 @@ def _parse_rows(all_rows: Iterable[Iterable[str]]) -> list[_RawRung]:
 
 
 def _parse_csv(csv_path: Path) -> list[_RawRung]:
-    """Read a CSV v2 file and segment into raw rungs."""
+    """Read a laddercodec CSV file and segment into raw rungs."""
     with csv_path.open("r", encoding="utf-8", newline="") as f:
         reader = csv.reader(f)
         all_rows = list(reader)

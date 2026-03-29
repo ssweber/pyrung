@@ -95,7 +95,7 @@ def _generate_code(
     lines: list[str] = []
 
     # Module docstring
-    lines.append('"""Auto-generated pyrung program from CSV v2."""')
+    lines.append('"""Auto-generated pyrung program from laddercodec CSV."""')
     lines.append("")
 
     # Imports

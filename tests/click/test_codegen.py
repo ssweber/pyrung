@@ -1,4 +1,4 @@
-"""Tests for CSV v2 → pyrung codegen (``ladder_to_pyrung``)."""
+"""Tests for laddercodec CSV → pyrung codegen (``ladder_to_pyrung``)."""
 
 from __future__ import annotations
 
