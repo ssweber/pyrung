@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pyrung.click.send_receive import ModbusTarget
+from pyrung.core.instruction.send_receive import ModbusTcpTarget
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class ModbusServerConfig:
 
 @dataclass(frozen=True)
 class ModbusClientConfig:
-    targets: tuple[ModbusTarget, ...]
+    targets: tuple[ModbusTcpTarget, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.targets, tuple):
@@ -44,9 +44,9 @@ class ModbusClientConfig:
             raise ValueError("targets must not be empty")
         seen: set[str] = set()
         for target in self.targets:
-            if not isinstance(target, ModbusTarget):
+            if not isinstance(target, ModbusTcpTarget):
                 raise TypeError(
-                    f"targets must contain ModbusTarget values, got {type(target).__name__}"
+                    f"targets must contain ModbusTcpTarget values, got {type(target).__name__}"
                 )
             if target.name in seen:
                 raise ValueError(f"Duplicate Modbus target name: {target.name!r}")
@@ -56,5 +56,5 @@ class ModbusClientConfig:
 __all__ = [
     "ModbusClientConfig",
     "ModbusServerConfig",
-    "ModbusTarget",
+    "ModbusTcpTarget",
 ]

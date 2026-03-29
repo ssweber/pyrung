@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from pyrung.click.ladder import LadderBundle
     from pyrung.click.profile import HardwareProfile
     from pyrung.click.validation import ClickValidationReport, ValidationMode
     from pyrung.core.program import Program
@@ -24,12 +23,14 @@ from pyclickplc.blocks import (
 from pyclickplc.blocks import (
     compute_all_block_ranges,
     format_block_tag,
+    parse_block_tag,
     parse_structured_block_name,
 )
 from pyclickplc.validation import validate_nickname
 
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
+from pyrung.core.memory_block import UNSET
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
 
@@ -45,6 +46,16 @@ class MappedSlot:
     address: int
     read_only: bool
     source: Literal["user", "system"]
+
+
+@dataclass(frozen=True)
+class OwnerInfo:
+    """Reverse-lookup result: which structure/block owns a hardware address."""
+
+    structure_name: str
+    instance: int | None  # 1-based, or None for singleton (count=1)
+    field: str | None  # field name, or None for plain block slot
+    structure_type: str  # "named_array", "udt", or "block"
 
 
 @dataclass(frozen=True)
@@ -344,6 +355,36 @@ def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -
     )
 
 
+def _extract_address_comment(comment: str) -> str:
+    parsed = parse_block_tag(comment)
+    if parsed.name is None:
+        return comment.strip()
+    return parsed.remaining_text.strip()
+
+
+def _compose_address_comment(comment: str, block_tag: str = "") -> str:
+    text = comment.strip()
+    if not block_tag:
+        return text
+    if not text:
+        return block_tag
+    return f"{block_tag} {text}"
+
+
+def _is_marker_only_boundary_row(row: AddressRecord, *, block_name: str) -> bool:
+    parsed = parse_block_tag(row.comment)
+    if parsed.name != block_name:
+        return False
+    if parsed.remaining_text.strip() != "":
+        return False
+    if row.nickname != "":
+        return False
+    if row.retentive != DEFAULT_RETENTIVE[row.memory_type]:
+        return False
+    logical_type = _tag_type_for_memory_type(row.memory_type)
+    return _parse_default(row.initial_value, logical_type) == _parse_default("", logical_type)
+
+
 class TagMap:
     """Maps logical Tags and Blocks to Click hardware addresses.
 
@@ -629,30 +670,38 @@ class TagMap:
                 logical_addr = hardware_to_logical.get(row.address)
                 if logical_addr is None:
                     continue
-
-                require_representable_block_nickname(
-                    memory_type=row.memory_type,
-                    address=row.address,
-                    name=row.nickname,
-                )
-                slot_name = logical_block.slot_config(logical_addr).name
-                if row.nickname != slot_name:
-                    logical_block.rename_slot(logical_addr, row.nickname)
-
                 slot_config = logical_block.slot_config(logical_addr)
+                if _is_marker_only_boundary_row(row, block_name=spec.name):
+                    continue
+
+                if row.nickname != "":
+                    require_representable_block_nickname(
+                        memory_type=row.memory_type,
+                        address=row.address,
+                        name=row.nickname,
+                    )
+                    if row.nickname != slot_config.name:
+                        logical_block.rename_slot(logical_addr, row.nickname)
+                        slot_config = logical_block.slot_config(logical_addr)
+                else:
+                    require_representable_block_nickname(
+                        memory_type=row.memory_type,
+                        address=row.address,
+                        name=row.nickname,
+                    )
+
                 default = _parse_default(row.initial_value, logical_block.type)
+                comment = _extract_address_comment(row.comment)
                 retentive_changed = row.retentive != slot_config.retentive
                 default_changed = default != slot_config.default
-                if retentive_changed and default_changed:
+                comment_changed = comment != slot_config.comment
+                if retentive_changed or default_changed or comment_changed:
                     logical_block.configure_slot(
                         logical_addr,
-                        retentive=row.retentive,
-                        default=default,
+                        retentive=row.retentive if retentive_changed else None,
+                        default=default if default_changed else UNSET,
+                        comment=comment if comment_changed else UNSET,
                     )
-                elif retentive_changed:
-                    logical_block.configure_slot(logical_addr, retentive=row.retentive)
-                elif default_changed:
-                    logical_block.configure_slot(logical_addr, default=default)
 
         def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
             if explicit_start is not None:
@@ -830,20 +879,20 @@ class TagMap:
                         slot_config = block.slot_config(instance)
                         if row.nickname != slot_config.name:
                             block.rename_slot(instance, row.nickname)
+                            slot_config = block.slot_config(instance)
 
                         default = _parse_default(row.initial_value, block.type)
+                        comment = _extract_address_comment(row.comment)
                         retentive_changed = row.retentive != slot_config.retentive
                         default_changed = default != slot_config.default
-                        if retentive_changed and default_changed:
+                        comment_changed = comment != slot_config.comment
+                        if retentive_changed or default_changed or comment_changed:
                             block.configure_slot(
                                 instance,
-                                retentive=row.retentive,
-                                default=default,
+                                retentive=row.retentive if retentive_changed else None,
+                                default=default if default_changed else UNSET,
+                                comment=comment if comment_changed else UNSET,
                             )
-                        elif retentive_changed:
-                            block.configure_slot(instance, retentive=row.retentive)
-                        elif default_changed:
-                            block.configure_slot(instance, default=default)
 
                 mappings.extend(runtime.map_to(spec.hardware_range))
                 append_structure(
@@ -934,6 +983,8 @@ class TagMap:
                 continue
             if row.nickname == "":
                 continue
+            if row.memory_type in {"SC", "SD"}:
+                continue
 
             register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
 
@@ -944,6 +995,7 @@ class TagMap:
                 type=logical_type,
                 retentive=row.retentive,
                 default=_parse_default(row.initial_value, logical_type),
+                comment=_extract_address_comment(row.comment),
             )
             hardware = _hardware_block_for(memory_type)[row.address]
             mappings.append(logical.map_to(hardware))
@@ -977,7 +1029,7 @@ class TagMap:
                 memory_type=memory_type,
                 address=address,
                 nickname=entry.logical.name,
-                comment="",
+                comment=entry.logical.comment,
                 initial_value=_format_default(entry.logical.default, entry.logical.type),
                 retentive=entry.logical.retentive,
                 data_type=BANKS[memory_type].data_type,
@@ -995,25 +1047,25 @@ class TagMap:
                 zip(entry.logical_addresses, entry.hardware_addresses, strict=True)
             ):
                 slot = entry.logical[logical_addr]
-                comment = ""
+                block_tag = ""
                 if block_len == 1:
-                    comment = format_block_tag(entry.logical.name, "self-closing")
+                    block_tag = format_block_tag(entry.logical.name, "self-closing")
                 elif i == 0:
-                    comment = format_block_tag(entry.logical.name, "open")
+                    block_tag = format_block_tag(entry.logical.name, "open")
                 elif i == block_len - 1:
-                    comment = format_block_tag(entry.logical.name, "close")
+                    block_tag = format_block_tag(entry.logical.name, "close")
 
                 records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                     memory_type=memory_type,
                     address=hardware_addr,
                     nickname=slot.name,
-                    comment=comment,
+                    comment=_compose_address_comment(slot.comment, block_tag),
                     initial_value=_format_default(slot.default, slot.type),
                     retentive=slot.retentive,
                     data_type=BANKS[memory_type].data_type,
                 )
 
-        def write_boundary_comment(memory_type: str, address: int, comment: str) -> None:
+        def write_boundary_comment(memory_type: str, address: int, block_tag: str) -> None:
             addr_key = get_addr_key(memory_type, address)
             existing = records.get(addr_key)
             if existing is None:
@@ -1021,13 +1073,19 @@ class TagMap:
                     memory_type=memory_type,
                     address=address,
                     nickname="",
-                    comment=comment,
+                    comment=block_tag,
                     initial_value="",
                     retentive=DEFAULT_RETENTIVE[memory_type],
                     data_type=BANKS[memory_type].data_type,
                 )
                 return
-            records[addr_key] = replace(existing, comment=comment)
+            records[addr_key] = replace(
+                existing,
+                comment=_compose_address_comment(
+                    _extract_address_comment(existing.comment),
+                    block_tag,
+                ),
+            )
 
         for structure in self._structures:
             if structure.kind != "named_array":
@@ -1146,12 +1204,6 @@ class TagMap:
 
         return validate_click_program(program, self, mode=mode, profile=profile)
 
-    def to_ladder(self, program: Program) -> LadderBundle:
-        """Render program logic as deterministic Click ladder CSV row matrices."""
-        from pyrung.click.ladder import build_ladder_bundle
-
-        return build_ladder_bundle(self, program)
-
     def mapped_slots(self) -> tuple[MappedSlot, ...]:
         """Return all mapped slots for runtime hardware-facing consumers."""
         slots: list[MappedSlot] = []
@@ -1182,6 +1234,41 @@ class TagMap:
 
         return tuple(slots)
 
+    def tags_from_plc_data(
+        self,
+        data: dict[str, bool | int | float | str],
+    ) -> dict[str, bool | int | float | str]:
+        """Return logical tag values from a PLC data dump.
+
+        Accepts a dict keyed by Click display addresses (e.g. from
+        ``pyclickplc.read_plc_data``) and returns a dict keyed by the
+        logical tag names in this mapping.  Unmapped addresses are
+        silently skipped.
+
+        .. code-block:: python
+
+            from pyclickplc import read_plc_data
+
+            data = read_plc_data("data.csv", skip_default=True)
+            tags = mapping.tags_from_plc_data(data)
+            runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+
+        Args:
+            data: ``{hardware_address: value}`` dict — keys are normalised
+                Click display addresses such as ``"X001"`` or ``"DS3"``.
+
+        Returns:
+            ``{logical_name: value}`` dict containing only the addresses
+            that appear in both *data* and this TagMap.
+        """
+        reverse: dict[str, str] = {}
+        for slot in self.mapped_slots():
+            if slot.memory_type in ("XD", "YD"):
+                continue
+            reverse[slot.hardware_address] = slot.logical_name
+
+        return {reverse[addr]: value for addr, value in data.items() if addr in reverse}
+
     @property
     def entries(self) -> tuple[_TagEntry | _BlockEntry, ...]:
         return self._entries_tuple
@@ -1200,6 +1287,78 @@ class TagMap:
     @property
     def structure_warnings(self) -> tuple[str, ...]:
         return self._structure_warnings
+
+    def owner_of(self, display_address: str) -> OwnerInfo | None:
+        """Return the structure/block that owns a hardware display address.
+
+        Args:
+            display_address: Click display address string (e.g. ``"DS103"``).
+
+        Returns:
+            An :class:`OwnerInfo` describing the owning structure, or ``None``
+            if the address is not mapped.
+        """
+        if not hasattr(self, "_reverse_index"):
+            self._build_reverse_index()
+        return self._reverse_index.get(display_address)
+
+    def _build_reverse_index(self) -> None:
+        """Build the reverse index mapping display addresses to OwnerInfo."""
+        index: dict[str, OwnerInfo] = {}
+
+        # 1. Index plain block entries
+        structure_block_names: set[str] = set()
+        for structure in self._structures:
+            runtime = cast(Any, structure.runtime)
+            for field_name in runtime.field_names:
+                structure_block_names.add(runtime._blocks[field_name].name)
+
+        for block_entry in self._block_entries_tuple:
+            if block_entry.logical.name in structure_block_names:
+                continue
+            for logical_addr, hardware_addr in zip(
+                block_entry.logical_addresses,
+                block_entry.hardware_addresses,
+                strict=True,
+            ):
+                hw_tag = block_entry.hardware.block[hardware_addr]
+                memory_type, address = self._parse_hardware_tag(hw_tag)
+                display = format_address_display(memory_type, address)
+                index[display] = OwnerInfo(
+                    structure_name=block_entry.logical.name,
+                    instance=logical_addr,
+                    field=None,
+                    structure_type="block",
+                )
+
+        # 2. Index structures (overwrites block entries for same addresses)
+        for structure in self._structures:
+            runtime = cast(Any, structure.runtime)
+            for field_name in runtime.field_names:
+                block = runtime._blocks[field_name]
+                for i in range(1, structure.count + 1):
+                    logical_slot = block[i]
+                    # Try block slot forward (Block→BlockRange entries)
+                    hw_tag = self._block_slot_forward_by_name.get(logical_slot.name)
+                    if hw_tag is None:
+                        hw_tag = self._block_slot_forward_by_id.get(id(logical_slot))
+                    # Try tag forward (Tag→Tag entries, e.g. from named_array.map_to)
+                    if hw_tag is None:
+                        tag_entry = self._tag_forward.get(logical_slot.name)
+                        if tag_entry is not None:
+                            hw_tag = tag_entry.hardware
+                    if hw_tag is None:
+                        continue
+                    memory_type, address = self._parse_hardware_tag(hw_tag)
+                    display = format_address_display(memory_type, address)
+                    index[display] = OwnerInfo(
+                        structure_name=structure.name,
+                        instance=i if structure.count > 1 else None,
+                        field=field_name,
+                        structure_type=structure.kind,
+                    )
+
+        self._reverse_index = index
 
     def __contains__(self, item: Tag | Block | str) -> bool:
         if isinstance(item, str):

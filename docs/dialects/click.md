@@ -109,17 +109,20 @@ This DSL follows Click PLC instruction naming as closely as possible, departing 
 | `MATH` | `calc` | Shadows Python stdlib `math` |
 | `RET` | `return_early` | Normal return is implicit; only early exit needs a call |
 
+The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`, `return_early` as `return()`, and `forloop` as `for(...)`. See the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/) for the full token grammar.
+
 ## Writing a Click program
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
-from pyrung.click import x, y, c, ds, TagMap
+from pyrung import Bool, Real, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
 StartButton  = Bool("StartButton")
 StopButton   = Bool("StopButton")
 MotorRunning = Bool("MotorRunning")
-Speed        = Int("Speed")
+RawSpeed     = Real("RawSpeed")
+Speed        = Real("Speed")
 
 # Write logic using semantic names
 with Program() as logic:
@@ -130,7 +133,7 @@ with Program() as logic:
         reset(MotorRunning)
 
     with Rung(MotorRunning):
-        copy(Speed, ds[1])
+        copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
 runner = PLCRunner(logic)
@@ -152,7 +155,8 @@ mapping = TagMap({
     StartButton:  x[1],           # BOOL → X001
     StopButton:   x[2],           # BOOL → X002
     MotorRunning: y[1],           # BOOL → Y001
-    Speed:        ds[1],          # INT  → DS1
+    RawSpeed:     df[1],          # REAL → DF1 (analog input)
+    Speed:        df[11],         # REAL → DF11
 })
 ```
 
@@ -189,15 +193,62 @@ Load an existing Click nickname CSV:
 mapping = TagMap.from_nickname_file("project.csv")
 ```
 
-The importer reconstructs blocks from paired `<Name>`/`</Name>` markers, infers block start indices from hardware spans, and groups dotted names (`Base.field`) into UDT structures. Standalone nicknames become individual `Tag` objects.
+The importer reconstructs blocks, structures, and standalone tags from CSV comment markers and nickname patterns. Standalone nicknames become individual `Tag` objects. Non-marker address-comment text is preserved on standalone tags and block slots for CSV round-trip export.
 
-For strict grouping validation, pass `mode="strict"` — this fails fast on dotted UDT grouping mismatches instead of falling back to plain blocks with a warning.
+For strict grouping validation, pass `mode="strict"` — this fails fast on structure grouping mismatches instead of falling back to plain blocks with a warning.
 
 ```python
 mapping = TagMap.from_nickname_file("project.csv", mode="strict")
 ```
 
 Imported structure metadata is available via `mapping.structures` and `mapping.structure_by_name("Base")`.
+
+#### CSV marker format
+
+The comment field on CSV rows carries block and structure boundaries. Three marker types:
+
+| Marker | Example | Meaning |
+|--------|---------|---------|
+| Opening | `<Alarms>` | Start of a plain block |
+| Closing | `</Alarms>` | End of a plain block |
+| Self-closing | `<Alarms />` | Single-slot block (open + close on same row) |
+
+**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
+
+**Named arrays** encode count and stride in the marker:
+
+```
+<Channel:named_array(count,stride)>
+</Channel:named_array(count,stride)>
+```
+
+Nicknames must follow the pattern `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+
+Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS101 | `Channel1_id` | `<Channel:named_array(2,3)>` |
+| DS102 | `Channel1_val` | |
+| DS103 | `Channel1_name` | |
+| DS104 | `Channel2_id` | |
+| DS105 | `Channel2_val` | |
+| DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
+
+If stride exceeds the field count, the extra slots are gaps (empty nicknames):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS101 | `Sensor1_raw` | `<Sensor:named_array(2,3)>` |
+| DS102 | `Sensor1_scaled` | |
+| DS103 | | *(gap)* |
+| DS104 | `Sensor2_raw` | |
+| DS105 | `Sensor2_scaled` | |
+| DS106 | | `</Sensor:named_array(2,3)>` |
+
+**UDTs** use dotted nicknames (`Base.field`) within plain block markers per memory bank. Fields spanning different banks each get their own block marker pair. The importer groups them by base name.
+
+Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
 
 ### To nickname file
 
@@ -207,7 +258,7 @@ Export to Click nickname CSV for import into CLICK Programming Software:
 mapping.to_nickname_file("project.csv")
 ```
 
-Mapped tags and blocks emit rows with canonical logical names, initial values, and retentive flags. Unmapped tags are omitted.
+Mapped tags and blocks emit rows with canonical logical names, initial values, retentive flags, and preserved address comments. If a row needs both a block marker and user comment text, both are emitted in the same CSV comment field. Unmapped tags are omitted.
 
 ## Validation
 
@@ -230,13 +281,206 @@ Common findings:
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
-## Ladder CSV export contract
+## Ladder CSV export
 
-`TagMap.to_ladder(program)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
+`pyrung_to_ladder(program, tag_map)` emits deterministic Click ladder CSV row matrices via `LadderBundle`.
 
-For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see:
+```python
+from pyrung.click import pyrung_to_ladder
 
-- [Click Ladder CSV Contract](click-ladder-csv.md)
+bundle = pyrung_to_ladder(logic, mapping)
+bundle.main_rows          # inspect rows in-memory
+bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
+```
+
+For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
+
+## Python codegen
+
+`ladder_to_pyrung()` converts Click ladder data back into executable pyrung Python source. Accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
+
+```python
+from pyrung.click import ladder_to_pyrung
+
+code = ladder_to_pyrung("main.csv")                    # from CSV file
+code = ladder_to_pyrung("ladder_dir/")                  # from directory with subroutines/*.csv
+code = ladder_to_pyrung(bundle)                         # from LadderBundle (no disk)
+code = ladder_to_pyrung("main.csv", output_path="generated.py")  # write to file
+```
+
+### Round-trip
+
+```python
+from pyrung.click import pyrung_to_ladder, ladder_to_pyrung
+
+bundle = pyrung_to_ladder(logic, mapping)
+code = ladder_to_pyrung(bundle)          # no CSV files needed
+```
+
+### Nickname substitution
+
+Three ways to provide nicknames for readable variable names:
+
+1. `nickname_csv=` — path to a Click nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
+2. `nicknames=` — pre-parsed `{operand: nickname}` dict (e.g. `{"X001": "start_button"}`).
+3. Neither — raw operand names used as-is (`X001`, `DS1`, etc.).
+
+Cannot provide both `nickname_csv` and `nicknames`.
+
+```python
+code = ladder_to_pyrung("main.csv", nickname_csv="Address.csv")
+
+code = ladder_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
+```
+
+### Structured type inference
+
+When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally, which reconstructs `@named_array` and `@udt` metadata from the CSV markers. The generated code emits idiomatic structure declarations instead of hundreds of flat tags.
+
+Without `nickname_csv`, a named-array group comes back flat:
+
+```python
+Channel1_id = Int("Channel1_id")
+Channel1_val = Int("Channel1_val")
+Channel2_id = Int("Channel2_id")
+Channel2_val = Int("Channel2_val")
+
+# in the program:
+copy(Channel1_id, Channel2_val)
+
+# in TagMap:
+mapping = TagMap({
+    Channel1_id: ds[101],
+    Channel1_val: ds[102],
+    ...
+})
+```
+
+With `nickname_csv=` pointing to a CSV that has named-array markers:
+
+```python
+@named_array(Int, count=2)
+class Channel:
+    id = 0
+    val = 0
+
+# in the program:
+copy(Channel[1].id, Channel[2].val)
+
+# in TagMap:
+mapping = TagMap([
+    *Channel.map_to(ds.select(101, 104)),
+], include_system=False)
+```
+
+For UDTs (fields spanning different memory banks), per-field `map_to` is emitted:
+
+```python
+@udt(count=2)
+class Motor:
+    running: Bool = False
+    speed: Int = 0
+
+mapping = TagMap([
+    Motor.running.map_to(c.select(101, 102)),
+    Motor.speed.map_to(ds.select(1001, 1002)),
+], include_system=False)
+```
+
+Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`.
+
+For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md).
+
+### What codegen infers
+
+Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `any_of()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
+
+For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
+
+### Round-trip guarantee
+
+The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
+
+## Multi-file project codegen
+
+`ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
+
+```python
+from pyrung.click import ladder_to_pyrung_project
+
+files = ladder_to_pyrung_project("ladder_dir/")
+files = ladder_to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
+files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
+```
+
+The return value is a `dict[str, str]` mapping relative paths to content:
+
+```
+tags.py                  # tag declarations, structures, TagMap
+main.py                  # Program context, main rungs, call() statements
+subroutines/
+  __init__.py
+  startup.py             # @subroutine("startup") decorated function
+  alarm_handler.py
+```
+
+### How subroutines are represented
+
+Each subroutine file defines a decorated function that auto-registers with the Program when called:
+
+```python
+# subroutines/startup.py
+from pyrung import Rung, subroutine, out
+from tags import SubLight
+
+@subroutine("startup")
+def startup():
+    with Rung():
+        out(SubLight)
+```
+
+`main.py` imports and calls it by reference (not by string name):
+
+```python
+from subroutines.startup import startup
+
+with Program() as logic:
+    with Rung(Button):
+        call(startup)
+```
+
+### Per-file imports
+
+Each generated file imports only what it uses. A subroutine that touches `X001` and `Y001` won't import `X002` or `DS1`. `tags.py` is the single source of truth for all tag declarations; other files import from it.
+
+### Nickname and structure support
+
+Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
+
+## Loading PLC state
+
+Use Click Programming Software's **Data > Read Data from PLC** to dump the live state of a Click PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.
+
+```python
+from pyclickplc import read_plc_data
+from pyrung.core import PLCRunner, SystemState
+
+data = read_plc_data("data.csv", skip_default=True)
+tags = mapping.tags_from_plc_data(data)
+runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+```
+
+`read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.
+
+`skip_default=True` omits zero/false/empty values — useful since PLC dumps are exhaustive and most addresses are at their default.
+
+You can also inject a PLC snapshot mid-run:
+
+```python
+data = read_plc_data("data.csv", skip_default=True)
+runner.patch(mapping.tags_from_plc_data(data))
+runner.step()  # applied at the start of this scan
+```
 
 ## ClickDataProvider — soft PLC
 
@@ -261,12 +505,16 @@ Reads return the current committed state. Writes queue a `runner.patch()` for th
 
 ## Communication instructions
 
-`send` and `receive` implement Modbus TCP communication between Click PLCs. The `target` parameter accepts a `ModbusTarget` (live Modbus I/O during simulation) or a plain string name (codegen placeholder resolved via `ModbusClientConfig` at code generation time):
+`send` and `receive` implement Modbus communication with remote devices. Two addressing modes are supported:
+
+### Click addresses (Click-to-Click)
+
+Use a Click address string for `remote_start` when talking to another Click PLC:
 
 ```python
-from pyrung.click import ModbusTarget, send, receive
+from pyrung.click import ModbusTcpTarget, send, receive
 
-plc = ModbusTarget("plc1", "192.168.1.20")
+plc = ModbusTcpTarget("plc1", "192.168.1.20")
 
 send(
     target=plc,
@@ -289,4 +537,53 @@ receive(
 )
 ```
 
-When `target` is a `ModbusTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a string, the instruction is inert during simulation and exists only for CircuitPython code generation.
+Click handles word swap and character order natively — no configuration needed on the pyrung side.
+
+### Raw Modbus addresses (any device)
+
+Use `ModbusAddress` for `remote_start` when talking to non-Click Modbus devices (VFDs, meters, sensors, etc.):
+
+```python
+from pyrung import ModbusAddress, ModbusTcpTarget, ModbusRtuTarget, RegisterType, send, receive
+
+vfd = ModbusTcpTarget("vfd", "192.168.1.50")
+
+send(
+    target=vfd,
+    remote_start=ModbusAddress(400001),
+    source=SpeedSetpoint,
+    sending=VfdSending,
+    success=VfdSuccess,
+    error=VfdError,
+    exception_response=VfdEx,
+)
+
+meter = ModbusRtuTarget("meter", "/dev/ttyUSB0", device_id=3, baudrate=19200)
+
+receive(
+    target=meter,
+    remote_start=ModbusAddress(300001),
+    dest=MeterReading,
+    receiving=MeterReceiving,
+    success=MeterSuccess,
+    error=MeterError,
+    exception_response=MeterEx,
+    word_swap=True,
+)
+```
+
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input, `100001` for discrete input) or hex strings with an `h` suffix (e.g. `"0h"`, `"FFFEh"`). For 984 addresses, the register type is inferred from the prefix. Hex addresses need an explicit `RegisterType` since the offset alone is ambiguous.
+
+`word_swap` controls how 32-bit values (DINT, REAL) are packed across register pairs. `False` (default) = high word first, `True` = low word first. Only relevant for 32-bit Click types (DD, DF, etc.).
+
+`RegisterType` selects the Modbus function code: `HOLDING` (FC 3/6/16, default), `INPUT` (FC 4, read-only), `COIL` (FC 1/5/15), `DISCRETE_INPUT` (FC 2, read-only). Sending to `INPUT` or `DISCRETE_INPUT` raises `ValueError`.
+
+### Target types
+
+| Type | Transport | Live I/O | Codegen |
+|------|-----------|----------|---------|
+| `ModbusTcpTarget` | Ethernet | Yes (pymodbus for raw, pyclickplc for Click addresses) | Yes |
+| `ModbusRtuTarget` | Serial | Yes (pymodbus) | Not yet |
+| `str` (name only) | — | No (inert) | Yes (resolved via `ModbusClientConfig`) |
+
+When `target` is a `ModbusTcpTarget` or `ModbusRtuTarget`, communication runs asynchronously in a background worker pool — the scan loop stays synchronous. When `target` is a plain string, the instruction is inert during simulation and exists only for CircuitPython code generation.

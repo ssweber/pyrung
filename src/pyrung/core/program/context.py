@@ -124,10 +124,22 @@ class Program:
 
     def add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
-        if self._current_subroutine is not None:
-            self.subroutines[self._current_subroutine].append(rung)
-        else:
-            self.rungs.append(rung)
+        target = (
+            self.subroutines[self._current_subroutine]
+            if self._current_subroutine is not None
+            else self.rungs
+        )
+        if rung._use_prior_snapshot and not target:
+            scope = (
+                f"subroutine '{self._current_subroutine}'"
+                if self._current_subroutine is not None
+                else "program"
+            )
+            raise RuntimeError(
+                f"Rung.continued() cannot be the first rung in a {scope}. "
+                "There is no prior condition snapshot to reuse."
+            )
+        target.append(rung)
 
     def start_subroutine(self, name: str) -> None:
         """Start defining a subroutine."""
@@ -156,11 +168,15 @@ class Program:
         """Execute a subroutine by name within a ScanContext."""
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
+        saved_snapshot = ctx._condition_snapshot
+        ctx._condition_snapshot = None
         try:
             for rung in self.subroutines[name]:
                 rung.evaluate(ctx)
         except SubroutineReturnSignal:
-            return
+            pass
+        finally:
+            ctx._condition_snapshot = saved_snapshot
 
     @classmethod
     def current(cls) -> Program | None:
@@ -234,6 +250,20 @@ class Rung:
                 else:
                     condition.source_line = source_line
 
+    def continued(self) -> Rung:
+        """Mark this rung as a continuation of the previous rung's condition snapshot.
+
+        All conditions in this rung will evaluate against the same frozen
+        state as the prior rung, rather than taking a fresh snapshot. This
+        models multiple independent wires on the same visual rung in Click's
+        ladder editor.
+
+        Returns:
+            self, for chaining: ``with Rung(B).continued(): ...``
+        """
+        self._rung._use_prior_snapshot = True
+        return self
+
     _MAX_COMMENT_LENGTH = 1400
 
     @property
@@ -243,6 +273,11 @@ class Rung:
 
     @comment.setter
     def comment(self, value: str | None) -> None:
+        if self._rung._use_prior_snapshot and value is not None:
+            raise RuntimeError(
+                "A continued() rung cannot have its own comment. "
+                "Set the comment on the original rung instead."
+            )
         if value is not None:
             value = textwrap.dedent(value).strip()
             if len(value) > self._MAX_COMMENT_LENGTH:

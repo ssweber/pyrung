@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pyrung.click import TagMap, c, dd, dh, ds, x, y
 from pyrung.click.validation import (
+    CLK_CALC_FLOOR_DIV,
+    CLK_CALC_FUNC_MODE_MISMATCH,
     CLK_CALC_MODE_MIXED,
+    CLK_CALC_NESTING_DEPTH,
     CLK_EXPR_ONLY_IN_CALC,
     CLK_FUNCTION_CALL_NOT_PORTABLE,
     CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y,
@@ -21,7 +24,7 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Tag, TagType, as_value, immediate
+from pyrung.core import Block, Bool, Tag, TagType, immediate, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -392,6 +395,297 @@ class TestCalcModeMixedValidation:
         report = validate_click_program(prog, tag_map, mode="warn")
         assert not any(
             f.code == CLK_CALC_MODE_MIXED for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+
+class TestFloorDivisionPortability:
+    def test_warn_mode_gives_hint_for_floor_div_in_calc(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a // b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.hints)
+
+    def test_strict_mode_gives_error_for_floor_div_in_calc(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a // b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_FLOOR_DIV for f in report.errors)
+
+    def test_regular_division_has_no_floor_div_finding(self):
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a / b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FLOOR_DIV for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+
+class TestCalcFuncModeMismatch:
+    def test_lsh_in_decimal_mode_gives_finding(self):
+        """LSH is hex-only; using it with INT tags (decimal) is a mismatch."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a << 3, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+
+    def test_sqrt_in_hex_mode_gives_finding(self):
+        """SQRT is decimal-only; using it with WORD tags (hex) is a mismatch."""
+        from pyrung.core.expression import sqrt
+
+        h = Tag("H", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(sqrt(h), dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [h.map_to(dh[1]), dest.map_to(dh[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.hints)
+
+    def test_and_in_hex_mode_no_finding(self):
+        """AND in hex mode is valid."""
+        h1 = Tag("H1", TagType.WORD)
+        h2 = Tag("H2", TagType.WORD)
+        dest = Tag("Dest", TagType.WORD)
+
+        def logic():
+            with Rung():
+                calc(h1 & h2, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [h1.map_to(dh[1]), h2.map_to(dh[2]), dest.map_to(dh[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_power_in_decimal_mode_no_finding(self):
+        """Power (^) in decimal mode is valid."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a**2, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_FUNC_MODE_MISMATCH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_strict_mode_gives_error(self):
+        """Strict mode escalates mismatch to error."""
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a << 3, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_FUNC_MODE_MISMATCH for f in report.errors)
+
+
+class TestCalcNestingDepth:
+    def _deeply_nested_expr(self, tag, levels):
+        """Build a left-nested binary expression tree with *levels* paren levels.
+
+        Each additional binary-inside-binary adds one paren level in the Click
+        formula:  (((...) + tag) + tag) + tag
+        """
+        expr = tag + tag  # depth 0 binary — no parens yet
+        for _ in range(levels):
+            # wrapping a binary child inside another binary adds one ( )
+            expr = expr + tag
+        return expr
+
+    def test_depth_8_is_accepted(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        # A binary inside a binary produces 1 level.  We need exactly 8.
+        # depth 0: a + a  (no parens)
+        # depth 1: (a + a) + a
+        # ...
+        # depth 7: 7 levels of nesting from 7 extra wraps
+        # We actually want 8 levels.  Let me re-derive:
+        # _deeply_nested_expr(tag, 0) → tag + tag → 0 levels (no child is binary)
+        # _deeply_nested_expr(tag, 1) → (tag + tag) + tag → 1 level
+        # _deeply_nested_expr(tag, N) → N levels
+        # So levels=8 → exactly 8.
+        expr_8 = self._deeply_nested_expr(a, 8)
+
+        def logic():
+            with Rung():
+                calc(expr_8, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_NESTING_DEPTH
+            for f in (*report.errors, *report.warnings, *report.hints)
+        )
+
+    def test_depth_9_gives_finding(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = self._deeply_nested_expr(a, 9)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+
+    def test_strict_mode_gives_error(self):
+        a = Tag("A", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        expr = self._deeply_nested_expr(a, 9)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), dest.map_to(ds[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="strict")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.errors)
+
+    def test_function_calls_count_as_paren_level(self):
+        """SQRT(…) adds one paren level; deeply nested args can exceed the limit."""
+        from pyrung.core.expression import sqrt
+
+        a = Tag("A", TagType.REAL)
+        dest = Tag("Dest", TagType.REAL)
+
+        # 8 levels of binary nesting + sqrt wrapping = 9 total
+        inner = self._deeply_nested_expr(a, 8)
+        expr = sqrt(inner)
+
+        def logic():
+            with Rung():
+                calc(expr, dest)
+
+        prog = _build_program(logic)
+        from pyrung.click import df
+
+        tag_map = TagMap(
+            [a.map_to(df[1]), dest.map_to(df[2])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert any(f.code == CLK_CALC_NESTING_DEPTH for f in report.hints)
+
+    def test_flat_expression_no_finding(self):
+        """Simple a + b has depth 0 — well within limits."""
+        a = Tag("A", TagType.INT)
+        b = Tag("B", TagType.INT)
+        dest = Tag("Dest", TagType.INT)
+
+        def logic():
+            with Rung():
+                calc(a + b, dest)
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [a.map_to(ds[1]), b.map_to(ds[2]), dest.map_to(ds[3])],
+            include_system=False,
+        )
+
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert not any(
+            f.code == CLK_CALC_NESTING_DEPTH
+            for f in (*report.errors, *report.warnings, *report.hints)
         )
 
 
@@ -821,7 +1115,7 @@ class TestWrappedCopySources:
 
         def logic():
             with Rung():
-                copy(as_value(dd[Pointer]), Dest)
+                copy(dd[Pointer], Dest, convert=to_value)
 
         prog = _build_program(logic)
         tag_map = TagMap([Pointer.map_to(ds[100]), Dest.map_to(dd[1])], include_system=False)

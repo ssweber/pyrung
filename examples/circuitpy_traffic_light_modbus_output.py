@@ -1,4 +1,5 @@
 # -- Imports -------------------------------------------------------------------
+import gc
 import json
 import math
 import os
@@ -1043,6 +1044,8 @@ def _write_outputs():
     base.writeDiscrete(_out_mask_s2_1, 2)
 
 # -- Main scan loop ------------------------------------------------------------
+gc.disable()
+
 while True:
     scan_start = time.monotonic()
     _sd_write_status = False
@@ -1073,4 +1076,6 @@ while True:
         _scan_overrun_count += 1
         if PRINT_SCAN_OVERRUNS:
             print(f"Scan overrun #{_scan_overrun_count}: {-sleep_ms:.3f} ms late")
+
+    gc.collect()
 

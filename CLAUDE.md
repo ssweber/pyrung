@@ -18,7 +18,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 - `docs/index.md` — Project entry point, philosophy, feature overview
 - `docs/getting-started/` — Installation, core concepts (Redux model, SystemState, scan cycle), quickstart tutorial
-- `docs/guides/ladder-logic.md` — Full DSL reference (conditions, instructions, timers, counters, branching, subroutines)
+- `docs/instructions/` — Full DSL reference split by instruction group (rungs, conditions, coils, timers, counters, copy, math, drums, program control, communication)
 - `docs/guides/runner.md` — Execution engine (time modes, history, seek/rewind, fork, rung inspection)
 - `docs/guides/testing.md` — Unit testing patterns with FIXED_STEP, forces as fixtures, pytest usage
 - `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork
@@ -27,19 +27,13 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `docs/dialects/circuitpy.md` — CircuitPython dialect (P1AM hardware model, module catalog, validation, code generation)
 - `docs/internal/debug-spec.md` — Debug architecture specification
 
-## Build & Development Commands
+## Build & Development
 
-```bash
-# Install dependencies
-make install                    # or: uv sync --all-extras --dev
-
-# Default workflow (install + lint + test)
-make
-
-# Individual commands
-make lint                       # Run codespell, ruff (check + format), ty
-make test                       # Run pytest (ALWAYS use this, not uv run pytest)
-```
+- `make install` — install deps (or `uv sync --all-extras --dev`)
+- `make` — install + lint + test
+- `make lint` — codespell, ruff (check + format), ty
+- `make test` — pytest (ALWAYS use this, not `uv run pytest`)
+- Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 
 ## Architecture
 

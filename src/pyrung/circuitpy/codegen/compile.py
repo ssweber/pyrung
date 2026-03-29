@@ -17,7 +17,6 @@ from pyrung.circuitpy.codegen._util import (
     _bool_literal,
     _coil_target_default,
     _indent_body,
-    _optional_range_type_name,
     _optional_value_type_name,
     _range_reverse,
     _range_type_name,
@@ -30,10 +29,6 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
     ModbusClientJobSpec,
     ModbusClientSymbolSpec,
-)
-from pyrung.click.send_receive import (
-    ModbusReceiveInstruction,
-    ModbusSendInstruction,
 )
 from pyrung.core.condition import (
     AllCondition,
@@ -57,7 +52,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     AbsExpr,
     AddExpr,
@@ -113,6 +108,12 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
+)
+from pyrung.core.instruction.send_receive import (
+    ModbusReceiveInstruction,
+    ModbusRtuTarget,
+    ModbusSendInstruction,
+    RegisterType,
 )
 from pyrung.core.memory_block import (
     BlockRange,
@@ -387,6 +388,69 @@ def _modbus_client_spec_for_instruction(
     if instr.target_name not in targets:
         raise ValueError(f"Unknown Modbus client target: {instr.target_name!r}")
 
+    if instr.bank is None:
+        # Raw ModbusAddress path (TCP only).
+        if isinstance(instr.raw_target, ModbusRtuTarget):
+            raise ValueError(
+                "ModbusRtuTarget is not yet supported for CircuitPython code generation"
+            )
+        assert instr.remote_address is not None
+        ra = instr.remote_address
+        is_coil = ra.register_type in (RegisterType.COIL, RegisterType.DISCRETE_INPUT)
+        modbus_start = ra.address
+        modbus_quantity = instr.register_count
+        item_tags = _modbus_client_operand_tags(
+            instr.source if isinstance(instr, ModbusSendInstruction) else instr.dest
+        )
+        item_specs = tuple(_modbus_client_symbol_spec(tag, ctx) for tag in item_tags)
+        if isinstance(instr, ModbusSendInstruction):
+            function_code = (
+                5
+                if is_coil and modbus_quantity == 1
+                else 15
+                if is_coil
+                else 6
+                if modbus_quantity == 1
+                else 16
+            )
+            busy_tag = instr.sending
+        else:
+            function_code = (
+                2
+                if ra.register_type == RegisterType.DISCRETE_INPUT
+                else 1
+                if is_coil
+                else 4
+                if ra.register_type == RegisterType.INPUT
+                else 3
+            )
+            busy_tag = instr.receiving
+            ctx.mark_helper("_store_copy_value_to_type")
+
+        state_key = ctx.state_key_for(instr)
+        spec = ModbusClientJobSpec(
+            var_name=f"_mb_client_{state_key}",
+            kind="send" if isinstance(instr, ModbusSendInstruction) else "receive",
+            target_name=instr.target_name,
+            bank=None,
+            plc_start=modbus_start,
+            modbus_start=modbus_start,
+            modbus_quantity=modbus_quantity,
+            function_code=function_code,
+            item_count=len(item_specs),
+            items=item_specs,
+            is_coil=is_coil,
+            word_order="low_high" if instr.word_swap else "high_low",
+            busy=_modbus_client_symbol_spec(busy_tag, ctx),
+            success=_modbus_client_symbol_spec(instr.success, ctx),
+            error=_modbus_client_symbol_spec(instr.error, ctx),
+            exception_response=_modbus_client_symbol_spec(instr.exception_response, ctx),
+        )
+        ctx.modbus_client_specs_by_instruction[id(instr)] = spec
+        ctx.modbus_client_specs.append(spec)
+        return spec
+
+    # Click bank-addressed path.
     mapping = MODBUS_MAPPINGS[instr.bank]
     modbus_start, _ = plc_to_modbus(instr.bank, instr.addresses[0])
     modbus_last, modbus_last_width = plc_to_modbus(instr.bank, instr.addresses[-1])
@@ -431,6 +495,7 @@ def _modbus_client_spec_for_instruction(
         function_code=function_code,
         item_count=len(item_specs),
         items=item_specs,
+        is_coil=mapping.is_coil,
         busy=_modbus_client_symbol_spec(busy_tag, ctx),
         success=_modbus_client_symbol_spec(instr.success, ctx),
         error=_modbus_client_symbol_spec(instr.error, ctx),
@@ -844,8 +909,8 @@ def _compile_copy_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if isinstance(instr.source, CopyModifier):
-        return _compile_copy_modifier_instruction(instr, enabled_expr, ctx, indent)
+    if instr.convert is not None:
+        return _compile_copy_converter_instruction(instr, enabled_expr, ctx, indent)
     target_type = _value_type_name(instr.target)
     ctx.mark_helper("_store_copy_value_to_type")
     source_expr = _compile_value(instr.source, ctx)
@@ -854,26 +919,26 @@ def _compile_copy_instruction(
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
-def _compile_copy_modifier_instruction(
+def _compile_copy_converter_instruction(
     instr: CopyInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    modifier = instr.source
-    if not isinstance(modifier, CopyModifier):
-        raise TypeError("copy modifier compiler requires CopyModifier source")
+    converter = instr.convert
+    if not isinstance(converter, CopyConverter):
+        raise TypeError("copy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("copymod")
     fault_body = _compile_set_out_of_range_fault_body(ctx)
-    mode = modifier.mode
-    source_expr = _compile_value(modifier.source, ctx)
+    mode = converter.mode
+    source_expr = _compile_value(instr.source, ctx)
 
-    setup, target_kind, target_symbol, target_start_var, target_type = _copy_modifier_target_info(
+    setup, target_kind, target_symbol, target_start_var, target_type = _copy_converter_target_info(
         instr.target, ctx, stem
     )
     values_var = f"_{stem}_values"
-    write_lines = _copy_modifier_write_lines(
+    write_lines = _copy_converter_write_lines(
         values_var=values_var,
         target_kind=target_kind,
         target_symbol=target_symbol,
@@ -903,18 +968,18 @@ def _compile_copy_modifier_instruction(
         ctx.mark_helper("_render_text_from_numeric")
         ctx.mark_helper("_termination_char")
         ctx.mark_helper("_store_copy_value_to_type")
-        source_type = _optional_value_type_name(modifier.source)
+        source_type = _optional_value_type_name(instr.source)
         enabled_body.extend(
             [
                 "try:",
                 "    _rendered = _render_text_from_numeric(",
                 f"        {source_expr},",
                 f"        source_type={source_type!r},",
-                f"        suppress_zero={modifier.suppress_zero!r},",
-                f"        pad={modifier.pad!r},",
-                f"        exponential={modifier.exponential!r},",
+                f"        suppress_zero={converter.suppress_zero!r},",
+                "        pad=None,",
+                f"        exponential={converter.exponential!r},",
                 "    )",
-                f"    _rendered += _termination_char({modifier.termination_code!r})",
+                f"    _rendered += _termination_char({converter.termination_code!r})",
                 f'    {values_var} = [_store_copy_value_to_type(_ch, "{target_type}") for _ch in _rendered]',
                 *_indent_body(write_lines, 4),
                 "except (IndexError, TypeError, ValueError, OverflowError):",
@@ -965,8 +1030,8 @@ def _compile_blockcopy_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if isinstance(instr.source, CopyModifier):
-        return _compile_blockcopy_modifier_instruction(instr, enabled_expr, ctx, indent)
+    if instr.convert is not None:
+        return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("blockcopy")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
@@ -987,24 +1052,24 @@ def _compile_blockcopy_instruction(
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
-def _compile_blockcopy_modifier_instruction(
+def _compile_blockcopy_converter_instruction(
     instr: BlockCopyInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    modifier = instr.source
-    if not isinstance(modifier, CopyModifier):
-        raise TypeError("blockcopy modifier compiler requires CopyModifier source")
+    converter = instr.convert
+    if not isinstance(converter, CopyConverter):
+        raise TypeError("blockcopy converter compiler requires CopyConverter")
 
     stem = ctx.next_name("blockcopymod")
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
-        modifier.source, ctx, stem=f"{stem}_src", include_addresses=False
+        instr.source, ctx, stem=f"{stem}_src", include_addresses=False
     )
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
-    mode = modifier.mode
+    mode = converter.mode
     dst_type = _range_type_name(instr.dest)
     fault_body = _compile_set_out_of_range_fault_body(ctx)
     enabled_body: list[str] = [
@@ -1034,51 +1099,6 @@ def _compile_blockcopy_modifier_instruction(
                 *_indent_body(fault_body, 4),
             ]
         )
-    elif mode == "text":
-        ctx.mark_helper("_render_text_from_numeric")
-        ctx.mark_helper("_termination_char")
-        ctx.mark_helper("_store_copy_value_to_type")
-        source_type = _optional_range_type_name(modifier.source)
-        enabled_body.extend(
-            [
-                "try:",
-                "    _rendered_parts = []",
-                f"    for _src_idx in {src_indices}:",
-                "        _rendered_parts.append(",
-                "            _render_text_from_numeric(",
-                f"                {src_symbol}[_src_idx],",
-                f"                source_type={source_type!r},",
-                f"                suppress_zero={modifier.suppress_zero!r},",
-                f"                pad={modifier.pad!r},",
-                f"                exponential={modifier.exponential!r},",
-                "            )",
-                "        )",
-                "    _rendered = ''.join(_rendered_parts)",
-                f"    _rendered += _termination_char({modifier.termination_code!r})",
-                f"    if len(_rendered) != len({dst_indices}):",
-                '        raise ValueError("formatted text length does not match destination range")',
-                f"    for _dst_idx, _char in zip({dst_indices}, _rendered):",
-                f'        {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_char, "{dst_type}")',
-                "except (IndexError, TypeError, ValueError, OverflowError):",
-                *_indent_body(fault_body, 4),
-            ]
-        )
-    elif mode == "binary":
-        ctx.mark_helper("_ascii_char_from_code")
-        ctx.mark_helper("_store_copy_value_to_type")
-        enabled_body.extend(
-            [
-                "try:",
-                "    _converted = []",
-                f"    for _src_idx in {src_indices}:",
-                f"        _char = _ascii_char_from_code(int({src_symbol}[_src_idx]) & 0xFF)",
-                f'        _converted.append(_store_copy_value_to_type(_char, "{dst_type}"))',
-                f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
-                f"        {dst_symbol}[_dst_idx] = _converted_value",
-                "except (IndexError, TypeError, ValueError, OverflowError):",
-                *_indent_body(fault_body, 4),
-            ]
-        )
     else:
         enabled_body.extend(fault_body)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -1090,8 +1110,6 @@ def _compile_fill_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    if isinstance(instr.value, CopyModifier):
-        return _compile_fill_modifier_instruction(instr, enabled_expr, ctx, indent)
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("fill")
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
@@ -1104,90 +1122,6 @@ def _compile_fill_instruction(
         f"for _dst_idx in {dst_indices}:",
         f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
     ]
-    return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
-
-
-def _compile_fill_modifier_instruction(
-    instr: FillInstruction,
-    enabled_expr: str,
-    ctx: CodegenContext,
-    indent: int,
-) -> list[str]:
-    modifier = instr.value
-    if not isinstance(modifier, CopyModifier):
-        raise TypeError("fill modifier compiler requires CopyModifier value")
-
-    stem = ctx.next_name("fillmod")
-    dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
-        instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
-    )
-    mode = modifier.mode
-    dst_type = _range_type_name(instr.dest)
-    source_expr = _compile_value(modifier.source, ctx)
-    enabled_body: list[str] = [
-        *dst_setup,
-        f"if not {dst_indices}:",
-        "    pass",
-        "else:",
-    ]
-
-    inner: list[str] = []
-    if mode in {"value", "ascii"}:
-        ctx.mark_helper("_text_from_source_value")
-        ctx.mark_helper("_store_numeric_text_digit")
-        ctx.mark_helper("_store_copy_value_to_type")
-        inner.extend(
-            [
-                f"_fill_text = _text_from_source_value({source_expr})",
-                "if len(_fill_text) != 1:",
-                '    raise ValueError("fill text->numeric conversion requires a single source character")',
-                f'_fill_numeric = _store_numeric_text_digit(_fill_text, "{mode}")',
-                f'_fill_value = _store_copy_value_to_type(_fill_numeric, "{dst_type}")',
-                f"for _dst_idx in {dst_indices}:",
-                f"    {dst_symbol}[_dst_idx] = _fill_value",
-            ]
-        )
-    elif mode == "text":
-        ctx.mark_helper("_render_text_from_numeric")
-        ctx.mark_helper("_termination_char")
-        ctx.mark_helper("_store_copy_value_to_type")
-        source_type = _optional_value_type_name(modifier.source)
-        inner.extend(
-            [
-                f'if "{dst_type}" != "CHAR":',
-                '    raise TypeError("fill(as_text(...)) requires CHAR destination range")',
-                "_fill_text = _render_text_from_numeric(",
-                f"    {source_expr},",
-                f"    source_type={source_type!r},",
-                f"    suppress_zero={modifier.suppress_zero!r},",
-                f"    pad={modifier.pad!r},",
-                f"    exponential={modifier.exponential!r},",
-                ")",
-                f"_fill_text += _termination_char({modifier.termination_code!r})",
-                f"if len(_fill_text) > len({dst_indices}):",
-                '    raise ValueError("formatted fill text exceeds destination range")',
-                f"for _fill_offset, _dst_idx in enumerate({dst_indices}):",
-                "    if _fill_offset < len(_fill_text):",
-                f'        {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_text[_fill_offset], "CHAR")',
-                "    else:",
-                f"        {dst_symbol}[_dst_idx] = ''",
-            ]
-        )
-    elif mode == "binary":
-        ctx.mark_helper("_ascii_char_from_code")
-        ctx.mark_helper("_store_copy_value_to_type")
-        inner.extend(
-            [
-                f"_fill_char = _ascii_char_from_code(int({source_expr}) & 0xFF)",
-                f'_fill_value = _store_copy_value_to_type(_fill_char, "{dst_type}")',
-                f"for _dst_idx in {dst_indices}:",
-                f"    {dst_symbol}[_dst_idx] = _fill_value",
-            ]
-        )
-    else:
-        inner.append(f'raise ValueError("Unsupported fill modifier mode: {mode}")')
-
-    enabled_body.extend(_indent_body(inner, 4))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -2071,7 +2005,7 @@ def _compile_instruction_list(
     return lines
 
 
-def _copy_modifier_target_info(
+def _copy_converter_target_info(
     target: Tag | IndirectRef | IndirectExprRef,
     ctx: CodegenContext,
     stem: str,
@@ -2131,7 +2065,7 @@ def _copy_modifier_target_info(
     raise TypeError(f"Unsupported copy modifier target type: {type(target).__name__}")
 
 
-def _copy_modifier_write_lines(
+def _copy_converter_write_lines(
     *,
     values_var: str,
     target_kind: str,

@@ -6,15 +6,15 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.click.send_receive import ModbusTarget
 from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType
+from pyrung.core.instruction.send_receive import ModbusTcpTarget
 
-_TARGET = ModbusTarget("test", "127.0.0.1", port=502, device_id=1)
-_TARGET_17 = ModbusTarget("test17", "127.0.0.1", port=502, device_id=17)
+_TARGET = ModbusTcpTarget("test", "127.0.0.1", port=502, device_id=1)
+_TARGET_17 = ModbusTcpTarget("test17", "127.0.0.1", port=502, device_id=17)
 
 
 def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     submissions: list[tuple[dict[str, object], Future[click_send_receive._RequestResult]]] = []
 
@@ -23,7 +23,7 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
         submissions.append((kwargs, fut))
         return fut
 
-    monkeypatch.setattr(click_send_receive, "_submit_send_request", fake_submit)
+    monkeypatch.setattr(click_send_receive, "_submit_click_send_request", fake_submit)
 
     Enable = Bool("Enable")
     Source = Int("Source")
@@ -75,7 +75,7 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
 def test_send_rung_false_discards_pending_result_and_clears_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     class _UncancellableFuture(Future[click_send_receive._RequestResult]):
         def cancel(self) -> bool:
@@ -89,7 +89,7 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
         futures.append(fut)
         return fut
 
-    monkeypatch.setattr(click_send_receive, "_submit_send_request", fake_submit)
+    monkeypatch.setattr(click_send_receive, "_submit_click_send_request", fake_submit)
 
     Enable = Bool("Enable")
     Source = Int("Source")
@@ -134,7 +134,7 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
 
 
 def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     future: Future[click_send_receive._RequestResult] = Future()
 
@@ -142,7 +142,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
         _ = kwargs
         return future
 
-    monkeypatch.setattr(click_send_receive, "_submit_receive_request", fake_submit)
+    monkeypatch.setattr(click_send_receive, "_submit_click_receive_request", fake_submit)
 
     Enable = Bool("Enable")
     Receiving = Bool("Receiving")
@@ -154,7 +154,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
     with Program() as logic:
         with Rung(Enable):
             click_send_receive.receive(
-                target=ModbusTarget("test3", "127.0.0.1", port=502, device_id=3),
+                target=ModbusTcpTarget("test3", "127.0.0.1", port=502, device_id=3),
                 remote_start="DS1",
                 dest=Local.select(1, 2),
                 receiving=Receiving,
@@ -181,7 +181,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
 
 
 def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     future: Future[click_send_receive._RequestResult] = Future()
 
@@ -189,7 +189,7 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
         _ = kwargs
         return future
 
-    monkeypatch.setattr(click_send_receive, "_submit_receive_request", fake_submit)
+    monkeypatch.setattr(click_send_receive, "_submit_click_receive_request", fake_submit)
 
     Enable = Bool("Enable")
     Receiving = Bool("Receiving")
@@ -225,7 +225,7 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_send_count_mismatch_raises():
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     Enable = Bool("Enable")
     Source = Int("Source")
@@ -250,7 +250,7 @@ def test_send_count_mismatch_raises():
 
 
 def test_receive_count_mismatch_raises():
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -275,7 +275,7 @@ def test_receive_count_mismatch_raises():
 
 
 def test_receive_validates_status_tag_types():
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -299,7 +299,7 @@ def test_receive_validates_status_tag_types():
 
 
 def test_receive_validates_exception_response_type():
-    import pyrung.click.send_receive as click_send_receive
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -322,8 +322,8 @@ def test_receive_validates_exception_response_type():
                 )
 
 
-def test_run_send_request_sparse_writes_are_split_by_gap(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.click.send_receive as click_send_receive
+def test_run_click_send_request_sparse_writes_are_split_by_gap(monkeypatch: pytest.MonkeyPatch):
+    import pyrung.core.instruction.send_receive as click_send_receive
 
     writes: list[tuple[str, object]] = []
 
@@ -346,7 +346,7 @@ def test_run_send_request_sparse_writes_are_split_by_gap(monkeypatch: pytest.Mon
 
     addresses = click_send_receive._addresses_for_count("X", 1, 17)
     values = tuple(range(17))
-    result = click_send_receive._run_send_request(
+    result = click_send_receive._run_click_send_request(
         "127.0.0.1",
         502,
         1,

@@ -27,6 +27,7 @@ class OutInstruction(OneShotMixin, Instruction):
     def __init__(
         self,
         target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+        *,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)

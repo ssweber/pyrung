@@ -119,6 +119,7 @@ def _render_code(ctx: CodegenContext) -> str:
     lines.append(_section("Imports"))
     lines.extend(
         [
+            "import gc",
             "import json",
             "import math",
             "import os",
@@ -439,6 +440,8 @@ def _render_code(ctx: CodegenContext) -> str:
 
     # 13) main scan loop
     lines.append(_section("Main scan loop"))
+    lines.append("gc.disable()")
+    lines.append("")
     lines.extend(_render_scan_loop(ctx))
 
     return "\n".join(lines).rstrip() + "\n"
@@ -1064,6 +1067,8 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
             "        _scan_overrun_count += 1",
             "        if PRINT_SCAN_OVERRUNS:",
             '            print(f"Scan overrun #{_scan_overrun_count}: {-sleep_ms:.3f} ms late")',
+            "",
+            "    gc.collect()",
             "",
         ]
     )

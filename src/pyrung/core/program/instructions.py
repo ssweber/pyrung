@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core._source import (
     _capture_source,
 )
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.instruction import (
     BlockCopyInstruction,
     CalcInstruction,
@@ -26,13 +27,13 @@ from pyrung.core.instruction import (
     UnpackToBitsInstruction,
     UnpackToWordsInstruction,
 )
-from pyrung.core.memory_block import BlockRange
+from pyrung.core.memory_block import BlockRange, RangeComparison
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .context import Program, SubroutineFunc, _require_rung_context, _validate_subroutine_name
 
 if TYPE_CHECKING:
-    from pyrung.core.memory_block import IndirectBlockRange, IndirectExprRef, IndirectRef
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
 
 def _iter_coil_tags(target: Tag | BlockRange | ImmediateRef) -> list[Tag]:
@@ -128,7 +129,7 @@ def _validate_function_call(
 
 
 def out(
-    target: Tag | BlockRange | ImmediateRef, oneshot: bool = False
+    target: Tag | BlockRange | ImmediateRef, *, oneshot: bool = False
 ) -> Tag | BlockRange | ImmediateRef:
     """Output coil instruction (OUT).
 
@@ -142,7 +143,7 @@ def out(
     """
     ctx, source_file, source_line = _capture_instruction_context("out", source_depth=3)
     _iter_coil_tags(target)
-    _attach_instruction(ctx, OutInstruction(target, oneshot), source_file, source_line)
+    _attach_instruction(ctx, OutInstruction(target, oneshot=oneshot), source_file, source_line)
     return target
 
 
@@ -182,25 +183,28 @@ def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
 def copy(
     source: Any,
     target: Tag | IndirectRef | IndirectExprRef,
+    *,
+    convert: CopyConverter | None = None,
     oneshot: bool = False,
 ) -> Tag | IndirectRef | IndirectExprRef:
     """Copy instruction (CPY/MOV).
 
-    Copies source value to target.
+    Copies source value to target.  Pass ``convert=`` for text/numeric
+    conversion (see :mod:`pyrung.core.copy_converters`).
 
     Example:
         with Rung(Button):
             copy(5, StepNumber)
     """
-    _add_instruction("copy", CopyInstruction, source, target, oneshot)
+    _add_instruction("copy", CopyInstruction, source, target, convert=convert, oneshot=oneshot)
     return target
 
 
 def run_function(
     fn: Callable[..., dict[str, Any]],
+    *,
     ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
     outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
-    *,
     oneshot: bool = False,
 ) -> None:
     """Execute a synchronous function when rung power is true."""
@@ -211,7 +215,7 @@ def run_function(
     _validate_function_call(fn, ins, outs, func_name="run_function")
     _attach_instruction(
         ctx,
-        FunctionCallInstruction(fn, ins, outs, oneshot),
+        FunctionCallInstruction(fn, ins=ins, outs=outs, oneshot=oneshot),
         source_file,
         source_line,
     )
@@ -219,6 +223,7 @@ def run_function(
 
 def run_enabled_function(
     fn: Callable[..., dict[str, Any]],
+    *,
     ins: dict[str, Tag | IndirectRef | IndirectExprRef | Any] | None = None,
     outs: dict[str, Tag | IndirectRef | IndirectExprRef] | None = None,
 ) -> None:
@@ -231,17 +236,26 @@ def run_enabled_function(
     enable_condition = ctx._rung._get_combined_condition()
     _attach_instruction(
         ctx,
-        EnabledFunctionCallInstruction(fn, ins, outs, enable_condition),
+        EnabledFunctionCallInstruction(fn, ins=ins, outs=outs, enable_condition=enable_condition),
         source_file,
         source_line,
     )
 
 
-def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
+def blockcopy(
+    source: Any,
+    dest: Any,
+    *,
+    convert: CopyConverter | None = None,
+    oneshot: bool = False,
+) -> None:
     """Block copy instruction.
 
     Copies values from source BlockRange to dest BlockRange.
     Both ranges must have the same length.
+
+    Pass ``convert=to_value`` or ``convert=to_ascii`` for text→numeric
+    block conversion.  Only ``value`` and ``ascii`` modes are supported.
 
     Example:
         with Rung(CopyEnable):
@@ -250,12 +264,15 @@ def blockcopy(source: Any, dest: Any, oneshot: bool = False) -> None:
     Args:
         source: Source BlockRange or IndirectBlockRange from .select().
         dest: Dest BlockRange or IndirectBlockRange from .select().
+        convert: Optional converter (to_value or to_ascii only).
         oneshot: If True, execute only once per rung activation.
     """
-    _add_instruction("blockcopy", BlockCopyInstruction, source, dest, oneshot)
+    _add_instruction(
+        "blockcopy", BlockCopyInstruction, source, dest, convert=convert, oneshot=oneshot
+    )
 
 
-def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
+def fill(value: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Fill instruction.
 
     Writes a constant value to every element in a BlockRange.
@@ -269,17 +286,17 @@ def fill(value: Any, dest: Any, oneshot: bool = False) -> None:
         dest: Dest BlockRange or IndirectBlockRange from .select().
         oneshot: If True, execute only once per rung activation.
     """
-    _add_instruction("fill", FillInstruction, value, dest, oneshot)
+    _add_instruction("fill", FillInstruction, value, dest, oneshot=oneshot)
 
 
-def pack_bits(bit_block: Any, dest: Any, oneshot: bool = False) -> None:
+def pack_bits(bit_block: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Pack BOOL tags from a BlockRange into a register destination."""
-    _add_instruction("pack_bits", PackBitsInstruction, bit_block, dest, oneshot)
+    _add_instruction("pack_bits", PackBitsInstruction, bit_block, dest, oneshot=oneshot)
 
 
-def pack_words(word_block: Any, dest: Any, oneshot: bool = False) -> None:
+def pack_words(word_block: Any, dest: Any, *, oneshot: bool = False) -> None:
     """Pack two 16-bit tags from a BlockRange into a 32-bit destination."""
-    _add_instruction("pack_words", PackWordsInstruction, word_block, dest, oneshot)
+    _add_instruction("pack_words", PackWordsInstruction, word_block, dest, oneshot=oneshot)
 
 
 def pack_text(
@@ -300,29 +317,29 @@ def pack_text(
     )
 
 
-def unpack_to_bits(source: Any, bit_block: Any, oneshot: bool = False) -> None:
+def unpack_to_bits(source: Any, bit_block: Any, *, oneshot: bool = False) -> None:
     """Unpack a register source into BOOL tags in a BlockRange."""
     _add_instruction(
         "unpack_to_bits",
         UnpackToBitsInstruction,
         source,
         bit_block,
-        oneshot,
+        oneshot=oneshot,
     )
 
 
-def unpack_to_words(source: Any, word_block: Any, oneshot: bool = False) -> None:
+def unpack_to_words(source: Any, word_block: Any, *, oneshot: bool = False) -> None:
     """Unpack a 32-bit register source into two 16-bit tags in a BlockRange."""
     _add_instruction(
         "unpack_to_words",
         UnpackToWordsInstruction,
         source,
         word_block,
-        oneshot,
+        oneshot=oneshot,
     )
 
 
-def calc(expression: Any, dest: Tag, oneshot: bool = False) -> Tag:
+def calc(expression: Any, dest: Tag, *, oneshot: bool = False) -> Tag:
     """Calc instruction.
 
     Evaluates an expression and stores the result in dest, with
@@ -346,14 +363,13 @@ def calc(expression: Any, dest: Tag, oneshot: bool = False) -> Tag:
     Returns:
         The dest tag.
     """
-    _add_instruction("calc", CalcInstruction, expression, dest, oneshot)
+    _add_instruction("calc", CalcInstruction, expression, dest, oneshot=oneshot)
     return dest
 
 
 def search(
-    condition: str,
-    value: Any,
-    search_range: BlockRange | IndirectBlockRange,
+    comparison: RangeComparison,
+    *,
     result: Tag,
     found: Tag,
     continuous: bool = False,
@@ -363,17 +379,16 @@ def search(
 
     Scans a selected range and writes the first matching address into `result`.
     Writes `found` True on hit; on miss writes `result=-1` and `found=False`.
-    """
-    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
-    if condition not in {"==", "!=", "<", "<=", ">", ">="}:
-        raise ValueError(
-            f"Invalid search condition: {condition!r}. Expected one of: ==, !=, <, <=, >, >="
-        )
-    if not isinstance(search_range, (BlockRange, IndirectBlockRange)):
+    The first argument is a comparison expression built from a ``.select()`` range::
+
+        search(DS.select(1, 100) >= 100, result=FoundAddr, found=FoundFlag)
+        search(Txt.select(1, 50) == "A", result=FoundAddr, found=FoundFlag)
+    """
+    if not isinstance(comparison, RangeComparison):
         raise TypeError(
-            "search() expects search_range from .select() "
-            f"(BlockRange or IndirectBlockRange), got {type(search_range).__name__}"
+            "search() expects a comparison expression, "
+            f"e.g. DS.select(1, 10) >= 100, got {type(comparison).__name__}"
         )
     if found.type != TagType.BOOL:
         raise TypeError(f"search() found must be BOOL, got {found.type.name}")
@@ -383,13 +398,11 @@ def search(
     _add_instruction(
         "search",
         SearchInstruction,
-        condition,
-        value,
-        search_range,
-        result,
-        found,
-        continuous,
-        oneshot,
+        comparison,
+        result=result,
+        found=found,
+        continuous=continuous,
+        oneshot=oneshot,
     )
     return result
 

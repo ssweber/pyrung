@@ -2,6 +2,7 @@ const vscode = require("vscode");
 
 const { PyrungAdapterFactory } = require("./adapterFactory");
 const { PyrungDecorationController } = require("./decorationController");
+const { PyrungHistorySliderProvider } = require("./historySlider");
 const { PyrungInlineValuesProvider } = require("./inlineValuesProvider");
 
 function isPyrungSession(session) {
@@ -26,6 +27,11 @@ exports.activate = function (context) {
   const inlineValuesProvider = new PyrungInlineValuesProvider({
     getConditionLinesForDocument: (document) => decorator.conditionLinesForDocument(document),
   });
+  const historySlider = new PyrungHistorySliderProvider();
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("pyrung.historySlider", historySlider)
+  );
+
   const output = vscode.window.createOutputChannel("pyrung: Debug Events");
   const monitorStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   monitorStatus.command = "pyrung.monitorMenu";
@@ -478,6 +484,8 @@ exports.activate = function (context) {
               output.appendLine(`[scan ${body.scanId}] snapshot: ${body.label}`);
             } else if (message.event === "stopped") {
               sessionExecutionState.set(session.id, "stopped");
+              historySlider.setSession(session);
+              historySlider.refresh();
               if (
                 rapidState.enabled &&
                 rapidState.sessionId === session.id &&
@@ -502,6 +510,7 @@ exports.activate = function (context) {
                 updateRapidStatus();
               }
               setMonitorStatus(0);
+              historySlider.setSession(null);
             }
           },
         };
@@ -531,6 +540,7 @@ exports.activate = function (context) {
           updateRapidStatus();
         }
         setMonitorStatus(0);
+        historySlider.setSession(null);
       }
     })
   );

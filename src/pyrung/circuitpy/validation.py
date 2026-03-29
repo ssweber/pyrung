@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.p1am import is_board_tag
 from pyrung.core.condition import Condition
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import Expression
 from pyrung.core.memory_block import (
     BlockRange,
@@ -134,8 +134,7 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
                 found.append(value)
             return
 
-        if isinstance(value, CopyModifier):
-            walk(value.source)
+        if isinstance(value, CopyConverter):
             return
 
         if isinstance(value, BlockRange):

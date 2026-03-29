@@ -48,6 +48,16 @@
         "title": "pyrung: Configure Rapid Step"
       }
     ],
+    "views": {
+      "debug": [
+        {
+          "type": "webview",
+          "id": "pyrung.historySlider",
+          "name": "History",
+          "when": "debugType == 'pyrung'"
+        }
+      ]
+    },
     "breakpoints": [
       {
         "language": "python"

@@ -49,12 +49,14 @@ class Tag:
         type: Data type (BOOL, INT, DINT, REAL, WORD, CHAR).
         default: Default value (None means use type default).
         retentive: Whether value survives power cycles.
+        comment: Optional address comment metadata for CSV round-tripping.
     """
 
     name: str
     type: TagType = TagType.BOOL
     default: Any = field(default=None)
     retentive: bool = False
+    comment: str = ""
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -216,43 +218,6 @@ class Tag:
     def map_to(self, target: Tag) -> MappingEntry:
         """Create a logical-to-hardware mapping entry."""
         return MappingEntry(source=self, target=target)
-
-    def as_value(self) -> Any:
-        """Wrap this tag for text->numeric character-value conversion."""
-        from pyrung.core.copy_modifiers import as_value
-
-        return as_value(self)
-
-    def as_ascii(self) -> Any:
-        """Wrap this tag for text->numeric ASCII-code conversion."""
-        from pyrung.core.copy_modifiers import as_ascii
-
-        return as_ascii(self)
-
-    def as_text(
-        self,
-        *,
-        suppress_zero: bool = True,
-        pad: int | None = None,
-        exponential: bool = False,
-        termination_code: int | str | None = None,
-    ) -> Any:
-        """Wrap this tag for numeric->text conversion."""
-        from pyrung.core.copy_modifiers import as_text
-
-        return as_text(
-            self,
-            suppress_zero=suppress_zero,
-            pad=pad,
-            exponential=exponential,
-            termination_code=termination_code,
-        )
-
-    def as_binary(self) -> Any:
-        """Wrap this tag for numeric->text binary-copy conversion."""
-        from pyrung.core.copy_modifiers import as_binary
-
-        return as_binary(self)
 
     # =========================================================================
     # Arithmetic Operators -> Expression
@@ -614,16 +579,32 @@ class _TagTypeBase(LiveTag):
     _tag_type: ClassVar[TagType]
     _default_retentive: ClassVar[bool]
 
-    def __init__(self, name: str, *, default: Any = None, retentive: bool | None = None) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        default: Any = None,
+        retentive: bool | None = None,
+        comment: str = "",
+    ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
 
-    def __new__(cls, name: str, *, default: Any = None, retentive: bool | None = None) -> LiveTag:
+    def __new__(
+        cls,
+        name: str,
+        *,
+        default: Any = None,
+        retentive: bool | None = None,
+        comment: str = "",
+    ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
         if not isinstance(name, str):
             raise TypeError(f"{cls.__name__}() name must be a string.")
-        return LiveTag(name, cls._tag_type, default, retentive)
+        if not isinstance(comment, str):
+            raise TypeError(f"{cls.__name__}() comment must be a string.")
+        return LiveTag(name, cls._tag_type, default, retentive, comment)
 
 
 class Bool(_TagTypeBase):

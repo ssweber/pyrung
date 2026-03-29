@@ -755,3 +755,62 @@ class TestExpressionEdgeCases:
         ctx = ScanContext(state)
         # 10 + 20 - (6 * 4 / 2) = 30 - 12 = 18
         assert expr.evaluate(ctx) == pytest.approx(18.0)
+
+
+# =============================================================================
+# SumExpr Tests
+# =============================================================================
+
+
+class TestSumExpr:
+    """Test BlockRange.sum() → SumExpr."""
+
+    def test_sum_evaluates_range(self):
+        """dh.select(1,5).sum() sums all tag values in range."""
+        DH = Block("DH", TagType.WORD, 1, 10)
+        expr = DH.select(1, 5).sum()
+        state = SystemState().with_tags({"DH1": 10, "DH2": 20, "DH3": 30, "DH4": 40, "DH5": 50})
+        ctx = ScanContext(state)
+        assert expr.evaluate(ctx) == 150
+
+    def test_sum_defaults_to_zero(self):
+        """Tags not in state default to 0."""
+        DS = Block("DS", TagType.INT, 1, 5)
+        expr = DS.select(1, 3).sum()
+        state = SystemState().with_tags({"DS2": 100})
+        ctx = ScanContext(state)
+        assert expr.evaluate(ctx) == 100
+
+    def test_sum_single_element(self):
+        """Single-element range."""
+        DS = Block("DS", TagType.INT, 1, 5)
+        expr = DS.select(3, 3).sum()
+        state = SystemState().with_tags({"DS3": 42})
+        ctx = ScanContext(state)
+        assert expr.evaluate(ctx) == 42
+
+    def test_sum_is_expression(self):
+        """SumExpr is an Expression — can participate in larger expressions."""
+        from pyrung.core.expression import Expression
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        expr = DS.select(1, 5).sum()
+        assert isinstance(expr, Expression)
+
+    def test_sum_in_arithmetic(self):
+        """SumExpr can be used in arithmetic: sum + literal."""
+        DS = Block("DS", TagType.INT, 1, 10)
+        expr = DS.select(1, 3).sum() + 10
+        state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3})
+        ctx = ScanContext(state)
+        assert expr.evaluate(ctx) == 16
+
+    def test_sum_format_expr(self):
+        """format_expr renders SumExpr."""
+        from pyrung.core.expression import format_expr
+
+        DS = Block("DS", TagType.INT, 1, 10)
+        expr = DS.select(1, 5).sum()
+        result = format_expr(expr)
+        assert "sum(" in result
+        assert "DS" in result

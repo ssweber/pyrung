@@ -128,10 +128,13 @@ class CallInstructionDebugHandler:
         next_stack = (*execution.call_stack, instruction.subroutine_name)
         try:
             for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
+                from pyrung.core.context import ConditionView
+
+                sub_condition_view = ConditionView(execution.ctx)
                 sub_enabled, sub_condition_traces = debugger._evaluate_conditions_with_trace(
                     execution.runner,
                     sub_rung._conditions,
-                    execution.ctx,
+                    sub_condition_view,
                 )
                 sub_execution = execution.with_overrides(
                     kind="subroutine",
@@ -145,6 +148,7 @@ class CallInstructionDebugHandler:
                         enabled=sub_enabled,
                         parent_enabled=True,
                     ),
+                    condition_view=sub_condition_view,
                 )
                 yield from debugger._iter_rung_steps(
                     debugger._make_rung_state(

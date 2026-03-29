@@ -19,6 +19,7 @@ from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
 from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
+    history_seek,
     lifecycle_launch,
     monitor_data_breakpoints,
     stack_variables_evaluate,
@@ -349,6 +350,12 @@ class DAPAdapter:
 
     def _on_pyrungFindLabel(self, args: dict[str, Any]) -> HandlerResult:
         return monitor_data_breakpoints.on_pyrung_find_label(self, args)
+
+    def _on_pyrungHistoryInfo(self, _args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_history_info(self, _args)
+
+    def _on_pyrungSeek(self, args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_seek(self, args)
 
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)

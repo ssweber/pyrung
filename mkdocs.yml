@@ -8,6 +8,7 @@ theme:
   features:
     - navigation.tabs
     - navigation.sections
+    - navigation.indexes
     - navigation.top
     - content.code.copy
     - content.code.annotate
@@ -18,8 +19,18 @@ nav:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
       - Core Concepts: getting-started/concepts.md
+  - Instruction Reference:
+      - instructions/index.md
+      - Rungs: instructions/rungs.md
+      - Conditions: instructions/conditions.md
+      - Coils: instructions/coils.md
+      - Timers & Counters: instructions/timers-counters.md
+      - Data Movement: instructions/copy.md
+      - Math: instructions/math.md
+      - Drum, Shift & Search: instructions/drum-shift-search.md
+      - Program Control: instructions/program-control.md
+      - Communication: instructions/communication.md
   - Guides:
-      - Ladder Logic Reference: guides/ladder-logic.md
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md
@@ -28,7 +39,6 @@ nav:
       - DAP Debugger in VS Code: guides/dap-vscode.md
   - Dialects:
       - Click PLC: dialects/click.md
-      - Click Ladder CSV Contract: dialects/click-ladder-csv.md
       - CircuitPython: dialects/circuitpy.md
       - CircuitPython Modbus TCP: dialects/circuitpy-modbus.md
   - API Reference:
@@ -62,13 +72,20 @@ plugins:
           - index.md
         Getting Started:
           - getting-started/*.md
+        Instruction Reference:
+          - instructions/*.md
         Guides:
           - guides/*.md
         Dialects:
           - dialects/*.md
         API Reference:
           - reference/index.md
-          - reference/api/*.md
+          - reference/api/runtime.md
+          - reference/api/data-model.md
+          - reference/api/program-structure.md
+          - reference/api/instruction-set.md
+          - reference/api/click-dialect.md
+          - reference/api/circuitpy-dialect.md
 
 exclude_docs: |
   internal/**

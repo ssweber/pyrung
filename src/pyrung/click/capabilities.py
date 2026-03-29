@@ -186,6 +186,22 @@ COPY_COMPATIBILITY: dict[CopyOperation, frozenset[tuple[str, str]]] = {
     "unpack_words": UNPACK_WORDS_COMPATIBILITY,
 }
 
+# ---------------------------------------------------------------------------
+# Converter compatibility — which bank types are valid source/dest per mode
+# ---------------------------------------------------------------------------
+
+# Numeric banks that can be a source for numeric→text conversion or dest for text→numeric.
+_NUMERIC_BANKS: frozenset[str] = frozenset({"DS", "DD", "DH", "DF", "TD", "CTD", "SD", "XD", "YD"})
+
+CONVERTER_COMPATIBILITY: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    # to_text / to_binary: source must be numeric, dest must be TXT
+    "text": (_NUMERIC_BANKS, frozenset({"TXT"})),
+    "binary": (_NUMERIC_BANKS, frozenset({"TXT"})),
+    # to_value / to_ascii: source must be TXT, dest must be numeric
+    "value": (frozenset({"TXT"}), _NUMERIC_BANKS),
+    "ascii": (frozenset({"TXT"}), _NUMERIC_BANKS),
+}
+
 _HEX_COMPARE_BANKS: frozenset[str] = frozenset({"XD", "YD", "DH"})
 _NUMERIC_COMPARE_BANKS: frozenset[str] = frozenset({"TD", "CTD", "DS", "DD", "DF", "SD"})
 _TEXT_COMPARE_BANKS: frozenset[str] = frozenset({"TXT"})
@@ -286,6 +302,7 @@ __all__ = [
     "LADDER_WRITABLE_SD",
     "LADDER_BANK_CAPABILITIES",
     "INSTRUCTION_ROLE_COMPATIBILITY",
+    "CONVERTER_COMPATIBILITY",
     "COPY_COMPATIBILITY",
     "COMPARE_COMPATIBILITY",
     "COMPARE_CONSTANT_COMPATIBILITY",

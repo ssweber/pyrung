@@ -61,7 +61,7 @@ Supported function codes: FC 1 (read coils), FC 2 (read discrete inputs), FC 3 (
 ```python
 from pyrung import Bool, Int, Block, Program, Rung, TagType
 from pyrung.circuitpy import ModbusClientConfig, P1AM, generate_circuitpy
-from pyrung.click import ModbusTarget, TagMap, send, receive
+from pyrung.click import ModbusTcpTarget, TagMap, send, receive
 
 hw = P1AM()
 hw.slot(1, "P1-08SIM")
@@ -103,13 +103,69 @@ source = generate_circuitpy(
     logic, hw,
     target_scan_ms=10.0,
     modbus_client=ModbusClientConfig(
-        targets=(ModbusTarget(name="plc1", ip="192.168.1.20"),)
+        targets=(ModbusTcpTarget(name="plc1", ip="192.168.1.20"),)
     ),
     tag_map=TagMap(),
 )
 ```
 
-`send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
+`send` writes local tag values to a remote Click address. `receive` reads remote Click addresses into local tags. The `target` string must match a `ModbusTcpTarget.name`. Remote addresses use Click address format (`DS1`, `C1`, `X001`, etc.).
+
+### Raw Modbus addresses
+
+When the remote device isn't a Click PLC, use `ModbusAddress` instead of a Click address string. This gives direct control over the register address and register type.
+
+```python
+from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+
+vfd = ModbusTcpTarget(name="vfd", ip="192.168.1.30")
+
+with Program() as logic:
+    # Read a 32-bit speed value from holding registers 0x200–0x201, word-swapped
+    with Rung(Enable):
+        receive(
+            target="vfd",
+            remote_start=ModbusAddress(0x200, RegisterType.HOLDING),
+            dest=Speed,
+            receiving=CommReceiving,
+            success=CommSuccess,
+            error=CommError,
+            exception_response=CommEx,
+            word_swap=True,
+        )
+
+    # Write a setpoint to a single holding register at 0x100
+    with Rung(Enable):
+        send(
+            target="vfd",
+            remote_start=ModbusAddress(0x100),
+            source=Setpoint,
+            sending=CommSending,
+            success=CommSuccess,
+            error=CommError,
+            exception_response=CommEx,
+        )
+```
+
+`ModbusAddress` accepts MODBUS 984 addresses (e.g. `400001` for holding, `300001` for input) or raw register offsets (0–0xFFFE). Hex strings with an `h` suffix (e.g. `"0h"`) are also supported — these require an explicit `register_type` since the offset alone is ambiguous.
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `address` | `int` or `str` | — | 984-style int (400001), raw int (0–0xFFFE), or hex str ("0h") |
+| `register_type` | `RegisterType` | `HOLDING` | Inferred for 984 addresses; required for hex |
+
+The codegen maps `register_type` to the correct Modbus function code:
+
+| Type | Send | Receive |
+|------|------|---------|
+| `HOLDING` | FC 6 (single) / FC 16 (multiple) | FC 3 |
+| `INPUT` | — | FC 4 |
+| `COIL` | FC 5 (single) / FC 15 (multiple) | FC 1 |
+| `DISCRETE_INPUT` | — | FC 2 |
+
+`word_swap` on `send()`/`receive()` controls how 32-bit values (DINT, REAL) are split across register pairs. `False` (default) = high word first (big-endian, common in VFDs and power meters). `True` = low word first.
+
+RTU (serial) targets are not yet supported for CircuitPython code generation.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -155,7 +211,7 @@ source = generate_circuitpy(
     target_scan_ms=10.0,
     modbus_server=ModbusServerConfig(ip="192.168.1.200"),
     modbus_client=ModbusClientConfig(
-        targets=(ModbusTarget(name="plc1", ip="192.168.1.20"),)
+        targets=(ModbusTcpTarget(name="plc1", ip="192.168.1.20"),)
     ),
     tag_map=mapping,
 )

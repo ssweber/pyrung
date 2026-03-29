@@ -1415,9 +1415,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="found tag must be BOOL"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=DS.select(1, 3),
+                DS.select(1, 3) == 1,
                 result=Result,
                 found=Int("Found"),
             )
@@ -1430,15 +1428,14 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="result tag must be INT or DINT"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=DS.select(1, 3),
+                DS.select(1, 3) == 1,
                 result=Real("Result"),
                 found=Found,
             )
 
     def test_search_invalid_condition_rejected(self):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         DS = Block("DS", TagType.INT, 1, 10)
         Found = Bool("Found")
@@ -1446,26 +1443,34 @@ class TestSearchInstruction:
 
         with pytest.raises(ValueError, match="Invalid search condition"):
             SearchInstruction(
-                condition="=",
-                value=1,
-                search_range=DS.select(1, 3),
+                RangeComparison(DS.select(1, 3), "=", 1),
                 result=Result,
                 found=Found,
             )
 
     def test_search_range_type_enforced(self):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         Found = Bool("Found")
         Result = Int("Result")
 
-        with pytest.raises(
-            TypeError, match="search_range must be BlockRange or IndirectBlockRange"
-        ):
+        with pytest.raises(TypeError, match="comparison must use a .select\\(\\) range"):
             SearchInstruction(
-                condition="==",
-                value=1,
-                search_range=Int("NotARange"),  # type: ignore[arg-type]
+                RangeComparison(Int("NotARange"), "==", 1),  # type: ignore[arg-type]
+                result=Result,
+                found=Found,
+            )
+
+    def test_search_comparison_type_enforced(self):
+        from pyrung.core.instruction import SearchInstruction
+
+        Found = Bool("Found")
+        Result = Int("Result")
+
+        with pytest.raises(TypeError, match="expects a comparison expression"):
+            SearchInstruction(
+                "not a comparison",  # type: ignore[arg-type]
                 result=Result,
                 found=Found,
             )
@@ -1483,12 +1488,15 @@ class TestSearchInstruction:
     )
     def test_search_numeric_success(self, condition, value, expected):
         from pyrung.core.instruction import SearchInstruction
+        from pyrung.core.memory_block import RangeComparison
 
         DS = Block("DS", TagType.INT, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(condition, value, DS.select(1, 3), Result, Found)
+        instr = SearchInstruction(
+            RangeComparison(DS.select(1, 3), condition, value), result=Result, found=Found
+        )
         state = SystemState().with_tags({"DS1": 10, "DS2": 20, "DS3": 5})
         new_state = execute(instr, state)
 
@@ -1502,7 +1510,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction(">", 100, DS.select(1, 3), Result, Found)
+        instr = SearchInstruction(DS.select(1, 3) > 100, result=Result, found=Found)
         state = SystemState().with_tags({"DS1": 1, "DS2": 2, "DS3": 3, "Result": 99, "Found": True})
         new_state = execute(instr, state)
 
@@ -1516,7 +1524,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 2, DS.select(1, 4), Result, Found, continuous=True)
+        instr = SearchInstruction(DS.select(1, 4) == 2, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags(
             {"DS1": 1, "DS2": 2, "DS3": 3, "DS4": 2, "Result": 0, "Found": False}
         )
@@ -1540,7 +1548,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 1, DS.select(1, 3), Result, Found, continuous=True)
+        instr = SearchInstruction(DS.select(1, 3) == 1, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags({"DS1": 1, "DS2": 1, "DS3": 1, "Result": -1, "Found": True})
         new_state = execute(instr, state)
 
@@ -1554,7 +1562,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 7, DS.select(1, 3), Result, Found, continuous=True)
+        instr = SearchInstruction(DS.select(1, 3) == 7, result=Result, found=Found, continuous=True)
         state = SystemState().with_tags({"DS1": 1, "DS2": 7, "DS3": 7, "Result": 0, "Found": False})
         new_state = execute(instr, state)
 
@@ -1569,7 +1577,7 @@ class TestSearchInstruction:
         Result = Int("Result")
 
         instr = SearchInstruction(
-            "==", 5, DS.select(1, 5).reverse(), Result, Found, continuous=True
+            DS.select(1, 5).reverse() == 5, result=Result, found=Found, continuous=True
         )
         state = SystemState().with_tags(
             {"DS1": 0, "DS2": 5, "DS3": 0, "DS4": 5, "DS5": 0, "Result": 0, "Found": False}
@@ -1594,7 +1602,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 2, DS.select(1, 2), Result, Found, oneshot=True)
+        instr = SearchInstruction(DS.select(1, 2) == 2, result=Result, found=Found, oneshot=True)
         state = SystemState().with_tags({"DS1": 0, "DS2": 2, "Result": 0, "Found": False})
 
         step1 = execute(instr, state)
@@ -1615,7 +1623,7 @@ class TestSearchInstruction:
         Result = Int("Result")
 
         rung = RungLogic(Enable)
-        rung.add_instruction(SearchInstruction("==", 1, DS.select(1, 3), Result, Found))
+        rung.add_instruction(SearchInstruction(DS.select(1, 3) == 1, result=Result, found=Found))
 
         state = SystemState().with_tags(
             {"Enable": False, "DS1": 1, "DS2": 1, "DS3": 1, "Result": 55, "Found": True}
@@ -1632,7 +1640,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", "ADC", CH.select(1, 6), Result, Found)
+        instr = SearchInstruction(CH.select(1, 6) == "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
         new_state = execute(instr, state)
 
@@ -1646,7 +1654,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("!=", "ADC", CH.select(1, 4), Result, Found)
+        instr = SearchInstruction(CH.select(1, 4) != "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "A", "CH2": "D", "CH3": "C", "CH4": "X"})
         new_state = execute(instr, state)
 
@@ -1660,7 +1668,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", "ADC", CH.select(1, 4).reverse(), Result, Found)
+        instr = SearchInstruction(CH.select(1, 4).reverse() == "ADC", result=Result, found=Found)
         state = SystemState().with_tags({"CH1": "Z", "CH2": "C", "CH3": "D", "CH4": "A"})
         new_state = execute(instr, state)
 
@@ -1673,7 +1681,7 @@ class TestSearchInstruction:
         CH = Block("CH", TagType.CHAR, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
-        instr = SearchInstruction(">", "ADC", CH.select(1, 4), Result, Found)
+        instr = SearchInstruction(CH.select(1, 4) > "ADC", result=Result, found=Found)
 
         with pytest.raises(ValueError, match="Text search only supports"):
             execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B", "CH3": "C"}))
@@ -1684,7 +1692,7 @@ class TestSearchInstruction:
         CH = Block("CH", TagType.CHAR, 1, 10)
         Found = Bool("Found")
         Result = Int("Result")
-        instr = SearchInstruction("==", "", CH.select(1, 4), Result, Found)
+        instr = SearchInstruction(CH.select(1, 4) == "", result=Result, found=Found)
 
         with pytest.raises(ValueError, match="cannot be empty"):
             execute(instr, SystemState().with_tags({"CH1": "A", "CH2": "B"}))
@@ -1696,7 +1704,7 @@ class TestSearchInstruction:
         Found = Bool("Found")
         Result = Int("Result")
 
-        instr = SearchInstruction("==", 0, DS.select(3, 4), Result, Found)
+        instr = SearchInstruction(DS.select(3, 4) == 0, result=Result, found=Found)
         new_state = execute(instr, SystemState().with_tags({"Result": 123, "Found": True}))
 
         assert new_state.tags["Result"] == -1
@@ -1704,24 +1712,24 @@ class TestSearchInstruction:
 
 
 class TestCopyTextModifiers:
-    def test_copy_as_value_expands_sequential_destinations(self):
-        from pyrung.core.copy_modifiers import as_value
+    def test_copy_to_value_expands_sequential_destinations(self):
+        from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import CopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction(as_value("123"), DS[1])
+        instr = CopyInstruction("123", DS[1], convert=to_value)
         new_state = execute(instr, SystemState())
 
         assert new_state.tags["DS1"] == 1
         assert new_state.tags["DS2"] == 2
         assert new_state.tags["DS3"] == 3
 
-    def test_copy_as_value_non_digit_sets_out_of_range_and_skips_write(self):
-        from pyrung.core.copy_modifiers import as_value
+    def test_copy_to_value_non_digit_sets_out_of_range_and_skips_write(self):
+        from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import CopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction(as_value("1A3"), DS[1])
+        instr = CopyInstruction("1A3", DS[1], convert=to_value)
         new_state = execute(instr, SystemState().with_tags({"DS1": 9, "DS2": 9, "DS3": 9}))
 
         assert new_state.tags["fault.out_of_range"] is True
@@ -1729,24 +1737,24 @@ class TestCopyTextModifiers:
         assert new_state.tags["DS2"] == 9
         assert new_state.tags["DS3"] == 9
 
-    def test_copy_as_ascii_converts_char_codes(self):
-        from pyrung.core.copy_modifiers import as_ascii
+    def test_copy_to_ascii_converts_char_codes(self):
+        from pyrung.core.copy_converters import to_ascii
         from pyrung.core.instruction import CopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = CopyInstruction(as_ascii("AZ"), DS[1])
+        instr = CopyInstruction("AZ", DS[1], convert=to_ascii)
         new_state = execute(instr, SystemState())
 
         assert new_state.tags["DS1"] == 65
         assert new_state.tags["DS2"] == 90
 
-    def test_copy_as_text_do_not_suppress_zero(self):
-        from pyrung.core.copy_modifiers import as_text
+    def test_copy_to_text_do_not_suppress_zero(self):
+        from pyrung.core.copy_converters import to_text
         from pyrung.core.instruction import CopyInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         Source = Int("Source")
-        instr = CopyInstruction(as_text(Source, suppress_zero=False), CH[1])
+        instr = CopyInstruction(Source, CH[1], convert=to_text(suppress_zero=False))
         new_state = execute(instr, SystemState().with_tags({"Source": 123}))
 
         assert new_state.tags["CH1"] == "0"
@@ -1755,120 +1763,127 @@ class TestCopyTextModifiers:
         assert new_state.tags["CH4"] == "2"
         assert new_state.tags["CH5"] == "3"
 
-    def test_copy_as_text_with_pad(self):
+    def test_copy_to_text_with_termination_code(self):
+        from pyrung.core.copy_converters import to_text
         from pyrung.core.instruction import CopyInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         Source = Int("Source")
-        instr = CopyInstruction(Source.as_text(pad=7), CH[1])
-        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
-
-        assert new_state.tags["CH1"] == "0"
-        assert new_state.tags["CH2"] == "0"
-        assert new_state.tags["CH3"] == "0"
-        assert new_state.tags["CH4"] == "0"
-        assert new_state.tags["CH5"] == "1"
-        assert new_state.tags["CH6"] == "2"
-        assert new_state.tags["CH7"] == "3"
-
-    def test_copy_as_text_pad_smaller_than_value(self):
-        from pyrung.core.copy_modifiers import as_text
-        from pyrung.core.instruction import CopyInstruction
-
-        CH = Block("CH", TagType.CHAR, 1, 10)
-        Source = Int("Source")
-        instr = CopyInstruction(as_text(Source, pad=3), CH[1])
-        new_state = execute(instr, SystemState().with_tags({"Source": 12345}))
-
-        assert new_state.tags["CH1"] == "1"
-        assert new_state.tags["CH2"] == "2"
-        assert new_state.tags["CH3"] == "3"
-        assert new_state.tags["CH4"] == "4"
-        assert new_state.tags["CH5"] == "5"
-
-    def test_copy_as_text_pad_with_dint(self):
-        from pyrung.core.copy_modifiers import as_text
-        from pyrung.core.instruction import CopyInstruction
-
-        CH = Block("CH", TagType.CHAR, 1, 12)
-        Source = Dint("Source")
-        instr = CopyInstruction(as_text(Source, pad=11), CH[1])
-        new_state = execute(instr, SystemState().with_tags({"Source": 123}))
-
-        assert new_state.tags["CH1"] == "0"
-        assert new_state.tags["CH2"] == "0"
-        assert new_state.tags["CH3"] == "0"
-        assert new_state.tags["CH4"] == "0"
-        assert new_state.tags["CH5"] == "0"
-        assert new_state.tags["CH6"] == "0"
-        assert new_state.tags["CH7"] == "0"
-        assert new_state.tags["CH8"] == "0"
-        assert new_state.tags["CH9"] == "1"
-        assert new_state.tags["CH10"] == "2"
-        assert new_state.tags["CH11"] == "3"
-
-    def test_copy_as_text_pad_with_negative(self):
-        from pyrung.core.copy_modifiers import as_text
-        from pyrung.core.instruction import CopyInstruction
-
-        CH = Block("CH", TagType.CHAR, 1, 10)
-        Source = Int("Source")
-        instr = CopyInstruction(as_text(Source, pad=6), CH[1])
-        new_state = execute(instr, SystemState().with_tags({"Source": -123}))
-
-        assert new_state.tags["CH1"] == "-"
-        assert new_state.tags["CH2"] == "0"
-        assert new_state.tags["CH3"] == "0"
-        assert new_state.tags["CH4"] == "1"
-        assert new_state.tags["CH5"] == "2"
-        assert new_state.tags["CH6"] == "3"
-
-    def test_copy_as_text_with_termination_code(self):
-        from pyrung.core.copy_modifiers import as_text
-        from pyrung.core.instruction import CopyInstruction
-
-        CH = Block("CH", TagType.CHAR, 1, 10)
-        Source = Int("Source")
-        instr = CopyInstruction(as_text(Source, termination_code=13), CH[1])
+        instr = CopyInstruction(Source, CH[1], convert=to_text(termination_code=13))
         new_state = execute(instr, SystemState().with_tags({"Source": 5}))
 
         assert new_state.tags["CH1"] == "5"
         assert ord(new_state.tags["CH2"]) == 13
 
-    def test_copy_as_binary_low_byte_ascii(self):
-        from pyrung.core.copy_modifiers import as_binary
+    def test_copy_to_text_with_termination_code_hex_string(self):
+        from pyrung.core.copy_converters import to_text
         from pyrung.core.instruction import CopyInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         Source = Int("Source")
-        instr = CopyInstruction(as_binary(Source), CH[1])
+        # $0D = hex 13 = carriage return
+        instr = CopyInstruction(Source, CH[1], convert=to_text(termination_code="$0D"))
+        new_state = execute(instr, SystemState().with_tags({"Source": 5}))
+
+        assert new_state.tags["CH1"] == "5"
+        assert ord(new_state.tags["CH2"]) == 13
+
+    def test_copy_to_binary_low_byte_ascii(self):
+        from pyrung.core.copy_converters import to_binary
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        Source = Int("Source")
+        instr = CopyInstruction(Source, CH[1], convert=to_binary)
         new_state = execute(instr, SystemState().with_tags({"Source": 123}))
 
         assert new_state.tags["CH1"] == "{"
 
     def test_copy_pointer_resolution_error_sets_address_error_only(self):
-        from pyrung.core.copy_modifiers import as_binary
+        from pyrung.core.copy_converters import to_binary
         from pyrung.core.instruction import CopyInstruction
 
         DS = Block("DS", TagType.INT, 1, 10)
         Pointer = Int("Pointer")
         CH = Block("CH", TagType.CHAR, 1, 10)
-        instr = CopyInstruction(as_binary(DS[Pointer]), CH[1])
+        instr = CopyInstruction(DS[Pointer], CH[1], convert=to_binary)
         new_state = execute(instr, SystemState().with_tags({"Pointer": 999}))
 
         assert new_state.tags["fault.address_error"] is True
         assert new_state.tags.get("fault.out_of_range", False) is False
         assert "CH1" not in new_state.tags
 
+    def test_copy_string_literal_fanout_to_char_tags(self):
+        from pyrung.core.instruction import CopyInstruction
+
+        CH = Block("CH", TagType.CHAR, 1, 10)
+        instr = CopyInstruction("00026", CH[1])
+        new_state = execute(instr, SystemState())
+
+        assert new_state.tags["CH1"] == "0"
+        assert new_state.tags["CH2"] == "0"
+        assert new_state.tags["CH3"] == "0"
+        assert new_state.tags["CH4"] == "2"
+        assert new_state.tags["CH5"] == "6"
+
+
+class TestNormalizeTerminationCode:
+    def test_hex_string_parses_to_int(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("$0D") == 0x0D  # 13 decimal
+        assert _normalize_termination_code("$00") == 0
+        assert _normalize_termination_code("$7F") == 127
+        assert _normalize_termination_code("$0d") == 13  # lowercase hex
+
+    def test_hex_string_out_of_range_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="ASCII range"):
+            _normalize_termination_code("$80")  # 128 decimal
+
+    def test_hex_string_invalid_digits_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="invalid hex digits"):
+            _normalize_termination_code("$GG")
+
+    def test_hex_single_digit(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("$0") == 0
+        assert _normalize_termination_code("$A") == 10
+
+    def test_multi_char_non_hex_raises(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        with pytest.raises(ValueError, match="single character or \\$XX hex"):
+            _normalize_termination_code("AB")
+
+    def test_none_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code(None) is None
+
+    def test_int_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code(13) == 13
+
+    def test_single_char_passthrough(self):
+        from pyrung.core.copy_converters import _normalize_termination_code
+
+        assert _normalize_termination_code("\r") == 13
+
 
 class TestBlockCopyTextModes:
-    def test_blockcopy_as_value_text_to_numeric(self):
-        from pyrung.core.copy_modifiers import as_value
+    def test_blockcopy_to_value_text_to_numeric(self):
+        from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import BlockCopyInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = BlockCopyInstruction(as_value(CH.select(1, 3)), DS.select(1, 3))
+        instr = BlockCopyInstruction(CH.select(1, 3), DS.select(1, 3), convert=to_value)
         state = SystemState().with_tags({"CH1": "1", "CH2": "2", "CH3": "3"})
         new_state = execute(instr, state)
 
@@ -1876,13 +1891,13 @@ class TestBlockCopyTextModes:
         assert new_state.tags["DS2"] == 2
         assert new_state.tags["DS3"] == 3
 
-    def test_blockcopy_as_value_failure_sets_out_of_range_no_partial_write(self):
-        from pyrung.core.copy_modifiers import as_value
+    def test_blockcopy_to_value_failure_sets_out_of_range_no_partial_write(self):
+        from pyrung.core.copy_converters import to_value
         from pyrung.core.instruction import BlockCopyInstruction
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         DS = Block("DS", TagType.INT, 1, 10)
-        instr = BlockCopyInstruction(as_value(CH.select(1, 3)), DS.select(1, 3))
+        instr = BlockCopyInstruction(CH.select(1, 3), DS.select(1, 3), convert=to_value)
         state = SystemState().with_tags(
             {"CH1": "1", "CH2": "A", "CH3": "3", "DS1": 9, "DS2": 9, "DS3": 9}
         )

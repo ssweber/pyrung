@@ -443,7 +443,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung():
-                search("==", 42, DS.select(1, 10), result, found, continuous=True)
+                search(DS.select(1, 10) == 42, result=result, found=found, continuous=True)
 
         facts = walk_program(prog)
         cont_facts = _facts_at(facts, "instruction.continuous")
@@ -546,25 +546,25 @@ class TestFunctionCallFieldsCaptured:
         assert _first(facts, "instruction.outs['result']").value_kind == "tag"
 
 
-class TestCopyModifierAndPackTextFacts:
-    def test_copy_modifier_is_first_class_operand_and_recurses_source(self):
-        from pyrung.core import as_value
+class TestCopyConverterAndPackTextFacts:
+    def test_copy_converter_is_first_class_operand_with_separate_source(self):
+        from pyrung.core import to_value
 
         CH = Block("CH", TagType.CHAR, 1, 10)
         Dest = Int("Dest")
 
         with Program() as prog:
             with Rung():
-                copy(as_value(CH[1]), Dest)
+                copy(CH[1], Dest, convert=to_value)
 
         facts = walk_program(prog)
-        wrapped = _first(facts, "instruction.source")
-        inner = _first(facts, "instruction.source.source")
+        source = _first(facts, "instruction.source")
+        converter = _first(facts, "instruction.convert")
 
-        assert wrapped.value_kind == "copy_modifier"
-        assert wrapped.metadata["mode"] == "value"
-        assert inner.value_kind == "tag"
-        assert inner.metadata["tag_name"] == "CH1"
+        assert source.value_kind == "tag"
+        assert source.metadata["tag_name"] == "CH1"
+        assert converter.value_kind == "copy_converter"
+        assert converter.metadata["mode"] == "value"
 
     def test_pack_text_fields_captured(self):
         from pyrung.core.program import pack_text

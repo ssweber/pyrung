@@ -8,7 +8,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 """
 
 from pyrung.core.context import ScanContext
-from pyrung.core.copy_modifiers import as_ascii, as_binary, as_text, as_value
+from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent
 from pyrung.core.expression import (
     PI,
@@ -29,6 +29,15 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusRtuTarget,
+    ModbusTcpTarget,
+    RegisterType,
+    WordOrder,
+    receive,
+    send,
+)
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -37,6 +46,7 @@ from pyrung.core.memory_block import (
     IndirectRef,
     InputBlock,
     OutputBlock,
+    RangeComparison,
     SlotConfig,
 )
 from pyrung.core.program import (
@@ -147,6 +157,7 @@ __all__ = [
     "IndirectBlockRange",
     "IndirectRef",
     "IndirectExprRef",
+    "RangeComparison",
     "SlotConfig",
     # Program structure
     "Program",
@@ -183,16 +194,23 @@ __all__ = [
     "on_delay",
     "off_delay",
     "time_drum",
+    "send",
+    "receive",
+    "ModbusAddress",
+    "ModbusRtuTarget",
+    "ModbusTcpTarget",
+    "RegisterType",
+    "WordOrder",
     # Conditions
     "rise",
     "fall",
     "all_of",
     "any_of",
-    # Copy modifiers
-    "as_value",
-    "as_ascii",
-    "as_text",
-    "as_binary",
+    # Copy converters
+    "to_value",
+    "to_ascii",
+    "to_text",
+    "to_binary",
     # Expressions
     "Expression",
     "PI",

@@ -16,6 +16,67 @@ if TYPE_CHECKING:
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
 
 
+class ConditionView:
+    """Frozen read-only view of tag/memory state for condition evaluation.
+
+    Created at rung entry so that all branch conditions — at every nesting
+    depth — evaluate against the same snapshot, regardless of mutations made
+    by instructions that execute between branch evaluations.
+    """
+
+    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver")
+
+    def __init__(self, ctx: ScanContext) -> None:
+        self._state: SystemState = ctx._state
+        self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
+        self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
+        self._resolver = ctx._resolver
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        if name in self._tags_snapshot:
+            return self._tags_snapshot[name]
+        if name in self._state.tags:
+            return self._state.tags[name]
+        if self._resolver is not None:
+            resolved, value = self._resolver(name, self)
+            if resolved:
+                return value
+        return default
+
+    def get_memory(self, key: str, default: Any = None) -> Any:
+        if key in self._memory_snapshot:
+            return self._memory_snapshot[key]
+        return self._state.memory.get(key, default)
+
+    def _get_tag_internal(self, name: str, default: Any = None) -> Any:
+        if name in self._tags_snapshot:
+            return self._tags_snapshot[name]
+        return self._state.tags.get(name, default)
+
+    def _has_tag_internal(self, name: str) -> bool:
+        return name in self._tags_snapshot or name in self._state.tags
+
+    def _get_memory_internal(self, key: str, default: Any = None) -> Any:
+        if key in self._memory_snapshot:
+            return self._memory_snapshot[key]
+        return self._state.memory.get(key, default)
+
+    def _has_memory_internal(self, key: str) -> bool:
+        return key in self._memory_snapshot or key in self._state.memory
+
+    @property
+    def scan_id(self) -> int:
+        return self._state.scan_id
+
+    @property
+    def timestamp(self) -> float:
+        return self._state.timestamp
+
+    @property
+    def original_state(self) -> SystemState:
+        return self._state
+
+
 class ScanContext:
     """Batched write context for a single scan cycle.
 
@@ -39,6 +100,7 @@ class ScanContext:
         "_memory_pending",
         "_resolver",
         "_read_only_tags",
+        "_condition_snapshot",
     )
 
     def __init__(
@@ -60,6 +122,7 @@ class ScanContext:
         self._memory_pending: dict[str, Any] = {}
         self._resolver = resolver
         self._read_only_tags = read_only_tags
+        self._condition_snapshot: ConditionView | None = None
 
     # =========================================================================
     # Read operations (with pending visibility)

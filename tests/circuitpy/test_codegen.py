@@ -30,10 +30,6 @@ from pyrung.core import (
     TagType,
     Tms,
     all_of,
-    as_ascii,
-    as_binary,
-    as_text,
-    as_value,
     blockcopy,
     branch,
     calc,
@@ -59,6 +55,10 @@ from pyrung.core import (
     sqrt,
     subroutine,
     time_drum,
+    to_ascii,
+    to_binary,
+    to_text,
+    to_value,
     unpack_to_bits,
     unpack_to_words,
 )
@@ -581,8 +581,8 @@ class TestInstructionCoverage:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                search(">=", 5, ds.select(1, 10), result=result, found=found, continuous=True)
-                search("==", "AB", txt.select(1, 8), result=result, found=found)
+                search(ds.select(1, 10) >= 5, result=result, found=found, continuous=True)
+                search(txt.select(1, 8) == "AB", result=result, found=found)
             with Rung(Bool("Enable")):
                 shift(bits.select(1, 8)).clock(clock).reset(reset_tag)
             with Rung(Bool("Enable")):
@@ -811,6 +811,22 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "_scan_overrun_count += 1" in source_code
         assert "PRINT_SCAN_OVERRUNS" in source_code
 
+    def test_gc_management_emitted(self):
+        hw, di, do = _basic_hw()
+        with Program(strict=False) as prog:
+            with Rung(di[1]):
+                out(do[1])
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        assert "import gc\n" in source_code
+        assert "\ngc.disable()\n" in source_code
+        # gc.disable() must appear before the scan loop
+        assert source_code.index("gc.disable()") < source_code.index("while True:")
+        # gc.collect() must appear inside the scan loop, after scan pacing
+        loop_body = source_code[source_code.index("while True:") :]
+        assert "    gc.collect()" in loop_body
+        assert loop_body.index("sleep_ms") < loop_body.index("gc.collect()")
+
 
 class TestIOMappingAndBranching:
     def test_discrete_analog_temperature_and_combo_mapping(self):
@@ -991,8 +1007,8 @@ class TestBoardPeripheralsAndRunStop:
         assert stub_base.discrete_writes[-1] == (2, 1)
 
 
-class TestCopyModifierCodegen:
-    def test_generation_unblocks_copy_blockcopy_fill_modifiers(self):
+class TestCopyConverterCodegen:
+    def test_generation_unblocks_copy_blockcopy_converters(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 12)
@@ -1000,20 +1016,13 @@ class TestCopyModifierCodegen:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                copy(as_value(ch[1]), ds[1])
-                blockcopy(as_ascii(ch.select(1, 3)), ds.select(1, 3))
-                fill(as_binary(ds[4]), ch.select(4, 6))
-                fill(as_text(ds[5], suppress_zero=False, pad=4), ch.select(7, 12))
+                copy(ch[1], ds[1], convert=to_value)
+                blockcopy(ch.select(1, 3), ds.select(1, 3), convert=to_ascii)
 
         source = generate_circuitpy(prog, hw, target_scan_ms=10.0)
-        assert "CopyModifier-based copy() codegen is not implemented" not in source
-        assert "CopyModifier-based blockcopy() codegen is not implemented" not in source
-        assert "CopyModifier-based fill() codegen is not implemented" not in source
         assert "_store_numeric_text_digit(" in source
-        assert "_render_text_from_numeric(" in source
-        assert "_termination_char(" in source
 
-    def test_copy_modifier_runtime_modes_smoke(self, monkeypatch):
+    def test_copy_converter_runtime_modes_smoke(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 12)
@@ -1028,10 +1037,10 @@ class TestCopyModifierCodegen:
                 copy("A", ch[2])
                 copy(7, ds[3])
                 copy(123, ds[4])
-                copy(as_value(ch[1]), ds[1])
-                copy(as_ascii(ch[2]), ds[2])
-                copy(as_text(ds[3], suppress_zero=False, pad=5, termination_code=13), ch[4])
-                copy(as_binary(ds[4]), ch[10])
+                copy(ch[1], ds[1], convert=to_value)
+                copy(ch[2], ds[2], convert=to_ascii)
+                copy(ds[3], ch[4], convert=to_text(suppress_zero=False, termination_code=13))
+                copy(ds[4], ch[10], convert=to_binary)
 
         ctx = _context_for_program(prog, hw)
         ch_symbol = ctx.symbol_for_block(ch)
@@ -1074,7 +1083,7 @@ class TestCopyModifierCodegen:
         assert ord(ch_terminator) == 13
         assert ch_values[9] == "{"
 
-    def test_blockcopy_modifier_failure_sets_fault_and_avoids_partial_write(self, monkeypatch):
+    def test_blockcopy_converter_failure_sets_fault_and_avoids_partial_write(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         ch = Block("CH", TagType.CHAR, 1, 10)
@@ -1088,7 +1097,7 @@ class TestCopyModifierCodegen:
                 copy("A", ch[2])
                 copy("3", ch[3])
                 fill(9, ds.select(1, 3))
-                blockcopy(as_value(ch.select(1, 3)), ds.select(1, 3))
+                blockcopy(ch.select(1, 3), ds.select(1, 3), convert=to_value)
             with Rung(system.fault.out_of_range):
                 out(fault_seen)
 
@@ -1124,56 +1133,7 @@ class TestCopyModifierCodegen:
         assert ds_values[2] == 9
         assert namespace[fault_seen_symbol] is True
 
-    def test_fill_modifier_text_renders_and_blank_fills_tail(self, monkeypatch):
-        hw = P1AM()
-        hw.slot(1, "P1-08SIM")
-        txt = Block("TXT", TagType.CHAR, 1, 8)
-        src = Int("Src", default=12)
-        enable = Bool("Enable", default=True)
-
-        with Program(strict=False) as prog:
-            with Rung(enable):
-                fill(
-                    as_text(src, suppress_zero=False, pad=4, termination_code=13), txt.select(1, 8)
-                )
-
-        ctx = _context_for_program(prog, hw)
-        txt_symbol = ctx.symbol_for_block(txt)
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
-
-        class StubBase:
-            def rollCall(self, modules):
-                return None
-
-            def readDiscrete(self, slot):
-                return 0
-
-            def writeDiscrete(self, value, slot):
-                return None
-
-            def readAnalog(self, slot, ch_num):
-                return 0
-
-            def writeAnalog(self, value, slot, ch_num):
-                return None
-
-            def readTemperature(self, slot, ch_num):
-                return 0.0
-
-        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
-        txt_values = _namespace_list(namespace, txt_symbol)
-        assert txt_values[0] == "0"
-        assert txt_values[1] == "0"
-        assert txt_values[2] == "1"
-        assert txt_values[3] == "2"
-        txt_terminator = txt_values[4]
-        assert isinstance(txt_terminator, str)
-        assert ord(txt_terminator) == 13
-        assert txt_values[5] == ""
-        assert txt_values[6] == ""
-        assert txt_values[7] == ""
-
-    def test_scalar_multi_char_copy_modifier_faults_and_skips_write(self, monkeypatch):
+    def test_scalar_multi_char_copy_converter_faults_and_skips_write(self, monkeypatch):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         source_value = Int("SourceValue", default=123)
@@ -1183,7 +1143,7 @@ class TestCopyModifierCodegen:
 
         with Program(strict=False) as prog:
             with Rung(enable):
-                copy(as_text(source_value, suppress_zero=False), target)
+                copy(source_value, target, convert=to_text(suppress_zero=False))
             with Rung(system.fault.out_of_range):
                 out(fault_seen)
 

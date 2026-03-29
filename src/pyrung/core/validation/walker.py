@@ -35,7 +35,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     ExprCompareEq,
     ExprCompareGe,
@@ -70,7 +70,7 @@ ValueKind = Literal[
     "block_range",
     "indirect_block_range",
     "condition",
-    "copy_modifier",
+    "copy_converter",
     "literal",
     "unknown",
 ]
@@ -111,8 +111,8 @@ _INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
     "OutInstruction": ("target",),
     "LatchInstruction": ("target",),
     "ResetInstruction": ("target",),
-    "CopyInstruction": ("source", "target"),
-    "BlockCopyInstruction": ("source", "dest"),
+    "CopyInstruction": ("source", "target", "convert"),
+    "BlockCopyInstruction": ("source", "dest", "convert"),
     "CalcInstruction": ("expression", "dest", "mode"),
     "FillInstruction": ("value", "dest"),
     "SearchInstruction": ("value", "search_range", "condition", "result", "found", "continuous"),
@@ -318,17 +318,17 @@ def _classify_value(
             {"condition_type": type(obj).__name__},
         )
 
-    # 8. CopyModifier wrapper
-    if isinstance(obj, CopyModifier):
+    # 8. CopyConverter
+    if isinstance(obj, CopyConverter):
         metadata: dict[str, str | int | bool] = {"mode": obj.mode}
         if obj.mode == "text":
             metadata["suppress_zero"] = bool(obj.suppress_zero)
             metadata["exponential"] = bool(obj.exponential)
             metadata["has_termination_code"] = obj.termination_code is not None
         return (
-            "copy_modifier",
+            "copy_converter",
             type(obj).__name__,
-            f"CopyModifier({obj.mode})",
+            f"CopyConverter({obj.mode})",
             metadata,
         )
 
@@ -692,18 +692,6 @@ class _Walker:
                     instr_type,
                     f"{arg_path}.{child_name}",
                 )
-
-        if kind == "copy_modifier" and isinstance(obj, CopyModifier):
-            self._walk_value(
-                obj.source,
-                scope,
-                subroutine,
-                rung_index,
-                branch_path,
-                instr_idx,
-                instr_type,
-                f"{arg_path}.source",
-            )
 
         if kind == "immediate_ref" and isinstance(obj, ImmediateRef):
             self._walk_value(

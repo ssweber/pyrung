@@ -183,19 +183,25 @@ ctd: Block = _block_from_bank_config(BANKS["CTD"])
 sd: Block = _block_from_bank_config(BANKS["SD"])
 txt: Block = _block_from_bank_config(BANKS["TXT"])
 
+from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
 from pyrung.click.data_provider import ClickDataProvider
-from pyrung.click.ladder import LadderBundle, LadderExportError
-from pyrung.click.send_receive import (
-    ModbusReceiveInstruction,
-    ModbusSendInstruction,
-    ModbusTarget,
-    receive,
-    send,
-)
+from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
+from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
     ValidationMode,
     validate_click_program,
+)
+from pyrung.core.instruction.send_receive import (
+    ModbusAddress,
+    ModbusReceiveInstruction,
+    ModbusRtuTarget,
+    ModbusSendInstruction,
+    ModbusTcpTarget,
+    RegisterType,
+    WordOrder,
+    receive,
+    send,
 )
 
 
@@ -242,9 +248,18 @@ __all__ = [
     "LadderExportError",
     "ClickDataProvider",
     "validate_click_program",
+    "ModbusAddress",
     "ModbusReceiveInstruction",
+    "ModbusRtuTarget",
     "ModbusSendInstruction",
-    "ModbusTarget",
+    "ModbusTcpTarget",
+    "RegisterType",
+    "WordOrder",
     "send",
     "receive",
+    "RawInstruction",
+    "raw",
+    "ladder_to_pyrung",
+    "ladder_to_pyrung_project",
+    "pyrung_to_ladder",
 ]

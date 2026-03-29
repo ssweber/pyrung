@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core._source import _capture_source
 
 if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
+    from pyrung.core.memory_block import BlockRange
     from pyrung.core.tag import Tag
 
 Numeric = int | float
@@ -34,7 +35,7 @@ class Expression(ABC):
     """
 
     @abstractmethod
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         """Evaluate this expression against a ScanContext.
 
         Args:
@@ -203,7 +204,7 @@ class TagExpr(Expression):
             raise TypeError(f"Expected Tag, got {type(tag)}")
         self.tag = tag
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return ctx.get_tag(self.tag.name, self.tag.default)
 
     def __repr__(self) -> str:
@@ -221,7 +222,7 @@ class LiteralExpr(Expression):
     def __init__(self, value: Numeric):
         self.value = value
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.value
 
     def __repr__(self) -> str:
@@ -240,7 +241,7 @@ class AddExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) + self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -254,7 +255,7 @@ class SubExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) - self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -268,7 +269,7 @@ class MulExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) * self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -282,7 +283,7 @@ class DivExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         left_val = self.left.evaluate(ctx)
         right_val = self.right.evaluate(ctx)
         if right_val == 0:
@@ -301,7 +302,7 @@ class FloorDivExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) // self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -315,7 +316,7 @@ class ModExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) % self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -329,7 +330,7 @@ class PowExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.left.evaluate(ctx) ** self.right.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -347,7 +348,7 @@ class NegExpr(Expression):
     def __init__(self, operand: Expression):
         self.operand = operand
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return -self.operand.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -360,7 +361,7 @@ class PosExpr(Expression):
     def __init__(self, operand: Expression):
         self.operand = operand
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return +self.operand.evaluate(ctx)
 
     def __repr__(self) -> str:
@@ -373,7 +374,7 @@ class AbsExpr(Expression):
     def __init__(self, operand: Expression):
         self.operand = operand
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return abs(self.operand.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -392,7 +393,7 @@ class AndExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return int(self.left.evaluate(ctx)) & int(self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -406,7 +407,7 @@ class OrExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return int(self.left.evaluate(ctx)) | int(self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -420,7 +421,7 @@ class XorExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return int(self.left.evaluate(ctx)) ^ int(self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -434,7 +435,7 @@ class LShiftExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return int(self.left.evaluate(ctx)) << int(self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -448,7 +449,7 @@ class RShiftExpr(Expression):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return int(self.left.evaluate(ctx)) >> int(self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -461,7 +462,7 @@ class InvertExpr(Expression):
     def __init__(self, operand: Expression):
         self.operand = operand
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         return ~int(self.operand.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -483,7 +484,7 @@ class ExprCompareEq(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) == self.right.evaluate(ctx)
 
 
@@ -494,7 +495,7 @@ class ExprCompareNe(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) != self.right.evaluate(ctx)
 
 
@@ -505,7 +506,7 @@ class ExprCompareLt(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) < self.right.evaluate(ctx)
 
 
@@ -516,7 +517,7 @@ class ExprCompareLe(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) <= self.right.evaluate(ctx)
 
 
@@ -527,7 +528,7 @@ class ExprCompareGt(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) > self.right.evaluate(ctx)
 
 
@@ -538,7 +539,7 @@ class ExprCompareGe(Condition):
         self.left = left
         self.right = right
 
-    def evaluate(self, ctx: ScanContext) -> bool:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return self.left.evaluate(ctx) >= self.right.evaluate(ctx)
 
 
@@ -555,7 +556,7 @@ class MathFuncExpr(Expression):
         self.func = func
         self.name = name
 
-    def evaluate(self, ctx: ScanContext) -> Numeric:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
         return self.func(self.operand.evaluate(ctx))
 
     def __repr__(self) -> str:
@@ -635,7 +636,7 @@ class ShiftFuncExpr(Expression):
         self.func = func
         self.name = name
 
-    def evaluate(self, ctx: ScanContext) -> int:
+    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
         val = int(self.value.evaluate(ctx))
         cnt = int(self.count.evaluate(ctx))
         return self.func(val, cnt)
@@ -676,6 +677,24 @@ def lro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
 def rro(x: Expression | int | Tag, n: Expression | int | Tag) -> ShiftFuncExpr:
     """Rotate right function (16-bit): rro(value, count)."""
     return ShiftFuncExpr(_wrap(x), _wrap(n), _rotate_right_16, "rro")
+
+
+# =============================================================================
+# Aggregate Functions
+# =============================================================================
+
+
+class SumExpr(Expression):
+    """Sum of all tag values in a block range."""
+
+    def __init__(self, block_range: BlockRange) -> None:
+        self.block_range = block_range
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
+        return sum(ctx.get_tag(tag.name, 0) for tag in self.block_range)
+
+    def __repr__(self) -> str:
+        return f"sum({self.block_range!r})"
 
 
 # =============================================================================
@@ -740,6 +759,9 @@ def format_expr(expr: Expression) -> str:
         return expr.tag.name
     if isinstance(expr, LiteralExpr):
         return repr(expr.value)
+    # SumExpr — aggregate over block range
+    if isinstance(expr, SumExpr):
+        return f"sum({expr.block_range!r})"
     # ShiftFuncExpr — two-argument shift/rotate functions (before MathFuncExpr)
     if isinstance(expr, ShiftFuncExpr):
         return f"{expr.name}({format_expr(expr.value)}, {format_expr(expr.count)})"

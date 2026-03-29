@@ -14,7 +14,7 @@ from pyrung.core.condition import (
     RisingEdgeCondition,
 )
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ScanContext
+from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.state import SystemState
 from pyrung.core.trace_formatter import TraceFormatter
 
@@ -165,7 +165,7 @@ def test_condition_trace_engine_short_circuit_terms_and_composite_expressions() 
 
 def test_condition_trace_engine_unknown_condition_uses_fallbacks() -> None:
     class AlwaysTrueCondition(Condition):
-        def evaluate(self, ctx: ScanContext) -> bool:
+        def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
             _ = ctx
             return True
 

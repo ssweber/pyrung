@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any, Protocol
 
-from pyrung.core.context import ScanContext
+from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.rung import Rung
 
 
@@ -24,7 +24,7 @@ class DebugRunner(Protocol):
     def evaluate_condition_value(
         self,
         condition: Any,
-        ctx: ScanContext,
+        ctx: ScanContext | ConditionView,
     ) -> tuple[bool, list[dict[str, Any]]]:
         """Evaluate one condition and return (value, details)."""
 

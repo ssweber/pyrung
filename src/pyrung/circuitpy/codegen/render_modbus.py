@@ -743,7 +743,11 @@ _FC_NAMES: dict[int, str] = {
 
 
 def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
-    plc_addr = format_address_display(spec.bank, spec.plc_start)
+    if spec.bank is not None:
+        plc_addr = format_address_display(spec.bank, spec.plc_start)
+    else:
+        kind = "coil" if spec.is_coil else "register"
+        plc_addr = f"{kind} 0x{spec.modbus_start:04X}"
     fc_desc = _FC_NAMES.get(spec.function_code, f"FC {spec.function_code}")
     if spec.kind == "send":
         if spec.function_code == 5:
@@ -762,9 +766,24 @@ def _render_client_request_helper(spec: Any, target: Any) -> list[str]:
                 "            _payload[_offset // 8] |= 1 << (_offset % 8)",
                 f"    _pdu = struct.pack('>BHHB', {spec.function_code}, {spec.modbus_start}, {spec.modbus_quantity}, _byte_count) + bytes(_payload)",
             ]
-        else:
+        elif spec.bank is not None:
             pdu_lines = [
                 f"    _regs = _mb_client_pack_register_values('{spec.bank}', {spec.var_name}_values())",
+            ]
+            if spec.function_code == 6:
+                pdu_lines.append(
+                    f"    _pdu = struct.pack('>BHH', {spec.function_code}, {spec.modbus_start}, int(_regs[0]) & 0xFFFF)"
+                )
+            else:
+                pdu_lines.append(
+                    f"    _pdu = struct.pack('>BHHB', {spec.function_code}, {spec.modbus_start}, {spec.modbus_quantity}, len(_regs) * 2)"
+                )
+                pdu_lines.append("    for _reg in _regs:")
+                pdu_lines.append("        _pdu += struct.pack('>H', int(_reg) & 0xFFFF)")
+        else:
+            tag_types_lit = repr([item.tag_type for item in spec.items])
+            pdu_lines = [
+                f"    _regs = _mb_client_raw_pack_register_values({spec.var_name}_values(), {tag_types_lit}, '{spec.word_order}')",
             ]
             if spec.function_code == 6:
                 pdu_lines.append(
@@ -828,7 +847,7 @@ def _render_client_apply_helper(spec: Any, target: Any) -> list[str]:
         )
         return lines
 
-    if MODBUS_MAPPINGS[spec.bank].is_coil:
+    if spec.is_coil:
         lines.extend(
             [
                 "    if _frame_len < 9:",
@@ -842,7 +861,7 @@ def _render_client_apply_helper(spec: Any, target: Any) -> list[str]:
                 "        _values.append(bool((_byte >> (_offset % 8)) & 0x1))",
             ]
         )
-    else:
+    elif spec.bank is not None:
         lines.extend(
             [
                 "    if _frame_len < 9:",
@@ -857,6 +876,26 @@ def _render_client_apply_helper(spec: Any, target: Any) -> list[str]:
                 "        _base = 9 + (_offset * 2)",
                 "        _regs.append(struct.unpack('>H', bytes(data[_base:_base + 2]))[0])",
                 f"    _values = _mb_client_unpack_register_values('{spec.bank}', _regs, {spec.item_count}, {spec.plc_start})",
+                f"    if len(_values) < {spec.item_count}:",
+                "        return (False, 0)",
+            ]
+        )
+    else:
+        tag_types_lit = repr([item.tag_type for item in spec.items])
+        lines.extend(
+            [
+                "    if _frame_len < 9:",
+                "        return (False, 0)",
+                "    _byte_count = int(data[8])",
+                f"    if _byte_count != ({spec.modbus_quantity} * 2):",
+                "        return (False, 0)",
+                "    if _frame_len < 9 + _byte_count:",
+                "        return (False, 0)",
+                "    _regs = []",
+                "    for _offset in range(_byte_count // 2):",
+                "        _base = 9 + (_offset * 2)",
+                "        _regs.append(struct.unpack('>H', bytes(data[_base:_base + 2]))[0])",
+                f"    _values = _mb_client_raw_unpack_register_values(_regs, {tag_types_lit}, '{spec.word_order}')",
                 f"    if len(_values) < {spec.item_count}:",
                 "        return (False, 0)",
             ]
@@ -981,6 +1020,53 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
         "    return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]",
         "",
     ]
+
+    if any(s.bank is None for s in specs):
+        lines.extend(
+            [
+                "def _mb_client_raw_pack_register_values(values, tag_types, word_order):",
+                "    _regs = []",
+                "    for _vi in range(len(values)):",
+                "        _tt = tag_types[_vi]",
+                "        _v = values[_vi]",
+                "        if _tt == 'DINT':",
+                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+                "            _bi = '>i' if word_order == 'high_low' else '<i'",
+                "            _regs.extend(struct.unpack(_bo, struct.pack(_bi, int(_v))))",
+                "        elif _tt == 'REAL':",
+                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+                "            _bf = '>f' if word_order == 'high_low' else '<f'",
+                "            _regs.extend(struct.unpack(_bo, struct.pack(_bf, float(_v))))",
+                "        elif _tt == 'INT':",
+                "            _regs.append(struct.unpack('<H', struct.pack('<h', int(_v)))[0])",
+                "        else:",
+                "            _regs.append(int(_v) & 0xFFFF)",
+                "    return _regs",
+                "",
+                "def _mb_client_raw_unpack_register_values(regs, tag_types, word_order):",
+                "    _values = []",
+                "    _ri = 0",
+                "    for _tt in tag_types:",
+                "        if _tt == 'DINT':",
+                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+                "            _bi = '>i' if word_order == 'high_low' else '<i'",
+                "            _values.append(struct.unpack(_bi, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
+                "            _ri += 2",
+                "        elif _tt == 'REAL':",
+                "            _bo = '>HH' if word_order == 'high_low' else '<HH'",
+                "            _bf = '>f' if word_order == 'high_low' else '<f'",
+                "            _values.append(struct.unpack(_bf, struct.pack(_bo, int(regs[_ri]) & 0xFFFF, int(regs[_ri + 1]) & 0xFFFF))[0])",
+                "            _ri += 2",
+                "        elif _tt == 'INT':",
+                "            _values.append(struct.unpack('<h', struct.pack('<H', int(regs[_ri]) & 0xFFFF))[0])",
+                "            _ri += 1",
+                "        else:",
+                "            _values.append(int(regs[_ri]) & 0xFFFF)",
+                "            _ri += 1",
+                "    return _values",
+                "",
+            ]
+        )
 
     for spec in specs:
         target = targets[spec.target_name]

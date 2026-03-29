@@ -121,6 +121,6 @@ The [full traffic light example](https://github.com/ssweber/pyrung/blob/main/exa
 From here:
 
 - [Core Concepts](concepts.md) — the scan cycle, SystemState, and how tags work
-- [Ladder Logic Guide](../guides/ladder-logic.md) — full DSL reference: branching, counters, subroutines, structured tags
+- [Instruction Reference](../instructions/index.md) — full DSL reference: branching, counters, subroutines, structured tags
 - [Testing Guide](../guides/testing.md) — patterns for unit testing with deterministic time
 - [Runner Guide](../guides/runner.md) — time modes, scan history, forking

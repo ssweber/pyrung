@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.expression import Expression
-from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+from pyrung.core.memory_block import BlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
@@ -63,6 +63,10 @@ def _collect_calc_tag_types(value: Any, found: set[TagType], seen: set[int]) -> 
 
     if isinstance(value, IndirectExprRef):
         # Address expression type does not affect arithmetic family.
+        found.add(value.block.type)
+        return
+
+    if isinstance(value, BlockRange):
         found.add(value.block.type)
         return
 
@@ -130,6 +134,7 @@ class CalcInstruction(OneShotMixin, Instruction):
         self,
         expression: Any,
         dest: Tag,
+        *,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)

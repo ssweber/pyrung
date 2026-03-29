@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition_trace import ConditionTraceEngine
-from pyrung.core.context import ScanContext
+from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
@@ -1075,7 +1075,7 @@ class PLCRunner:
     def evaluate_condition_value(
         self,
         condition: Any,
-        ctx: ScanContext,
+        ctx: ScanContext | ConditionView,
     ) -> tuple[bool, list[dict[str, Any]]]:
         """Debugger-facing condition evaluation API."""
         return self._evaluate_condition_value(condition, ctx)
@@ -1099,7 +1099,7 @@ class PLCRunner:
     def _evaluate_condition_value(
         self,
         condition: Any,
-        ctx: ScanContext,
+        ctx: ScanContext | ConditionView,
     ) -> tuple[bool, list[dict[str, Any]]]:
         return self._condition_trace.evaluate(condition, ctx)
 

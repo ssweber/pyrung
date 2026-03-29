@@ -13,7 +13,46 @@ PACKAGE = "pyrung"
 ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT / "src" / PACKAGE
 PUBLIC_MODULES = ("pyrung", "pyrung.click", "pyrung.circuitpy")
-SKIP_PACKAGE_PAGES = set(PUBLIC_MODULES)
+SKIP_MODULE_PAGES: set[str] = {
+    # Top-level public modules (curated pages cover their exports)
+    "pyrung",
+    "pyrung.click",
+    "pyrung.circuitpy",
+    # Internal codegen
+    "pyrung.circuitpy.codegen.context",
+    "pyrung.circuitpy.codegen.generate",
+    "pyrung.circuitpy.codegen.render",
+    "pyrung.circuitpy.codegen.render_modbus",
+    # Re-export packages (symbols on curated pages)
+    "pyrung.circuitpy.modbus",
+    "pyrung.circuitpy.p1am",
+    "pyrung.circuitpy.validation",
+    "pyrung.click.validation",
+    # DAP internals
+    "pyrung.dap",
+    "pyrung.dap.breakpoints",
+    "pyrung.dap.execution_flow",
+    "pyrung.dap.formatter",
+    "pyrung.dap.handlers",
+    "pyrung.dap.handlers.breakpoint_requests",
+    "pyrung.dap.handlers.lifecycle_launch",
+    "pyrung.dap.handlers.monitor_data_breakpoints",
+    "pyrung.dap.handlers.stack_variables_evaluate",
+    "pyrung.dap.session",
+    # Core internals
+    "pyrung.core.copy_converters",
+    "pyrung.core.debug_trace",
+    "pyrung.core.input_overrides",
+    "pyrung.core.system_points",
+    "pyrung.core.trace_formatter",
+    "pyrung.core.instruction.conversions",
+    "pyrung.core.instruction.drums",
+    "pyrung.core.program.validation",
+    # Click internals
+    "pyrung.click.capabilities",
+    "pyrung.click.profile",
+    "pyrung.click.system_mappings",
+}
 
 
 @dataclass(frozen=True)
@@ -56,12 +95,19 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.LadderBundle",
     "pyrung.click.LadderExportError",
     "pyrung.click.ClickDataProvider",
+    "pyrung.click.ModbusAddress",
     "pyrung.click.ModbusReceiveInstruction",
+    "pyrung.click.ModbusRtuTarget",
     "pyrung.click.ModbusSendInstruction",
-    "pyrung.click.ModbusTarget",
+    "pyrung.click.ModbusTcpTarget",
+    "pyrung.click.RegisterType",
+    "pyrung.click.WordOrder",
     "pyrung.click.validate_click_program",
+    "pyrung.click.ladder_to_pyrung",
     "pyrung.click.send",
     "pyrung.click.receive",
+    "pyrung.click.RawInstruction",
+    "pyrung.click.raw",
 )
 
 
@@ -103,6 +149,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.Block",
             "pyrung.InputBlock",
             "pyrung.OutputBlock",
+            "pyrung.RangeComparison",
             "pyrung.SlotConfig",
         ),
     ),
@@ -150,15 +197,22 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.on_delay",
             "pyrung.off_delay",
             "pyrung.time_drum",
+            "pyrung.send",
+            "pyrung.receive",
+            "pyrung.ModbusAddress",
+            "pyrung.ModbusRtuTarget",
+            "pyrung.ModbusTcpTarget",
+            "pyrung.RegisterType",
+            "pyrung.WordOrder",
             "pyrung.rise",
             "pyrung.fall",
             "pyrung.all_of",
             "pyrung.any_of",
             "pyrung.immediate",
-            "pyrung.as_value",
-            "pyrung.as_ascii",
-            "pyrung.as_text",
-            "pyrung.as_binary",
+            "pyrung.to_value",
+            "pyrung.to_ascii",
+            "pyrung.to_text",
+            "pyrung.to_binary",
         ),
     ),
     ReferencePage(
@@ -183,7 +237,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.circuitpy.MODULE_CATALOG",
             "pyrung.circuitpy.ModbusClientConfig",
             "pyrung.circuitpy.ModbusServerConfig",
-            "pyrung.circuitpy.ModbusTarget",
+            "pyrung.circuitpy.ModbusTcpTarget",
             "pyrung.circuitpy.ModuleDirection",
             "pyrung.circuitpy.ModuleSpec",
             "pyrung.circuitpy.P1AM",
@@ -339,8 +393,12 @@ def _write_module_pages() -> None:
                 Path("reference/api").joinpath(*rel.with_suffix("").parts).with_suffix(".md")
             )
 
+        # Auto-skip private modules (filename starts with _ but isn't __init__.py)
+        if rel.name != "__init__.py" and rel.stem.startswith("_"):
+            continue
+
         identifier = ".".join(module_parts)
-        if identifier in SKIP_PACKAGE_PAGES:
+        if identifier in SKIP_MODULE_PAGES:
             continue
         with mkdocs_gen_files.open(doc_rel_path, "w") as fd:
             fd.write(f"::: {identifier}\n")

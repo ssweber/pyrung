@@ -25,7 +25,7 @@ from pyrung.core.condition import (
     FallingEdgeCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.copy_modifiers import CopyModifier
+from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
     Expression,
 )
@@ -83,7 +83,7 @@ class ModbusClientJobSpec:
     var_name: str
     kind: str
     target_name: str
-    bank: str
+    bank: str | None
     plc_start: int
     modbus_start: int
     modbus_quantity: int
@@ -94,6 +94,8 @@ class ModbusClientJobSpec:
     success: ModbusClientSymbolSpec
     error: ModbusClientSymbolSpec
     exception_response: ModbusClientSymbolSpec
+    is_coil: bool = False
+    word_order: str | None = None
 
 
 @dataclass
@@ -261,8 +263,7 @@ class CodegenContext:
                 walk_value(value.end_expr)
                 return
 
-            if isinstance(value, CopyModifier):
-                walk_value(value.source)
+            if isinstance(value, CopyConverter):
                 return
 
             if isinstance(value, Condition):
