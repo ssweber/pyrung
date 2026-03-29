@@ -530,19 +530,28 @@ def _emit_rung(
     """Emit a single rung."""
     pad = "    " * indent
 
-    if not rung.instructions:
+    # Filter out bare NOP tokens — they become empty rungs (pass).
+    real_instructions = [i for i in rung.instructions if i.af_token != "NOP"]
+
+    if not real_instructions:
+        # Empty or NOP-only rung — preserve with pass (comment-only rungs survive).
+        if not rung.instructions and not rung.comment:
+            return  # truly empty, no comment — skip
+        conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
+        _emit_rung_header(lines, rung, conditions_str, indent)
+        lines.append(f"{pad}    pass")
         return
 
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
 
     # Check if we need branch() blocks
-    has_branches = any(instr.branch_tree is not None for instr in rung.instructions)
-    multi_output = len(rung.instructions) > 1
+    has_branches = any(instr.branch_tree is not None for instr in real_instructions)
+    multi_output = len(real_instructions) > 1
 
     if has_branches and multi_output:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             if instr.branch_tree is not None:
                 branch_cond = _render_sp_node(
                     instr.branch_tree, collection, nicknames, structured_map
@@ -558,14 +567,14 @@ def _emit_rung(
     elif multi_output and not has_branches:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             _emit_instruction(
                 lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
             )
     else:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             _emit_instruction(
                 lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
             )
@@ -716,7 +725,16 @@ def _render_af_token(
     """Render an AF token to a pyrung DSL call."""
     match = _FUNC_RE.match(token)
     if not match:
-        return _sub_operand(token, collection, nicknames, structured_map)
+        # Safeguard: reject unknown bare text that isn't a recognised operand.
+        # Known operands are substituted normally; anything else is an error
+        # that would produce invalid Python (bare undefined names).
+        sub = _sub_operand(token, collection, nicknames, structured_map)
+        if sub == token and token not in collection.tags:
+            raise ValueError(
+                f"Unrecognised AF token {token!r} — not a known instruction or operand. "
+                f"If this is a new Click instruction, add it to the codegen."
+            )
+        return sub
 
     func_name = match.group(2)
     args_str = match.group(3) or ""

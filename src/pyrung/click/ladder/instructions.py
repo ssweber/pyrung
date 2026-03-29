@@ -537,6 +537,9 @@ class _InstructionMixin:
         if instruction_type == "ReturnInstruction":
             return self._fn("return")
 
+        if instruction_type == "NopInstruction":
+            return "NOP"
+
         if instruction_type == "RawInstruction":
             return f"raw({instruction.class_name},{instruction.fields})"
 

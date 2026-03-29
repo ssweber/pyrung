@@ -309,6 +309,10 @@ def _scan_af_token(
     if not token:
         return
 
+    # Bare NOP — becomes an empty rung (pass), not an instruction import.
+    if token == "NOP":
+        return
+
     match = _FUNC_RE.match(token)
     if not match:
         return
@@ -513,6 +517,10 @@ def _ref_af_token(
 ) -> None:
     """Record references in an AF (instruction) token."""
     if not token:
+        return
+
+    # Bare NOP — becomes an empty rung (pass), not an instruction import.
+    if token == "NOP":
         return
 
     match = _FUNC_RE.match(token)

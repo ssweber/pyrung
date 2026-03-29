@@ -297,6 +297,28 @@ For the consumer-facing CSV decode contract (files, row semantics, token formats
 
 To convert ladder CSV back into pyrung Python source, see [Click Python Codegen](click-codegen.md).
 
+### Empty and comment-only rungs
+
+Empty rungs survive the round-trip. A `with Rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
+
+```python
+with Rung() as r:
+    r.comment = "--- Motor Control Section ---"
+    pass  # becomes NOP in Click ladder CSV
+```
+
+For Click programs that want to be explicit, `pyrung.click` also provides `nop()`:
+
+```python
+from pyrung.click import nop
+
+with Rung() as r:
+    r.comment = "Section header"
+    nop()  # one per rung, must be the sole instruction
+```
+
+Both forms produce identical CSV output.
+
 ## Loading PLC state
 
 Use Click Programming Software's **Data > Read Data from PLC** to dump the live state of a Click PLC to CSV, then load that snapshot into a pyrung runner so it starts right where the PLC was.

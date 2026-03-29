@@ -105,11 +105,18 @@ class _LadderExporter(
         return [("#", line) for line in rung.comment.splitlines()]
 
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
-        if not rung._instructions and not rung._branches:
-            return []
-
         comment_rows = self._comment_rows(rung)
         first_marker = "" if rung._use_prior_snapshot else "R"
+
+        if not rung._instructions and not rung._branches:
+            # Empty rung (comment-only or bare pass) → emit NOP in AF column.
+            condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
+            output_rows = self._single_output_rows(
+                condition_rows,
+                output_token="NOP",
+                first_marker=first_marker,
+            )
+            return comment_rows + output_rows
 
         if any(
             type(instruction).__name__ == "ForLoopInstruction" for instruction in rung._instructions

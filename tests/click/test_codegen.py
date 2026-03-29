@@ -2602,3 +2602,57 @@ class TestStructuredCodegen:
         # Singleton → should use Config.timeout not Config[1].timeout
         assert "Config.timeout" in code
         assert "Config[1]" not in code
+
+
+class TestNop:
+    """Test NOP / empty rung codegen and round-trip."""
+
+    def test_empty_rung_round_trip(self, tmp_path: Path):
+        """Empty (pass) rung survives program → CSV NOP → codegen → exec → CSV₂."""
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung() as r:
+                r.comment = "Section header"
+                pass
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # Codegen should emit pass, not nop()
+        assert "pass" in code
+        assert "nop()" not in code
+        assert orig == repro
+
+    def test_explicit_nop_round_trip(self, tmp_path: Path):
+        """Explicit nop() rung survives round-trip via NOP in CSV."""
+        from pyrung.click import nop
+
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung() as r:
+                r.comment = "Explicit NOP"
+                nop()
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # Round-trip normalises nop() → pass (both map to CSV NOP)
+        assert "pass" in code
+        assert orig == repro
+
+    def test_bare_text_rejected(self, tmp_path: Path):
+        """Unknown bare text in AF column raises ValueError."""
+        from pyrung.click.codegen.emitter import _render_af_token
+        from pyrung.click.codegen.models import _OperandCollection
+
+        collection = _OperandCollection()
+        with pytest.raises(ValueError, match="Unrecognised AF token"):
+            _render_af_token("BOGUS", collection, None)
