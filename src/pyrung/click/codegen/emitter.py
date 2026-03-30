@@ -814,10 +814,11 @@ def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
         # Multi-line → triple-quoted string
         escaped = comment.replace("\\", "\\\\")
         parts = escaped.split("\n")
+        content_pad = "    " * (indent + 1)
         lines.append(f'{pad}comment("""\\')
         for part in parts[:-1]:
-            lines.append(part)
-        lines.append(f'{parts[-1]}""")')
+            lines.append(f"{content_pad}{part}" if part else "")
+        lines.append(f'{content_pad}{parts[-1]}""")')
     else:
         escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'{pad}comment("{escaped}")')
