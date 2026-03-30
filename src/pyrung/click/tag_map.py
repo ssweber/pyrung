@@ -104,6 +104,7 @@ _DATA_TYPE_TO_TAG_TYPE: dict[DataType, TagType] = {
 }
 
 _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
+_BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -462,7 +463,7 @@ class TagMap:
         self._system_read_only: dict[str, bool] = {}
         self._block_lookup: dict[int, _BlockEntry] = {}
         self._block_by_name: dict[str, _BlockEntry] = {}
-        self._user_logical_names: set[str] = set()
+        self._user_logical_name_owners: dict[str, str] = {}
         self._block_slot_forward_by_id: dict[int, Tag] = {}
         self._block_slot_forward_by_name: dict[str, Tag] = {}
         self._warnings: tuple[str, ...] = ()
@@ -641,10 +642,7 @@ class TagMap:
         ) -> None:
             display = format_address_display(memory_type, address)
             if name == "":
-                raise ValueError(
-                    f"Block row nickname at {display} cannot be blank; a representable slot "
-                    "name must be non-empty."
-                )
+                return
             is_valid, error = validate_nickname(name)
             if not is_valid:
                 raise ValueError(f"Block row nickname at {display} is not representable: {error}.")
@@ -683,12 +681,6 @@ class TagMap:
                     if row.nickname != slot_config.name:
                         logical_block.rename_slot(logical_addr, row.nickname)
                         slot_config = logical_block.slot_config(logical_addr)
-                else:
-                    require_representable_block_nickname(
-                        memory_type=row.memory_type,
-                        address=row.address,
-                        name=row.nickname,
-                    )
 
                 default = _parse_default(row.initial_value, logical_block.type)
                 comment = _extract_address_comment(row.comment)
@@ -844,13 +836,7 @@ class TagMap:
                         row = field_rows.get(key)
                         expected_address = spec.hardware_addresses[(instance - 1) * stride + offset]
                         if row is None:
-                            expected_display = format_address_display(
-                                spec.memory_type, expected_address
-                            )
-                            raise ValueError(
-                                f"Named array {base_name!r} missing required row for field "
-                                f"{field!r}, instance {instance} at {expected_display}."
-                            )
+                            continue
                         if row.address != expected_address:
                             display = format_address_display(row.memory_type, row.address)
                             expected_display = format_address_display(
@@ -875,7 +861,9 @@ class TagMap:
                 for field, _ in ordered_fields_with_offsets:
                     block = runtime_blocks[field]
                     for instance in range(1, count + 1):
-                        row = field_rows[(field, instance)]
+                        row = field_rows.get((field, instance))
+                        if row is None:
+                            continue
                         slot_config = block.slot_config(instance)
                         if row.nickname != slot_config.name:
                             block.rename_slot(instance, row.nickname)
@@ -1517,10 +1505,38 @@ class TagMap:
         if name in SYSTEM_TAGS_BY_NAME:
             raise ValueError(f"Logical tag name {name!r} is reserved for system points.")
 
+    def _duplicate_user_logical_name_hint(
+        self, name: str, *, owner: str, existing_owner: str
+    ) -> str:
+        for candidate_owner in (owner, existing_owner):
+            match = _BLOCK_SLOT_OWNER_RE.fullmatch(candidate_owner)
+            if match is None:
+                continue
+            block_name = match.group("block_name")
+            addr = int(match.group("addr"))
+            if not block_name.endswith(tuple("0123456789")):
+                continue
+            if name != f"{block_name}{addr}":
+                continue
+            return (
+                " Auto-generated block slot names concatenate the block tag and slot number, "
+                f"so {block_name}[{addr}] becomes {name!r}. If a block tag ends in digits, "
+                "that can collide with another block's later slot numbers. Consider renaming "
+                "the block tag so it does not end in a number, or rename the slot explicitly."
+            )
+        return ""
+
     def _register_user_logical_name(self, name: str, *, owner: str) -> None:
-        if name in self._user_logical_names:
-            raise ValueError(f"Duplicate user logical tag name {name!r} (from {owner}).")
-        self._user_logical_names.add(name)
+        existing_owner = self._user_logical_name_owners.get(name)
+        if existing_owner is not None:
+            hint = self._duplicate_user_logical_name_hint(
+                name, owner=owner, existing_owner=existing_owner
+            )
+            raise ValueError(
+                f"Duplicate user logical tag name {name!r} (from {owner}; already used by "
+                f"{existing_owner}).{hint}"
+            )
+        self._user_logical_name_owners[name] = owner
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:

@@ -207,6 +207,14 @@ def test_name_conflict_across_blocks_raises():
         TagMap({alarm_a: c.select(101, 101), alarm_b: c.select(201, 201)})
 
 
+def test_name_conflict_from_block_name_ending_in_digit_has_specific_hint():
+    template = Block("Template.Subroutines", TagType.BOOL, 26, 26)
+    template_2 = Block("Template.Subroutines2", TagType.BOOL, 6, 6)
+
+    with pytest.raises(ValueError, match="does not end in a number"):
+        TagMap({template: c.select(101, 101), template_2: c.select(201, 201)})
+
+
 def test_block_slot_name_rename_exported_to_csv(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
     alarms.rename_slot(1, "Alarm_1")
@@ -407,7 +415,7 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
     assert block[2].name == "AlarmCfg2"
 
 
-def test_from_nickname_file_rejects_blank_block_nickname_when_boundary_has_extra_metadata(tmp_path):
+def test_from_nickname_file_allows_blank_block_nickname_when_boundary_has_extra_metadata(tmp_path):
     path = tmp_path / "blank_block_name.csv"
     records = {
         get_addr_key("C", 401): AddressRecord(
@@ -423,16 +431,65 @@ def test_from_nickname_file_rejects_blank_block_nickname_when_boundary_has_extra
             memory_type="C",
             address=402,
             nickname="",
-            comment="</AlarmCfg> Needs nickname",
-            initial_value="",
+            comment="</AlarmCfg> Boundary note",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+
+    assert restored.resolve(block, 2) == "C402"
+    assert block[2].name == "AlarmCfg2"
+    assert block[2].comment == "Boundary note"
+    assert block[2].default is True
+    assert block[2].retentive is True
+
+
+def test_from_nickname_file_allows_blank_block_nickname_for_internal_metadata_row(tmp_path):
+    path = tmp_path / "blank_internal_block_name.csv"
+    records = {
+        get_addr_key("C", 501): AddressRecord(
+            memory_type="C",
+            address=501,
+            nickname="AlarmCfg1",
+            comment="<AlarmCfg>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 502): AddressRecord(
+            memory_type="C",
+            address=502,
+            nickname="",
+            comment="Held state",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 503): AddressRecord(
+            memory_type="C",
+            address=503,
+            nickname="AlarmCfg3",
+            comment="</AlarmCfg>",
+            initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
         ),
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="C402"):
-        TagMap.from_nickname_file(path)
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+
+    assert restored.resolve(block, 2) == "C502"
+    assert block[2].name == "AlarmCfg2"
+    assert block[2].comment == "Held state"
+    assert block[2].default is True
+    assert block[2].retentive is True
 
 
 def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
@@ -765,8 +822,9 @@ def test_from_nickname_file_named_array_success(tmp_path):
     assert restored.resolve(runtime[2].val) == "DS505"
 
 
-def test_from_nickname_file_named_array_missing_required_rows_raises(tmp_path):
-    path = tmp_path / "named_array_missing.csv"
+def test_from_nickname_file_named_array_sparse_nicknames_accepted(tmp_path):
+    """Sparse nicknames are fine — only populated rows are registered."""
+    path = tmp_path / "named_array_sparse.csv"
     records = {
         get_addr_key("DS", 501): AddressRecord(
             memory_type="DS",
@@ -807,57 +865,12 @@ def test_from_nickname_file_named_array_missing_required_rows_raises(tmp_path):
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="missing required row"):
-        TagMap.from_nickname_file(path)
-
-
-@pytest.mark.parametrize("mode", ["warn", "strict"])
-def test_from_nickname_file_named_array_missing_required_rows_raises_in_both_modes(
-    tmp_path, mode: str
-):
-    path = tmp_path / f"named_array_missing_{mode}.csv"
-    records = {
-        get_addr_key("DS", 501): AddressRecord(
-            memory_type="DS",
-            address=501,
-            nickname="AlarmPacked1_id",
-            comment="<AlarmPacked:named_array(2,3)>",
-            initial_value="1",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 502): AddressRecord(
-            memory_type="DS",
-            address=502,
-            nickname="AlarmPacked1_val",
-            comment="",
-            initial_value="10",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 504): AddressRecord(
-            memory_type="DS",
-            address=504,
-            nickname="AlarmPacked2_id",
-            comment="",
-            initial_value="2",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 506): AddressRecord(
-            memory_type="DS",
-            address=506,
-            nickname="",
-            comment="</AlarmPacked:named_array(2,3)>",
-            initial_value="",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-    }
-    pyclickplc.write_csv(path, records)
-
-    with pytest.raises(ValueError, match="missing required row"):
-        TagMap.from_nickname_file(path, mode=cast(Any, mode))
+    mapping = TagMap.from_nickname_file(path)
+    struct = mapping.structure_by_name("AlarmPacked")
+    assert struct is not None
+    runtime = cast(Any, struct.runtime)
+    assert mapping.resolve(runtime[1].id) == "DS501"
+    assert mapping.resolve(runtime[2].id) == "DS504"
 
 
 def test_from_nickname_file_named_array_bad_nickname_pattern_raises(tmp_path):
