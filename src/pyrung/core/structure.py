@@ -23,6 +23,7 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
+        "select_instances",
         "stride",
         "type",
     }
@@ -112,6 +113,65 @@ class InstanceView:
 
     def __repr__(self) -> str:
         return f"InstanceView({self._owner.name}[{self._index}])"
+
+
+class _SelectedTagRange(BlockRange):
+    """BlockRange-like wrapper backed by an explicit ordered tag list."""
+
+    def __init__(
+        self,
+        block: Block,
+        start: int,
+        end: int,
+        tags: tuple[LiveTag, ...],
+        *,
+        reverse_order: bool = False,
+        label: str,
+        instance_start: int,
+        instance_end: int,
+    ):
+        super().__init__(block=block, start=start, end=end, reverse_order=reverse_order)
+        object.__setattr__(self, "_selected_tags", tags)
+        object.__setattr__(self, "_label", label)
+        object.__setattr__(self, "_instance_start", instance_start)
+        object.__setattr__(self, "_instance_end", instance_end)
+
+    @property
+    def addresses(self) -> range:
+        if not self.reverse_order:
+            return range(self.start, self.end + 1)
+        return range(self.end, self.start - 1, -1)
+
+    def tags(self) -> list[LiveTag]:
+        tags = list(self._selected_tags)
+        if self.reverse_order:
+            tags.reverse()
+        return tags
+
+    def reverse(self) -> _SelectedTagRange:
+        return _SelectedTagRange(
+            self.block,
+            self.start,
+            self.end,
+            self._selected_tags,
+            reverse_order=not self.reverse_order,
+            label=self._label,
+            instance_start=self._instance_start,
+            instance_end=self._instance_end,
+        )
+
+    def __len__(self) -> int:
+        return len(self._selected_tags)
+
+    def __iter__(self):
+        yield from self.tags()
+
+    def __repr__(self) -> str:
+        if self._instance_start == self._instance_end:
+            return f"{self._label}.select_instances({self._instance_start})"
+        return (
+            f"{self._label}.select_instances({self._instance_start}, {self._instance_end})"
+        )
 
 
 class _StructRuntime:
@@ -224,6 +284,7 @@ class _NamedArrayRuntime(_StructRuntime):
 
         self.type = type
         self.stride = stride
+        self._instance_block = Block(name=name, type=type, start=1, end=count * stride)
         super().__init__(name=name, count=count, field_specs=field_specs, kind="named_array")
 
     def clone(
@@ -267,6 +328,43 @@ class _NamedArrayRuntime(_StructRuntime):
                 hardware = target.block[hardware_addresses[base + offset]]
                 entries.append(logical.map_to(hardware))
         return entries
+
+    def select_instances(self, start: int, end: int | None = None) -> BlockRange:
+        """Select one or more full named-array instances as a dense BlockRange."""
+        if end is None:
+            end = start
+        if not isinstance(start, int) or not isinstance(end, int):
+            raise TypeError("select_instances() expects integer instance bounds.")
+        if start < 1 or end < 1 or start > self.count or end > self.count:
+            raise IndexError(
+                f"select_instances() bounds {start}..{end} out of range 1..{self.count}."
+            )
+        if start > end:
+            raise ValueError(
+                f"select_instances() start ({start}) must be <= end ({end}) for {self.name}."
+            )
+        if self.stride != len(self._field_order):
+            raise ValueError(
+                "select_instances() requires a dense named_array layout "
+                "(stride must equal field count)."
+            )
+
+        tags: list[LiveTag] = []
+        for instance in range(start, end + 1):
+            for field_name in self._field_order:
+                tags.append(self._blocks[field_name][instance])
+
+        raw_start = (start - 1) * self.stride + 1
+        raw_end = end * self.stride
+        return _SelectedTagRange(
+            self._instance_block,
+            raw_start,
+            raw_end,
+            tuple(tags),
+            label=self.name,
+            instance_start=start,
+            instance_end=end,
+        )
 
     def __repr__(self) -> str:
         return (

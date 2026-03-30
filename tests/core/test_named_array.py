@@ -204,3 +204,54 @@ def test_named_array_count_one_map_to_succeeds():
     assert len(entries) == 2
     assert [entry.source.name for entry in entries] == ["Alarm_id", "Alarm_val"]
     assert [cast(Tag, entry.target).name for entry in entries] == ["HW1", "HW2"]
+
+
+def test_named_array_select_instances_returns_dense_range():
+    @named_array(Int, count=2, stride=2)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.select_instances(1)
+
+    assert isinstance(selected, BlockRange)
+    assert list(selected.addresses) == [1, 2]
+    assert [tag.name for tag in selected.tags()] == ["Alarm1_id", "Alarm1_val"]
+    assert repr(selected) == "Alarm.select_instances(1)"
+
+
+def test_named_array_select_instances_multiple_instances():
+    @named_array(Int, count=3, stride=2)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.select_instances(2, 3)
+
+    assert list(selected.addresses) == [3, 4, 5, 6]
+    assert [tag.name for tag in selected.tags()] == [
+        "Alarm2_id",
+        "Alarm2_val",
+        "Alarm3_id",
+        "Alarm3_val",
+    ]
+    assert [tag.name for tag in selected.reverse().tags()] == [
+        "Alarm3_val",
+        "Alarm3_id",
+        "Alarm2_val",
+        "Alarm2_id",
+    ]
+
+
+def test_named_array_select_instances_rejects_sparse_layout():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+
+    with pytest.raises(ValueError, match="dense named_array layout"):
+        alarms.select_instances(1)

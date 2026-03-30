@@ -2811,8 +2811,8 @@ class TestStructuredCodegen:
         assert "C1004_to_C1006:" not in code
         assert orig == repro
 
-    def test_named_array_backing_range_stays_raw_bank(self, tmp_path: Path):
-        """Backing-memory windows for named_arrays should remain raw bank ranges."""
+    def test_dense_named_array_backing_range_codegen_uses_select_instances(self, tmp_path: Path):
+        """Dense named_array backing windows should rewrite to select_instances()."""
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import DataType
 
@@ -2881,10 +2881,100 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "fill(0, ds.select(501, 504))" in code
+        assert "@named_array(Int, count=2)" in code
+        assert "fill(0, Channel.select_instances(1, 2))" in code
+
+    def test_sparse_named_array_backing_range_stays_raw_bank(self, tmp_path: Path):
+        """Named_array windows with stride gaps should remain raw bank ranges."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 6)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(1, 6))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 506)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Sensor1_raw",
+                    comment="<Sensor:named_array(2,3)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Sensor1_scaled",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Sensor2_raw",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 505): AddressRecord(
+                    memory_type="DS",
+                    address=505,
+                    nickname="Sensor2_scaled",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 506): AddressRecord(
+                    memory_type="DS",
+                    address=506,
+                    nickname="",
+                    comment="</Sensor:named_array(2,3)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "fill(0, ds.select(501, 506))" in code
         assert "@named_array(" not in code
-        assert "Channel.select(" not in code
-        assert 'Block("DS501_to_DS504"' not in code
+        assert "Sensor.select_instances(" not in code
 
     def test_bare_block_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
         """Bare block markers should be grouping-only and not reconstruct semantics."""

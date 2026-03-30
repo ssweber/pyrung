@@ -430,6 +430,35 @@ def _enrich_with_ownership(
             )
             continue
 
+        if start_owner.structure_type == "named_array" and end_owner.structure_type == "named_array":
+            if start_owner.structure_name != end_owner.structure_name:
+                continue
+            decl = _ensure_structure_decl(start_owner.structure_name)
+            if decl is None:
+                continue
+            if decl.stride != len(decl.fields):
+                continue
+            first_field = decl.fields[0][0]
+            last_field = decl.fields[-1][0]
+            if start_owner.field != first_field or end_owner.field != last_field:
+                continue
+            start_instance = start_owner.instance or 1
+            end_instance = end_owner.instance or 1
+            if start_instance > end_instance:
+                continue
+            expected_len = (end_instance - start_instance + 1) * len(decl.fields)
+            if range_decl.end - range_decl.start + 1 != expected_len:
+                continue
+            args = f"{start_instance}" if start_instance == end_instance else (
+                f"{start_instance}, {end_instance}"
+            )
+            collection.semantic_ranges[range_str] = _SemanticRender(
+                expr=f"{start_owner.structure_name}.select_instances({args})",
+                import_kind="structure",
+                import_name=start_owner.structure_name,
+            )
+            continue
+
         if start_owner.structure_type != "udt" or end_owner.structure_type != "udt":
             continue
         if start_owner.structure_name != end_owner.structure_name:
