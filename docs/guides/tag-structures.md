@@ -99,6 +99,30 @@ Sensor[1].reading   # first sensor's reading
 Sensor[3].setpoint  # third sensor's setpoint
 ```
 
+### Selecting whole instances
+
+For dense named arrays, you can select one or more complete instances as a contiguous `BlockRange`:
+
+```python
+@named_array(Int, count=3)
+class RecipeProfile:
+    mix_seconds = 0
+    hold_seconds = 0
+    target_temp = 0
+
+RecipeProfile.select_instances(2)      # one complete profile
+RecipeProfile.select_instances(1, 2)   # the first two profiles
+```
+
+This is useful with range-based instructions such as `blockcopy()` and `fill()`:
+
+```python
+blockcopy(RecipeProfile.select_instances(2), ds.select(201, 203))
+fill(0, RecipeProfile.select_instances(1, 2))
+```
+
+Whole-instance selection requires a **dense** layout: `stride` must equal the field count. If your named array has gaps, select individual field blocks such as `Sensor.reading.select(1, 3)` or work with the raw mapped hardware range instead.
+
 ### Stride
 
 `stride` controls how many hardware slots each instance spans. When stride exceeds the field count, the extra slots are gaps:
