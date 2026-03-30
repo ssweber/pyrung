@@ -58,15 +58,52 @@ def _walk_tree_labels(node: SPNode | None) -> Iterator[str]:
             yield from _walk_tree_labels(child)
 
 
-def _tree_has_parallel(node: SPNode | None) -> bool:
-    """Check if tree contains any Parallel node."""
+def _is_bool_operand_token(token: str, collection: _OperandCollection) -> bool:
+    """Return True when a raw operand token resolves to a BOOL-style contact."""
+    token = token.strip()
+    if not token:
+        return False
+    tag_decl = collection.tags.get(token)
+    if tag_decl is not None:
+        return tag_decl.tag_type == "Bool"
+    parsed = _parse_operand_prefix(token)
+    return parsed is not None and parsed[1] == "Bool"
+
+
+def _is_pipe_safe_or_token(token: str, collection: _OperandCollection) -> bool:
+    """Return True when a condition token can be emitted safely with ``|``."""
+    token = token.strip()
+    if not token or _COMPARE_RE.match(token):
+        return False
+    if token.startswith("~"):
+        return _is_pipe_safe_or_token(token[1:], collection)
+    match = _FUNC_RE.match(token)
+    if match:
+        func_name = match.group(2)
+        args_str = (match.group(3) or "").strip()
+        return func_name in _CONDITION_WRAPPERS and _is_bool_operand_token(args_str, collection)
+    return _is_bool_operand_token(token, collection)
+
+
+def _parallel_renders_with_pipe(node: Parallel, collection: _OperandCollection) -> bool:
+    """Return True when a parallel group should emit as ``a | b`` instead of ``any_of``."""
+    return len(node.children) == 2 and all(
+        isinstance(child, Leaf) and _is_pipe_safe_or_token(child.label, collection)
+        for child in node.children
+    )
+
+
+def _tree_uses_any_of(node: SPNode | None, collection: _OperandCollection) -> bool:
+    """Check if tree requires an ``any_of(...)`` helper in emitted code."""
     if node is None:
         return False
-    if isinstance(node, Parallel):
-        return True
+    if isinstance(node, Leaf):
+        return False
     if isinstance(node, Series):
-        return any(_tree_has_parallel(c) for c in node.children)
-    return False
+        return any(_tree_uses_any_of(c, collection) for c in node.children)
+    if _parallel_renders_with_pipe(node, collection):
+        return any(_tree_uses_any_of(c, collection) for c in node.children)
+    return True
 
 
 def _tree_has_all_of(node: SPNode | None) -> bool:
@@ -99,7 +136,7 @@ def _collect_operands(
     collection = _OperandCollection()
 
     for rung in rungs:
-        if _tree_has_parallel(rung.condition_tree):
+        if _tree_uses_any_of(rung.condition_tree, collection):
             collection.has_any_of = True
         if _tree_has_all_of(rung.condition_tree):
             collection.has_all_of = True
@@ -118,7 +155,7 @@ def _collect_operands(
             _scan_af_token(instr.af_token, collection, nicknames)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _scan_token_for_operands(cond, collection, nicknames)
-            if _tree_has_parallel(instr.branch_tree):
+            if _tree_uses_any_of(instr.branch_tree, collection):
                 collection.has_any_of = True
             if _tree_has_all_of(instr.branch_tree):
                 collection.has_all_of = True
@@ -606,7 +643,7 @@ def _scan_file_refs(
     refs = _FileRefs()
 
     for rung in rungs:
-        if _tree_has_parallel(rung.condition_tree):
+        if _tree_uses_any_of(rung.condition_tree, collection):
             refs.has_any_of = True
         if _tree_has_all_of(rung.condition_tree):
             refs.has_all_of = True
@@ -622,7 +659,7 @@ def _scan_file_refs(
             _ref_af_token(instr.af_token, collection, refs, call_func_map=call_func_map)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _ref_token(cond, collection, refs)
-            if _tree_has_parallel(instr.branch_tree):
+            if _tree_uses_any_of(instr.branch_tree, collection):
                 refs.has_any_of = True
             if _tree_has_all_of(instr.branch_tree):
                 refs.has_all_of = True

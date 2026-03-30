@@ -876,6 +876,8 @@ class TestRoundTrip:
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(X001 | X002):" in code
+        assert "any_of" not in code
         assert orig == repro
 
     def test_or_with_trailing_and(self, tmp_path: Path):
@@ -895,6 +897,7 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(X001 | X002, C1):" in code
         assert orig == repro
 
     def test_three_way_or(self, tmp_path: Path):
@@ -914,6 +917,22 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(any_of(X001, X002, C1)):" in code
+        assert orig == repro
+
+    def test_two_way_comparison_or_stays_any_of(self, tmp_path: Path):
+        """2-way comparison OR stays as any_of(...) for readability and precedence."""
+        Step = Int("Step")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(Step == 1, Step == 2)):
+                out(Y)
+
+        mapping = TagMap({Step: ds[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "with Rung(any_of(DS1 == 1, DS1 == 2)):" in code
         assert orig == repro
 
     def test_mid_rung_or(self, tmp_path: Path):
@@ -1969,7 +1988,7 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "any_of(rise(C1), fall(C2))" in code
+        assert "with Rung(rise(C1) | fall(C2)):" in code
         assert orig == repro
 
 

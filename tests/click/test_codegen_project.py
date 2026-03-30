@@ -27,6 +27,7 @@ from pyrung.core import (
     Rung,
     TagType,
     Tms,
+    any_of,
 )
 from pyrung.core.program import (
     call,
@@ -446,6 +447,24 @@ class TestPerFileImports:
         from_tags_line = [ln for ln in main_py.splitlines() if ln.startswith("from tags import")]
         assert len(from_tags_line) == 1
         assert "mapping" in from_tags_line[0]
+
+    def test_main_omits_any_of_for_two_way_bool_or(self, tmp_path: Path):
+        """Two-way BOOL OR renders with | and does not import any_of."""
+        A = Bool("A")
+        B = Bool("B")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(A, B)):
+                out(Y)
+
+        mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
+        files = _project_from_program(logic, mapping, tmp_path)
+
+        main_py = files["main.py"]
+        assert "with Rung(" in main_py
+        assert " | " in main_py
+        assert "any_of" not in main_py
 
 
 class TestSubroutineCallsSubroutine:

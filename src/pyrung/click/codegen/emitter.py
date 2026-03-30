@@ -10,6 +10,7 @@ from pyrung.click.codegen.constants import (
     _FUNC_RE,
     _OPERAND_PREFIXES,
 )
+from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
@@ -628,6 +629,11 @@ def _render_sp_node(
         )
 
     if isinstance(node, Parallel):
+        if _parallel_renders_with_pipe(node, collection):
+            return " | ".join(
+                _render_sp_node(child, collection, nicknames, structured_map)
+                for child in node.children
+            )
         parts: list[str] = []
         for child in node.children:
             rendered = _render_sp_node(child, collection, nicknames, structured_map)
