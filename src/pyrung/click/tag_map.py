@@ -111,6 +111,7 @@ _EXPLICIT_NAMED_ARRAY_RE = re.compile(
 _EXPLICIT_UDT_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE})\.(?P<field>{_IDENTIFIER_TOKEN_RE}):udt$"
 )
+_EXPLICIT_UDT_BLOCK_RE = re.compile(rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):udt$")
 _EXPLICIT_BLOCK_RE = re.compile(rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block$")
 _EXPLICIT_BLOCK_START_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block\((?P<start>start=(?:0|[1-9][0-9]*)|0|[1-9][0-9]*)\)$"
@@ -291,7 +292,7 @@ def _format_default(value: object, tag_type: TagType) -> str:
 def _parse_structured_block_name(
     name: str,
 ) -> tuple[
-    Literal["plain", "udt", "named_array", "group"],
+    Literal["plain", "udt", "udt_block", "named_array", "group"],
     str | None,
     str | None,
     int | None,
@@ -337,9 +338,14 @@ def _parse_structured_block_name(
             None,
         )
 
+    udt_block_match = _EXPLICIT_UDT_BLOCK_RE.fullmatch(name)
+    if udt_block_match is not None:
+        return ("udt_block", udt_block_match.group("base"), None, None, None, name, None)
+
     if name.endswith(":udt") or ":udt" in name:
         raise ValueError(
-            f"Invalid UDT block tag {name!r}. Expected Base.field:udt with identifier tokens."
+            f"Invalid UDT block tag {name!r}. Expected Base.field:udt or Base:udt "
+            "with identifier tokens."
         )
 
     block_match = _EXPLICIT_BLOCK_RE.fullmatch(name)
@@ -767,6 +773,92 @@ class TagMap:
                 raise ValueError(f"Duplicate structured import name {structure.name!r}.")
             structures.append(structure)
 
+        def import_udt_block(spec: _BlockImportSpec, *, base_name: str) -> None:
+            nickname_pattern = re.compile(
+                rf"^{re.escape(base_name)}_(?P<field>{_IDENTIFIER_TOKEN_RE})$"
+            )
+            inferred_fields: list[tuple[str, AddressRecord]] = []
+            seen_fields: set[str] = set()
+
+            for row_idx in range(spec.start_idx, spec.end_idx + 1):
+                row = rows[row_idx]
+                if row.memory_type != spec.memory_type:
+                    continue
+                if row.address not in spec.hardware_addresses:
+                    continue
+                if _is_marker_only_boundary_row(row, block_name=spec.name):
+                    continue
+                if row.nickname == "":
+                    continue
+
+                match = nickname_pattern.fullmatch(row.nickname)
+                display = format_address_display(row.memory_type, row.address)
+                if match is None:
+                    raise ValueError(
+                        f"Block-style UDT {base_name!r} row at {display} has invalid nickname "
+                        f"{row.nickname!r}; expected {base_name}_{{field}}."
+                    )
+
+                field = match.group("field")
+                if field in seen_fields:
+                    raise ValueError(
+                        f"Block-style UDT {base_name!r} has duplicate field {field!r} at "
+                        f"{display}."
+                    )
+                seen_fields.add(field)
+                inferred_fields.append((field, row))
+                register_logical_name(
+                    row.nickname, memory_type=row.memory_type, address=row.address
+                )
+
+            if not inferred_fields:
+                raise ValueError(
+                    f"Block-style UDT {base_name!r} did not infer any fields from nicknames."
+                )
+
+            runtime_annotations = {
+                field: _tag_type_for_memory_type(spec.memory_type)
+                for field, _ in inferred_fields
+            }
+            runtime_type = cast(
+                type[Any],
+                type(
+                    base_name,
+                    (),
+                    {"__annotations__": runtime_annotations, "__module__": __name__},
+                ),
+            )
+            runtime = udt(count=1)(runtime_type)
+            runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
+            hardware_block = _hardware_block_for(spec.memory_type)
+
+            for field, row in inferred_fields:
+                logical_block = runtime_blocks[field]
+                slot_config = logical_block.slot_config(1)
+                default = _parse_default(row.initial_value, logical_block.type)
+                comment = _extract_address_comment(row.comment)
+                retentive_changed = row.retentive != slot_config.retentive
+                default_changed = default != slot_config.default
+                comment_changed = comment != slot_config.comment
+                if retentive_changed or default_changed or comment_changed:
+                    logical_block.configure_slot(
+                        1,
+                        retentive=row.retentive if retentive_changed else None,
+                        default=default if default_changed else UNSET,
+                        comment=comment if comment_changed else UNSET,
+                    )
+                mappings.append(logical_block[1].map_to(hardware_block[row.address]))
+
+            append_structure(
+                StructuredImport(
+                    name=base_name,
+                    kind="udt",
+                    runtime=runtime,
+                    count=1,
+                    stride=None,
+                )
+            )
+
         for block_range in ranges:
             spec = _build_block_spec(rows, block_range)
             kind, base_name, field_name, count, stride, logical_block_name, explicit_start = (
@@ -942,6 +1034,23 @@ class TagMap:
                     spec.hardware_addresses[-1],
                 )
                 continue
+
+            if kind == "udt_block":
+                assert base_name is not None
+                try:
+                    import_udt_block(spec, base_name=base_name)
+                    continue
+                except Exception as exc:  # pragma: no cover - defensive fallback
+                    if mode == "strict":
+                        raise ValueError(
+                            f"UDT grouping failed for base {base_name!r}: {exc}."
+                        ) from exc
+                    structure_warnings.append(
+                        f"UDT grouping for {base_name!r} failed ({exc}); imported as plain "
+                        "blocks."
+                    )
+                    import_plain_block(spec, logical_name=base_name)
+                    continue
 
             assert kind == "udt"
             assert base_name is not None

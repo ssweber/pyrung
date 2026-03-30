@@ -3232,6 +3232,75 @@ class TestStructuredCodegen:
         assert "Config.timeout" in code
         assert "Config[1]" not in code
 
+    def test_block_style_udt_marker_infers_singleton_structure(self, tmp_path: Path):
+        """<Base:udt> spans should infer a singleton UDT from Base_field nicknames."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        SFCExample_xCall = Int("SFCExample_xCall")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(SFCExample_xCall, SFCExample_xCall)
+
+        mapping = TagMap(
+            {Enable: x[1], SFCExample_xCall: ds[501]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="SFCExample_xCall",
+                    comment="<SFCExample:udt>",
+                    initial_value="1",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="",
+                    comment="",
+                    initial_value="",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="SFCExample_xInit",
+                    comment="</SFCExample:udt>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@udt(" in code
+        assert "class SFCExample:" in code
+        assert "copy(SFCExample.xCall, SFCExample.xCall)" in code
+        assert 'SFCExample_xCall = Int("SFCExample_xCall")' not in code
+
 
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""

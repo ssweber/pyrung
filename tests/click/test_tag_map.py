@@ -620,6 +620,63 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
     assert restored.resolve(runtime[1].On) == "C101"
 
 
+def test_from_nickname_file_udt_block_singleton_success(tmp_path):
+    path = tmp_path / "udt_block_singleton.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="SFCExample_xCall",
+            comment="<SFCExample:udt>",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="",
+            comment="",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 503): AddressRecord(
+            memory_type="DS",
+            address=503,
+            nickname="SFCExample_xInit",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 504): AddressRecord(
+            memory_type="DS",
+            address=504,
+            nickname="SFCExample_xDone",
+            comment="</SFCExample:udt>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    assert len(restored.structures) == 1
+    struct = restored.structures[0]
+    assert struct.kind == "udt"
+    assert struct.name == "SFCExample"
+    assert struct.count == 1
+    assert struct.stride is None
+    assert restored.structure_warnings == ()
+
+    runtime = cast(Any, struct.runtime)
+    assert restored.resolve(runtime.xCall) == "DS501"
+    assert restored.resolve(runtime.xInit) == "DS503"
+    assert restored.resolve(runtime.xDone) == "DS504"
+
+
 def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
     path = tmp_path / "udt_fallback.csv"
     records = {
