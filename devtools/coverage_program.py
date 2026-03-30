@@ -37,6 +37,7 @@ from pyrung import (
     blockcopy,
     calc,
     call,
+    comment,
     copy,
     count_down,
     count_up,
@@ -288,8 +289,8 @@ with Program(strict=False) as coverage_program:
 
     for label, make_cond in CONDITIONS:
         target = a.bool()
-        with Rung(*make_cond(a)) as r:
-            r.comment = f"cond__{label}"
+        comment(f"cond__{label}")
+        with Rung(*make_cond(a)):
             out(target)
 
     # ── 2. Coil instructions (out/latch/reset × target kinds) ───────
@@ -297,14 +298,14 @@ with Program(strict=False) as coverage_program:
     for func_name, func in [("out", out), ("latch", latch), ("reset", reset)]:
         for target_label, make_target in COIL_TARGETS:
             trigger = a.bool()
-            with Rung(trigger) as r:
-                r.comment = f"{func_name}__{target_label}"
+            comment(f"{func_name}__{target_label}")
+            with Rung(trigger):
                 func(make_target(a))
 
     # out with oneshot
     trigger = a.bool()
-    with Rung(trigger) as r:
-        r.comment = "out__oneshot"
+    comment("out__oneshot")
+    with Rung(trigger):
         out(a.bool(), oneshot=True)
 
     # ── 3. Copy variants ────────────────────────────────────────────
@@ -312,14 +313,14 @@ with Program(strict=False) as coverage_program:
     for label, make in COPY_VARIANTS:
         trigger = a.bool()
         src, dst = make(a)
-        with Rung(trigger) as r:
-            r.comment = f"copy__{label}"
+        comment(f"copy__{label}")
+        with Rung(trigger):
             copy(src, dst)
 
     # copy with oneshot
     trigger = a.bool()
-    with Rung(trigger) as r:
-        r.comment = "copy__oneshot"
+    comment("copy__oneshot")
+    with Rung(trigger):
         copy(a.int_(), a.int_(), oneshot=True)
 
     # ── 4. Blockcopy variants ───────────────────────────────────────
@@ -327,14 +328,14 @@ with Program(strict=False) as coverage_program:
     for label, make in BLOCKCOPY_VARIANTS:
         trigger = a.bool()
         src, dst = make(a)
-        with Rung(trigger) as r:
-            r.comment = f"blockcopy__{label}"
+        comment(f"blockcopy__{label}")
+        with Rung(trigger):
             blockcopy(src, dst)
 
     # blockcopy with oneshot
     trigger = a.bool()
-    with Rung(trigger) as r:
-        r.comment = "blockcopy__oneshot"
+    comment("blockcopy__oneshot")
+    with Rung(trigger):
         blockcopy(a.int_block(4).select(1, 4), a.int_block(4).select(1, 4), oneshot=True)
 
     # ── 5. Fill variants ────────────────────────────────────────────
@@ -342,14 +343,14 @@ with Program(strict=False) as coverage_program:
     for label, make in FILL_VARIANTS:
         trigger = a.bool()
         val, dst = make(a)
-        with Rung(trigger) as r:
-            r.comment = f"fill__{label}"
+        comment(f"fill__{label}")
+        with Rung(trigger):
             fill(val, dst)
 
     # fill with oneshot
     trigger = a.bool()
-    with Rung(trigger) as r:
-        r.comment = "fill__oneshot"
+    comment("fill__oneshot")
+    with Rung(trigger):
         fill(0, a.int_block(4).select(1, 4), oneshot=True)
 
     # ── 6. Calc variants ────────────────────────────────────────────
@@ -357,8 +358,8 @@ with Program(strict=False) as coverage_program:
     for label, make in CALC_VARIANTS:
         trigger = a.bool()
         expr, dest, os = make(a)
-        with Rung(trigger) as r:
-            r.comment = f"calc__{label}"
+        comment(f"calc__{label}")
+        with Rung(trigger):
             calc(expr, dest, oneshot=os)
 
     # ── 7. Timer variants ───────────────────────────────────────────
@@ -367,8 +368,8 @@ with Program(strict=False) as coverage_program:
         trigger = a.bool()
         kind, (done, acc), preset, rst = make(a)
         fn = on_delay if kind == "on" else off_delay
-        with Rung(trigger) as r:
-            r.comment = f"{'on' if kind == 'on' else 'off'}_delay__{label}"
+        comment(f"{'on' if kind == 'on' else 'off'}_delay__{label}")
+        with Rung(trigger):
             builder = fn(done, acc, preset=preset, unit=Tms)
             if rst is not None and isinstance(builder, OnDelayBuilder):
                 builder.reset(rst)
@@ -379,8 +380,8 @@ with Program(strict=False) as coverage_program:
         trigger = a.bool()
         kind, (done, acc), preset, dwn, rst = make(a)
         fn = count_up if kind == "up" else count_down
-        with Rung(rise(trigger)) as r:
-            r.comment = f"count_{label}"
+        comment(f"count_{label}")
+        with Rung(rise(trigger)):
             builder = fn(done, acc, preset=preset)
             if dwn is not None and isinstance(builder, CountUpBuilder):
                 builder = builder.down(dwn)
@@ -392,24 +393,24 @@ with Program(strict=False) as coverage_program:
         trigger = a.bool()
         val, src_blk = a.int_(), a.int_block(10)
         result, found = a.int_(), a.bool()
-        with Rung(trigger) as r:
-            r.comment = f"search__{label}"
+        comment(f"search__{label}")
+        with Rung(trigger):
             search(RangeComparison(src_blk.select(1, 10), op, val), result=result, found=found)
 
     # search with continuous
     trigger = a.bool()
     val, src_blk = a.int_(), a.int_block(10)
     result, found = a.int_(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "search__continuous"
+    comment("search__continuous")
+    with Rung(trigger):
         search(src_blk.select(1, 10) == val, result=result, found=found, continuous=True)
 
     # search with oneshot
     trigger = a.bool()
     val, src_blk = a.int_(), a.int_block(10)
     result, found = a.int_(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "search__oneshot"
+    comment("search__oneshot")
+    with Rung(trigger):
         search(src_blk.select(1, 10) == val, result=result, found=found, oneshot=True)
 
     # ── 10. Shift register ──────────────────────────────────────────
@@ -417,77 +418,77 @@ with Program(strict=False) as coverage_program:
     trigger = a.bool()
     clk, rst = a.bool(), a.bool()
     bits = a.bool_block(8)
-    with Rung(trigger) as r:
-        r.comment = "shift__basic"
+    comment("shift__basic")
+    with Rung(trigger):
         shift(bits.select(1, 8)).clock(clk).reset(rst)
 
     # ── 11. Pack / unpack ───────────────────────────────────────────
 
     trigger = a.bool()
     bits, dest = a.bool_block(16), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "pack_bits"
+    comment("pack_bits")
+    with Rung(trigger):
         pack_bits(bits.select(1, 16), dest)
 
     trigger = a.bool()
     words, dest = a.int_block(2), a.dint()
-    with Rung(trigger) as r:
-        r.comment = "pack_words"
+    comment("pack_words")
+    with Rung(trigger):
         pack_words(words.select(1, 2), dest)
 
     trigger = a.bool()
     chars, dest = a.char_block(4), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "pack_text"
+    comment("pack_text")
+    with Rung(trigger):
         pack_text(chars.select(1, 4), dest)
 
     trigger = a.bool()
     chars, dest = a.char_block(4), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "pack_text__allow_whitespace"
+    comment("pack_text__allow_whitespace")
+    with Rung(trigger):
         pack_text(chars.select(1, 4), dest, allow_whitespace=True)
 
     trigger = a.bool()
     src, bits = a.int_(), a.bool_block(16)
-    with Rung(trigger) as r:
-        r.comment = "unpack_to_bits"
+    comment("unpack_to_bits")
+    with Rung(trigger):
         unpack_to_bits(src, bits.select(1, 16))
 
     trigger = a.bool()
     src, words = a.dint(), a.int_block(2)
-    with Rung(trigger) as r:
-        r.comment = "unpack_to_words"
+    comment("unpack_to_words")
+    with Rung(trigger):
         unpack_to_words(src, words.select(1, 2))
 
     # oneshot variants
     trigger = a.bool()
     bits, dest = a.bool_block(16), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "pack_bits__oneshot"
+    comment("pack_bits__oneshot")
+    with Rung(trigger):
         pack_bits(bits.select(1, 16), dest, oneshot=True)
 
     trigger = a.bool()
     words, dest = a.int_block(2), a.dint()
-    with Rung(trigger) as r:
-        r.comment = "pack_words__oneshot"
+    comment("pack_words__oneshot")
+    with Rung(trigger):
         pack_words(words.select(1, 2), dest, oneshot=True)
 
     trigger = a.bool()
     chars, dest = a.char_block(4), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "pack_text__oneshot"
+    comment("pack_text__oneshot")
+    with Rung(trigger):
         pack_text(chars.select(1, 4), dest, oneshot=True)
 
     trigger = a.bool()
     src, bits = a.int_(), a.bool_block(16)
-    with Rung(trigger) as r:
-        r.comment = "unpack_to_bits__oneshot"
+    comment("unpack_to_bits__oneshot")
+    with Rung(trigger):
         unpack_to_bits(src, bits.select(1, 16), oneshot=True)
 
     trigger = a.bool()
     src, words = a.dint(), a.int_block(2)
-    with Rung(trigger) as r:
-        r.comment = "unpack_to_words__oneshot"
+    comment("unpack_to_words__oneshot")
+    with Rung(trigger):
         unpack_to_words(src, words.select(1, 2), oneshot=True)
 
     # ── 12. Drums ───────────────────────────────────────────────────
@@ -497,8 +498,8 @@ with Program(strict=False) as coverage_program:
     outs_tags = [a.bool(), a.bool()]
     evts = [a.bool(), a.bool()]
     step, flag, rst = a.int_(), a.bool(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "event_drum__basic"
+    comment("event_drum__basic")
+    with Rung(trigger):
         event_drum(
             outputs=outs_tags,
             events=evts,
@@ -513,8 +514,8 @@ with Program(strict=False) as coverage_program:
     evts = [a.bool(), a.bool()]
     step, flag = a.int_(), a.bool()
     rst, jmp = a.bool(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "event_drum__jump"
+    comment("event_drum__jump")
+    with Rung(trigger):
         event_drum(
             outputs=outs_tags,
             events=evts,
@@ -529,8 +530,8 @@ with Program(strict=False) as coverage_program:
     evts = [a.bool(), a.bool()]
     step, flag = a.int_(), a.bool()
     rst, jog_c = a.bool(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "event_drum__jog"
+    comment("event_drum__jog")
+    with Rung(trigger):
         event_drum(
             outputs=outs_tags,
             events=evts,
@@ -544,8 +545,8 @@ with Program(strict=False) as coverage_program:
     outs_tags = [a.bool(), a.bool()]
     step, flag, rst = a.int_(), a.bool(), a.bool()
     _, tmr_acc = a.timer()  # accumulator must be on TD bank
-    with Rung(trigger) as r:
-        r.comment = "time_drum__basic"
+    comment("time_drum__basic")
+    with Rung(trigger):
         time_drum(
             outputs=outs_tags,
             presets=[1000, 2000],
@@ -562,8 +563,8 @@ with Program(strict=False) as coverage_program:
     step, flag = a.int_(), a.bool()
     _, tmr_acc = a.timer()  # accumulator must be on TD bank
     rst, jmp = a.bool(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "time_drum__jump"
+    comment("time_drum__jump")
+    with Rung(trigger):
         time_drum(
             outputs=outs_tags,
             presets=[1000, 2000],
@@ -580,8 +581,8 @@ with Program(strict=False) as coverage_program:
     step, flag = a.int_(), a.bool()
     _, tmr_acc = a.timer()  # accumulator must be on TD bank
     rst, jog_c = a.bool(), a.bool()
-    with Rung(trigger) as r:
-        r.comment = "time_drum__jog"
+    comment("time_drum__jog")
+    with Rung(trigger):
         time_drum(
             outputs=outs_tags,
             presets=[1000, 2000],
@@ -598,8 +599,8 @@ with Program(strict=False) as coverage_program:
         trigger = a.bool()
         cnt, os = make(a)
         src, dst = a.int_(), a.int_()
-        with Rung(trigger) as r:
-            r.comment = f"forloop__{label}"
+        comment(f"forloop__{label}")
+        with Rung(trigger):
             with forloop(cnt, oneshot=os):
                 copy(src, dst)
 
@@ -608,8 +609,8 @@ with Program(strict=False) as coverage_program:
     trigger = a.bool()
     src = a.int_block(4)
     sending, success, error, exc = a.bool(), a.bool(), a.bool(), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "send__basic"
+    comment("send__basic")
+    with Rung(trigger):
         send(
             target=ModbusTcpTarget(name="plc2", ip="192.168.1.10"),
             remote_start="DS1",
@@ -623,8 +624,8 @@ with Program(strict=False) as coverage_program:
     trigger = a.bool()
     dst = a.int_block(4)
     receiving, success, error, exc = a.bool(), a.bool(), a.bool(), a.int_()
-    with Rung(trigger) as r:
-        r.comment = "receive__basic"
+    comment("receive__basic")
+    with Rung(trigger):
         receive(
             target=ModbusTcpTarget(name="plc2", ip="192.168.1.10"),
             remote_start="DS1",
@@ -638,19 +639,19 @@ with Program(strict=False) as coverage_program:
     # ── 16. Subroutine call / return ─────────────────────────────────
 
     trigger = a.bool()
-    with Rung(trigger) as r:
-        r.comment = "call__basic"
+    comment("call__basic")
+    with Rung(trigger):
         call("coverage_sub")
 
     with subroutine("coverage_sub"):
         trigger = a.bool()
-        with Rung(trigger) as r:
-            r.comment = "return_early__basic"
+        comment("return_early__basic")
+        with Rung(trigger):
             return_early()
 
         target = a.bool()
-        with Rung() as r:
-            r.comment = "sub__out"
+        comment("sub__out")
+        with Rung():
             out(target)
 
 

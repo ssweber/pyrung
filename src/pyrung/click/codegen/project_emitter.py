@@ -397,6 +397,8 @@ def _emit_logic_imports(
 
     if refs.has_branch:
         parts.append("branch")
+    if refs.has_comment:
+        parts.append("comment")
     if refs.has_forloop:
         parts.append("forloop")
 

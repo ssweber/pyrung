@@ -40,6 +40,7 @@ from .context import (
     Subroutine,
     SubroutineFunc,
     branch,
+    comment,
     forloop,
     subroutine,
 )
@@ -79,6 +80,7 @@ __all__ = [
     "SubroutineFunc",
     # Decorators & Factory Functions
     "branch",
+    "comment",
     "forloop",
     "program",
     "subroutine",

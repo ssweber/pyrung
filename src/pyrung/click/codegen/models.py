@@ -158,6 +158,7 @@ class _OperandCollection:
     has_any_of: bool = False
     has_all_of: bool = False
     has_branch: bool = False
+    has_comment: bool = False
     has_subroutine: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
@@ -188,6 +189,7 @@ class _FileRefs:
     has_any_of: bool = False
     has_all_of: bool = False
     has_branch: bool = False
+    has_comment: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False

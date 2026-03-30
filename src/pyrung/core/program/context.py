@@ -106,6 +106,7 @@ class Program:
         self.rungs: list[RungLogic] = []
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
+        self._pending_comment: str | None = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -239,6 +240,12 @@ class Rung:
             context_name="Rung",
         )
 
+        # Consume any pending comment() call.
+        prog = Program.current()
+        if prog is not None and prog._pending_comment is not None:
+            self._rung.comment = prog._pending_comment
+            prog._pending_comment = None
+
         # Direct Tag conditions are converted internally and would otherwise
         # have no source metadata.
         for idx, condition in enumerate(self._rung._conditions):
@@ -261,30 +268,13 @@ class Rung:
         Returns:
             self, for chaining: ``with Rung(B).continued(): ...``
         """
-        self._rung._use_prior_snapshot = True
-        return self
-
-    _MAX_COMMENT_LENGTH = 1400
-
-    @property
-    def comment(self) -> str | None:
-        """Rung comment (max 1400 chars)."""
-        return self._rung.comment
-
-    @comment.setter
-    def comment(self, value: str | None) -> None:
-        if self._rung._use_prior_snapshot and value is not None:
+        if self._rung.comment is not None:
             raise RuntimeError(
                 "A continued() rung cannot have its own comment. "
                 "Set the comment on the original rung instead."
             )
-        if value is not None:
-            value = textwrap.dedent(value).strip()
-            if len(value) > self._MAX_COMMENT_LENGTH:
-                raise ValueError(
-                    f"Rung comment is {len(value)} chars, max is {self._MAX_COMMENT_LENGTH}."
-                )
-        self._rung.comment = value
+        self._rung._use_prior_snapshot = True
+        return self
 
     def _set_pending_required_builder(self, builder: object, descriptor: str) -> None:
         pending = self._pending_required_builder
@@ -643,6 +633,32 @@ def branch(*conditions: ConditionTerm) -> Branch:
     """
     source_file, source_line = _capture_source(depth=2)
     return Branch(*conditions, source_file=source_file, source_line=source_line)
+
+
+_MAX_COMMENT_LENGTH = 1400
+
+
+def comment(text: str) -> None:
+    """Attach a comment to the next rung.
+
+    The comment is consumed by the immediately following ``Rung()`` constructor.
+    Must be called inside a ``Program`` context.
+
+    Example::
+
+        comment("UnitMode Change")
+        with Rung(C_UnitModeChgRequest):
+            copy(1, C_UnitModeChgRequestBool, oneshot=True)
+    """
+    prog = Program.current()
+    if prog is None:
+        raise RuntimeError("comment() must be used inside a Program context")
+    if prog._pending_comment is not None:
+        raise RuntimeError("comment() already set — missing a Rung after the previous comment()?")
+    text = textwrap.dedent(text).strip()
+    if len(text) > _MAX_COMMENT_LENGTH:
+        raise ValueError(f"Rung comment is {len(text)} chars, max is {_MAX_COMMENT_LENGTH}.")
+    prog._pending_comment = text
 
 
 RungContext = Rung

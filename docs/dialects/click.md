@@ -302,8 +302,8 @@ To convert ladder CSV back into pyrung Python source, see [Click Python Codegen]
 Empty rungs survive the round-trip. A `with Rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
 
 ```python
-with Rung() as r:
-    r.comment = "--- Motor Control Section ---"
+comment("--- Motor Control Section ---")
+with Rung():
     pass  # becomes NOP in Click ladder CSV
 ```
 
@@ -312,8 +312,8 @@ For Click programs that want to be explicit, `pyrung.click` also provides `nop()
 ```python
 from pyrung.click import nop
 
-with Rung() as r:
-    r.comment = "Section header"
+comment("Section header")
+with Rung():
     nop()  # one per rung, must be the sole instruction
 ```
 

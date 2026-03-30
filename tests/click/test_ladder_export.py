@@ -38,6 +38,7 @@ from pyrung.core.program import (
     branch,
     calc,
     call,
+    comment,
     copy,
     count_down,
     count_up,
@@ -997,8 +998,8 @@ def test_comment_single_line():
     B = Bool("B")
 
     with Program() as logic:
-        with Rung(A) as r:
-            r.comment = "Turn on B when A is true."
+        comment("Turn on B when A is true.")
+        with Rung(A):
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
@@ -1017,8 +1018,8 @@ def test_comment_multi_line():
     B = Bool("B")
 
     with Program() as logic:
-        with Rung(A) as r:
-            r.comment = "Line one.\nLine two."
+        comment("Line one.\nLine two.")
+        with Rung(A):
             out(B)
 
     mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
@@ -1058,8 +1059,8 @@ def test_comment_with_branches():
     Y2 = Bool("Y2")
 
     with Program() as logic:
-        with Rung(A) as r:
-            r.comment = "Branching rung."
+        comment("Branching rung.")
+        with Rung(A):
             with branch(Mode):
                 out(Y1)
             with branch(~Mode):
@@ -1078,8 +1079,8 @@ def test_comment_not_emitted_for_empty_branches():
     Mode = Bool("Mode")
 
     with Program() as logic:
-        with Rung(A) as r:
-            r.comment = "No rows should be emitted."
+        comment("No rows should be emitted.")
+        with Rung(A):
             with branch(Mode):
                 pass
 

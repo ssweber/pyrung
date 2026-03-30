@@ -593,83 +593,78 @@ class TestRungComment:
         assert logic.rungs[0].comment is None
 
     def test_comment_set_and_get(self):
-        from pyrung.core.program import out
+        from pyrung.core.program import comment, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button) as r:
-                r.comment = "Initialize the light system."
+            comment("Initialize the light system.")
+            with Rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "Initialize the light system."
 
     def test_comment_strips_whitespace(self):
-        from pyrung.core.program import out
+        from pyrung.core.program import comment, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button) as r:
-                r.comment = "  padded text  "
+            comment("  padded text  ")
+            with Rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "padded text"
 
     def test_comment_dedents_triple_quoted(self):
-        from pyrung.core.program import out
+        from pyrung.core.program import comment, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button) as r:
-                r.comment = """
+            comment("""
                     Line one.
                     Line two.
-                """
+                """)
+            with Rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment == "Line one.\nLine two."
 
     def test_comment_exceeding_max_length_raises(self):
-        from pyrung.core.program import out
-
-        Button = Bool("Button")
-        Light = Bool("Light")
+        from pyrung.core.program import comment
 
         with Program():
-            with Rung(Button) as r:
-                with pytest.raises(ValueError, match="1400"):
-                    r.comment = "x" * 1401
-                out(Light)
+            with pytest.raises(ValueError, match="1400"):
+                comment("x" * 1401)
 
     def test_comment_at_max_length_is_accepted(self):
-        from pyrung.core.program import out
+        from pyrung.core.program import comment, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
         with Program() as logic:
-            with Rung(Button) as r:
-                r.comment = "x" * 1400
+            comment("x" * 1400)
+            with Rung(Button):
                 out(Light)
 
         assert logic.rungs[0].comment is not None
         assert len(logic.rungs[0].comment) == 1400
 
-    def test_comment_set_to_none(self):
-        from pyrung.core.program import out
+    def test_comment_double_call_raises(self):
+        from pyrung.core.program import comment
 
-        Button = Bool("Button")
-        Light = Bool("Light")
+        with Program():
+            comment("first")
+            with pytest.raises(RuntimeError, match="already set"):
+                comment("second")
 
-        with Program() as logic:
-            with Rung(Button) as r:
-                r.comment = "something"
-                r.comment = None
-                out(Light)
+    def test_comment_outside_program_raises(self):
+        from pyrung.core.program import comment
 
-        assert logic.rungs[0].comment is None
+        with pytest.raises(RuntimeError, match="Program context"):
+            comment("orphan")

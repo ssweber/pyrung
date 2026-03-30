@@ -209,6 +209,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
     if collection.has_branch:
         core_imports.append("branch")
+    if collection.has_comment:
+        core_imports.append("comment")
     if collection.has_forloop:
         core_imports.append("forloop")
     if collection.has_subroutine:
@@ -506,16 +508,15 @@ def _emit_rung_header(
     conditions_str: str,
     indent: int,
 ) -> None:
-    """Emit 'with Rung(...):' or 'with Rung(...) as r:' + comment lines."""
+    """Emit comment() call (if any) followed by 'with Rung(...):' line."""
     pad = "    " * indent
-    as_clause = " as r" if rung.comment else ""
+    if rung.comment:
+        _emit_comment(lines, rung.comment, indent)
     continued = ".continued()" if rung.is_continued else ""
     if conditions_str:
-        lines.append(f"{pad}with Rung({conditions_str}){continued}{as_clause}:")
+        lines.append(f"{pad}with Rung({conditions_str}){continued}:")
     else:
-        lines.append(f"{pad}with Rung(){continued}{as_clause}:")
-    if rung.comment:
-        _emit_comment(lines, rung.comment, indent + 1)
+        lines.append(f"{pad}with Rung(){continued}:")
 
 
 def _emit_rung(
@@ -800,19 +801,19 @@ def _render_pin(
 
 
 def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
-    """Emit a rung comment assignment."""
+    """Emit a comment() call above the rung."""
     pad = "    " * indent
     if "\n" in comment:
         # Multi-line → triple-quoted string
         escaped = comment.replace("\\", "\\\\")
         parts = escaped.split("\n")
-        lines.append(f'{pad}r.comment = """\\')
+        lines.append(f'{pad}comment("""\\')
         for part in parts[:-1]:
             lines.append(part)
-        lines.append(f'{parts[-1]}"""')
+        lines.append(f'{parts[-1]}""")')
     else:
         escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{pad}r.comment = "{escaped}"')
+        lines.append(f'{pad}comment("{escaped}")')
 
 
 def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:

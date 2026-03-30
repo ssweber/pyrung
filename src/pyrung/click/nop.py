@@ -8,8 +8,8 @@ Usage::
 
     from pyrung.click import nop
 
-    with Rung() as r:
-        r.comment = "Section header comment"
+    comment("Section header comment")
+    with Rung():
         nop()
 """
 
@@ -52,8 +52,8 @@ def nop() -> None:
 
         from pyrung.click import nop
 
-        with Rung() as r:
-            r.comment = "Section header"
+        comment("Section header")
+        with Rung():
             nop()
     """
     ctx = _require_rung_context("nop")

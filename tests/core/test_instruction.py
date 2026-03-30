@@ -1987,11 +1987,11 @@ class TestNopInstruction:
     def test_nop_dsl_in_rung(self):
         """nop() works in a rung context."""
         from pyrung.click import nop
-        from pyrung.core import Program, Rung
+        from pyrung.core import Program, Rung, comment
 
         with Program() as logic:
-            with Rung() as r:
-                r.comment = "Header"
+            comment("Header")
+            with Rung():
                 nop()
 
         assert len(logic.rungs) == 1

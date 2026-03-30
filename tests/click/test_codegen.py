@@ -41,6 +41,7 @@ from pyrung.core import (
 from pyrung.core.program import (
     branch,
     calc,
+    comment,
     copy,
     count_up,
     event_drum,
@@ -322,8 +323,8 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Start motor"
+            comment("Start motor")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -339,8 +340,8 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Line 1\nLine 2"
+            comment("Line 1\nLine 2")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -989,8 +990,8 @@ class TestRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Start motor"
+            comment("Start motor")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -1004,8 +1005,8 @@ class TestRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Line 1\nLine 2"
+            comment("Line 1\nLine 2")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -2613,8 +2614,8 @@ class TestNop:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung() as r:
-                r.comment = "Section header"
+            comment("Section header")
+            with Rung():
                 pass
             with Rung(A):
                 out(Y)
@@ -2635,8 +2636,8 @@ class TestNop:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung() as r:
-                r.comment = "Explicit NOP"
+            comment("Explicit NOP")
+            with Rung():
                 nop()
             with Rung(A):
                 out(Y)

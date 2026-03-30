@@ -95,6 +95,8 @@ def _collect_operands(
         if _tree_has_all_of(rung.condition_tree):
             collection.has_all_of = True
 
+        if rung.comment:
+            collection.has_comment = True
         if rung.is_forloop_start:
             collection.has_forloop = True
 
@@ -455,6 +457,8 @@ def _scan_file_refs(
             refs.has_any_of = True
         if _tree_has_all_of(rung.condition_tree):
             refs.has_all_of = True
+        if rung.comment:
+            refs.has_comment = True
         if rung.is_forloop_start:
             refs.has_forloop = True
 

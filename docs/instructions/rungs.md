@@ -4,22 +4,22 @@ For an introduction to the DSL vocabulary, see [Core Concepts](../getting-starte
 
 ## Rung comments
 
-Attach a comment to a rung using the `as` variable:
+Use `comment()` before a rung to attach a comment:
 
 ```python
-with Rung(Button) as r:
-    r.comment = "Initialize the light system."
+comment("Initialize the light system.")
+with Rung(Button):
     out(Light)
 ```
 
 Multi-line comments use triple-quoted strings (automatically dedented and stripped):
 
 ```python
-with Rung(Button) as r:
-    r.comment = """
-        This rung controls the main light.
-        It activates when Button is pressed.
-    """
+comment("""
+    This rung controls the main light.
+    It activates when Button is pressed.
+""")
+with Rung(Button):
     out(Light)
 ```
 
