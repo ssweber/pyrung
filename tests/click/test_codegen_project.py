@@ -283,6 +283,83 @@ class TestProjectBasic:
         assert "C1004_to_C1006" not in files["tags.py"]
         assert "C1004_to_C1006" not in files["main.py"]
 
+    def test_plain_block_project_lifts_uniform_retentive_to_block_default(self, tmp_path: Path):
+        """Uniform plain-block retentive policy should lift to the Block constructor."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1001, 1003)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv"
+        bundle.write(csv_dir)
+
+        nick_path = tmp_path / "nicknames.csv"
+        pyclickplc.write_csv(
+            nick_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="AlarmCoil_PLC",
+                    comment="<AlarmCoil:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1002): AddressRecord(
+                    memory_type="C",
+                    address=1002,
+                    nickname="AlarmCoil_LostData",
+                    comment="",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1003): AddressRecord(
+                    memory_type="C",
+                    address=1003,
+                    nickname="AlarmCoil_Watchdog",
+                    comment="</AlarmCoil:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+
+        assert (
+            'AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 3, retentive=True)' in files["tags.py"]
+        )
+        assert "AlarmCoil.configure_slot(1, name='AlarmCoil_PLC')" in files["tags.py"]
+        assert "AlarmCoil.configure_slot(2, name='AlarmCoil_LostData')" in files["tags.py"]
+        assert "AlarmCoil.configure_slot(3, name='AlarmCoil_Watchdog')" in files["tags.py"]
+        assert (
+            "retentive=True"
+            not in files["tags.py"].split(
+                'AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 3, retentive=True)', 1
+            )[1]
+        )
+
 
 class TestProjectWithSubroutines:
     """Project generation with subroutines."""

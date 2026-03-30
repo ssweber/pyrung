@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -10,7 +11,6 @@ from pyrung.click.codegen.constants import (
     _FUNC_RE,
     _OPERAND_PREFIXES,
 )
-from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
@@ -288,15 +288,16 @@ def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollect
 
 def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
     """Emit one first-class plain named block."""
-    lines.append(
-        f'{decl.var_name} = Block("{decl.name}", TagType.{decl.tag_type}, {decl.start}, {decl.end})'
-    )
+    block_args = [f'"{decl.name}"', f"TagType.{decl.tag_type}", str(decl.start), str(decl.end)]
+    block_retentive = bool(decl.slots) and all(slot.retentive for slot in decl.slots.values())
+    if block_retentive:
+        block_args.append("retentive=True")
+    lines.append(f"{decl.var_name} = Block({', '.join(block_args)})")
     for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
-        if slot.name_overridden:
-            lines.append(f"{decl.var_name}.rename_slot({slot.index}, {slot.tag_name!r})")
-
         kwargs: list[str] = []
-        if slot.retentive_overridden:
+        if slot.name_overridden:
+            kwargs.append(f"name={slot.tag_name!r}")
+        if slot.retentive_overridden and slot.retentive != block_retentive:
             kwargs.append(f"retentive={slot.retentive}")
         if slot.default_overridden:
             kwargs.append(f"default={_format_literal(slot.default)}")

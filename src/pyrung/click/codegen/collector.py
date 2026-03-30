@@ -409,7 +409,9 @@ def _enrich_with_ownership(
         start_owner = structured_map.owner_of(
             format_address_display(range_decl.prefix, range_decl.start)
         )
-        end_owner = structured_map.owner_of(format_address_display(range_decl.prefix, range_decl.end))
+        end_owner = structured_map.owner_of(
+            format_address_display(range_decl.prefix, range_decl.end)
+        )
         if start_owner is None or end_owner is None:
             continue
         if start_owner.structure_type == "block" and end_owner.structure_type == "block":
@@ -430,7 +432,10 @@ def _enrich_with_ownership(
             )
             continue
 
-        if start_owner.structure_type == "named_array" and end_owner.structure_type == "named_array":
+        if (
+            start_owner.structure_type == "named_array"
+            and end_owner.structure_type == "named_array"
+        ):
             if start_owner.structure_name != end_owner.structure_name:
                 continue
             decl = _ensure_structure_decl(start_owner.structure_name)
@@ -449,8 +454,10 @@ def _enrich_with_ownership(
             expected_len = (end_instance - start_instance + 1) * len(decl.fields)
             if range_decl.end - range_decl.start + 1 != expected_len:
                 continue
-            args = f"{start_instance}" if start_instance == end_instance else (
-                f"{start_instance}, {end_instance}"
+            args = (
+                f"{start_instance}"
+                if start_instance == end_instance
+                else (f"{start_instance}, {end_instance}")
             )
             collection.semantic_ranges[range_str] = _SemanticRender(
                 expr=f"{start_owner.structure_name}.select_instances({args})",
@@ -580,9 +587,9 @@ def _register_operands_from_text(
     nicknames: dict[str, str] | None,
 ) -> None:
     """Find and register all operands in a text fragment."""
-    used_var_names = {
-        decl.var_name for decl in collection.tags.values()
-    } | {decl.var_name for decl in collection.ranges.values()}
+    used_var_names = {decl.var_name for decl in collection.tags.values()} | {
+        decl.var_name for decl in collection.ranges.values()
+    }
 
     # Check for ranges first — collect range spans to suppress individual tags
     range_spans: set[str] = set()
@@ -599,7 +606,9 @@ def _register_operands_from_text(
                     _, tag_type, block_var, _ = parsed
                     # IEC type constants for Block declaration
                     iec_type = tag_type.upper()
-                    var_name = _make_safe_identifier(range_str.replace("..", "_to_"), used_names=used_var_names)
+                    var_name = _make_safe_identifier(
+                        range_str.replace("..", "_to_"), used_names=used_var_names
+                    )
                     used_var_names.add(var_name)
                     collection.ranges[range_str] = _RangeDecl(
                         var_name=var_name,
@@ -801,6 +810,7 @@ def _ref_operands_in_text(
     refs: _FileRefs,
 ) -> None:
     """Record which tags/ranges/structures from *collection* appear in *text*."""
+
     def _record_semantic_ref(render: _SemanticRender) -> None:
         if render.import_kind == "tag":
             refs.tag_var_names.add(render.import_name)

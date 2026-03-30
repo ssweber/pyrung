@@ -177,6 +177,23 @@ class TestBlock:
         assert restored.name == "DS4"
         assert restored.name_overridden is False
 
+    def test_configure_slot_accepts_name_override(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.configure_slot(4, name="ManualName", retentive=True, default=999, comment="Recipe")
+
+        configured = DS.slot_config(4)
+        assert configured.name == "ManualName"
+        assert configured.name_overridden is True
+        assert configured.retentive is True
+        assert configured.default == 999
+        assert configured.comment == "Recipe"
+
+        tag = DS[4]
+        assert tag.name == "ManualName"
+        assert tag.retentive is True
+        assert tag.default == 999
+        assert tag.comment == "Recipe"
+
     def test_configure_range_applies_to_sparse_addresses_only(self):
         sparse = Block("X", TagType.BOOL, 1, 6, valid_ranges=((1, 2), (5, 6)))
         sparse.configure_range(1, 6, retentive=True, default=True)

@@ -169,9 +169,7 @@ class _SelectedTagRange(BlockRange):
     def __repr__(self) -> str:
         if self._instance_start == self._instance_end:
             return f"{self._label}.select_instances({self._instance_start})"
-        return (
-            f"{self._label}.select_instances({self._instance_start}, {self._instance_end})"
-        )
+        return f"{self._label}.select_instances({self._instance_start}, {self._instance_end})"
 
 
 class _StructRuntime:

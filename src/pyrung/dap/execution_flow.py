@@ -45,10 +45,12 @@ def on_step_out(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
             origin_depth = origin_step.depth
             origin_stack_len = len(origin_step.call_stack)
             adapter._step_until(
-                lambda step: step is None
-                or len(step.call_stack) < origin_stack_len
-                or step.depth < origin_depth
-                or adapter._current_ctx is not origin_ctx,
+                lambda step: (
+                    step is None
+                    or len(step.call_stack) < origin_stack_len
+                    or step.depth < origin_depth
+                    or adapter._current_ctx is not origin_ctx
+                ),
             )
     return {}, [("stopped", adapter._stopped_body("step"))]
 

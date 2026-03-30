@@ -258,6 +258,7 @@ class Block:
         self,
         addr: int,
         *,
+        name: object = UNSET,
         retentive: bool | None = None,
         default: object = UNSET,
         comment: object = UNSET,
@@ -266,6 +267,10 @@ class Block:
         self._validate_address(addr)
         self._assert_not_materialized(addr, action="configure slot policy for")
 
+        if name is not UNSET:
+            if not isinstance(name, str):
+                raise TypeError(f"name must be a string, got {type(name).__name__}.")
+            self._slot_name_overrides[addr] = name
         if retentive is not None:
             self._slot_retentive_overrides[addr] = bool(retentive)
         if default is not UNSET:

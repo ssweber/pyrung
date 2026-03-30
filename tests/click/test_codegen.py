@@ -2731,7 +2731,7 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in code
-        assert "CmdTagBits.rename_slot(4, 'Cmd_Mode_Production')" in code
+        assert "CmdTagBits.configure_slot(4, name='Cmd_Mode_Production')" in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(CmdTagBits.select(4, 6))" in code

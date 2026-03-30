@@ -459,11 +459,7 @@ def _make_safe_identifier(
         safe = f"_{safe}"
 
     is_softkeyword = getattr(keyword, "issoftkeyword", lambda _: False)
-    if (
-        keyword.iskeyword(safe)
-        or is_softkeyword(safe)
-        or safe in _CODEGEN_RESERVED_IDENTIFIERS
-    ):
+    if keyword.iskeyword(safe) or is_softkeyword(safe) or safe in _CODEGEN_RESERVED_IDENTIFIERS:
         safe = f"_{safe}"
 
     if used_names is None:

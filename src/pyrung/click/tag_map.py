@@ -802,8 +802,7 @@ class TagMap:
                 field = match.group("field")
                 if field in seen_fields:
                     raise ValueError(
-                        f"Block-style UDT {base_name!r} has duplicate field {field!r} at "
-                        f"{display}."
+                        f"Block-style UDT {base_name!r} has duplicate field {field!r} at {display}."
                     )
                 seen_fields.add(field)
                 inferred_fields.append((field, row))
@@ -817,8 +816,7 @@ class TagMap:
                 )
 
             runtime_annotations = {
-                field: _tag_type_for_memory_type(spec.memory_type)
-                for field, _ in inferred_fields
+                field: _tag_type_for_memory_type(spec.memory_type) for field, _ in inferred_fields
             }
             runtime_type = cast(
                 type[Any],
@@ -1046,8 +1044,7 @@ class TagMap:
                             f"UDT grouping failed for base {base_name!r}: {exc}."
                         ) from exc
                     structure_warnings.append(
-                        f"UDT grouping for {base_name!r} failed ({exc}); imported as plain "
-                        "blocks."
+                        f"UDT grouping for {base_name!r} failed ({exc}); imported as plain blocks."
                     )
                     import_plain_block(spec, logical_name=base_name)
                     continue
