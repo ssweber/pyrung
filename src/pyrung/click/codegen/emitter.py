@@ -407,10 +407,14 @@ def _emit_rung_sequence(
         return
 
     i = 0
+    first = True
     while i < len(rungs):
         rung = rungs[i]
 
         if rung.is_forloop_start:
+            if not first:
+                lines.append("")
+            first = False
             _emit_forloop(
                 lines,
                 rungs,
@@ -433,6 +437,9 @@ def _emit_rung_sequence(
             i += 1
             continue
 
+        if not first:
+            lines.append("")
+        first = False
         _emit_rung(
             lines,
             rung,
