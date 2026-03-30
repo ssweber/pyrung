@@ -161,8 +161,11 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
         _emit_tag_declarations(lines, collection, suppress_comments=True)
         lines.append("")
 
-    # Range declarations
-    if collection.ranges:
+    has_flat_ranges = any(
+        decl.operand_str not in collection.structure_owned_ranges
+        for decl in collection.ranges.values()
+    )
+    if has_flat_ranges:
         _emit_range_declarations(lines, collection)
         lines.append("")
 
@@ -183,7 +186,11 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     core: list[str] = []
 
     # Block/TagType if ranges
-    if collection.ranges:
+    has_flat_ranges = any(
+        decl.operand_str not in collection.structure_owned_ranges
+        for decl in collection.ranges.values()
+    )
+    if has_flat_ranges:
         core.append("Block")
         core.append("TagType")
 

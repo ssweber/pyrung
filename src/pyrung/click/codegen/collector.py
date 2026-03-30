@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 
+from pyclickplc.addresses import format_address_display
+
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -26,7 +28,11 @@ from pyrung.click.codegen.models import (
     _StructureDecl,
     _TagDecl,
 )
-from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
+from pyrung.click.codegen.utils import (
+    _make_safe_identifier,
+    _parse_operand_prefix,
+    _strip_quoted_strings,
+)
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
 if TYPE_CHECKING:
@@ -135,35 +141,57 @@ def _enrich_with_structures(
     """Mark structure-owned operands and build _StructureDecl entries."""
 
     seen_structures: dict[str, _StructureDecl] = {}
+    _TAG_TYPE_MAP = {
+        "BOOL": "Bool",
+        "INT": "Int",
+        "DINT": "Dint",
+        "REAL": "Real",
+        "WORD": "Word",
+        "CHAR": "Char",
+    }
+    _MEM_TO_BLOCK = {
+        "X": "x",
+        "Y": "y",
+        "C": "c",
+        "DS": "ds",
+        "DD": "dd",
+        "DH": "dh",
+        "DF": "df",
+        "T": "t",
+        "TD": "td",
+        "CT": "ct",
+        "CTD": "ctd",
+        "SC": "sc",
+        "SD": "sd",
+        "TXT": "txt",
+        "XD": "xd",
+        "YD": "yd",
+    }
 
-    for operand in list(collection.tags):
-        owner = structured_map.owner_of(operand)
-        if owner is None:
-            continue
-        if owner.structure_type not in ("named_array", "udt"):
-            continue
+    from pyclickplc.addresses import parse_address
 
-        collection.structure_owned_operands.add(operand)
+    def _resolve_hw_tag(slot_tag: Any) -> Any:
+        """Resolve a logical slot to its hardware tag."""
+        hw = structured_map._block_slot_forward_by_name.get(slot_tag.name)
+        if hw is None:
+            hw = structured_map._block_slot_forward_by_id.get(id(slot_tag))
+        if hw is None:
+            tag_entry = structured_map._tag_forward.get(slot_tag.name)
+            if tag_entry is not None:
+                hw = tag_entry.hardware
+        return hw
 
-        if owner.structure_name in seen_structures:
-            continue
+    def _ensure_structure_decl(structure_name: str) -> _StructureDecl | None:
+        existing = seen_structures.get(structure_name)
+        if existing is not None:
+            return existing
 
-        # Build _StructureDecl from StructuredImport metadata
-        si = structured_map.structure_by_name(owner.structure_name)
+        si = structured_map.structure_by_name(structure_name)
         if si is None:
-            continue
+            return None
 
         runtime = cast(Any, si.runtime)
         field_names = runtime.field_names
-
-        _TAG_TYPE_MAP = {
-            "BOOL": "Bool",
-            "INT": "Int",
-            "DINT": "Dint",
-            "REAL": "Real",
-            "WORD": "Word",
-            "CHAR": "Char",
-        }
 
         fields: list[tuple[str, str, object]] = []
         field_retentive: dict[str, bool] = {}
@@ -174,49 +202,14 @@ def _enrich_with_structures(
             fields.append((fn, type_name, default))
             field_retentive[fn] = block.slot_config(1).retentive
 
-        # Determine base_type for named_array (all fields share same type)
         base_type: str | None = None
         if si.kind == "named_array":
             base_type = _TAG_TYPE_MAP.get(runtime.type.name, runtime.type.name)
 
-        # Determine hw_block_var and hw address range
         hw_block_var = ""
         hw_start = 0
         hw_end = 0
 
-        def _resolve_hw_tag(slot_tag: Any) -> Any:
-            """Resolve a logical slot to its hardware tag."""
-            hw = structured_map._block_slot_forward_by_name.get(slot_tag.name)
-            if hw is None:
-                hw = structured_map._block_slot_forward_by_id.get(id(slot_tag))
-            if hw is None:
-                tag_entry = structured_map._tag_forward.get(slot_tag.name)
-                if tag_entry is not None:
-                    hw = tag_entry.hardware
-            return hw
-
-        _MEM_TO_BLOCK = {
-            "X": "x",
-            "Y": "y",
-            "C": "c",
-            "DS": "ds",
-            "DD": "dd",
-            "DH": "dh",
-            "DF": "df",
-            "T": "t",
-            "TD": "td",
-            "CT": "ct",
-            "CTD": "ctd",
-            "SC": "sc",
-            "SD": "sd",
-            "TXT": "txt",
-            "XD": "xd",
-            "YD": "yd",
-        }
-
-        from pyclickplc.addresses import parse_address
-
-        # Build per-field hardware info
         per_field_hw: dict[str, _FieldHw] = {}
         for fn in field_names:
             fblock = runtime._blocks[fn]
@@ -229,7 +222,6 @@ def _enrich_with_structures(
                 per_field_hw[fn] = _FieldHw(block_var=bvar, start=fstart, end=fend)
                 collection.used_blocks.add(bvar)
 
-        # For named_array, use overall span; for udt, use per-field
         first_field_block = runtime._blocks[field_names[0]]
         first_slot = first_field_block[1]
         hw_tag = _resolve_hw_tag(first_slot)
@@ -260,13 +252,47 @@ def _enrich_with_structures(
         seen_structures[si.name] = decl
         collection.structures.append(decl)
 
-        # Ensure types from structure fields are imported
         if si.kind == "udt":
             for _, type_name, _ in fields:
                 collection.used_types.add(type_name)
-        # Ensure hw block var is in used_blocks
         if hw_block_var:
             collection.used_blocks.add(hw_block_var)
+
+        return decl
+
+    for operand in list(collection.tags):
+        owner = structured_map.owner_of(operand)
+        if owner is None:
+            continue
+        if owner.structure_type not in ("named_array", "udt"):
+            continue
+
+        collection.structure_owned_operands.add(operand)
+        _ensure_structure_decl(owner.structure_name)
+
+    for range_str, range_decl in collection.ranges.items():
+        start_owner = structured_map.owner_of(
+            format_address_display(range_decl.prefix, range_decl.start)
+        )
+        end_owner = structured_map.owner_of(format_address_display(range_decl.prefix, range_decl.end))
+        if start_owner is None or end_owner is None:
+            continue
+        if start_owner.structure_type != "udt" or end_owner.structure_type != "udt":
+            continue
+        if start_owner.structure_name != end_owner.structure_name:
+            continue
+        if start_owner.field != end_owner.field:
+            continue
+        if start_owner.instance is None or end_owner.instance is None:
+            continue
+        if start_owner.instance > end_owner.instance:
+            continue
+
+        _ensure_structure_decl(start_owner.structure_name)
+        collection.structure_owned_ranges[range_str] = (
+            f"{start_owner.structure_name}.{start_owner.field}.select("
+            f"{start_owner.instance}, {end_owner.instance})"
+        )
 
 
 def _scan_token_for_operands(
@@ -368,6 +394,10 @@ def _register_operands_from_text(
     nicknames: dict[str, str] | None,
 ) -> None:
     """Find and register all operands in a text fragment."""
+    used_var_names = {
+        decl.var_name for decl in collection.tags.values()
+    } | {decl.var_name for decl in collection.ranges.values()}
+
     # Check for ranges first — collect range spans to suppress individual tags
     range_spans: set[str] = set()
     for range_match in _RANGE_RE.finditer(text):
@@ -383,8 +413,10 @@ def _register_operands_from_text(
                     _, tag_type, block_var, _ = parsed
                     # IEC type constants for Block declaration
                     iec_type = tag_type.upper()
+                    var_name = _make_safe_identifier(range_str.replace("..", "_to_"), used_names=used_var_names)
+                    used_var_names.add(var_name)
                     collection.ranges[range_str] = _RangeDecl(
-                        var_name=range_str.replace("..", "_to_"),
+                        var_name=var_name,
                         block_var=block_var,
                         tag_type=iec_type,
                         prefix=prefix1,
@@ -417,7 +449,8 @@ def _register_operands_from_text(
         collection.used_blocks.add(block_var)
 
         nick = nicknames.get(operand) if nicknames else None
-        var_name = nick if nick else operand
+        var_name = _make_safe_identifier(nick if nick else operand, used_names=used_var_names)
+        used_var_names.add(var_name)
         tag_name = nick if nick else operand
         comment_str = f"  # {operand}" if nick else ""
 
@@ -585,6 +618,9 @@ def _ref_operands_in_text(
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):
         range_str = range_match.group(0)
+        if range_str in collection.structure_owned_ranges:
+            refs.structure_names.add(collection.structure_owned_ranges[range_str].split(".", 1)[0])
+            continue
         if range_str in collection.ranges:
             refs.range_var_names.add(collection.ranges[range_str].var_name)
 

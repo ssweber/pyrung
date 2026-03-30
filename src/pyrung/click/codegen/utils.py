@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import keyword
 import re
 from typing import TYPE_CHECKING
 
@@ -211,6 +212,8 @@ def _sub_operand(
         return collection.tags[text].var_name
 
     # Check if entire text is a known range → use logical block's .select()
+    if text in collection.structure_owned_ranges:
+        return collection.structure_owned_ranges[text]
     if text in collection.ranges:
         r = collection.ranges[text]
         return f"{r.var_name}.select({r.start}, {r.end})"
@@ -294,6 +297,8 @@ def _sub_operand(
     range_match = _RANGE_RE.match(text)
     if range_match:
         range_str = range_match.group(0)
+        if range_str in collection.structure_owned_ranges:
+            return collection.structure_owned_ranges[range_str]
         if range_str in collection.ranges:
             return collection.ranges[range_str].var_name
         # Inline range: block.select(start, end)
@@ -356,6 +361,8 @@ def _sub_range(
 ) -> str:
     """Substitute a range match."""
     range_str = match.group(0)
+    if range_str in collection.structure_owned_ranges:
+        return collection.structure_owned_ranges[range_str]
     if range_str in collection.ranges:
         r = collection.ranges[range_str]
         return f"{r.var_name}.select({r.start}, {r.end})"
@@ -431,6 +438,51 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "Field",
     }
 )
+
+_CODEGEN_RESERVED_IDENTIFIERS: frozenset[str] = frozenset(
+    set(_RESERVED_IMPORT_NAMES)
+    | set(_EXPR_FUNC_IMPORT_NAMES)
+    | {block_var for _, _, block_var in _OPERAND_PREFIXES}
+    | {
+        "TagMap",
+        "logic",
+        "mapping",
+        "system",
+        "PLCRunner",
+    }
+)
+
+
+def _make_safe_identifier(
+    name: str,
+    *,
+    used_names: set[str] | None = None,
+    fallback: str = "tag",
+) -> str:
+    """Convert a logical tag/block name into a safe Python identifier."""
+    safe = re.sub(r"\W+", "_", name)
+    if not safe:
+        safe = fallback
+    if safe[0].isdigit():
+        safe = f"_{safe}"
+
+    is_softkeyword = getattr(keyword, "issoftkeyword", lambda _: False)
+    if (
+        keyword.iskeyword(safe)
+        or is_softkeyword(safe)
+        or safe in _CODEGEN_RESERVED_IDENTIFIERS
+    ):
+        safe = f"_{safe}"
+
+    if used_names is None:
+        return safe
+
+    candidate = safe
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{safe}_{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _build_sub_name_map(

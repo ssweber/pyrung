@@ -109,8 +109,11 @@ def _generate_code(
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
-    # Range declarations
-    if collection.ranges:
+    has_flat_ranges = any(
+        decl.operand_str not in collection.structure_owned_ranges
+        for decl in collection.ranges.values()
+    )
+    if has_flat_ranges:
         lines.append("# --- Ranges ---")
         _emit_range_declarations(lines, collection)
         lines.append("")
@@ -147,7 +150,11 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     core_imports: list[str] = ["Program", "Rung"]
 
     # Block/TagType if ranges are used
-    if collection.ranges:
+    has_flat_ranges = any(
+        decl.operand_str not in collection.structure_owned_ranges
+        for decl in collection.ranges.values()
+    )
+    if has_flat_ranges:
         core_imports.append("Block")
         core_imports.append("TagType")
 
@@ -279,6 +286,8 @@ def _emit_tag_declarations(
 def _emit_range_declarations(lines: list[str], collection: _OperandCollection) -> None:
     """Emit logical Block declarations for ranges."""
     for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
+        if decl.operand_str in collection.structure_owned_ranges:
+            continue
         lines.append(
             f'{decl.var_name} = Block("{decl.var_name}", TagType.{decl.tag_type}, '
             f"{decl.start}, {decl.end})"
@@ -868,6 +877,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         # Flat ranges
         for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
+            if decl.operand_str in collection.structure_owned_ranges:
+                continue
             lines.append(
                 f"    {decl.var_name}.map_to({decl.block_var}.select({decl.start}, {decl.end})),"
             )
@@ -878,6 +889,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
 
         # Add ranges
         for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
+            if decl.operand_str in collection.structure_owned_ranges:
+                continue
             lines.append(f"    {decl.var_name}: {decl.block_var}.select({decl.start}, {decl.end}),")
 
         lines.append("})")

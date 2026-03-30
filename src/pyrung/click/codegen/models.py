@@ -167,6 +167,7 @@ class _OperandCollection:
     has_system_operands: bool = False
     structures: list[_StructureDecl] = field(default_factory=list)
     structure_owned_operands: set[str] = field(default_factory=set)
+    structure_owned_ranges: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
