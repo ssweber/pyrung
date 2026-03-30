@@ -19,11 +19,13 @@ from pyrung.click import (
     y,
 )
 from pyrung.core import (
+    Block,
     Bool,
     Dint,
     Int,
     Program,
     Rung,
+    TagType,
     Tms,
 )
 from pyrung.core.program import (
@@ -31,6 +33,7 @@ from pyrung.core.program import (
     count_up,
     on_delay,
     out,
+    reset,
     subroutine,
 )
 
@@ -204,6 +207,80 @@ class TestProjectBasic:
         # Re-export and verify
         bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert len(bundle.main_rows) > 0
+
+    def test_plain_block_range_project_imports_block_symbol(self, tmp_path: Path):
+        """Project output should import reconstructed plain blocks, not range helpers."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv"
+        bundle.write(csv_dir)
+
+        nick_path = tmp_path / "nicknames.csv"
+        pyclickplc.write_csv(
+            nick_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in files["tags.py"]
+        assert "Cmd_Mode_Production = CmdTagBits[4]" in files["tags.py"]
+        assert "from tags import mapping" in files["main.py"]
+        assert "Cmd_Mode_Production" in files["main.py"]
+        assert "CmdTagBits" in files["main.py"]
+        assert "out(Cmd_Mode_Production)" in files["main.py"]
+        assert "reset(CmdTagBits.select(4, 6))" in files["main.py"]
+        assert "C1004_to_C1006" not in files["tags.py"]
+        assert "C1004_to_C1006" not in files["main.py"]
 
 
 class TestProjectWithSubroutines:

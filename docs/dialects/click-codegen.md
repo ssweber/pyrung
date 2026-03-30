@@ -42,7 +42,7 @@ code = ladder_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "
 
 ### Structured type inference
 
-When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally, which reconstructs `@named_array` and `@udt` metadata from the CSV markers. The generated code emits idiomatic structure declarations instead of hundreds of flat tags.
+When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally. It reconstructs semantic metadata only from explicit markers such as `:block`, `:udt`, and `:named_array(...)`. Bare tags remain grouping-only, so the generated code keeps them as flat tags or raw bank ranges instead of inventing pyrung structures.
 
 Without `nickname_csv`, a named-array group comes back flat:
 

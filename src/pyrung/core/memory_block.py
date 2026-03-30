@@ -190,13 +190,26 @@ class Block:
     def _new_tag_for_slot(
         self, addr: int, *, retentive: bool, default: Any, comment: str
     ) -> LiveTag:
-        return LiveTag(
+        tag = LiveTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
             comment=comment,
         )
+        return self._annotate_tag(tag, addr)
+
+    def _annotate_tag(self, tag: LiveTag, addr: int) -> LiveTag:
+        runtime = getattr(self, "_pyrung_structure_runtime", None)
+        if runtime is None:
+            return tag
+
+        object.__setattr__(tag, "_pyrung_structure_runtime", runtime)
+        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)
+        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)
+        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)
+        object.__setattr__(tag, "_pyrung_structure_index", addr)
+        return tag
 
     def _type_default(self) -> Any:
         defaults = {
@@ -520,13 +533,14 @@ class InputBlock(Block):
     def _new_tag_for_slot(
         self, addr: int, *, retentive: bool, default: Any, comment: str
     ) -> LiveInputTag:
-        return LiveInputTag(
+        tag = LiveInputTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
             comment=comment,
         )
+        return cast(LiveInputTag, self._annotate_tag(tag, addr))
 
     def _get_tag(self, addr: int) -> LiveInputTag:
         return cast(LiveInputTag, super()._get_tag(addr))
@@ -598,13 +612,14 @@ class OutputBlock(Block):
     def _new_tag_for_slot(
         self, addr: int, *, retentive: bool, default: Any, comment: str
     ) -> LiveOutputTag:
-        return LiveOutputTag(
+        tag = LiveOutputTag(
             name=self._effective_slot_name(addr),
             type=self.type,
             retentive=retentive,
             default=default,
             comment=comment,
         )
+        return cast(LiveOutputTag, self._annotate_tag(tag, addr))
 
     def _get_tag(self, addr: int) -> LiveOutputTag:
         return cast(LiveOutputTag, super()._get_tag(addr))

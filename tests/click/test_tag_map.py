@@ -277,7 +277,7 @@ def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path
     assert record.nickname == "Alarm_1"
     assert record.retentive is True
     assert record.initial_value == "1"
-    assert record.comment == "<Alarm /> First alarm"
+    assert record.comment == "<Alarm:block /> First alarm"
 
 
 def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
@@ -323,7 +323,7 @@ def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -332,7 +332,7 @@ def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
             memory_type="C",
             address=402,
             nickname="AlarmCfg2",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -355,7 +355,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1",
-            comment="<Alarm>",
+            comment="<Alarm:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -364,7 +364,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
             memory_type="C",
             address=200,
             nickname="Alarm100",
-            comment="</Alarm>",
+            comment="</Alarm:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -389,7 +389,7 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -398,7 +398,7 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
             memory_type="C",
             address=402,
             nickname="",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="",
             retentive=False,
             data_type=DataType.BIT,
@@ -422,7 +422,7 @@ def test_from_nickname_file_allows_blank_block_nickname_when_boundary_has_extra_
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -431,7 +431,7 @@ def test_from_nickname_file_allows_blank_block_nickname_when_boundary_has_extra_
             memory_type="C",
             address=402,
             nickname="",
-            comment="</AlarmCfg> Boundary note",
+            comment="</AlarmCfg:block> Boundary note",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -456,7 +456,7 @@ def test_from_nickname_file_allows_blank_block_nickname_for_internal_metadata_ro
             memory_type="C",
             address=501,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -474,7 +474,7 @@ def test_from_nickname_file_allows_blank_block_nickname_for_internal_metadata_ro
             memory_type="C",
             address=503,
             nickname="AlarmCfg3",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -499,7 +499,7 @@ def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
             memory_type="C",
             address=501,
             nickname="Bad-Name",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -508,7 +508,7 @@ def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
             memory_type="C",
             address=502,
             nickname="AlarmCfg2",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -527,7 +527,7 @@ def test_from_nickname_file_rejects_duplicate_block_nickname(tmp_path):
             memory_type="C",
             address=601,
             nickname="AlarmCfg",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -536,7 +536,7 @@ def test_from_nickname_file_rejects_duplicate_block_nickname(tmp_path):
             memory_type="C",
             address=602,
             nickname="AlarmCfg",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -570,7 +570,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.INT,
@@ -579,7 +579,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -588,7 +588,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On>",
+            comment="<Alarm.On:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -597,7 +597,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="C",
             address=102,
             nickname="Alarm2_On",
-            comment="</Alarm.On>",
+            comment="</Alarm.On:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -627,7 +627,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=False,
             data_type=DataType.INT,
@@ -636,7 +636,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -645,7 +645,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On />",
+            comment="<Alarm.On:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -669,7 +669,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=False,
             data_type=DataType.INT,
@@ -678,7 +678,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -687,7 +687,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On />",
+            comment="<Alarm.On:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -706,7 +706,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.INT,
@@ -715,7 +715,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -724,7 +724,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On>",
+            comment="<Alarm.On:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -733,7 +733,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="C",
             address=102,
             nickname="Alarm2_On",
-            comment="</Alarm.On>",
+            comment="</Alarm.On:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -954,7 +954,7 @@ def test_from_nickname_file_structured_identifier_policy_rejects_invalid_tokens(
             memory_type="DS",
             address=701,
             nickname="Bad1",
-            comment="<Alarm.bad-name />",
+            comment="<Alarm.bad-name:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -973,7 +973,7 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
             memory_type="DS",
             address=801,
             nickname="A1",
-            comment="<Alarm.id />",
+            comment="<Alarm.id:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -982,7 +982,7 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
             memory_type="DS",
             address=802,
             nickname="A2",
-            comment="<Alarm.id />",
+            comment="<Alarm.id:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -1001,7 +1001,7 @@ def test_from_nickname_file_plain_block_auto_starts_at_zero_for_zero_address(tmp
             memory_type="XD",
             address=0,
             nickname="Word0",
-            comment="<WordBank>",
+            comment="<WordBank:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.HEX,
@@ -1010,7 +1010,7 @@ def test_from_nickname_file_plain_block_auto_starts_at_zero_for_zero_address(tmp
             memory_type="XD",
             address=2,
             nickname="Word2",
-            comment="</WordBank>",
+            comment="</WordBank:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.HEX,
@@ -1238,7 +1238,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Motor1_speed",
-            comment="<Motor.speed>",
+            comment="<Motor.speed:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -1247,7 +1247,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Motor2_speed",
-            comment="</Motor.speed>",
+            comment="</Motor.speed:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -1256,7 +1256,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="C",
             address=101,
             nickname="Motor1_running",
-            comment="<Motor.running>",
+            comment="<Motor.running:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1265,7 +1265,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="C",
             address=102,
             nickname="Motor2_running",
-            comment="</Motor.running>",
+            comment="</Motor.running:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1297,7 +1297,7 @@ def test_owner_of_singleton(tmp_path):
             memory_type="DS",
             address=301,
             nickname="Config1_timeout",
-            comment="<Config.timeout />",
+            comment="<Config.timeout:udt />",
             initial_value="100",
             retentive=False,
             data_type=DataType.INT,
@@ -1306,7 +1306,7 @@ def test_owner_of_singleton(tmp_path):
             memory_type="C",
             address=201,
             nickname="Config1_enabled",
-            comment="<Config.enabled />",
+            comment="<Config.enabled:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1330,6 +1330,39 @@ def test_owner_of_plain_block(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1",
+            comment="<Alarm:block>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="Alarm2",
+            comment="</Alarm:block>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("C101")
+    assert owner is not None
+    assert owner.structure_name == "Alarm"
+    assert owner.instance == 1
+    assert owner.field is None
+    assert owner.structure_type == "block"
+
+
+def test_bare_plain_block_marker_is_group_only(tmp_path):
+    path = tmp_path / "bare_plain_group.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="Alarm1",
             comment="<Alarm>",
             initial_value="0",
             retentive=False,
@@ -1348,12 +1381,72 @@ def test_owner_of_plain_block(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("C101")
-    assert owner is not None
-    assert owner.structure_name == "Alarm"
-    assert owner.instance == 1
-    assert owner.field is None
-    assert owner.structure_type == "block"
+    assert restored.blocks() == ()
+    assert restored.owner_of("C101") is None
+    assert restored.resolve("Alarm1") == "C101"
+    assert restored.resolve("Alarm2") == "C102"
+
+
+def test_bare_dotted_marker_is_group_only(tmp_path):
+    path = tmp_path / "bare_dotted_group.csv"
+    records = {
+        get_addr_key("DS", 301): AddressRecord(
+            memory_type="DS",
+            address=301,
+            nickname="Config1_timeout",
+            comment="<Config.timeout />",
+            initial_value="100",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("C", 201): AddressRecord(
+            memory_type="C",
+            address=201,
+            nickname="Config1_enabled",
+            comment="<Config.enabled />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    assert restored.structures == ()
+    assert restored.owner_of("DS301") is None
+    assert restored.resolve("Config1_timeout") == "DS301"
+    assert restored.resolve("Config1_enabled") == "C201"
+
+
+def test_group_block_import_stays_standalone_tags(tmp_path):
+    path = tmp_path / "group.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="AlarmA",
+            comment="<Alarm:group>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="AlarmB",
+            comment="</Alarm:group>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    assert restored.block_entry_by_name("Alarm") is None
+    assert restored.owner_of("C101") is None
+    assert restored.resolve("AlarmA") == "C101"
+    assert restored.resolve("AlarmB") == "C102"
 
 
 def test_owner_of_structure_wins_over_block(tmp_path):

@@ -21,10 +21,13 @@ from pyrung.click.codegen.models import (
     Series,
     SPNode,
     _AnalyzedRung,
+    _BlockSlotDecl,
     _FieldHw,
     _FileRefs,
     _OperandCollection,
+    _PlainBlockDecl,
     _RangeDecl,
+    _SemanticRender,
     _StructureDecl,
     _TagDecl,
 )
@@ -127,20 +130,26 @@ def _collect_operands(
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
-    # Enrich with structured metadata if available
+    # Enrich with semantic ownership metadata if available
     if structured_map is not None:
-        _enrich_with_structures(collection, structured_map)
+        _enrich_with_ownership(collection, structured_map)
 
     return collection
 
 
-def _enrich_with_structures(
+def _enrich_with_ownership(
     collection: _OperandCollection,
     structured_map: TagMap,
 ) -> None:
-    """Mark structure-owned operands and build _StructureDecl entries."""
+    """Build semantic ownership metadata for structures and plain named blocks."""
 
     seen_structures: dict[str, _StructureDecl] = {}
+    seen_plain_blocks: dict[str, _PlainBlockDecl] = {}
+    used_symbol_names = (
+        {decl.var_name for decl in collection.tags.values()}
+        | {decl.var_name for decl in collection.ranges.values()}
+        | {structure.name for structure in structured_map.structures}
+    )
     _TAG_TYPE_MAP = {
         "BOOL": "Bool",
         "INT": "Int",
@@ -260,15 +269,104 @@ def _enrich_with_structures(
 
         return decl
 
+    def _ensure_plain_block_decl(block_name: str) -> _PlainBlockDecl | None:
+        existing = seen_plain_blocks.get(block_name)
+        if existing is not None:
+            return existing
+
+        entry = structured_map.block_entry_by_name(block_name)
+        if entry is None or not entry.hardware_addresses:
+            return None
+
+        logical_block = entry.logical
+        first_hw = entry.hardware.block[entry.hardware_addresses[0]]
+        last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
+        mem_type, hw_start = parse_address(first_hw.name)
+        _, hw_end = parse_address(last_hw.name)
+        var_name = _make_safe_identifier(
+            logical_block.name,
+            used_names=used_symbol_names,
+            fallback="block",
+        )
+        used_symbol_names.add(var_name)
+
+        decl = _PlainBlockDecl(
+            name=logical_block.name,
+            var_name=var_name,
+            tag_type=logical_block.type.name,
+            start=logical_block.start,
+            end=logical_block.end,
+            hw_block_var=_MEM_TO_BLOCK.get(mem_type, mem_type.lower()),
+            hw_start=hw_start,
+            hw_end=hw_end,
+        )
+        for logical_addr in entry.logical_addresses:
+            slot = logical_block.slot_config(logical_addr)
+            decl.slots[logical_addr] = _BlockSlotDecl(
+                index=logical_addr,
+                tag_name=slot.name,
+                name_overridden=slot.name_overridden,
+                retentive=slot.retentive,
+                retentive_overridden=slot.retentive_overridden,
+                default=slot.default,
+                default_overridden=slot.default_overridden,
+                comment=slot.comment,
+                comment_overridden=slot.comment_overridden,
+            )
+
+        seen_plain_blocks[block_name] = decl
+        collection.plain_blocks.append(decl)
+        collection.used_blocks.add(decl.hw_block_var)
+        return decl
+
     for operand in list(collection.tags):
         owner = structured_map.owner_of(operand)
         if owner is None:
             continue
-        if owner.structure_type not in ("named_array", "udt"):
+        if owner.structure_type in ("named_array", "udt"):
+            _ensure_structure_decl(owner.structure_name)
+            if owner.instance is None:
+                expr = f"{owner.structure_name}.{owner.field}"
+            else:
+                expr = f"{owner.structure_name}[{owner.instance}].{owner.field}"
+            collection.semantic_operands[operand] = _SemanticRender(
+                expr=expr,
+                import_kind="structure",
+                import_name=owner.structure_name,
+            )
             continue
 
-        collection.structure_owned_operands.add(operand)
-        _ensure_structure_decl(owner.structure_name)
+        if owner.structure_type != "block" or owner.instance is None:
+            continue
+
+        decl = _ensure_plain_block_decl(owner.structure_name)
+        if decl is None:
+            continue
+        slot = decl.slots.get(owner.instance)
+        if slot is not None and slot.name_overridden:
+            if slot.alias_var_name is None:
+                existing_decl = collection.tags.get(operand)
+                if existing_decl is not None:
+                    slot.alias_var_name = existing_decl.var_name
+                else:
+                    slot.alias_var_name = _make_safe_identifier(
+                        slot.tag_name,
+                        used_names=used_symbol_names,
+                        fallback="tag",
+                    )
+                    used_symbol_names.add(slot.alias_var_name)
+            collection.semantic_operands[operand] = _SemanticRender(
+                expr=slot.alias_var_name,
+                import_kind="tag",
+                import_name=slot.alias_var_name,
+            )
+            continue
+
+        collection.semantic_operands[operand] = _SemanticRender(
+            expr=f"{decl.var_name}[{owner.instance}]",
+            import_kind="block",
+            import_name=decl.var_name,
+        )
 
     for range_str, range_decl in collection.ranges.items():
         start_owner = structured_map.owner_of(
@@ -277,6 +375,24 @@ def _enrich_with_structures(
         end_owner = structured_map.owner_of(format_address_display(range_decl.prefix, range_decl.end))
         if start_owner is None or end_owner is None:
             continue
+        if start_owner.structure_type == "block" and end_owner.structure_type == "block":
+            if start_owner.structure_name != end_owner.structure_name:
+                continue
+            if start_owner.instance is None or end_owner.instance is None:
+                continue
+            if start_owner.instance > end_owner.instance:
+                continue
+
+            decl = _ensure_plain_block_decl(start_owner.structure_name)
+            if decl is None:
+                continue
+            collection.semantic_ranges[range_str] = _SemanticRender(
+                expr=f"{decl.var_name}.select({start_owner.instance}, {end_owner.instance})",
+                import_kind="block",
+                import_name=decl.var_name,
+            )
+            continue
+
         if start_owner.structure_type != "udt" or end_owner.structure_type != "udt":
             continue
         if start_owner.structure_name != end_owner.structure_name:
@@ -289,9 +405,13 @@ def _enrich_with_structures(
             continue
 
         _ensure_structure_decl(start_owner.structure_name)
-        collection.structure_owned_ranges[range_str] = (
-            f"{start_owner.structure_name}.{start_owner.field}.select("
-            f"{start_owner.instance}, {end_owner.instance})"
+        collection.semantic_ranges[range_str] = _SemanticRender(
+            expr=(
+                f"{start_owner.structure_name}.{start_owner.field}.select("
+                f"{start_owner.instance}, {end_owner.instance})"
+            ),
+            import_kind="structure",
+            import_name=start_owner.structure_name,
         )
 
 
@@ -615,14 +735,21 @@ def _ref_operands_in_text(
     refs: _FileRefs,
 ) -> None:
     """Record which tags/ranges/structures from *collection* appear in *text*."""
+    def _record_semantic_ref(render: _SemanticRender) -> None:
+        if render.import_kind == "tag":
+            refs.tag_var_names.add(render.import_name)
+        elif render.import_kind == "block":
+            refs.block_var_names.add(render.import_name)
+        elif render.import_kind == "structure":
+            refs.structure_names.add(render.import_name)
+
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):
         range_str = range_match.group(0)
-        if range_str in collection.structure_owned_ranges:
-            refs.structure_names.add(collection.structure_owned_ranges[range_str].split(".", 1)[0])
+        render = collection.semantic_ranges.get(range_str)
+        if render is not None:
+            _record_semantic_ref(render)
             continue
-        if range_str in collection.ranges:
-            refs.range_var_names.add(collection.ranges[range_str].var_name)
 
     # Check individual operands
     for op_match in _OPERAND_RE.finditer(text):
@@ -630,22 +757,8 @@ def _ref_operands_in_text(
         if operand in SYSTEM_OPERAND_PATHS:
             refs.has_system_import = True
             continue
-        if operand in collection.structure_owned_operands:
-            # Find which structure owns it
-            for sdecl in collection.structures:
-                # Check if operand falls within structure's address space
-                parsed = _parse_operand_prefix(operand)
-                if parsed is None:
-                    continue
-                _, _, block_var, index = parsed
-                if sdecl.structure_type == "named_array":
-                    if block_var == sdecl.hw_block_var and sdecl.hw_start <= index <= sdecl.hw_end:
-                        refs.structure_names.add(sdecl.name)
-                        break
-                elif sdecl.structure_type == "udt":
-                    for fhw in sdecl.field_hw.values():
-                        if block_var == fhw.block_var and fhw.start <= index <= fhw.end:
-                            refs.structure_names.add(sdecl.name)
-                            break
+        render = collection.semantic_operands.get(operand)
+        if render is not None:
+            _record_semantic_ref(render)
         elif operand in collection.tags:
             refs.tag_var_names.add(collection.tags[operand].var_name)

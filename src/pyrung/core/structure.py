@@ -124,6 +124,7 @@ class _StructRuntime:
         field_specs: tuple[_FieldSpec, ...],
         *,
         numbered: bool = False,
+        kind: str = "udt",
     ):
         _validate_name(name)
         _validate_count(count)
@@ -132,6 +133,7 @@ class _StructRuntime:
         self.name = name
         self.count = count
         self.numbered = numbered
+        self._structure_kind = kind
         self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
@@ -143,7 +145,7 @@ class _StructRuntime:
                 default=field_spec.default,
                 retentive=field_spec.retentive,
             )
-            self._blocks[field_spec.name] = Block(
+            block = Block(
                 name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
                 start=1,
@@ -156,6 +158,11 @@ class _StructRuntime:
                 ),
                 default_factory=_make_default_factory(field_spec.default),
             )
+            block._pyrung_structure_runtime = self
+            block._pyrung_structure_kind = self._structure_kind
+            block._pyrung_structure_name = name
+            block._pyrung_structure_field = field_spec.name
+            self._blocks[field_spec.name] = block
 
     def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
@@ -164,6 +171,7 @@ class _StructRuntime:
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
             numbered=self.numbered,
+            kind=self._structure_kind,
         )
 
     @property
@@ -216,7 +224,7 @@ class _NamedArrayRuntime(_StructRuntime):
 
         self.type = type
         self.stride = stride
-        super().__init__(name=name, count=count, field_specs=field_specs)
+        super().__init__(name=name, count=count, field_specs=field_specs, kind="named_array")
 
     def clone(
         self,

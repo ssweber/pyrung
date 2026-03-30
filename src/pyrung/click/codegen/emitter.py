@@ -19,6 +19,7 @@ from pyrung.click.codegen.models import (
     _InstructionInfo,
     _OperandCollection,
     _PinInfo,
+    _PlainBlockDecl,
     _StructureDecl,
     _SubroutineInfo,
 )
@@ -102,20 +103,16 @@ def _generate_code(
     _emit_imports(lines, collection)
     lines.append("")
 
-    # Tag declarations (skip structure-owned)
-    has_flat_tags = any(op not in collection.structure_owned_operands for op in collection.tags)
+    # Tag declarations (skip semantic-owned)
+    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
     if has_flat_tags:
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
-    has_flat_ranges = any(
-        decl.operand_str not in collection.structure_owned_ranges
-        for decl in collection.ranges.values()
-    )
-    if has_flat_ranges:
-        lines.append("# --- Ranges ---")
-        _emit_range_declarations(lines, collection)
+    if collection.plain_blocks:
+        lines.append("# --- Blocks ---")
+        _emit_plain_block_declarations(lines, collection)
         lines.append("")
 
     # Structure declarations
@@ -149,12 +146,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     # Core imports
     core_imports: list[str] = ["Program", "Rung"]
 
-    # Block/TagType if ranges are used
-    has_flat_ranges = any(
-        decl.operand_str not in collection.structure_owned_ranges
-        for decl in collection.ranges.values()
-    )
-    if has_flat_ranges:
+    # Block/TagType for reconstructed plain named blocks
+    if collection.plain_blocks:
         core_imports.append("Block")
         core_imports.append("TagType")
 
@@ -275,7 +268,7 @@ def _emit_tag_declarations(
         key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
     )
     for decl in sorted_tags:
-        if decl.operand in collection.structure_owned_operands:
+        if decl.operand in collection.semantic_operands:
             continue
         line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
         if decl.comment and not suppress_comments:
@@ -283,15 +276,37 @@ def _emit_tag_declarations(
         lines.append(line)
 
 
-def _emit_range_declarations(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit logical Block declarations for ranges."""
-    for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-        if decl.operand_str in collection.structure_owned_ranges:
-            continue
-        lines.append(
-            f'{decl.var_name} = Block("{decl.var_name}", TagType.{decl.tag_type}, '
-            f"{decl.start}, {decl.end})"
-        )
+def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit reconstructed plain named block declarations and used aliases."""
+    sorted_blocks = sorted(collection.plain_blocks, key=lambda decl: decl.var_name)
+    for i, decl in enumerate(sorted_blocks):
+        if i:
+            lines.append("")
+        _emit_plain_block_decl(lines, decl)
+
+
+def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
+    """Emit one first-class plain named block."""
+    lines.append(
+        f'{decl.var_name} = Block("{decl.name}", TagType.{decl.tag_type}, {decl.start}, {decl.end})'
+    )
+    for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
+        if slot.name_overridden:
+            lines.append(f"{decl.var_name}.rename_slot({slot.index}, {slot.tag_name!r})")
+
+        kwargs: list[str] = []
+        if slot.retentive_overridden:
+            kwargs.append(f"retentive={slot.retentive}")
+        if slot.default_overridden:
+            kwargs.append(f"default={_format_literal(slot.default)}")
+        if slot.comment_overridden:
+            kwargs.append(f"comment={slot.comment!r}")
+        if kwargs:
+            lines.append(f"{decl.var_name}.configure_slot({slot.index}, {', '.join(kwargs)})")
+
+    for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
+        if slot.alias_var_name is not None:
+            lines.append(f"{slot.alias_var_name} = {decl.var_name}[{slot.index}]")
 
 
 def _emit_structure_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -320,7 +335,7 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
         if retentive:
             lines.append(f"    {field_name} = Field(retentive=True)")
         else:
-            default_repr = _format_field_default(default)
+            default_repr = _format_literal(default)
             lines.append(f"    {field_name} = {default_repr}")
 
 
@@ -334,12 +349,12 @@ def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
         if retentive:
             lines.append(f"    {field_name}: {type_name} = Field(retentive=True)")
         else:
-            default_repr = _format_field_default(default)
+            default_repr = _format_literal(default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
 
 
-def _format_field_default(default: object) -> str:
-    """Format a field default value for code emission."""
+def _format_literal(default: object) -> str:
+    """Format a Python literal for generated code."""
     if isinstance(default, bool):
         return "True" if default else "False"
     if isinstance(default, float):
@@ -870,27 +885,24 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
                             f"    {sdecl.name}.{fn}.map_to("
                             f"{fhw.block_var}.select({fhw.start}, {fhw.end})),"
                         )
+        for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
+            lines.append(
+                f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501
+            )
         # Flat tags (non-structure-owned)
         for decl in sorted_tags:
-            if decl.operand in collection.structure_owned_operands:
+            if decl.operand in collection.semantic_operands:
                 continue
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
-        # Flat ranges
-        for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-            if decl.operand_str in collection.structure_owned_ranges:
-                continue
-            lines.append(
-                f"    {decl.var_name}.map_to({decl.block_var}.select({decl.start}, {decl.end})),"
-            )
         lines.append("])")
     else:
+        for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
+            lines.append(
+                f"    {bdecl.var_name}: {bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end}),"
+            )
         for decl in sorted_tags:
-            lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
-
-        # Add ranges
-        for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-            if decl.operand_str in collection.structure_owned_ranges:
+            if decl.operand in collection.semantic_operands:
                 continue
-            lines.append(f"    {decl.var_name}: {decl.block_var}.select({decl.start}, {decl.end}),")
+            lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 
         lines.append("})")

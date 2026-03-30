@@ -2537,7 +2537,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=1001,
                     nickname="Motor1_speed",
-                    comment="<Motor.speed>",
+                    comment="<Motor.speed:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2546,7 +2546,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=1002,
                     nickname="Motor2_speed",
-                    comment="</Motor.speed>",
+                    comment="</Motor.speed:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2555,7 +2555,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=101,
                     nickname="Motor1_running",
-                    comment="<Motor.running>",
+                    comment="<Motor.running:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2564,7 +2564,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=102,
                     nickname="Motor2_running",
-                    comment="</Motor.running>",
+                    comment="</Motor.running:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2614,7 +2614,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=1031,
                     nickname="Sts1_TagBitsA",
-                    comment="<Sts.TagBitsA>",
+                    comment="<Sts.TagBitsA:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2623,7 +2623,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=1040,
                     nickname="Sts10_TagBitsA",
-                    comment="</Sts.TagBitsA>",
+                    comment="</Sts.TagBitsA:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2648,6 +2648,349 @@ class TestStructuredCodegen:
         assert "Sts.TagBitsA.map_to(c.select(1031, 1040))" in code
         assert "reset(Sts.TagBitsA.select(1, 10))" in code
         assert 'C1031_to_C1040 = Block("C1031_to_C1040"' not in code
+
+    def test_plain_block_range_codegen_uses_full_block_and_aliases(self, tmp_path: Path):
+        """Plain named blocks become first-class Blocks with used slot aliases."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in code
+        assert "CmdTagBits.rename_slot(4, 'Cmd_Mode_Production')" in code
+        assert "Cmd_Mode_Production = CmdTagBits[4]" in code
+        assert "out(Cmd_Mode_Production)" in code
+        assert "reset(CmdTagBits.select(4, 6))" in code
+        assert "CmdTagBits: c.select(1001, 1019)" in code
+        assert 'Bool("Cmd_Mode_Production")' not in code
+        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
+
+    def test_plain_block_explicit_start_uses_logical_indices(self, tmp_path: Path):
+        """Explicit plain-block starts should preserve logical slot numbering."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block(10)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block(10)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 10, 28)' in code
+        assert "reset(CmdTagBits.select(13, 15))" in code
+
+    def test_raw_range_codegen_inlines_hardware_bank_without_helper(self, tmp_path: Path):
+        """Unnamed raw windows should use bank .select() inline, not helper Blocks."""
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "reset(c.select(1004, 1006))" in code
+        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
+        assert "C1004_to_C1006:" not in code
+        assert orig == repro
+
+    def test_named_array_backing_range_stays_raw_bank(self, tmp_path: Path):
+        """Backing-memory windows for named_arrays should remain raw bank ranges."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 4)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(1, 4))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Channel1_val",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Channel2_val",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "fill(0, ds.select(501, 504))" in code
+        assert "@named_array(" not in code
+        assert "Channel.select(" not in code
+        assert 'Block("DS501_to_DS504"' not in code
+
+    def test_bare_block_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
+        """Bare block markers should be grouping-only and not reconstruct semantics."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' in code
+        assert "out(Cmd_Mode_Production)" in code
+        assert "reset(c.select(1004, 1006))" in code
+        assert 'CmdTagBits = Block("CmdTagBits"' not in code
+        assert "Cmd_Mode_Production = CmdTagBits[4]" not in code
+
+    def test_bare_dotted_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
+        """Bare dotted markers should stay grouping-only and not reconstruct UDTs."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Config_timeout = Int("Config1_timeout")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Config_timeout, Config_timeout)
+
+        mapping = TagMap({Enable: x[1], Config_timeout: ds[301]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 301): AddressRecord(
+                    memory_type="DS",
+                    address=301,
+                    nickname="Config1_timeout",
+                    comment="<Config.timeout />",
+                    initial_value="100",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("C", 201): AddressRecord(
+                    memory_type="C",
+                    address=201,
+                    nickname="Config1_enabled",
+                    comment="<Config.enabled />",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Config1_timeout = Int("Config1_timeout")' in code
+        assert "@udt(" not in code
+        assert "Config.timeout" not in code
+        assert "copy(Config1_timeout, Config1_timeout)" in code
 
     def test_mixed_structured_and_flat(self, tmp_path: Path):
         """Mixed: some tags in structures, some flat → both coexist."""
@@ -2748,7 +3091,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=301,
                     nickname="Config1_timeout",
-                    comment="<Config.timeout />",
+                    comment="<Config.timeout:udt />",
                     initial_value="100",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2757,7 +3100,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=201,
                     nickname="Config1_enabled",
-                    comment="<Config.enabled />",
+                    comment="<Config.enabled:udt />",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,

@@ -209,11 +209,13 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 
 | Marker | Example | Meaning |
 |--------|---------|---------|
-| Opening | `<Alarms>` | Start of a plain block |
-| Closing | `</Alarms>` | End of a plain block |
-| Self-closing | `<Alarms />` | Single-slot block (open + close on same row) |
+| Opening | `<Alarms:block>` | Start of a semantic plain block |
+| Closing | `</Alarms:block>` | End of a semantic plain block |
+| Self-closing | `<Config.timeout:udt />` | Single-row semantic marker |
 
-**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
+Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, and `<Base.field />` do not reconstruct pyrung semantics. They simply group rows visually, and any inner nicknames import as ordinary standalone tags.
+
+**Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
 
 **Named arrays** encode count and stride in the marker:
 
@@ -246,7 +248,15 @@ If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 | DS105 | `Sensor2_scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
-**UDTs** use dotted nicknames (`Base.field`) within plain block markers per memory bank. Fields spanning different banks each get their own block marker pair. The importer groups them by base name.
+**UDTs** use explicit `:udt` markers per field and memory bank:
+
+```text
+<Motor.speed:udt>
+</Motor.speed:udt>
+<Config.timeout:udt />
+```
+
+Bare dotted tags such as `<Motor.speed>` are grouping-only and do not reconstruct a UDT.
 
 Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
 

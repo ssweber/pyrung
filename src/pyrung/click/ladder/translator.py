@@ -648,6 +648,8 @@ class _TranslatorMixin:
         try:
             return self._tag_map.resolve(tag)
         except Exception:
+            if _parse_display_address(tag.name) is not None:
+                return tag.name
             self._raise_issue(
                 path=path,
                 message=f"Tag {tag.name!r} is not mapped in TagMap.",
