@@ -727,7 +727,7 @@ class TagMap:
                 logical_addr = hardware_to_logical.get(row.address)
                 if logical_addr is None:
                     continue
-                slot_config = logical_block.slot_config(logical_addr)
+                sv = logical_block.slot(logical_addr)
                 if _is_marker_only_boundary_row(row, block_name=spec.name):
                     continue
 
@@ -737,17 +737,16 @@ class TagMap:
                         address=row.address,
                         name=row.nickname,
                     )
-                    if row.nickname != slot_config.name:
-                        logical_block.rename_slot(logical_addr, row.nickname)
-                        slot_config = logical_block.slot_config(logical_addr)
+                    if row.nickname != sv.name:
+                        logical_block.slot(logical_addr, name=row.nickname)
 
                 default = _parse_default(row.initial_value, logical_block.type)
                 comment = _extract_address_comment(row.comment)
-                retentive_changed = row.retentive != slot_config.retentive
-                default_changed = default != slot_config.default
-                comment_changed = comment != slot_config.comment
+                retentive_changed = row.retentive != sv.retentive
+                default_changed = default != sv.default
+                comment_changed = comment != sv.comment
                 if retentive_changed or default_changed or comment_changed:
-                    logical_block.configure_slot(
+                    logical_block.slot(
                         logical_addr,
                         retentive=row.retentive if retentive_changed else None,
                         default=default if default_changed else UNSET,
@@ -1005,18 +1004,17 @@ class TagMap:
                         row = field_rows.get((field, instance))
                         if row is None:
                             continue
-                        slot_config = block.slot_config(instance)
-                        if row.nickname != slot_config.name:
-                            block.rename_slot(instance, row.nickname)
-                            slot_config = block.slot_config(instance)
+                        sv = block.slot(instance)
+                        if row.nickname != sv.name:
+                            block.slot(instance, name=row.nickname)
 
                         default = _parse_default(row.initial_value, block.type)
                         comment = _extract_address_comment(row.comment)
-                        retentive_changed = row.retentive != slot_config.retentive
-                        default_changed = default != slot_config.default
-                        comment_changed = comment != slot_config.comment
+                        retentive_changed = row.retentive != sv.retentive
+                        default_changed = default != sv.default
+                        comment_changed = comment != sv.comment
                         if retentive_changed or default_changed or comment_changed:
-                            block.configure_slot(
+                            block.slot(
                                 instance,
                                 retentive=row.retentive if retentive_changed else None,
                                 default=default if default_changed else UNSET,

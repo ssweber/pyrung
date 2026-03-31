@@ -200,8 +200,8 @@ def test_name_conflict_standalone_and_block_slot_raises():
 def test_name_conflict_across_blocks_raises():
     alarm_a = Block("AlarmA", TagType.BOOL, 1, 1)
     alarm_b = Block("AlarmB", TagType.BOOL, 1, 1)
-    alarm_a.rename_slot(1, "Shared")
-    alarm_b.rename_slot(1, "Shared")
+    alarm_a.slot(1, name="Shared")
+    alarm_b.slot(1, name="Shared")
 
     with pytest.raises(ValueError, match="Duplicate user logical tag name"):
         TagMap({alarm_a: c.select(101, 101), alarm_b: c.select(201, 201)})
@@ -217,7 +217,7 @@ def test_name_conflict_from_block_name_ending_in_digit_has_specific_hint():
 
 def test_block_slot_name_rename_exported_to_csv(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    alarms.rename_slot(1, "Alarm_1")
+    alarms.slot(1, name="Alarm_1")
     mapping = TagMap({alarms: c.select(101, 102)})
     path = tmp_path / "renamed.csv"
     mapping.to_nickname_file(path)
@@ -265,8 +265,7 @@ def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
 
 def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 1, retentive=False)
-    alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, retentive=True, default=True, comment="First alarm")
+    alarms.slot(1, name="Alarm_1", retentive=True, default=True, comment="First alarm")
     mapping = TagMap({alarms: c.select(101, 101)})
 
     path = tmp_path / "slot_metadata.csv"
@@ -282,7 +281,7 @@ def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path
 
 def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
     alarms = Block("AlarmCfg", TagType.BOOL, 1, 1, retentive=False)
-    alarms.configure_slot(1, retentive=True, default=True)
+    alarms.slot(1, retentive=True, default=True)
     mapping = TagMap({alarms: c.select(301, 301)})
 
     path = tmp_path / "slot_runtime.csv"
@@ -297,9 +296,8 @@ def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
 def test_from_nickname_file_round_trip(tmp_path):
     valve = Bool("Valve", comment="Main valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, default=True, comment="First alarm")
-    alarms.configure_slot(2, comment="Last alarm")
+    alarms.slot(1, name="Alarm_1", default=True, comment="First alarm")
+    alarms.slot(2, comment="Last alarm")
     mapping = TagMap({valve: c[1], alarms: c.select(101, 102)})
 
     path = tmp_path / "round_trip.csv"

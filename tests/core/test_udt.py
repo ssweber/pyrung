@@ -12,7 +12,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
-from pyrung.core import Bool, Field, Int, TagType, auto, udt
+from pyrung.core import Bool, Field, Int, Real, TagType, auto, udt
 from pyrung.core.tag import LiveTag
 
 

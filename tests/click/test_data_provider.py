@@ -45,7 +45,7 @@ def test_read_mapped_block_slot_falls_back_to_logical_default_when_absent():
 
 def test_read_mapped_block_slot_uses_first_class_slot_default_when_absent():
     alarms = Block("AlarmCfg", TagType.BOOL, 1, 2)
-    alarms.configure_slot(1, default=True)
+    alarms.slot(1, default=True)
     mapping = TagMap({alarms: c.select(111, 112)})
     runner = PLCRunner(logic=[])
     provider = ClickDataProvider(runner, mapping)
@@ -242,7 +242,7 @@ def test_address_normalization_supports_case_and_zero_padding():
 
 def test_mapped_read_uses_slot_or_tag_default_when_absent():
     counts = Block("Count", TagType.INT, 1, 1)
-    counts.configure_slot(1, default=9)
+    counts.slot(1, default=9)
     total = Tag("Total", TagType.INT, default=4)
     mapping = TagMap({counts: ds.select(1, 1), total: ds[2]})
     provider = ClickDataProvider(PLCRunner(logic=[]), mapping)

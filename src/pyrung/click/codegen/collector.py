@@ -244,9 +244,9 @@ def _enrich_with_ownership(
         for fn in field_names:
             block = runtime._blocks[fn]
             type_name = _TAG_TYPE_MAP.get(block.type.name, block.type.name)
-            default = block.slot_config(1).default
-            fields.append((fn, type_name, default))
-            field_retentive[fn] = block.slot_config(1).retentive
+            sv = block.slot(1)
+            fields.append((fn, type_name, sv.default))
+            field_retentive[fn] = sv.retentive
 
         base_type: str | None = None
         if si.kind == "named_array":
@@ -339,7 +339,7 @@ def _enrich_with_ownership(
             hw_end=hw_end,
         )
         for logical_addr in entry.logical_addresses:
-            slot = logical_block.slot_config(logical_addr)
+            slot = logical_block.slot(logical_addr)
             decl.slots[logical_addr] = _BlockSlotDecl(
                 index=logical_addr,
                 tag_name=slot.name,

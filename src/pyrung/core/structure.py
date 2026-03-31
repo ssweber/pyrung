@@ -362,13 +362,9 @@ class _NamedArrayRuntime(_StructRuntime):
         if not isinstance(start, int) or not isinstance(end, int):
             raise TypeError("instance bounds must be integers.")
         if start < 1 or end < 1 or start > self.count or end > self.count:
-            raise IndexError(
-                f"instance bounds {start}..{end} out of range 1..{self.count}."
-            )
+            raise IndexError(f"instance bounds {start}..{end} out of range 1..{self.count}.")
         if start > end:
-            raise ValueError(
-                f"instance start ({start}) must be <= end ({end}) for {self.name}."
-            )
+            raise ValueError(f"instance start ({start}) must be <= end ({end}) for {self.name}.")
 
         tags: list[LiveTag] = []
         for inst in range(start, end + 1):

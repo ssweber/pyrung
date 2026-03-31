@@ -224,7 +224,7 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
 def test_yd_mirror_read_and_write(monkeypatch):
     outputs = Block("OutBits", TagType.BOOL, 1, 16)
     for idx in range(1, 17):
-        outputs.configure_slot(idx, default=True)
+        outputs.slot(idx, default=True)
     mapping = TagMap({outputs: y.select(1, 16)})
     with Program(strict=False) as prog:
         pass
@@ -272,7 +272,7 @@ def test_yd_mirror_read_and_write(monkeypatch):
 def test_xd_mirror_read(monkeypatch):
     inputs = Block("InBits", TagType.BOOL, 1, 16)
     for idx in range(1, 17):
-        inputs.configure_slot(idx, default=True)
+        inputs.slot(idx, default=True)
     mapping = TagMap({inputs: x.select(1, 16)})
     with Program(strict=False) as prog:
         pass
@@ -363,7 +363,7 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     outputs = Block("OutBits", TagType.BOOL, 1, 16)
     yd_word = 0x1234
     for idx in range(1, 17):
-        outputs.configure_slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
+        outputs.slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
     mapping = TagMap({coil: c[1], reg: ds[1], outputs: y.select(1, 16)})
     with Program(strict=False) as prog:
         pass

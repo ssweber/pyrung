@@ -350,9 +350,9 @@ class TestProjectBasic:
         assert (
             'AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 3, retentive=True)' in files["tags.py"]
         )
-        assert "AlarmCoil.configure_slot(1, name='AlarmCoil_PLC')" in files["tags.py"]
-        assert "AlarmCoil.configure_slot(2, name='AlarmCoil_LostData')" in files["tags.py"]
-        assert "AlarmCoil.configure_slot(3, name='AlarmCoil_Watchdog')" in files["tags.py"]
+        assert "AlarmCoil.slot(1, name='AlarmCoil_PLC')" in files["tags.py"]
+        assert "AlarmCoil.slot(2, name='AlarmCoil_LostData')" in files["tags.py"]
+        assert "AlarmCoil.slot(3, name='AlarmCoil_Watchdog')" in files["tags.py"]
         assert (
             "retentive=True"
             not in files["tags.py"].split(

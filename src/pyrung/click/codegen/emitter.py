@@ -304,7 +304,7 @@ def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
         if slot.comment_overridden:
             kwargs.append(f"comment={slot.comment!r}")
         if kwargs:
-            lines.append(f"{decl.var_name}.configure_slot({slot.index}, {', '.join(kwargs)})")
+            lines.append(f"{decl.var_name}.slot({slot.index}, {', '.join(kwargs)})")
 
     for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
         if slot.alias_var_name is not None:

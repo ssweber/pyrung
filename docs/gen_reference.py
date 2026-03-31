@@ -152,7 +152,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.InputBlock",
             "pyrung.OutputBlock",
             "pyrung.RangeComparison",
-            "pyrung.SlotConfig",
+            "pyrung.SlotView",
         ),
     ),
     ReferencePage(

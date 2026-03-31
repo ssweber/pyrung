@@ -47,7 +47,8 @@ from pyrung.core.memory_block import (
     InputBlock,
     OutputBlock,
     RangeComparison,
-    SlotConfig,
+    RangeSlotView,
+    SlotView,
 )
 from pyrung.core.program import (
     ForbiddenControlFlowError,
@@ -159,7 +160,8 @@ __all__ = [
     "IndirectRef",
     "IndirectExprRef",
     "RangeComparison",
-    "SlotConfig",
+    "RangeSlotView",
+    "SlotView",
     # Program structure
     "Program",
     "Rung",

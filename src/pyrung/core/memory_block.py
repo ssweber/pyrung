@@ -36,18 +36,94 @@ if TYPE_CHECKING:
 UNSET: Final = object()
 
 
-@dataclass(frozen=True)
-class SlotConfig:
-    """Effective runtime policy for one block slot."""
+class SlotView:
+    """Live view into a single block slot.
 
-    name: str
-    retentive: bool
-    default: Any
-    comment: str
-    name_overridden: bool
-    retentive_overridden: bool
-    default_overridden: bool
-    comment_overridden: bool
+    Returned by ``block.slot(addr)``.  Properties reflect the *current*
+    effective policy (inherited defaults + overrides).  Call ``.reset()``
+    to clear all overrides and restore inherited defaults.
+    """
+
+    __slots__ = ("_block", "_addr")
+
+    def __init__(self, block: Block, addr: int) -> None:
+        self._block = block
+        self._addr = addr
+
+    @property
+    def name(self) -> str:
+        return self._block._effective_slot_name(self._addr)
+
+    @property
+    def retentive(self) -> bool:
+        return self._block._effective_slot_policy(self._addr)[0]
+
+    @property
+    def default(self) -> Any:
+        return self._block._effective_slot_policy(self._addr)[1]
+
+    @property
+    def comment(self) -> str:
+        return self._block._effective_slot_comment(self._addr)
+
+    @property
+    def name_overridden(self) -> bool:
+        return self._addr in self._block._slot_name_overrides
+
+    @property
+    def retentive_overridden(self) -> bool:
+        return self._addr in self._block._slot_retentive_overrides
+
+    @property
+    def default_overridden(self) -> bool:
+        return self._addr in self._block._slot_default_overrides
+
+    @property
+    def comment_overridden(self) -> bool:
+        return self._addr in self._block._slot_comment_overrides
+
+    def reset(self) -> None:
+        """Clear all overrides, restoring inherited defaults."""
+        self._block._assert_not_materialized(self._addr, action="reset slot")
+        self._block._slot_name_overrides.pop(self._addr, None)
+        self._block._slot_retentive_overrides.pop(self._addr, None)
+        self._block._slot_default_overrides.pop(self._addr, None)
+        self._block._slot_comment_overrides.pop(self._addr, None)
+
+    def __repr__(self) -> str:
+        return (
+            f"SlotView({self._block.name}[{self._addr}], "
+            f"name={self.name!r}, retentive={self.retentive})"
+        )
+
+
+class RangeSlotView:
+    """Live view into a range of block slots.
+
+    Returned by ``block.slot(start, end)``.  Call ``.reset()`` to clear
+    all per-slot overrides for every address in the range.
+    """
+
+    __slots__ = ("_block", "_start", "_end")
+
+    def __init__(self, block: Block, start: int, end: int) -> None:
+        self._block = block
+        self._start = start
+        self._end = end
+
+    def reset(self) -> None:
+        """Clear all overrides for every address in this range."""
+        addresses = self._block._window_addresses(self._start, self._end)
+        for addr in addresses:
+            self._block._assert_not_materialized(addr, action="reset slot")
+        for addr in addresses:
+            self._block._slot_name_overrides.pop(addr, None)
+            self._block._slot_retentive_overrides.pop(addr, None)
+            self._block._slot_default_overrides.pop(addr, None)
+            self._block._slot_comment_overrides.pop(addr, None)
+
+    def __repr__(self) -> str:
+        return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
 
 
 @dataclass(eq=False)
@@ -242,113 +318,125 @@ class Block:
                 "Configure slot metadata before reading/indexing that slot."
             )
 
-    def rename_slot(self, addr: int, name: str) -> None:
-        """Set the first-class logical name for one slot before materialization."""
-        self._validate_address(addr)
-        self._assert_not_materialized(addr, action="rename")
-        self._slot_name_overrides[addr] = name
+    @overload
+    def slot(self, addr: int) -> SlotView: ...
 
-    def clear_slot_name(self, addr: int) -> None:
-        """Clear a first-class slot name override for one address."""
-        self._validate_address(addr)
-        self._assert_not_materialized(addr, action="clear slot name for")
-        self._slot_name_overrides.pop(addr, None)
-
-    def configure_slot(
+    @overload
+    def slot(
         self,
         addr: int,
+        *,
+        name: str = ...,
+        retentive: bool = ...,
+        default: Any = ...,
+        comment: str = ...,
+    ) -> SlotView: ...
+
+    @overload
+    def slot(self, addr: int, end: int) -> RangeSlotView: ...
+
+    @overload
+    def slot(
+        self,
+        addr: int,
+        end: int,
+        *,
+        retentive: bool = ...,
+        default: Any = ...,
+    ) -> RangeSlotView: ...
+
+    def slot(
+        self,
+        addr: int,
+        end: int | None = None,
         *,
         name: object = UNSET,
         retentive: bool | None = None,
         default: object = UNSET,
         comment: object = UNSET,
-    ) -> None:
-        """Set per-slot runtime policy before this slot is materialized."""
+    ) -> SlotView | RangeSlotView:
+        """Inspect, configure, or reset one or more block slots.
+
+        Single slot::
+
+            ds.slot(10)                                # inspect
+            ds.slot(10, name="Speed", retentive=True)  # configure
+            ds.slot(10).reset()                        # clear overrides
+
+        Range::
+
+            ds.slot(20, 30, retentive=True)            # configure range
+            ds.slot(20, 30).reset()                    # clear range
+
+        Args:
+            addr: Slot address (always required).
+            end: If given, defines an inclusive range ``[addr, end]``.
+            name: Custom tag name (single-slot only).
+            retentive: Retentive policy override.
+            default: Default value override.
+            comment: Comment override (empty string clears).
+
+        Returns:
+            `SlotView` for a single slot, `RangeSlotView` for a range.
+        """
+        if end is not None:
+            return self._slot_range(addr, end, retentive=retentive, default=default)
+
         self._validate_address(addr)
-        self._assert_not_materialized(addr, action="configure slot policy for")
 
-        if name is not UNSET:
-            if not isinstance(name, str):
-                raise TypeError(f"name must be a string, got {type(name).__name__}.")
-            self._slot_name_overrides[addr] = name
-        if retentive is not None:
-            self._slot_retentive_overrides[addr] = bool(retentive)
-        if default is not UNSET:
-            self._slot_default_overrides[addr] = default
-        if comment is not UNSET:
-            if not isinstance(comment, str):
-                raise TypeError(f"comment must be a string, got {type(comment).__name__}.")
-            if comment == "":
-                self._slot_comment_overrides.pop(addr, None)
-            else:
-                self._slot_comment_overrides[addr] = comment
+        has_config = (
+            name is not UNSET
+            or retentive is not None
+            or default is not UNSET
+            or comment is not UNSET
+        )
+        if has_config:
+            self._assert_not_materialized(addr, action="configure slot")
+            if name is not UNSET:
+                if not isinstance(name, str):
+                    raise TypeError(f"name must be a string, got {type(name).__name__}.")
+                self._slot_name_overrides[addr] = name
+            if retentive is not None:
+                self._slot_retentive_overrides[addr] = bool(retentive)
+            if default is not UNSET:
+                self._slot_default_overrides[addr] = default
+            if comment is not UNSET:
+                if not isinstance(comment, str):
+                    raise TypeError(f"comment must be a string, got {type(comment).__name__}.")
+                if comment == "":
+                    self._slot_comment_overrides.pop(addr, None)
+                else:
+                    self._slot_comment_overrides[addr] = comment
 
-    def configure_range(
+        return SlotView(self, addr)
+
+    def _slot_range(
         self,
         start: int,
         end: int,
         *,
         retentive: bool | None = None,
         default: object = UNSET,
-    ) -> None:
-        """Set per-slot policy for all valid addresses in the inclusive window."""
+    ) -> RangeSlotView:
         if start > end:
             raise ValueError(
-                f"configure_range start ({start}) must be <= end ({end}) for {self.name} block"
+                f"slot range start ({start}) must be <= end ({end}) for {self.name} block"
             )
         self._validate_window_bound(start, "Start")
         self._validate_window_bound(end, "End")
 
-        addresses = self._window_addresses(start, end)
-        for addr in addresses:
-            self._assert_not_materialized(addr, action="configure slot policy for")
+        has_config = retentive is not None or default is not UNSET
+        if has_config:
+            addresses = self._window_addresses(start, end)
+            for addr in addresses:
+                self._assert_not_materialized(addr, action="configure slot")
+            for addr in addresses:
+                if retentive is not None:
+                    self._slot_retentive_overrides[addr] = bool(retentive)
+                if default is not UNSET:
+                    self._slot_default_overrides[addr] = default
 
-        for addr in addresses:
-            if retentive is not None:
-                self._slot_retentive_overrides[addr] = bool(retentive)
-            if default is not UNSET:
-                self._slot_default_overrides[addr] = default
-
-    def clear_slot_config(self, addr: int) -> None:
-        """Clear per-slot policy overrides for one address."""
-        self._validate_address(addr)
-        self._assert_not_materialized(addr, action="clear slot policy for")
-        self._slot_retentive_overrides.pop(addr, None)
-        self._slot_default_overrides.pop(addr, None)
-        self._slot_comment_overrides.pop(addr, None)
-
-    def clear_range_config(self, start: int, end: int) -> None:
-        """Clear per-slot policy overrides for all valid addresses in a window."""
-        if start > end:
-            raise ValueError(
-                f"clear_range_config start ({start}) must be <= end ({end}) for {self.name} block"
-            )
-        self._validate_window_bound(start, "Start")
-        self._validate_window_bound(end, "End")
-
-        addresses = self._window_addresses(start, end)
-        for addr in addresses:
-            self._assert_not_materialized(addr, action="clear slot policy for")
-
-        for addr in addresses:
-            self._slot_retentive_overrides.pop(addr, None)
-            self._slot_default_overrides.pop(addr, None)
-            self._slot_comment_overrides.pop(addr, None)
-
-    def slot_config(self, addr: int) -> SlotConfig:
-        """Return the effective runtime slot policy without materializing a Tag."""
-        self._validate_address(addr)
-        retentive, default = self._effective_slot_policy(addr)
-        return SlotConfig(
-            name=self._effective_slot_name(addr),
-            retentive=retentive,
-            default=default,
-            comment=self._effective_slot_comment(addr),
-            name_overridden=addr in self._slot_name_overrides,
-            retentive_overridden=addr in self._slot_retentive_overrides,
-            default_overridden=addr in self._slot_default_overrides,
-            comment_overridden=addr in self._slot_comment_overrides,
-        )
+        return RangeSlotView(self, start, end)
 
     def _effective_slot_name(self, addr: int) -> str:
         return self._slot_name_overrides.get(addr, self._format_tag_name(addr))

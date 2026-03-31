@@ -76,9 +76,9 @@ x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 Pre-built blocks support per-slot runtime policy for retention, default values, and naming. Configure before first access to a slot:
 
 ```python
-ds.rename_slot(10, "RecipeStep")
-ds.configure_slot(200, retentive=True, default=123)
-td.configure_range(1, 5, retentive=False, default=0)
+ds.slot(10, name="RecipeStep")
+ds.slot(200, retentive=True, default=123)
+td.slot(1, 5, retentive=False, default=0)
 ```
 
 If a slot is already materialized (`block[n]` accessed), later configuration for that slot raises `ValueError`.

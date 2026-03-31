@@ -190,32 +190,29 @@ For UDTs, use `TagMap` to map individual field blocks — see the [Click Dialect
 
 ## Block configuration
 
-Blocks support per-slot overrides for name, retentive policy, and default value. All configuration must happen **before** you index the slot (before tag materialization).
+Blocks support per-slot overrides for name, retentive policy, default value, and comment. All configuration must happen **before** you index the slot (before tag materialization). The unified `slot()` method handles inspection, configuration, and reset.
 
-### rename_slot
-
-Give a slot a human-readable name:
+### Configuring slots
 
 ```python
 ds = Block("DS", TagType.INT, 1, 100)
-ds.rename_slot(1, "SpeedCommand")
-ds.rename_slot(2, "SpeedFeedback")
+
+# Name a slot
+ds.slot(1, name="SpeedCommand")
+ds.slot(2, name="SpeedFeedback")
 
 ds[1].name   # "SpeedCommand"
 ds[2].name   # "SpeedFeedback"
 ds[3].name   # "DS3" (default)
+
+# Override retentive policy and default
+ds.slot(10, retentive=True, default=999)
+
+# Configure a range (retentive and default only)
+ds.slot(20, 30, retentive=True)
 ```
 
-### configure_slot and configure_range
-
-Override retentive policy or default value for individual slots or ranges:
-
-```python
-ds.configure_slot(10, retentive=True, default=999)
-ds.configure_range(20, 30, retentive=True)
-```
-
-`configure_range` applies to all valid addresses in the inclusive window. For sparse blocks, it only affects addresses within the block's valid ranges.
+Range configuration applies to all valid addresses in the inclusive window. For sparse blocks, it only affects addresses within the block's valid ranges.
 
 ### default_factory
 
@@ -228,29 +225,28 @@ ds[1].default   # 10
 ds[5].default   # 50
 ```
 
-Per-slot overrides from `configure_slot` take precedence over `default_factory`.
+Per-slot overrides from `slot()` take precedence over `default_factory`.
 
-### Clearing overrides
+### Inspecting slots
 
-```python
-ds.clear_slot_name(1)            # Restore generated name
-ds.clear_slot_config(10)         # Clear retentive + default overrides
-ds.clear_range_config(20, 30)    # Clear overrides for a range
-```
-
-## SlotConfig
-
-`slot_config()` inspects the effective policy for a slot **without materializing** the tag:
+`slot()` without configuration kwargs returns a live `SlotView` — no tag materialization:
 
 ```python
-config = ds.slot_config(10)
+sv = ds.slot(10)
 
-config.name                 # Effective tag name
-config.retentive            # Effective retentive policy
-config.default              # Effective default value
-config.name_overridden      # True if rename_slot was called
-config.retentive_overridden # True if retentive was overridden
-config.default_overridden   # True if default was overridden
+sv.name                 # Effective tag name
+sv.retentive            # Effective retentive policy
+sv.default              # Effective default value
+sv.name_overridden      # True if name was overridden
+sv.retentive_overridden # True if retentive was overridden
+sv.default_overridden   # True if default was overridden
 ```
 
-The `*_overridden` flags tell you whether a value comes from an explicit override or from the block's inherited defaults. Useful for validation and diagnostic tooling.
+The `*_overridden` flags tell you whether a value comes from an explicit override or from the block's inherited defaults.
+
+### Resetting overrides
+
+```python
+ds.slot(10).reset()        # Clear all overrides for slot 10
+ds.slot(20, 30).reset()    # Clear all overrides for range 20–30
+```
