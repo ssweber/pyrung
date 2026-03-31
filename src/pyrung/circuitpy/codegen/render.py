@@ -175,13 +175,16 @@ def _render_code(ctx: CodegenContext) -> str:
 
     # 3) hardware bootstrap + roll-call
     lines.append(_section("Hardware bootstrap"))
-    lines.extend(
-        [
-            "base = P1AM.Base()",
-            "base.rollCall(_SLOT_MODULES)",
-            "",
-        ]
-    )
+    if ctx.hw.configured_slots:
+        lines.extend(
+            [
+                "base = P1AM.Base()",
+                "base.rollCall(_SLOT_MODULES)",
+                "",
+            ]
+        )
+    else:
+        lines.append("")
     if modbus_bootstrap_lines:
         lines.extend(modbus_bootstrap_lines)
     if needs_digitalio:

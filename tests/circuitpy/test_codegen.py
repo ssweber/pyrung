@@ -361,7 +361,8 @@ class TestGenerateCircuitPyAPI:
             with Rung(board.switch):
                 out(board.led)
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
-        assert "base.rollCall(_SLOT_MODULES)" in source_code
+        assert "base.rollCall" not in source_code
+        assert "P1AM.Base()" not in source_code
         assert "_SLOT_MODULES = []" in source_code
         assert "import digitalio" in source_code
 
