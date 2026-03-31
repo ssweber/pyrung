@@ -255,3 +255,46 @@ def test_named_array_select_instances_rejects_sparse_layout():
 
     with pytest.raises(ValueError, match="dense named_array layout"):
         alarms.select_instances(1)
+
+
+def test_named_array_always_number_forces_numbered_names_for_count_one():
+    @named_array(Int, stride=2, always_number=True)
+    class Task:
+        call = auto()
+        done = 0
+
+    task = cast(Any, Task)
+    assert task.call.name == "Task1_call"
+    assert task.done.name == "Task1_done"
+    assert task[1].call.name == "Task1_call"
+
+
+def test_named_array_always_number_has_no_effect_when_count_greater_than_one():
+    @named_array(Int, count=2, stride=2, always_number=True)
+    class Task:
+        call = auto()
+        done = 0
+
+    tasks = cast(Any, Task)
+    assert tasks[1].call.name == "Task1_call"
+    assert tasks[2].done.name == "Task2_done"
+
+
+def test_named_array_always_number_default_is_false():
+    @named_array(Int)
+    class Task:
+        call = auto()
+
+    task = cast(Any, Task)
+    assert task.always_number is False
+    assert task.call.name == "Task_call"
+
+
+def test_named_array_always_number_clone_preserves_flag():
+    @named_array(Int, always_number=True)
+    class Task:
+        call = auto()
+
+    Job = cast(Any, Task).clone("Job")
+    assert Job.call.name == "Job1_call"
+    assert Job.always_number is True

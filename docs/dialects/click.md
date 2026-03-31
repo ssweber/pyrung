@@ -224,7 +224,20 @@ Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, a
 </Channel:named_array(count,stride)>
 ```
 
-Nicknames must follow the pattern `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+
+**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_id` → field `id`).
+
+For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
+
+```
+<Task:named_array(1,2,always_number)>
+</Task:named_array(1,2,always_number)>
+```
+
+The `always_number` flag only matters for singletons — `count > 1` is always numbered regardless.
+
+**Instance rules.** Instance 1 defines the field template — all its fields must be explicitly named. Instance 2+ fields must match instance 1's pattern (correct field name and instance number). Unnamed slots in instance 2+ are fine (silently skipped). A field name in instance 2+ that wasn't defined in instance 1 is an error.
 
 Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 
@@ -236,6 +249,13 @@ Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 | DS104 | `Channel2_id` | |
 | DS105 | `Channel2_val` | |
 | DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
+
+Singleton with compact names (`count=1`):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS501 | `Task_call` | `<Task:named_array(1,2)>` |
+| DS502 | `Task_done` | `</Task:named_array(1,2)>` |
 
 If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 
@@ -257,7 +277,7 @@ fill(0, RecipeProfile.select_instances(1, 2))
 
 Sparse or gapped named arrays still import as raw hardware spans for whole-range operations, because there is no gapless whole-instance view to emit.
 
-**UDTs** use explicit `:udt` markers per field and memory bank:
+**UDTs** use explicit `:udt` markers per field and memory bank. Each attribute range is a separate marker:
 
 ```text
 <Motor.speed:udt>
@@ -265,24 +285,18 @@ Sparse or gapped named arrays still import as raw hardware spans for whole-range
 <Config.timeout:udt />
 ```
 
-For a singleton UDT that lives in one contiguous bank span, you can also use a
-block-style marker and infer fields from underscored nicknames:
-
-```text
-<SFCExample:udt>
-DS501  SFCExample_xCall
-DS502
-DS503  SFCExample_xInit
-</SFCExample:udt>
-```
-
-Inside a ``Base:udt`` span, non-empty nicknames must follow ``Base_field`` and
-blank rows are treated as gaps. This shorthand is import-only; exporting a
-reconstructed UDT still uses the canonical ``Base.field:udt`` markers.
+The importer collects all `Base.field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
 
 Bare dotted tags such as `<Motor.speed>` are grouping-only and do not reconstruct a UDT.
 
 Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
+
+**Conflict rules.** The same base name cannot be used across different marker kinds. These combinations are all errors:
+
+- Same name as both `:named_array` and `.attr:udt`
+- Same name as both `:block` and `:named_array`
+- Same name as both `:block` and `.attr:udt`
+- Duplicate `:named_array` or `:block` markers for the same name
 
 ### To nickname file
 

@@ -181,7 +181,7 @@ class _StructRuntime:
         count: int,
         field_specs: tuple[_FieldSpec, ...],
         *,
-        numbered: bool = False,
+        always_number: bool = False,
         kind: str = "udt",
     ):
         _validate_name(name)
@@ -190,7 +190,7 @@ class _StructRuntime:
 
         self.name = name
         self.count = count
-        self.numbered = numbered
+        self.always_number = always_number
         self._structure_kind = kind
         self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
@@ -211,7 +211,7 @@ class _StructRuntime:
                 retentive=field_spec.retentive,
                 address_formatter=(
                     _make_compact_formatter(name, field_spec.name)
-                    if self.count == 1 and not self.numbered
+                    if self.count == 1 and not self.always_number
                     else _make_formatter(name, field_spec.name)
                 ),
                 default_factory=_make_default_factory(field_spec.default),
@@ -228,7 +228,7 @@ class _StructRuntime:
             name=name,
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
-            numbered=self.numbered,
+            always_number=self.always_number,
             kind=self._structure_kind,
         )
 
@@ -273,6 +273,7 @@ class _NamedArrayRuntime(_StructRuntime):
         count: int,
         stride: int,
         field_specs: tuple[_FieldSpec, ...],
+        always_number: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -283,7 +284,13 @@ class _NamedArrayRuntime(_StructRuntime):
         self.type = type
         self.stride = stride
         self._instance_block = Block(name=name, type=type, start=1, end=count * stride)
-        super().__init__(name=name, count=count, field_specs=field_specs, kind="named_array")
+        super().__init__(
+            name=name,
+            count=count,
+            field_specs=field_specs,
+            always_number=always_number,
+            kind="named_array",
+        )
 
     def clone(
         self,
@@ -299,6 +306,7 @@ class _NamedArrayRuntime(_StructRuntime):
             count=self.count if count is None else count,
             stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
+            always_number=self.always_number,
         )
 
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
@@ -371,7 +379,7 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1, numbered: bool = False) -> Callable[[type[Any]], _StructRuntime]:
+def udt(*, count: int = 1, always_number: bool = False) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
@@ -379,13 +387,15 @@ def udt(*, count: int = 1, numbered: bool = False) -> Callable[[type[Any]], _Str
         name = cls.__name__
         _validate_name(name)
         field_specs = _parse_udt_fields(cls)
-        return _StructRuntime(name=name, count=count, field_specs=field_specs, numbered=numbered)
+        return _StructRuntime(
+            name=name, count=count, field_specs=field_specs, always_number=always_number
+        )
 
     return _decorator
 
 
 def named_array(
-    base_type: object, *, count: int = 1, stride: int = 1
+    base_type: object, *, count: int = 1, stride: int = 1, always_number: bool = False
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -402,6 +412,7 @@ def named_array(
             count=count,
             stride=stride,
             field_specs=field_specs,
+            always_number=always_number,
         )
 
     return _decorator

@@ -3300,6 +3300,7 @@ class TestStructuredCodegen:
         assert "Mirror: ds[1]" in code
         assert "system.rtc.year2" not in code
 
+
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""
 

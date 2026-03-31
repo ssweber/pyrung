@@ -171,6 +171,7 @@ class _StructureDecl:
     hw_end: int  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
+    always_number: bool = False
 
 
 @dataclass

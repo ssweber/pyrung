@@ -103,9 +103,9 @@ mapping = TagMap([
 ], include_system=False)
 ```
 
-Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`.
+Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`. If the CSV uses numbered names for a singleton (e.g. `Config1_timeout`), the importer infers `always_number=True` and emits `@named_array(Int, always_number=True)`.
 
-For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md).
+For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md). For the CSV marker format, see [CSV marker format](click.md#csv-marker-format).
 
 ### What codegen infers
 

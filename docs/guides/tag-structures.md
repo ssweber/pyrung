@@ -26,10 +26,10 @@ class Pump:
 # Tags: Pump1_running, Pump1_flow, Pump2_running, ...
 ```
 
-If you want numbered names even for a singleton, use `numbered=True`:
+If you want numbered names even for a singleton, use `always_number=True`:
 
 ```python
-@udt(count=1, numbered=True)
+@udt(count=1, always_number=True)
 class Heater:
     on: Bool
     temp: Real

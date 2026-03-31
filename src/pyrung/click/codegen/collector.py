@@ -294,6 +294,7 @@ def _enrich_with_ownership(
             hw_end=hw_end,
             field_retentive=field_retentive,
             field_hw=per_field_hw,
+            always_number=getattr(runtime, "always_number", False),
         )
         seen_structures[si.name] = decl
         collection.structures.append(decl)

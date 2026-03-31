@@ -110,7 +110,7 @@ _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
 _BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
 _IDENTIFIER_TOKEN_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 _EXPLICIT_NAMED_ARRAY_RE = re.compile(
-    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):named_array\((?P<count>[1-9][0-9]*),(?P<stride>[1-9][0-9]*)\)$"
+    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):named_array\((?P<count>[1-9][0-9]*),(?P<stride>[1-9][0-9]*)(?:,(?P<always_number>always_number))?\)$"
 )
 _EXPLICIT_UDT_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE})\.(?P<field>{_IDENTIFIER_TOKEN_RE}):udt$"
@@ -302,6 +302,7 @@ def _parse_structured_block_name(
     int | None,
     str,
     int | None,
+    bool | None,
 ]:
     if name.endswith(":group"):
         base = name[: -len(":group")]
@@ -309,10 +310,11 @@ def _parse_structured_block_name(
             raise ValueError(
                 f"Invalid group block tag {name!r}. Expected Base:group with a non-empty base name."
             )
-        return ("group", base, None, None, None, name, None)
+        return ("group", base, None, None, None, name, None, None)
 
     named_array_match = _EXPLICIT_NAMED_ARRAY_RE.fullmatch(name)
     if named_array_match is not None:
+        explicit_always_number = named_array_match.group("always_number") is not None
         return (
             "named_array",
             named_array_match.group("base"),
@@ -321,6 +323,7 @@ def _parse_structured_block_name(
             int(named_array_match.group("stride")),
             name,
             None,
+            True if explicit_always_number else None,
         )
 
     if ":named_array" in name:
@@ -339,6 +342,7 @@ def _parse_structured_block_name(
             None,
             name,
             None,
+            None,
         )
 
     if name.endswith(":udt") or ":udt" in name:
@@ -348,7 +352,7 @@ def _parse_structured_block_name(
 
     block_match = _EXPLICIT_BLOCK_RE.fullmatch(name)
     if block_match is not None:
-        return ("plain", None, None, None, None, block_match.group("base"), None)
+        return ("plain", None, None, None, None, block_match.group("base"), None, None)
 
     block_start_match = _EXPLICIT_BLOCK_START_RE.fullmatch(name)
     if block_start_match is not None:
@@ -357,7 +361,16 @@ def _parse_structured_block_name(
             explicit_start = int(start_token.split("=", maxsplit=1)[1])
         else:
             explicit_start = int(start_token)
-        return ("plain", None, None, None, None, block_start_match.group("base"), explicit_start)
+        return (
+            "plain",
+            None,
+            None,
+            None,
+            None,
+            block_start_match.group("base"),
+            explicit_start,
+            None,
+        )
 
     if ":block" in name:
         raise ValueError(
@@ -365,7 +378,7 @@ def _parse_structured_block_name(
             "Base:block(start=n)."
         )
 
-    return ("group", name, None, None, None, name, None)
+    return ("group", name, None, None, None, name, None, None)
 
 
 def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -> _BlockImportSpec:
@@ -766,6 +779,14 @@ class TagMap:
             apply_block_rows(logical_block, spec)
             mappings.append(logical_block.map_to(spec.hardware_range))
 
+        seen_base_names: dict[str, str] = {}  # base_name → kind label
+
+        def _check_base_name(name: str, kind_label: str) -> None:
+            existing = seen_base_names.get(name)
+            if existing is not None:
+                raise ValueError(f"Name {name!r} used as both {existing} and {kind_label}.")
+            seen_base_names[name] = kind_label
+
         def append_structure(structure: StructuredImport) -> None:
             if any(existing.name == structure.name for existing in structures):
                 raise ValueError(f"Duplicate structured import name {structure.name!r}.")
@@ -773,9 +794,16 @@ class TagMap:
 
         for block_range in ranges:
             spec = _build_block_spec(rows, block_range)
-            kind, base_name, field_name, count, stride, logical_block_name, explicit_start = (
-                _parse_structured_block_name(spec.name)
-            )
+            (
+                kind,
+                base_name,
+                field_name,
+                count,
+                stride,
+                logical_block_name,
+                explicit_start,
+                explicit_always_number,
+            ) = _parse_structured_block_name(spec.name)
 
             if kind != "group":
                 if block_range.name in seen_semantic_block_names:
@@ -784,6 +812,7 @@ class TagMap:
                 covered_rows.update(range(block_range.start_idx, block_range.end_idx + 1))
 
             if kind == "plain":
+                _check_base_name(logical_block_name, "block")
                 import_plain_block(
                     spec,
                     logical_name=logical_block_name,
@@ -796,6 +825,7 @@ class TagMap:
 
             if kind == "named_array":
                 assert base_name is not None
+                _check_base_name(base_name, "named_array")
                 assert count is not None
                 assert stride is not None
 
@@ -810,10 +840,46 @@ class TagMap:
                     address: position
                     for position, address in enumerate(spec.hardware_addresses, start=0)
                 }
-                nickname_pattern = re.compile(
+                numbered_pattern = re.compile(
                     rf"^{re.escape(base_name)}(?P<instance>[1-9][0-9]*)_(?P<field>[A-Za-z_][A-Za-z0-9_]*)$"
                 )
+                compact_pattern = (
+                    re.compile(rf"^{re.escape(base_name)}_(?P<field>[A-Za-z_][A-Za-z0-9_]*)$")
+                    if count == 1
+                    else None
+                )
 
+                # Determine which naming convention to use.
+                if count > 1 or explicit_always_number is True:
+                    use_always_number = True
+                elif explicit_always_number is False:
+                    use_always_number = False
+                else:
+                    # count==1, no explicit flag — detect from CSV field names.
+                    has_numbered = False
+                    has_compact = False
+                    for row_idx in range(spec.start_idx, spec.end_idx + 1):
+                        row = rows[row_idx]
+                        if row.memory_type != spec.memory_type or row.nickname == "":
+                            continue
+                        if address_to_position.get(row.address) is None:
+                            continue
+                        if _is_marker_only_boundary_row(row, block_name=spec.name):
+                            continue
+                        if numbered_pattern.fullmatch(row.nickname):
+                            has_numbered = True
+                        elif compact_pattern is not None and compact_pattern.fullmatch(
+                            row.nickname
+                        ):
+                            has_compact = True
+                    use_always_number = has_numbered and not has_compact
+
+                nickname_pattern = (
+                    numbered_pattern if use_always_number or count > 1 else compact_pattern
+                )
+                assert nickname_pattern is not None
+
+                is_compact = not use_always_number and count == 1
                 field_offsets: dict[str, int] = {}
                 field_rows: dict[tuple[str, int], AddressRecord] = {}
                 for row_idx in range(spec.start_idx, spec.end_idx + 1):
@@ -826,15 +892,25 @@ class TagMap:
                     if row.nickname == "":
                         continue
 
+                    if _is_marker_only_boundary_row(row, block_name=spec.name):
+                        continue
+
                     match = nickname_pattern.fullmatch(row.nickname)
                     display = format_address_display(row.memory_type, row.address)
                     if match is None:
+                        if is_compact:
+                            expected_fmt = f"{base_name}_{{field}}"
+                        else:
+                            expected_fmt = f"{base_name}{{instance}}_{{field}}"
                         raise ValueError(
                             f"Named array {base_name!r} row at {display} has invalid nickname "
-                            f"{row.nickname!r}; expected {base_name}{{instance}}_{{field}}."
+                            f"{row.nickname!r}; expected {expected_fmt}."
                         )
 
-                    instance = int(match.group("instance"))
+                    if is_compact:
+                        instance = 1
+                    else:
+                        instance = int(match.group("instance"))
                     field = match.group("field")
                     if instance < 1 or instance > count:
                         raise ValueError(
@@ -875,6 +951,21 @@ class TagMap:
                         f"Named array {base_name!r} did not infer any fields from nicknames."
                     )
 
+                if count > 1:
+                    # Instance 1 defines the template — all fields must appear there.
+                    instance1_fields = {f for (f, inst) in field_rows if inst == 1}
+                    if not instance1_fields:
+                        raise ValueError(
+                            f"Named array {base_name!r} instance 1 has no named fields; "
+                            "instance 1 must define the field template."
+                        )
+                    for f, inst in field_rows:
+                        if inst > 1 and f not in instance1_fields:
+                            raise ValueError(
+                                f"Named array {base_name!r} instance {inst} introduces field "
+                                f"{f!r} not present in instance 1."
+                            )
+
                 ordered_fields_with_offsets = sorted(
                     field_offsets.items(), key=lambda item: item[1]
                 )
@@ -899,10 +990,12 @@ class TagMap:
                 for field, _ in ordered_fields_with_offsets:
                     runtime_namespace[field] = Field()
                 runtime_type = cast(type[Any], type(base_name, (), runtime_namespace))
+                inferred_always_number = use_always_number and count == 1
                 runtime = named_array(
                     _tag_type_for_memory_type(spec.memory_type),
                     count=count,
                     stride=stride,
+                    always_number=inferred_always_number,
                 )(runtime_type)
                 runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
 
@@ -950,6 +1043,8 @@ class TagMap:
             assert kind == "udt"
             assert base_name is not None
             assert field_name is not None
+            if base_name not in udt_groups:
+                _check_base_name(base_name, "udt")
             udt_groups[base_name].append((spec, field_name))
 
         for base_name, grouped_specs in udt_groups.items():
@@ -1149,7 +1244,14 @@ class TagMap:
 
             memory_type, start_address, end_address = span
             stride = cast(int, structure.stride)
-            block_name = f"{structure.name}:named_array({structure.count},{stride})"
+            always_number_suffix = (
+                ",always_number"
+                if getattr(structure.runtime, "always_number", False) and structure.count == 1
+                else ""
+            )
+            block_name = (
+                f"{structure.name}:named_array({structure.count},{stride}{always_number_suffix})"
+            )
             if structure.count * stride == 1:
                 write_boundary_comment(
                     memory_type,

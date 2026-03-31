@@ -326,10 +326,12 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
     if decl.stride is not None and decl.stride != len(decl.fields):
         stride_part = f", stride={decl.stride}"
     count_part = f"count={decl.count}" if decl.count > 1 else ""
+    always_number_part = ", always_number=True" if decl.always_number and decl.count == 1 else ""
     deco_args = decl.base_type or "Int"
     if count_part:
         deco_args += f", {count_part}"
     deco_args += stride_part
+    deco_args += always_number_part
     lines.append(f"@named_array({deco_args})")
     lines.append(f"class {decl.name}:")
     for field_name, _type_name, default in decl.fields:
@@ -343,8 +345,12 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
 
 def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
     """Emit a @udt decorator + class."""
-    count_part = f"count={decl.count}" if decl.count > 1 else ""
-    lines.append(f"@udt({count_part})")
+    parts: list[str] = []
+    if decl.count > 1:
+        parts.append(f"count={decl.count}")
+    if decl.always_number and decl.count == 1:
+        parts.append("always_number=True")
+    lines.append(f"@udt({', '.join(parts)})")
     lines.append(f"class {decl.name}:")
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)

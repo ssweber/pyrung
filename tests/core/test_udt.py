@@ -231,8 +231,8 @@ def test_udt_count_one_fields_and_field_names():
     assert alarm.fields["On"].retentive is True
 
 
-def test_udt_numbered_forces_numbered_names_for_count_one():
-    @udt(numbered=True)
+def test_udt_always_number_forces_numbered_names_for_count_one():
+    @udt(always_number=True)
     class Alarm:
         id: Int
         On: Bool
@@ -243,8 +243,8 @@ def test_udt_numbered_forces_numbered_names_for_count_one():
     assert alarm[1].id.name == "Alarm1_id"
 
 
-def test_udt_numbered_has_no_effect_when_count_greater_than_one():
-    @udt(count=3, numbered=True)
+def test_udt_always_number_has_no_effect_when_count_greater_than_one():
+    @udt(count=3, always_number=True)
     class Alarm:
         id: Int
 
@@ -253,21 +253,21 @@ def test_udt_numbered_has_no_effect_when_count_greater_than_one():
     assert alarms[3].id.name == "Alarm3_id"
 
 
-def test_udt_numbered_clone_preserves_flag():
-    @udt(numbered=True)
+def test_udt_always_number_clone_preserves_flag():
+    @udt(always_number=True)
     class Device:
         total: Int
 
     Pump = cast(Any, Device).clone("Pump")
     assert Pump.total.name == "Pump1_total"
-    assert Pump.numbered is True
+    assert Pump.always_number is True
 
 
-def test_udt_numbered_default_is_false():
+def test_udt_always_number_default_is_false():
     @udt()
     class Alarm:
         id: Int
 
     alarm = cast(Any, Alarm)
-    assert alarm.numbered is False
+    assert alarm.always_number is False
     assert alarm.id.name == "Alarm_id"
