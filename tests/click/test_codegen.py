@@ -2526,7 +2526,7 @@ class TestStructuredCodegen:
 
         assert "@named_array(Int, count=2, stride=2)" in code
         assert "class Channel:" in code
-        assert "id = 0" in code
+        assert "id = Field(retentive=False)" in code
         assert "Channel[1].id" in code or "Channel[2].id" in code
         assert "val =" not in code
 

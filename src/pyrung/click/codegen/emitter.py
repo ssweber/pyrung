@@ -4,6 +4,16 @@ import re
 from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _parallel_renders_with_pipe
+# Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
+_TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
+    "Bool": False,
+    "Int": True,
+    "Dint": True,
+    "Real": True,
+    "Word": True,
+    "Char": True,
+}
+
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -334,10 +344,12 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
     deco_args += always_number_part
     lines.append(f"@named_array({deco_args})")
     lines.append(f"class {decl.name}:")
+    type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(decl.base_type or "Int", True)
     for field_name, _type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
-        if retentive:
-            lines.append(f"    {field_name} = Field(retentive=True)")
+        if retentive != type_default_ret:
+            # Only emit Field() when retentive differs from the type default.
+            lines.append(f"    {field_name} = Field(retentive={retentive})")
         else:
             default_repr = _format_literal(default)
             lines.append(f"    {field_name} = {default_repr}")
@@ -354,8 +366,9 @@ def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
     lines.append(f"class {decl.name}:")
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
-        if retentive:
-            lines.append(f"    {field_name}: {type_name} = Field(retentive=True)")
+        type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+        if retentive != type_default_ret:
+            lines.append(f"    {field_name}: {type_name} = Field(retentive={retentive})")
         else:
             default_repr = _format_literal(default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
