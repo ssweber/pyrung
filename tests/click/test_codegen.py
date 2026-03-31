@@ -2813,8 +2813,8 @@ class TestStructuredCodegen:
         assert "C1004_to_C1006:" not in code
         assert orig == repro
 
-    def test_dense_named_array_backing_range_codegen_uses_select_instances(self, tmp_path: Path):
-        """Dense named_array backing windows should rewrite to select_instances()."""
+    def test_dense_named_array_backing_range_codegen_uses_instance_select(self, tmp_path: Path):
+        """Dense named_array backing windows should rewrite to instance_select()."""
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import DataType
 
@@ -2884,10 +2884,10 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "@named_array(Int, count=2)" in code
-        assert "fill(0, Channel.select_instances(1, 2))" in code
+        assert "fill(0, Channel.instance_select(1, 2))" in code
 
-    def test_sparse_named_array_backing_range_stays_raw_bank(self, tmp_path: Path):
-        """Named_array windows with stride gaps should remain raw bank ranges."""
+    def test_sparse_named_array_backing_range_uses_instance_select(self, tmp_path: Path):
+        """Named_array windows with stride gaps should rewrite to instance_select()."""
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import DataType
 
@@ -2974,9 +2974,8 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "fill(0, ds.select(501, 506))" in code
-        assert "@named_array(" not in code
-        assert "Sensor.select_instances(" not in code
+        assert "@named_array(Int, count=2, stride=3)" in code
+        assert "fill(0, Sensor.instance_select(1, 2))" in code
 
     def test_bare_block_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
         """Bare block markers should be grouping-only and not reconstruct semantics."""

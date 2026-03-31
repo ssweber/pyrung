@@ -19,10 +19,10 @@ Out-of-range values are **clamped** to the destination type's min/max. This is d
 blockcopy(DS.select(1, 10), DS.select(11, 20))   # Copy DS1..DS10 → DS11..DS20
 ```
 
-Dense named arrays also support whole-instance copies:
+Named arrays also support whole-instance copies:
 
 ```python
-blockcopy(RecipeProfile.select_instances(2), WorkingRecipe.select(1, 3))
+blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
 ```
 
 Source and destination ranges must have the same length.

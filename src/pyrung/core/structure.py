@@ -23,7 +23,8 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
-        "select_instances",
+        "instance",
+        "instance_select",
         "stride",
         "type",
     }
@@ -182,8 +183,8 @@ class _SelectedTagRange(BlockRange):
 
     def __repr__(self) -> str:
         if self._instance_start == self._instance_end:
-            return f"{self._label}.select_instances({self._instance_start})"
-        return f"{self._label}.select_instances({self._instance_start}, {self._instance_end})"
+            return f"{self._label}.instance({self._instance_start})"
+        return f"{self._label}.instance_select({self._instance_start}, {self._instance_end})"
 
 
 class _StructRuntime:
@@ -349,30 +350,30 @@ class _NamedArrayRuntime(_StructRuntime):
                 entries.append(logical.map_to(hardware))
         return entries
 
-    def select_instances(self, start: int, end: int | None = None) -> BlockRange:
-        """Select one or more full named-array instances as a dense BlockRange."""
-        if end is None:
-            end = start
+    def instance(self, index: int) -> BlockRange:
+        """Select a single named-array instance as a contiguous BlockRange."""
+        return self._instance_range(index, index)
+
+    def instance_select(self, start: int, end: int) -> BlockRange:
+        """Select a range of named-array instances as a contiguous BlockRange."""
+        return self._instance_range(start, end)
+
+    def _instance_range(self, start: int, end: int) -> BlockRange:
         if not isinstance(start, int) or not isinstance(end, int):
-            raise TypeError("select_instances() expects integer instance bounds.")
+            raise TypeError("instance bounds must be integers.")
         if start < 1 or end < 1 or start > self.count or end > self.count:
             raise IndexError(
-                f"select_instances() bounds {start}..{end} out of range 1..{self.count}."
+                f"instance bounds {start}..{end} out of range 1..{self.count}."
             )
         if start > end:
             raise ValueError(
-                f"select_instances() start ({start}) must be <= end ({end}) for {self.name}."
-            )
-        if self.stride != len(self._field_order):
-            raise ValueError(
-                "select_instances() requires a dense named_array layout "
-                "(stride must equal field count)."
+                f"instance start ({start}) must be <= end ({end}) for {self.name}."
             )
 
         tags: list[LiveTag] = []
-        for instance in range(start, end + 1):
+        for inst in range(start, end + 1):
             for field_name in self._field_order:
-                tags.append(self._blocks[field_name][instance])
+                tags.append(self._blocks[field_name][inst])
 
         raw_start = (start - 1) * self.stride + 1
         raw_end = end * self.stride

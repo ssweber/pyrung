@@ -268,14 +268,12 @@ If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 | DS105 | `Sensor2_scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
-For dense named arrays (`stride == field count`), Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.select_instances(...)` instead of raw bank ranges. Example:
+Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
 
 ```python
-blockcopy(RecipeProfile.select_instances(2), WorkingRecipe.select(1, 3))
-fill(0, RecipeProfile.select_instances(1, 2))
+blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
+fill(0, RecipeProfile.instance_select(1, 2))
 ```
-
-Sparse or gapped named arrays still import as raw hardware spans for whole-range operations, because there is no gapless whole-instance view to emit.
 
 **UDTs** use explicit `:udt` markers per field and memory bank. Each attribute range is a separate marker:
 

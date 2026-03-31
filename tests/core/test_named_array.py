@@ -242,29 +242,29 @@ def test_named_array_count_one_map_to_succeeds():
     assert [cast(Tag, entry.target).name for entry in entries] == ["HW1", "HW2"]
 
 
-def test_named_array_select_instances_returns_dense_range():
+def test_named_array_instance_returns_single_instance_range():
     @named_array(Int, count=2, stride=2)
     class Alarm:
         id = auto()
         val = 0
 
     alarms = cast(Any, Alarm)
-    selected = alarms.select_instances(1)
+    selected = alarms.instance(1)
 
     assert isinstance(selected, BlockRange)
     assert list(selected.addresses) == [1, 2]
     assert [tag.name for tag in selected.tags()] == ["Alarm1_id", "Alarm1_val"]
-    assert repr(selected) == "Alarm.select_instances(1)"
+    assert repr(selected) == "Alarm.instance(1)"
 
 
-def test_named_array_select_instances_multiple_instances():
+def test_named_array_instance_select_multiple_instances():
     @named_array(Int, count=3, stride=2)
     class Alarm:
         id = auto()
         val = 0
 
     alarms = cast(Any, Alarm)
-    selected = alarms.select_instances(2, 3)
+    selected = alarms.instance_select(2, 3)
 
     assert list(selected.addresses) == [3, 4, 5, 6]
     assert [tag.name for tag in selected.tags()] == [
@@ -279,18 +279,38 @@ def test_named_array_select_instances_multiple_instances():
         "Alarm2_val",
         "Alarm2_id",
     ]
+    assert repr(selected) == "Alarm.instance_select(2, 3)"
 
 
-def test_named_array_select_instances_rejects_sparse_layout():
+def test_named_array_instance_works_with_sparse_layout():
     @named_array(Int, count=2, stride=3)
     class Alarm:
         id = auto()
         val = 0
 
     alarms = cast(Any, Alarm)
+    selected = alarms.instance(1)
 
-    with pytest.raises(ValueError, match="dense named_array layout"):
-        alarms.select_instances(1)
+    assert list(selected.addresses) == [1, 2, 3]
+    assert [tag.name for tag in selected.tags()] == ["Alarm1_id", "Alarm1_val"]
+
+
+def test_named_array_instance_select_works_with_sparse_layout():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.instance_select(1, 2)
+
+    assert list(selected.addresses) == [1, 2, 3, 4, 5, 6]
+    assert [tag.name for tag in selected.tags()] == [
+        "Alarm1_id",
+        "Alarm1_val",
+        "Alarm2_id",
+        "Alarm2_val",
+    ]
 
 
 def test_named_array_always_number_forces_numbered_names_for_count_one():

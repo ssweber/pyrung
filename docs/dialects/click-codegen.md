@@ -80,14 +80,14 @@ mapping = TagMap([
 ], include_system=False)
 ```
 
-Dense named-array instance windows can also round-trip as whole-instance selects when the ladder uses an exact aligned span:
+Named-array instance windows round-trip as whole-instance selects when the ladder uses an exact aligned span:
 
 ```python
-blockcopy(RecipeProfile.select_instances(2), WorkingRecipe.select(1, 3))
-fill(0, RecipeProfile.select_instances(1, 2))
+blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
+fill(0, RecipeProfile.instance_select(1, 2))
 ```
 
-This only applies to dense layouts where `stride == field count`. Sparse or gapped named arrays still stay as raw bank ranges such as `ds.select(...)`.
+This works for both dense and sparse layouts — the range length must be an exact multiple of the stride and start at an instance boundary.
 
 For UDTs (fields spanning different memory banks), per-field `map_to` is emitted:
 
