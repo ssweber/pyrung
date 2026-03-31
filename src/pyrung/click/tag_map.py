@@ -110,7 +110,7 @@ _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
 _BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
 _IDENTIFIER_TOKEN_RE = r"[A-Za-z_][A-Za-z0-9_]*"
 _EXPLICIT_NAMED_ARRAY_RE = re.compile(
-    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):named_array\((?P<count>[1-9][0-9]*),(?P<stride>[1-9][0-9]*)(?:,(?P<always_number>always_number))?\)$"
+    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):named_array(?:\((?P<args>[^)]*)\))?$"
 )
 _EXPLICIT_UDT_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE})\.(?P<field>{_IDENTIFIER_TOKEN_RE}):udt$"
@@ -314,13 +314,39 @@ def _parse_structured_block_name(
 
     named_array_match = _EXPLICIT_NAMED_ARRAY_RE.fullmatch(name)
     if named_array_match is not None:
-        explicit_always_number = named_array_match.group("always_number") is not None
+        count_val: int | None = None
+        stride_val: int | None = None
+        explicit_always_number = False
+        args_str = named_array_match.group("args")
+        if args_str is not None:
+            tokens = [t.strip() for t in args_str.split(",") if t.strip()]
+            numeric_tokens: list[int] = []
+            for token in tokens:
+                if token == "always_number":
+                    explicit_always_number = True
+                elif token.isdigit() and int(token) >= 1:
+                    numeric_tokens.append(int(token))
+                else:
+                    raise ValueError(
+                        f"Invalid named_array argument {token!r} in {name!r}. "
+                        "Expected positive integers and/or 'always_number'."
+                    )
+            if len(numeric_tokens) == 1:
+                count_val = numeric_tokens[0]
+            elif len(numeric_tokens) == 2:
+                count_val = numeric_tokens[0]
+                stride_val = numeric_tokens[1]
+            elif len(numeric_tokens) > 2:
+                raise ValueError(
+                    f"Too many numeric arguments in {name!r}. "
+                    "Expected :named_array, :named_array(count), or :named_array(count,stride)."
+                )
         return (
             "named_array",
             named_array_match.group("base"),
             None,
-            int(named_array_match.group("count")),
-            int(named_array_match.group("stride")),
+            count_val,
+            stride_val,
             name,
             None,
             True if explicit_always_number else None,
@@ -328,8 +354,8 @@ def _parse_structured_block_name(
 
     if ":named_array" in name:
         raise ValueError(
-            f"Invalid named_array block tag {name!r}. Expected Base:named_array(count,stride) "
-            "with identifier tokens and positive integers."
+            f"Invalid named_array block tag {name!r}. Expected Base:named_array "
+            "or Base:named_array(count) or Base:named_array(count,stride)."
         )
 
     udt_match = _EXPLICIT_UDT_RE.fullmatch(name)
@@ -825,14 +851,23 @@ class TagMap:
             if kind == "named_array":
                 assert base_name is not None
                 _check_base_name(base_name, "named_array")
-                assert count is not None
-                assert stride is not None
+
+                total_rows = len(spec.hardware_addresses)
+                if count is None:
+                    count = 1
+                if stride is None:
+                    if total_rows % count != 0:
+                        raise ValueError(
+                            f"Named array {base_name!r} has {total_rows} rows "
+                            f"which is not divisible by count={count}."
+                        )
+                    stride = total_rows // count
 
                 expected_span = count * stride
-                if len(spec.hardware_addresses) != expected_span:
+                if total_rows != expected_span:
                     raise ValueError(
                         f"Named array {base_name!r} expects span {expected_span}, "
-                        f"got {len(spec.hardware_addresses)}."
+                        f"got {total_rows}."
                     )
 
                 address_to_position = {

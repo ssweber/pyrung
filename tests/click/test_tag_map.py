@@ -1094,6 +1094,141 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
         TagMap.from_nickname_file(path)
 
 
+def test_from_nickname_file_named_array_bare_marker_infers_count_and_stride(tmp_path):
+    """Task:named_array (no args) → count=1, stride inferred from row span."""
+    path = tmp_path / "na_bare.csv"
+    records = {
+        get_addr_key("DS", 601): AddressRecord(
+            memory_type="DS",
+            address=601,
+            nickname="Task_call",
+            comment="<Task:named_array>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 602): AddressRecord(
+            memory_type="DS",
+            address=602,
+            nickname="Task_done",
+            comment="</Task:named_array>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 1
+    assert struct.stride == 2
+    runtime = cast(Any, struct.runtime)
+    assert restored.resolve(runtime.call) == "DS601"
+    assert restored.resolve(runtime.done) == "DS602"
+
+
+def test_from_nickname_file_named_array_count_only_infers_stride(tmp_path):
+    """Task:named_array(2) → count=2, stride inferred from row span / count."""
+    path = tmp_path / "na_count_only.csv"
+    records = {
+        get_addr_key("DS", 701): AddressRecord(
+            memory_type="DS",
+            address=701,
+            nickname="Task1_call",
+            comment="<Task:named_array(2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 702): AddressRecord(
+            memory_type="DS",
+            address=702,
+            nickname="Task1_done",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 703): AddressRecord(
+            memory_type="DS",
+            address=703,
+            nickname="Task2_call",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 704): AddressRecord(
+            memory_type="DS",
+            address=704,
+            nickname="Task2_done",
+            comment="</Task:named_array(2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 2
+    assert struct.stride == 2
+    runtime = cast(Any, struct.runtime)
+    assert restored.resolve(runtime[1].call) == "DS701"
+    assert restored.resolve(runtime[2].done) == "DS704"
+
+
+def test_from_nickname_file_named_array_indivisible_row_count_raises(tmp_path):
+    """Task:named_array(3) with 4 rows → not divisible, raises."""
+    path = tmp_path / "na_indivisible.csv"
+    records = {
+        get_addr_key("DS", 801): AddressRecord(
+            memory_type="DS",
+            address=801,
+            nickname="Task1_a",
+            comment="<Task:named_array(3)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 802): AddressRecord(
+            memory_type="DS",
+            address=802,
+            nickname="",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 803): AddressRecord(
+            memory_type="DS",
+            address=803,
+            nickname="",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 804): AddressRecord(
+            memory_type="DS",
+            address=804,
+            nickname="",
+            comment="</Task:named_array(3)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="not divisible"):
+        TagMap.from_nickname_file(path)
+
+
 def test_from_nickname_file_rejects_named_array_then_udt_same_name(tmp_path):
     """Same base name as :named_array then .attr:udt → error."""
     path = tmp_path / "na_then_udt.csv"

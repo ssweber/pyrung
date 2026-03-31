@@ -217,14 +217,15 @@ Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, a
 
 **Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
 
-**Named arrays** encode count and stride in the marker:
+**Named arrays** use `:named_array` markers. Count and stride are optional — the importer infers them from the row span between open/close tags:
 
 ```
-<Channel:named_array(count,stride)>
-</Channel:named_array(count,stride)>
+<Task:named_array>            count=1, stride from row count
+<Task:named_array(2)>         count=2, stride = rows / count
+<Task:named_array(2,3)>       count=2, stride=3 (fully explicit)
 ```
 
-Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+When both count and stride are given, the row span must equal `count × stride`. When stride is omitted, the row count must be divisible by count.
 
 **Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_id` → field `id`).
 
