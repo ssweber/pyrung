@@ -121,21 +121,20 @@ def _parse_subroutines(
     sub_entries = sorted(
         (p, p.stem) for p in subroutine_dir.iterdir() if p.is_file() and p.suffix.lower() == ".csv"
     )
-    # call_names keys are lowercased slugs; file stems may preserve original
-    # casing (e.g. sub_fillFilling.csv).  Match case-insensitively so both
-    # sides find each other, while preserving the original call() name for
-    # the generated @subroutine("name") string.
-    stem_lower_to_path: dict[str, tuple[Path, str]] = {
-        slug.lower(): (p, slug) for p, slug in sub_entries
+    # call_names keys are slugified; file stems may preserve original
+    # casing (e.g. sub_fillFilling.csv).  Slugify file stems too so both
+    # sides match consistently.
+    stem_slug_to_path: dict[str, tuple[Path, str]] = {
+        _slugify(slug): (p, slug) for p, slug in sub_entries
     }
-    missing = sorted(slug for slug in call_names if slug not in stem_lower_to_path)
+    missing = sorted(slug for slug in call_names if slug not in stem_slug_to_path)
     if missing:
         expected = ", ".join(f"{slug}.csv" for slug in missing)
         raise ValueError(f"Missing subroutine CSV file(s) in {subroutine_dir}: {expected}")
 
     subs: list[_SubroutineInfo] = []
     for sub_path, stem in sub_entries:
-        name = call_names.get(stem.lower(), stem)
+        name = call_names.get(_slugify(stem), stem)
         raw = _parse_csv(sub_path)
         analyzed = _analyze_rungs(raw)
         subs.append(_SubroutineInfo(name=name, analyzed=analyzed))
