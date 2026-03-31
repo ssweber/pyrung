@@ -4,6 +4,7 @@ import re
 from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _parallel_renders_with_pipe
+
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
 _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
     "Bool": False,

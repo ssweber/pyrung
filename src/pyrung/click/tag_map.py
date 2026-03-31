@@ -866,8 +866,7 @@ class TagMap:
                 expected_span = count * stride
                 if total_rows != expected_span:
                     raise ValueError(
-                        f"Named array {base_name!r} expects span {expected_span}, "
-                        f"got {total_rows}."
+                        f"Named array {base_name!r} expects span {expected_span}, got {total_rows}."
                     )
 
                 address_to_position = {

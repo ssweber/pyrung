@@ -425,10 +425,7 @@ def _enrich_with_ownership(
                 first_field = decl.fields[0][0]
                 start_instance = start_owner.instance or 1
                 range_len = range_decl.end - range_decl.start + 1
-                if (
-                    start_owner.field == first_field
-                    and range_len % decl.stride == 0
-                ):
+                if start_owner.field == first_field and range_len % decl.stride == 0:
                     n_instances = range_len // decl.stride
                     end_instance = start_instance + n_instances - 1
                     ok = end_instance <= decl.count
