@@ -2977,6 +2977,79 @@ class TestStructuredCodegen:
         assert "@named_array(Int, count=2, stride=3)" in code
         assert "fill(0, Sensor.instance_select(1, 2))" in code
 
+    def test_partial_named_array_range_gets_comment(self, tmp_path: Path):
+        """Sub-instance range within a named_array emits raw select with comment."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 4)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(2, 3))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Channel1_val",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Channel2_val",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "ds.select(502, 503)" in code
+        assert "# Channel: val..id" in code
+
     def test_bare_block_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
         """Bare block markers should be grouping-only and not reconstruct semantics."""
         from pyclickplc.addresses import AddressRecord, get_addr_key

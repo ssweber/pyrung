@@ -20,6 +20,7 @@ from pyrung.click.codegen.constants import (
     _DROP_KWARGS,
     _FUNC_RE,
     _OPERAND_PREFIXES,
+    _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
     Leaf,
@@ -737,10 +738,21 @@ def _emit_instruction(
         pin_rendered = _render_pin(pin, collection, nicknames, structured_map)
         pin_strs.append(pin_rendered)
 
-    if pin_strs:
-        lines.append(f"{pad}{rendered}{''.join(pin_strs)}")
-    else:
-        lines.append(f"{pad}{rendered}")
+    line = f"{pad}{rendered}{''.join(pin_strs)}"
+
+    # Append inline comment for partial-structure ranges
+    if collection.range_comments:
+        comments: list[str] = []
+        all_tokens = af + " ".join(pin.arg for pin in instr.pins if pin.arg)
+        for rm in _RANGE_RE.finditer(all_tokens):
+            range_key = rm.group(0)
+            comment = collection.range_comments.get(range_key)
+            if comment is not None and comment not in comments:
+                comments.append(comment)
+        if comments:
+            line += "  " + "  ".join(comments)
+
+    lines.append(line)
 
 
 _SEARCH_OP_RE = re.compile(r"^(.+?)\s+(==|!=|<=|>=|<|>)\s+(.+)$")

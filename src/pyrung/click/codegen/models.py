@@ -179,8 +179,9 @@ class _SemanticRender:
     """How an imported operand/range should render and what symbol it imports."""
 
     expr: str
-    import_kind: str  # "tag", "block", or "structure"
+    import_kind: str  # "tag", "block", "structure", or "comment"
     import_name: str
+    comment: str | None = None
 
 
 @dataclass
@@ -210,6 +211,7 @@ class _OperandCollection:
     structures: list[_StructureDecl] = field(default_factory=list)
     semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)
     semantic_ranges: dict[str, _SemanticRender] = field(default_factory=dict)
+    range_comments: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

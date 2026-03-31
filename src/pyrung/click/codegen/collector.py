@@ -416,77 +416,102 @@ def _enrich_with_ownership(
         if start_owner is None:
             continue
 
+        resolved = False
+
         # Named-array whole-instance ranges (end may land on a gap slot for sparse)
         if start_owner.structure_type == "named_array":
             decl = _ensure_structure_decl(start_owner.structure_name)
-            if decl is None:
-                continue
-            first_field = decl.fields[0][0]
-            if start_owner.field != first_field:
-                continue
-            start_instance = start_owner.instance or 1
-            range_len = range_decl.end - range_decl.start + 1
-            if range_len % decl.stride != 0:
-                continue
-            n_instances = range_len // decl.stride
-            end_instance = start_instance + n_instances - 1
-            if end_instance > decl.count:
-                continue
-            if end_owner is not None and end_owner.structure_type == "named_array":
-                if end_owner.structure_name != start_owner.structure_name:
-                    continue
-            expr = (
-                f"{start_owner.structure_name}.instance({start_instance})"
-                if start_instance == end_instance
-                else f"{start_owner.structure_name}.instance_select({start_instance}, {end_instance})"
-            )
-            collection.semantic_ranges[range_str] = _SemanticRender(
-                expr=expr,
-                import_kind="structure",
-                import_name=start_owner.structure_name,
-            )
-            continue
+            if decl is not None:
+                first_field = decl.fields[0][0]
+                start_instance = start_owner.instance or 1
+                range_len = range_decl.end - range_decl.start + 1
+                if (
+                    start_owner.field == first_field
+                    and range_len % decl.stride == 0
+                ):
+                    n_instances = range_len // decl.stride
+                    end_instance = start_instance + n_instances - 1
+                    ok = end_instance <= decl.count
+                    if ok and end_owner is not None and end_owner.structure_type == "named_array":
+                        ok = end_owner.structure_name == start_owner.structure_name
+                    if ok:
+                        expr = (
+                            f"{start_owner.structure_name}.instance({start_instance})"
+                            if start_instance == end_instance
+                            else f"{start_owner.structure_name}.instance_select({start_instance}, {end_instance})"
+                        )
+                        collection.semantic_ranges[range_str] = _SemanticRender(
+                            expr=expr,
+                            import_kind="structure",
+                            import_name=start_owner.structure_name,
+                        )
+                        resolved = True
 
-        if end_owner is None:
-            continue
-        if start_owner.structure_type == "block" and end_owner.structure_type == "block":
-            if start_owner.structure_name != end_owner.structure_name:
-                continue
-            if start_owner.instance is None or end_owner.instance is None:
-                continue
-            if start_owner.instance > end_owner.instance:
-                continue
+        if not resolved and end_owner is not None:
+            if start_owner.structure_type == "block" and end_owner.structure_type == "block":
+                if (
+                    start_owner.structure_name == end_owner.structure_name
+                    and start_owner.instance is not None
+                    and end_owner.instance is not None
+                    and start_owner.instance <= end_owner.instance
+                ):
+                    decl = _ensure_plain_block_decl(start_owner.structure_name)
+                    if decl is not None:
+                        collection.semantic_ranges[range_str] = _SemanticRender(
+                            expr=f"{decl.var_name}.select({start_owner.instance}, {end_owner.instance})",
+                            import_kind="block",
+                            import_name=decl.var_name,
+                        )
+                        resolved = True
 
-            decl = _ensure_plain_block_decl(start_owner.structure_name)
-            if decl is None:
-                continue
-            collection.semantic_ranges[range_str] = _SemanticRender(
-                expr=f"{decl.var_name}.select({start_owner.instance}, {end_owner.instance})",
-                import_kind="block",
-                import_name=decl.var_name,
-            )
-            continue
+            if (
+                not resolved
+                and start_owner.structure_type == "udt"
+                and end_owner.structure_type == "udt"
+                and start_owner.structure_name == end_owner.structure_name
+                and start_owner.field == end_owner.field
+                and start_owner.instance is not None
+                and end_owner.instance is not None
+                and start_owner.instance <= end_owner.instance
+            ):
+                _ensure_structure_decl(start_owner.structure_name)
+                collection.semantic_ranges[range_str] = _SemanticRender(
+                    expr=(
+                        f"{start_owner.structure_name}.{start_owner.field}.select("
+                        f"{start_owner.instance}, {end_owner.instance})"
+                    ),
+                    import_kind="structure",
+                    import_name=start_owner.structure_name,
+                )
+                resolved = True
 
-        if start_owner.structure_type != "udt" or end_owner.structure_type != "udt":
-            continue
-        if start_owner.structure_name != end_owner.structure_name:
-            continue
-        if start_owner.field != end_owner.field:
-            continue
-        if start_owner.instance is None or end_owner.instance is None:
-            continue
-        if start_owner.instance > end_owner.instance:
-            continue
+        # Partial-structure range: keep raw ds.select() but add a comment
+        if not resolved:
+            comment = _build_partial_range_comment(start_owner, end_owner)
+            if comment is not None:
+                collection.range_comments[range_str] = comment
 
-        _ensure_structure_decl(start_owner.structure_name)
-        collection.semantic_ranges[range_str] = _SemanticRender(
-            expr=(
-                f"{start_owner.structure_name}.{start_owner.field}.select("
-                f"{start_owner.instance}, {end_owner.instance})"
-            ),
-            import_kind="structure",
-            import_name=start_owner.structure_name,
-        )
+
+def _build_partial_range_comment(
+    start_owner: OwnerInfo,
+    end_owner: OwnerInfo | None,
+) -> str | None:
+    """Build an inline comment for a range that falls within a structure."""
+    name = start_owner.structure_name
+    start_field = start_owner.field
+    end_field = end_owner.field if end_owner is not None else None
+
+    # Both endpoints in the same structure
+    if end_owner is not None and end_owner.structure_name == name:
+        if start_field == end_field:
+            return f"# {name}.{start_field}"
+        return f"# {name}: {start_field}..{end_field}"
+
+    # Only start is owned
+    if start_field is not None:
+        return f"# {name}.{start_field}.."
+
+    return None
 
 
 def _scan_token_for_operands(
