@@ -72,7 +72,7 @@ def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path)
     assert rows[get_addr_key("DS", 3001)].initial_value == "1"
     assert rows[get_addr_key("DS", 3002)].initial_value == "2"
     assert rows[get_addr_key("DS", 3003)].nickname == "Alarm1_val"
-    assert rows[get_addr_key("DS", 3003)].retentive is False
+    assert rows[get_addr_key("DS", 3003)].retentive is True  # inherits Int default
     assert rows[get_addr_key("DS", 3001)].comment == "<Alarm.id:udt>"
     assert rows[get_addr_key("DS", 3002)].comment == "</Alarm.id:udt>"
     assert rows[get_addr_key("DS", 4001)].nickname == "AlarmPacked1_id"

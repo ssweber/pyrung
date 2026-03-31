@@ -34,6 +34,14 @@ _PRIMITIVE_TYPE_MAP = {
     float: TagType.REAL,
     str: TagType.CHAR,
 }
+_TYPE_DEFAULT_RETENTIVE: dict[TagType, bool] = {
+    TagType.BOOL: False,
+    TagType.INT: True,
+    TagType.DINT: True,
+    TagType.REAL: True,
+    TagType.WORD: True,
+    TagType.CHAR: True,
+}
 _STRING_TYPE_MAP = {
     "bool": TagType.BOOL,
     "bit": TagType.BOOL,
@@ -52,17 +60,23 @@ _STRING_TYPE_MAP = {
 
 @dataclass(frozen=True)
 class Field:
-    """Field metadata used by `udt` and `named_array` declarations."""
+    """Field metadata used by `udt` and `named_array` declarations.
+
+    When ``retentive`` is ``None`` (the default), the field inherits
+    its retentive policy from the resolved tag type (e.g. ``Int`` →
+    ``True``, ``Bool`` → ``False``).  Pass an explicit ``bool`` only
+    when you need to override the type default.
+    """
 
     type: TagType | None = None
     default: Any = UNSET
-    retentive: bool = False
+    retentive: bool | None = None
 
     def __new__(
         cls,
         type: TagType | None = None,
         default: Any = UNSET,
-        retentive: bool = False,
+        retentive: bool | None = None,
     ) -> Any:
         _ = (type, default, retentive)
         return super().__new__(cls)
@@ -496,7 +510,7 @@ def _should_skip_named_array_attr(name: str, value: object, *, classvar_names: s
 def _build_field_spec(
     field_name: str, type: TagType, raw_default: object, *, source: str
 ) -> _FieldSpec:
-    retentive = False
+    retentive: bool | None = None
     default_spec = raw_default
 
     if isinstance(raw_default, Field):
@@ -512,6 +526,9 @@ def _build_field_spec(
             )
         retentive = raw_default.retentive
         default_spec = raw_default.default
+
+    if retentive is None:
+        retentive = _TYPE_DEFAULT_RETENTIVE[type]
 
     _validate_auto_default_allowed(field_name, default_spec, type)
     return _FieldSpec(name=field_name, type=type, default=default_spec, retentive=retentive)

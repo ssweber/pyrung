@@ -99,6 +99,42 @@ def test_named_array_width_greater_than_one_emits_tag_mappings():
     assert all(isinstance(entry.target, Tag) for entry in entries)
 
 
+def test_named_array_retentive_inherits_from_base_type():
+    """Fields inherit retentive from the named_array base type."""
+    from pyrung.core import Bool
+
+    @named_array(Int, count=1, stride=2)
+    class IntFields:
+        speed = 0
+        preset = 0
+
+    @named_array(Bool, count=1, stride=2)
+    class BoolFields:
+        running = None
+        alarm = None
+
+    int_fields = cast(Any, IntFields)
+    bool_fields = cast(Any, BoolFields)
+
+    assert int_fields.speed.retentive is True  # Int → retentive
+    assert int_fields.preset.retentive is True
+    assert bool_fields.running.retentive is False  # Bool → non-retentive
+    assert bool_fields.alarm.retentive is False
+
+
+def test_named_array_retentive_explicit_field_overrides_base_type():
+    """Field(retentive=...) overrides the base type default."""
+
+    @named_array(Int, count=1, stride=2)
+    class Setpoints:
+        speed = Field(retentive=False)  # override Int's default True
+        pressure = 0  # inherits Int default True
+
+    sp = cast(Any, Setpoints)
+    assert sp.speed.retentive is False
+    assert sp.pressure.retentive is True
+
+
 def test_named_array_auto_default_restricted_by_base_type():
     with pytest.raises(ValueError, match="not numeric"):
 

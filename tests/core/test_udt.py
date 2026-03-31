@@ -64,6 +64,34 @@ def test_udt_retentive_policy_inherited_by_generated_tags():
     assert alarms[1].On.retentive is False
 
 
+def test_udt_retentive_inherits_from_base_type():
+    """Fields without explicit retentive inherit from their tag type."""
+
+    @udt(count=1)
+    class Sensor:
+        active: Bool  # Bool → retentive=False
+        reading: Int  # Int → retentive=True
+        hi_limit: Real  # Real → retentive=True
+
+    sensor = cast(Any, Sensor)
+    assert sensor.active.retentive is False
+    assert sensor.reading.retentive is True
+    assert sensor.hi_limit.retentive is True
+
+
+def test_udt_retentive_explicit_overrides_type_default():
+    """Field(retentive=...) overrides the type default."""
+
+    @udt(count=1)
+    class Sensor:
+        active: Bool = Field(retentive=True)  # type: ignore[invalid-assignment]
+        reading: Int = Field(retentive=False)  # type: ignore[invalid-assignment]
+
+    sensor = cast(Any, Sensor)
+    assert sensor.active.retentive is True  # overridden from Bool default False
+    assert sensor.reading.retentive is False  # overridden from Int default True
+
+
 def test_udt_rejects_invalid_declarations():
     with pytest.raises(ValueError, match="count"):
 
