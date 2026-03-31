@@ -43,5 +43,5 @@ with Program() as logic:
         copy(0, board.neopixel.b)
 
 
-source = generate_circuitpy(logic, P1AM(), target_scan_ms=10.0)
-print(source)
+result = generate_circuitpy(logic, P1AM(), target_scan_ms=10.0)
+print(result.code)

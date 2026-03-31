@@ -107,7 +107,7 @@ def main() -> int:
     for number, module_name in slot_specs:
         hw.slot(number, module_name)
 
-    source = generate_circuitpy(
+    result = generate_circuitpy(
         program_obj,
         hw,
         target_scan_ms=args.target_scan_ms,
@@ -116,11 +116,15 @@ def main() -> int:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(source, encoding="utf-8")
+    output_path.write_text(result.code, encoding="utf-8")
 
-    print(f"Wrote {output_path} ({len(source.splitlines())} lines)")
+    if result.runtime:
+        runtime_path = output_path.parent / "pyrung_rt.py"
+        runtime_path.write_text(result.runtime, encoding="utf-8")
+        print(f"Wrote {runtime_path} ({len(result.runtime.splitlines())} lines)")
+    print(f"Wrote {output_path} ({len(result.code.splitlines())} lines)")
     if args.stdout:
-        print(source)
+        print(result.code)
     return 0
 
 

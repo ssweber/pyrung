@@ -23,7 +23,7 @@ from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 # ── Hardware ──────────────────────────────────────────────────────────────
 hw = P1AM()
 inputs = hw.slot(1, "P1-08SIM")   # 8-ch discrete input simulator
-outputs = hw.slot(2, "P1-08TRS")  # 8-ch relay output
+outputs = hw.slot(2, "P1-15TD2")  # 15-ch discrete output (24V source)
 
 ManualOverride = inputs[1]         # toggle: freeze current phase
 LocalPedButton = inputs[2]         # local pedestrian push-button
@@ -118,13 +118,13 @@ mapping = TagMap({
 })
 
 # ── Modbus configs ────────────────────────────────────────────────────────
-server_cfg = ModbusServerConfig(ip="192.168.1.200")
+server_cfg = ModbusServerConfig(ip="192.168.1.221")
 
-ped_panel = ModbusTcpTarget(name="ped_panel", ip="192.168.1.50", port=502, device_id=1)
+ped_panel = ModbusTcpTarget(name="ped_panel", ip="192.168.1.122", port=502, device_id=1)
 client_cfg = ModbusClientConfig(targets=(ped_panel,))
 
 # ── Generate ──────────────────────────────────────────────────────────────
-source = generate_circuitpy(
+result = generate_circuitpy(
     logic,
     hw,
     target_scan_ms=10.0,
@@ -133,4 +133,4 @@ source = generate_circuitpy(
     modbus_client=client_cfg,
     tag_map=mapping,
 )
-print(source)
+print(result.code)
