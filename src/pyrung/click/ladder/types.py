@@ -156,7 +156,10 @@ class _OutputSlot:
 
 # ---- Internal helpers ----
 def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+    # Insert underscores at CamelCase boundaries (e.g. AlarmHandler → Alarm_Handler)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
     return slug if slug else "subroutine"
 
 

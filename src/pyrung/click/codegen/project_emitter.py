@@ -158,19 +158,23 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     # Tag declarations
     has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
     if has_flat_tags:
+        lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection, suppress_comments=True)
         lines.append("")
 
     if collection.plain_blocks:
+        lines.append("# --- Blocks ---")
         _emit_plain_block_declarations(lines, collection)
         lines.append("")
 
     # Structure declarations
     if collection.structures:
+        lines.append("# --- Structures ---")
         _emit_structure_declarations(lines, collection)
         lines.append("")
 
     # TagMap
+    lines.append("# --- Tag Map ---")
     _emit_tag_map(lines, collection)
     lines.append("")
 

@@ -374,8 +374,11 @@ def _render_inline_range(prefix: str, start_num: int, end_num: int) -> str:
 
 
 def _slugify(name: str) -> str:
-    """Convert a subroutine name to a filename slug (matching ladder.py)."""
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+    """Convert a subroutine name to a snake_case filename slug."""
+    # Insert underscores at CamelCase boundaries (e.g. AlarmHandler → Alarm_Handler)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
     return slug if slug else "subroutine"
 
 
