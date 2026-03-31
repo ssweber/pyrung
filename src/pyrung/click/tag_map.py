@@ -33,6 +33,10 @@ from pyrung.core.memory_block import UNSET
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
 
+_RESERVED_SYSTEM_HARDWARE_KEYS: frozenset[int] = frozenset(
+    get_addr_key(*parse_address(slot.hardware.name)) for slot in SYSTEM_CLICK_SLOTS
+)
+
 
 @dataclass(frozen=True)
 class MappedSlot:
@@ -1015,7 +1019,7 @@ class TagMap:
                 continue
             if row.nickname == "":
                 continue
-            if row.memory_type in {"SC", "SD"}:
+            if get_addr_key(row.memory_type, row.address) in _RESERVED_SYSTEM_HARDWARE_KEYS:
                 continue
 
             register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)

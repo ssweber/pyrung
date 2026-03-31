@@ -16,6 +16,8 @@ from pyrung.click import (
     ds,
     ladder_to_pyrung,
     pyrung_to_ladder,
+    sc,
+    sd,
     t,
     td,
     x,
@@ -3232,6 +3234,71 @@ class TestStructuredCodegen:
         assert "Config.timeout" in code
         assert "Config[1]" not in code
 
+    def test_nickname_csv_preserves_custom_non_reserved_sc_sd_aliases(self, tmp_path: Path):
+        """Custom SC/SD nicknames should import for non-reserved system addresses."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        ModeReady = Bool("ModeReady")
+        RecipeShadow = Int("RecipeShadow")
+        Mirror = Int("Mirror")
+
+        with Program() as logic:
+            with Rung(ModeReady):
+                copy(RecipeShadow, Mirror)
+
+        mapping = TagMap(
+            {ModeReady: sc[20], RecipeShadow: sd[91], Mirror: ds[1]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("SC", 20): AddressRecord(
+                    memory_type="SC",
+                    address=20,
+                    nickname="ModeReady",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("SD", 91): AddressRecord(
+                    memory_type="SD",
+                    address=91,
+                    nickname="RecipeShadow",
+                    comment="",
+                    initial_value="123",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Mirror",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'ModeReady = Bool("ModeReady")' in code
+        assert 'RecipeShadow = Int("RecipeShadow")' in code
+        assert 'Mirror = Int("Mirror")' in code
+        assert "with Rung(ModeReady):" in code
+        assert "copy(RecipeShadow, Mirror)" in code
+        assert "ModeReady: sc[20]" in code
+        assert "RecipeShadow: sd[91]" in code
+        assert "Mirror: ds[1]" in code
+        assert "system.rtc.year2" not in code
 
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""

@@ -1481,6 +1481,57 @@ def test_owner_of_structure_wins_over_block(tmp_path):
     assert owner.structure_name == "Packed"
 
 
+def test_from_nickname_file_preserves_custom_sc_sd_nicknames_for_non_reserved_addresses(tmp_path):
+    path = tmp_path / "custom_system_banks.csv"
+    records = {
+        get_addr_key("SC", 20): AddressRecord(
+            memory_type="SC",
+            address=20,
+            nickname="ModeReady",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("SD", 91): AddressRecord(
+            memory_type="SD",
+            address=91,
+            nickname="RecipeShadow",
+            comment="",
+            initial_value="123",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("SD", 20): AddressRecord(
+            memory_type="SD",
+            address=20,
+            nickname="DontOverrideRtcYear2",
+            comment="",
+            initial_value="2026",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    custom_slots = {slot.logical_name: slot for slot in restored.mapped_slots() if slot.source == "user"}
+    system_slots = {
+        slot.logical_name: slot for slot in restored.mapped_slots() if slot.source == "system"
+    }
+
+    assert restored.resolve("ModeReady") == "SC20"
+    assert restored.resolve("RecipeShadow") == "SD91"
+    assert custom_slots["ModeReady"].hardware_address == "SC20"
+    assert custom_slots["RecipeShadow"].hardware_address == "SD91"
+
+    with pytest.raises(KeyError):
+        restored.resolve("DontOverrideRtcYear2")
+
+    assert restored.resolve("rtc.year2") == "SD20"
+    assert system_slots["rtc.year2"].hardware_address == "SD20"
+
+
 # ── tags_from_plc_data ──────────────────────────────────────────────
 
 
