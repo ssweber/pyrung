@@ -534,7 +534,7 @@ class TestStrictDslControlFlowGuard:
 
         with pytest.raises(ForbiddenControlFlowError, match="Use `~Tag`"):
             with Program():
-                with Rung(not A):  # type: ignore[arg-type]
+                with Rung(not A):  # ty: ignore[invalid-argument-type]
                     out(Light)
 
     def test_context_manager_rejects_for_loop(self):
@@ -992,7 +992,7 @@ class TestCopyAndMathReferenceExamples:
         with Program():
             with pytest.raises(TypeError):
                 with Rung(Enable):
-                    calc(1 + 2, Result, mode="decimal")  # type: ignore[unknown-argument]
+                    calc(1 + 2, Result, mode="decimal")  # ty: ignore[unknown-argument]
 
 
 class TestClickPrebuiltProgramIntegration:

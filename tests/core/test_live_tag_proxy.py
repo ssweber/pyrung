@@ -26,7 +26,7 @@ def test_live_value_requires_active_runner_scope() -> None:
         _ = flag.value
 
     with pytest.raises(RuntimeError, match="runner.active"):
-        flag.value = True  # type: ignore[invalid-assignment]
+        flag.value = True  # ty: ignore[invalid-assignment]
 
 
 def test_live_value_reads_pending_write_until_next_step() -> None:
@@ -35,7 +35,7 @@ def test_live_value_reads_pending_write_until_next_step() -> None:
 
     with runner.active():
         assert count.value == 7
-        count.value = 9  # type: ignore[invalid-assignment]
+        count.value = 9  # ty: ignore[invalid-assignment]
         assert count.value == 9
 
     assert runner._pending_patches == {"Count": 9}
@@ -59,9 +59,9 @@ def test_live_value_supports_block_input_and_output_tags() -> None:
     runner = PLCRunner(logic=[])
 
     with runner.active():
-        ds[1].value = 123  # type: ignore[invalid-assignment]
-        x[1].value = True  # type: ignore[invalid-assignment]
-        y[1].value = True  # type: ignore[invalid-assignment]
+        ds[1].value = 123  # ty: ignore[invalid-assignment]
+        x[1].value = True  # ty: ignore[invalid-assignment]
+        y[1].value = True  # ty: ignore[invalid-assignment]
         assert ds[1].value == 123
         assert x[1].value is True
         assert y[1].value is True
@@ -89,8 +89,8 @@ def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
     runner = PLCRunner(logic=[])
 
     with runner.active():
-        alarm_1 = alarms[1]  # type: ignore[not-subscriptable]
-        sub_name_1 = sub_name[1]  # type: ignore[not-subscriptable]
+        alarm_1 = alarms[1]  # ty: ignore[not-subscriptable]
+        sub_name_1 = sub_name[1]  # ty: ignore[not-subscriptable]
         alarm_1.id.value = 42
         alarm_1.on.value = True
         sub_name_1.xCall.value = 1
@@ -109,12 +109,12 @@ def test_live_value_supports_system_tags_and_enforces_read_only() -> None:
 
     with runner.active():
         assert system.sys.always_on.value is True
-        system.rtc.apply_time.value = True  # type: ignore[invalid-assignment]
+        system.rtc.apply_time.value = True  # ty: ignore[invalid-assignment]
         assert system.rtc.apply_time.value is True
 
     with pytest.raises(ValueError, match="read-only system point"):
         with runner.active():
-            system.sys.always_on.value = False  # type: ignore[invalid-assignment]
+            system.sys.always_on.value = False  # ty: ignore[invalid-assignment]
 
 
 def test_active_scope_is_context_local_and_supports_nesting() -> None:
@@ -123,10 +123,10 @@ def test_active_scope_is_context_local_and_supports_nesting() -> None:
     runner_b = PLCRunner(logic=[])
 
     with runner_a.active():
-        value.value = 1  # type: ignore[invalid-assignment]
+        value.value = 1  # ty: ignore[invalid-assignment]
         assert value.value == 1
         with runner_b.active():
-            value.value = 2  # type: ignore[invalid-assignment]
+            value.value = 2  # ty: ignore[invalid-assignment]
             assert value.value == 2
         assert value.value == 1
 
@@ -153,4 +153,4 @@ def test_patch_rejects_invalid_key_types() -> None:
     runner = PLCRunner(logic=[])
 
     with pytest.raises(TypeError, match="str or Tag"):
-        runner.patch({1: True})  # type: ignore[arg-type]
+        runner.patch({1: True})  # ty: ignore[invalid-argument-type]

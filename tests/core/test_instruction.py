@@ -1345,7 +1345,7 @@ class TestCalcInstruction:
         Result = Word("Result")
 
         with pytest.raises(TypeError):
-            CalcInstruction(MaskA + 1, Result, mode="hex")  # type: ignore[unknown-argument]
+            CalcInstruction(MaskA + 1, Result, mode="hex")  # ty: ignore[unknown-argument]
 
     def test_math_literal_expression(self):
         """MATH works with literal values."""
@@ -1457,7 +1457,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="comparison must use a .select\\(\\) range"):
             SearchInstruction(
-                RangeComparison(Int("NotARange"), "==", 1),  # type: ignore[arg-type]
+                RangeComparison(Int("NotARange"), "==", 1),  # ty: ignore[invalid-argument-type]
                 result=Result,
                 found=Found,
             )
@@ -1470,7 +1470,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="expects a comparison expression"):
             SearchInstruction(
-                "not a comparison",  # type: ignore[arg-type]
+                "not a comparison",  # ty: ignore[invalid-argument-type]
                 result=Result,
                 found=Found,
             )

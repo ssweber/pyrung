@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import LiveTag, MappingEntry, TagType, _TagTypeBase
+from pyrung.core.tag import LiveTag, MappingEntry, Tag, TagType, _TagTypeBase
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -133,6 +133,11 @@ class InstanceView:
 class _SelectedTagRange(BlockRange):
     """BlockRange-like wrapper backed by an explicit ordered tag list."""
 
+    _selected_tags: tuple[LiveTag, ...]
+    _label: str
+    _instance_start: int
+    _instance_end: int
+
     def __init__(
         self,
         block: Block,
@@ -157,11 +162,11 @@ class _SelectedTagRange(BlockRange):
             return range(self.start, self.end + 1)
         return range(self.end, self.start - 1, -1)
 
-    def tags(self) -> list[LiveTag]:
-        tags = list(self._selected_tags)
+    def tags(self) -> list[Tag]:
+        result: list[Tag] = list(self._selected_tags)
         if self.reverse_order:
-            tags.reverse()
-        return tags
+            result.reverse()
+        return result
 
     def reverse(self) -> _SelectedTagRange:
         return _SelectedTagRange(
@@ -231,10 +236,10 @@ class _StructRuntime:
                 ),
                 default_factory=_make_default_factory(field_spec.default),
             )
-            block._pyrung_structure_runtime = self
-            block._pyrung_structure_kind = self._structure_kind
-            block._pyrung_structure_name = name
-            block._pyrung_structure_field = field_spec.name
+            block._pyrung_structure_runtime = self  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_kind = self._structure_kind  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_name = name  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
             self._blocks[field_spec.name] = block
 
     def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
@@ -549,7 +554,7 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
     if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
         return annotation._tag_type
 
-    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)
+    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)  # ty: ignore[invalid-argument-type]
     if primitive is not None:
         return primitive
 

@@ -6,6 +6,7 @@ All state transitions produce new SystemState instances.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from pyrsistent import PMap, PRecord, field, pmap
@@ -26,7 +27,7 @@ class SystemState(PRecord):
     tags = field(type=PMap, initial=pmap())
     memory = field(type=PMap, initial=pmap())
 
-    def with_tags(self, updates: dict[str, bool | int | float | str]) -> SystemState:
+    def with_tags(self, updates: Mapping[str, bool | int | float | str]) -> SystemState:
         """Return new state with updated tags. Original unchanged."""
         return self.set(tags=self.tags.update(updates))
 

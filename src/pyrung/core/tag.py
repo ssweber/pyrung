@@ -75,7 +75,7 @@ class Tag:
     def __hash__(self) -> int:
         return hash(self.name)
 
-    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+    def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
@@ -83,7 +83,7 @@ class Tag:
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+    def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 

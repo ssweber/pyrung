@@ -1231,7 +1231,7 @@ def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: 
             call_stack=event.call_stack,
             enabled_state=event.enabled_state,
             instruction_kind=event.instruction_kind,
-            trace="unexpected-trace-type",  # type: ignore[arg-type]
+            trace="unexpected-trace-type",  # ty: ignore[invalid-argument-type]
         ),
     )
 

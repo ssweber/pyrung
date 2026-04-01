@@ -156,13 +156,13 @@ def test_lookup_tables_exported():
     [
         lambda: CLICK_HARDWARE_PROFILE.is_writable("ZZ", 1),
         lambda: CLICK_HARDWARE_PROFILE.valid_for_role("ZZ", "timer_done_bit"),
-        lambda: CLICK_HARDWARE_PROFILE.valid_for_role("T", "bad_role"),  # type: ignore[arg-type]
-        lambda: CLICK_HARDWARE_PROFILE.copy_compatible("bad_op", "DS", "DD"),  # type: ignore[arg-type]
+        lambda: CLICK_HARDWARE_PROFILE.valid_for_role("T", "bad_role"),  # ty: ignore[invalid-argument-type]
+        lambda: CLICK_HARDWARE_PROFILE.copy_compatible("bad_op", "DS", "DD"),  # ty: ignore[invalid-argument-type]
         lambda: CLICK_HARDWARE_PROFILE.copy_compatible("single", "ZZ", "DD"),
         lambda: CLICK_HARDWARE_PROFILE.copy_compatible("single", "DS", "ZZ"),
         lambda: CLICK_HARDWARE_PROFILE.compare_compatible("ZZ", "DS"),
         lambda: CLICK_HARDWARE_PROFILE.compare_constant_compatible("ZZ", "int1"),
-        lambda: CLICK_HARDWARE_PROFILE.compare_constant_compatible("DS", "bad_kind"),  # type: ignore[arg-type]
+        lambda: CLICK_HARDWARE_PROFILE.compare_constant_compatible("DS", "bad_kind"),  # ty: ignore[invalid-argument-type]
     ],
 )
 def test_unknown_inputs_raise_key_error(call):

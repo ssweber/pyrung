@@ -281,9 +281,9 @@ class Block:
             return tag
 
         object.__setattr__(tag, "_pyrung_structure_runtime", runtime)
-        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)
-        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)
-        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)
+        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)  # ty: ignore[unresolved-attribute]
+        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)  # ty: ignore[unresolved-attribute]
+        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
         object.__setattr__(tag, "_pyrung_structure_index", addr)
         return tag
 
@@ -765,11 +765,11 @@ class BlockRange:
         for addr in self.addresses:
             yield self.block._get_tag(addr)
 
-    def __eq__(self, other: object) -> RangeComparison:  # type: ignore[override]
+    def __eq__(self, other: object) -> RangeComparison:  # ty: ignore[invalid-method-override]
         """Create equality comparison for search."""
         return RangeComparison(self, "==", other)
 
-    def __ne__(self, other: object) -> RangeComparison:  # type: ignore[override]
+    def __ne__(self, other: object) -> RangeComparison:  # ty: ignore[invalid-method-override]
         """Create inequality comparison for search."""
         return RangeComparison(self, "!=", other)
 
@@ -832,11 +832,11 @@ class IndirectBlockRange:
             reverse_order=not self.reverse_order,
         )
 
-    def __eq__(self, other: object) -> RangeComparison:  # type: ignore[override]
+    def __eq__(self, other: object) -> RangeComparison:  # ty: ignore[invalid-method-override]
         """Create equality comparison for search."""
         return RangeComparison(self, "==", other)
 
-    def __ne__(self, other: object) -> RangeComparison:  # type: ignore[override]
+    def __ne__(self, other: object) -> RangeComparison:  # ty: ignore[invalid-method-override]
         """Create inequality comparison for search."""
         return RangeComparison(self, "!=", other)
 
@@ -934,13 +934,13 @@ class IndirectRef:
         self.block._validate_address(ptr_value)
         return self.block._get_tag(ptr_value)
 
-    def __eq__(self, other: object) -> Condition:  # type: ignore[override]
+    def __eq__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create equality comparison condition."""
         from pyrung.core.condition import IndirectCompareEq
 
         return IndirectCompareEq(self, other)
 
-    def __ne__(self, other: object) -> Condition:  # type: ignore[override]
+    def __ne__(self, other: object) -> Condition:  # ty: ignore[invalid-method-override]
         """Create inequality comparison condition."""
         from pyrung.core.condition import IndirectCompareNe
 

@@ -752,7 +752,7 @@ class ModbusSendInstruction(Instruction):
     def _submit(self, source_tags: list[Tag], values: list[Any]) -> Future[_RequestResult]:
         if self.bank is not None:
             return _submit_click_send_request(
-                host=self.host,  # type: ignore[arg-type]
+                host=self.host,  # ty: ignore[invalid-argument-type]
                 port=self.port,
                 device_id=self.device_id,
                 bank=self.bank,
@@ -870,7 +870,7 @@ class ModbusReceiveInstruction(Instruction):
     def _submit(self, dest_tags: list[Tag]) -> Future[_RequestResult]:
         if self.bank is not None:
             return _submit_click_receive_request(
-                host=self.host,  # type: ignore[arg-type]
+                host=self.host,  # ty: ignore[invalid-argument-type]
                 port=self.port,
                 device_id=self.device_id,
                 bank=self.bank,

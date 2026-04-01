@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -1196,7 +1196,7 @@ class TagMap:
                 if kind == "named_array":
                     return None
                 if kind == "udt":
-                    field = cast(str, entry.logical._pyrung_structure_field)
+                    field = cast(str, entry.logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
                     return f"{name}.{field}:udt"
 
             default_start = _default_logical_block_start(entry.hardware_addresses)
@@ -1426,7 +1426,7 @@ class TagMap:
 
     def tags_from_plc_data(
         self,
-        data: dict[str, bool | int | float | str],
+        data: Mapping[str, bool | int | float | str],
     ) -> dict[str, bool | int | float | str]:
         """Return logical tag values from a PLC data dump.
 
@@ -1718,13 +1718,13 @@ class TagMap:
             if kind != "named_array":
                 return
 
-            field_name = cast(str, logical._pyrung_structure_field)
+            field_name = cast(str, logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
             field_offset = cast(tuple[str, ...], runtime.field_names).index(field_name)
             stride = cast(int, runtime.stride)
             instance = (
                 logical.start
                 if isinstance(logical, Block)
-                else cast(int, logical._pyrung_structure_index)
+                else cast(int, logical._pyrung_structure_index)  # ty: ignore[unresolved-attribute]
             )
             span_start = address - ((instance - 1) * stride + field_offset)
             span_end = span_start + cast(int, runtime.count) * stride - 1

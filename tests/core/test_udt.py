@@ -56,8 +56,8 @@ def test_udt_literal_and_auto_defaults_resolve_per_instance():
 def test_udt_retentive_policy_inherited_by_generated_tags():
     @udt(count=2)
     class Alarm:
-        id: Int = Field(retentive=True)  # type: ignore[invalid-assignment]
-        On: Bool = Field(retentive=False)  # type: ignore[invalid-assignment]
+        id: Int = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=False)  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms[1].id.retentive is True
@@ -84,8 +84,8 @@ def test_udt_retentive_explicit_overrides_type_default():
 
     @udt(count=1)
     class Sensor:
-        active: Bool = Field(retentive=True)  # type: ignore[invalid-assignment]
-        reading: Int = Field(retentive=False)  # type: ignore[invalid-assignment]
+        active: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        reading: Int = Field(retentive=False)  # ty: ignore[invalid-assignment]
 
     sensor = cast(Any, Sensor)
     assert sensor.active.retentive is True  # overridden from Bool default False
@@ -139,8 +139,8 @@ def test_instance_view_validates_index_and_missing_attributes():
 def test_udt_allows_underscored_fields():
     @udt(count=1)
     class Alarm:
-        _x: Int = 0  # type: ignore[invalid-assignment]
-        val: Int = 1  # type: ignore[invalid-assignment]
+        _x: Int = 0  # ty: ignore[invalid-assignment]
+        val: Int = 1  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("_x", "val")
@@ -177,7 +177,7 @@ def test_udt_skips_classvar_fields():
     @udt(count=1)
     class Alarm:
         _meta: ClassVar[int] = 123
-        val: Int = 1  # type: ignore[invalid-assignment]
+        val: Int = 1  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("val",)
@@ -248,8 +248,8 @@ def test_udt_clone_allows_count_override():
 def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:
-        id: Int = 1  # type: ignore[invalid-assignment]
-        On: Bool = Field(retentive=True)  # type: ignore[invalid-assignment]
+        id: Int = 1  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
 
     alarm = cast(Any, Alarm)
     assert alarm.field_names == ("id", "On")
