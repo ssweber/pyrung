@@ -31,6 +31,8 @@ nav:
       - Program Control: instructions/program-control.md
       - Communication: instructions/communication.md
   - Guides:
+      - Click Quickstart: guides/click-quickstart.md
+      - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md

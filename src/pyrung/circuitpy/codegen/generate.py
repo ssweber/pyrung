@@ -183,10 +183,10 @@ def write_circuitpy(
     tag_map: TagMap | None = None,
     mapped_tag_scope: MappedTagScope = "referenced_only",
 ) -> Path:
-    """Generate and write ``code.py`` to *output_dir*.
+    """Generate and write ``code.py`` (and ``pyrung_rt.py`` when needed) to *output_dir*.
 
     Accepts the same parameters as :func:`generate_circuitpy` plus
-    ``output_dir``.  Returns the path to the written file.
+    ``output_dir``.  Returns the path to the written ``code.py``.
     """
     result = generate_circuitpy(
         program,
@@ -202,4 +202,7 @@ def write_circuitpy(
     out = Path(output_dir)
     code_path = out / "code.py"
     code_path.write_text(result.code, encoding="utf-8")
+    if result.runtime:
+        runtime_path = out / "pyrung_rt.py"
+        runtime_path.write_text(result.runtime, encoding="utf-8")
     return code_path
