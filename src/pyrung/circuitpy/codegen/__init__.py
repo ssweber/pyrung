@@ -13,7 +13,7 @@ from pyrung.circuitpy.codegen.context import (
     CodegenContext,
     SlotBinding,
 )
-from pyrung.circuitpy.codegen.generate import CircuitPyOutput, generate_circuitpy
+from pyrung.circuitpy.codegen.generate import CircuitPyOutput, generate_circuitpy, write_circuitpy
 
 __all__ = [
     "BlockBinding",
@@ -25,4 +25,5 @@ __all__ = [
     "compile_instruction",
     "compile_rung",
     "generate_circuitpy",
+    "write_circuitpy",
 ]

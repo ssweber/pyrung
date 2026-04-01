@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math as _math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
@@ -165,3 +166,38 @@ def generate_circuitpy(
     except SyntaxError as exc:
         raise RuntimeError(f"Generated source is invalid: {exc}") from exc
     return CircuitPyOutput(code=source, runtime=runtime_source)
+
+
+def write_circuitpy(
+    program: Program,
+    hw: P1AM,
+    *,
+    output_dir: str | Path,
+    target_scan_ms: float,
+    watchdog_ms: int | None = None,
+    runstop: RunStopConfig | None = None,
+    modbus_server: ModbusServerConfig | None = None,
+    modbus_client: ModbusClientConfig | None = None,
+    tag_map: TagMap | None = None,
+    mapped_tag_scope: MappedTagScope = "referenced_only",
+) -> Path:
+    """Generate and write ``code.py`` to *output_dir*.
+
+    Accepts the same parameters as :func:`generate_circuitpy` plus
+    ``output_dir``.  Returns the path to the written file.
+    """
+    result = generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=target_scan_ms,
+        watchdog_ms=watchdog_ms,
+        runstop=runstop,
+        modbus_server=modbus_server,
+        modbus_client=modbus_client,
+        tag_map=tag_map,
+        mapped_tag_scope=mapped_tag_scope,
+    )
+    out = Path(output_dir)
+    code_path = out / "code.py"
+    code_path.write_text(result.code, encoding="utf-8")
+    return code_path
