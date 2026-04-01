@@ -327,7 +327,8 @@ def test_xd_mirror_read(monkeypatch):
     assert struct.unpack(">H", resp[-2:])[0] == 0x8081
 
 
-def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
+def test_service_modbus_server_keeps_idle_client(monkeypatch):
+    """recv_into returning 0 means no data on WIZNET5K — keep the connection."""
     with Program(strict=False) as prog:
         pass
     result = _ctx_and_source(prog, TagMap())
@@ -356,7 +357,7 @@ def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
         source, monkeypatch, StubBase(), runtime_source=result.runtime
     )
 
-    class ClosingClient:
+    class IdleClient:
         def __init__(self):
             self.closed = False
 
@@ -366,15 +367,15 @@ def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
         def close(self):
             self.closed = True
 
-    client = ClosingClient()
+    client = IdleClient()
     clients = namespace["_mb_clients"]
     assert isinstance(clients, list)
     clients[0] = client
 
     namespace["service_modbus_server"]()
 
-    assert client.closed is True
-    assert clients[0] is None
+    assert client.closed is False
+    assert clients[0] is client
 
 
 def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
