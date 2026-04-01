@@ -23,6 +23,8 @@ from pyrung.core.tag import Tag
 
 MappedTagScope = Literal["referenced_only", "all_mapped"]
 
+_DEFAULT_RUNSTOP = RunStopConfig()
+
 
 @dataclass(frozen=True)
 class CircuitPyOutput:
@@ -50,7 +52,7 @@ def generate_circuitpy(
     *,
     target_scan_ms: float,
     watchdog_ms: int | None = None,
-    runstop: RunStopConfig | None = None,
+    runstop: RunStopConfig | None = _DEFAULT_RUNSTOP,
     modbus_server: ModbusServerConfig | None = None,
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
@@ -175,7 +177,7 @@ def write_circuitpy(
     output_dir: str | Path,
     target_scan_ms: float,
     watchdog_ms: int | None = None,
-    runstop: RunStopConfig | None = None,
+    runstop: RunStopConfig | None = _DEFAULT_RUNSTOP,
     modbus_server: ModbusServerConfig | None = None,
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,

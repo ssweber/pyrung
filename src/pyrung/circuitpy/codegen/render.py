@@ -328,6 +328,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "_sd_available = False",
             '_MEMORY_PATH = "/sd/memory.json"',
             '_MEMORY_TMP_PATH = "/sd/_memory.tmp"',
+            '_MEMORY_BAK_PATH = "/sd/memory.json.bak"',
             "_sd_spi = None",
             "_sd = None",
             "_sd_vfs = None",
@@ -337,6 +338,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "_sd_save_cmd = False",
             "_sd_eject_cmd = False",
             "_sd_delete_all_cmd = False",
+            "_ret_snapshot = {}",
+            "_ret_last_save_ts = 0.0",
+            "_RET_AUTO_SAVE_S = 30.0",
             "",
         ]
     )
@@ -369,8 +373,16 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     # 7) SD mount + load memory startup call
     lines.append(_section("Retentive memory (SD card)"))
     ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
-    load_globals = ", ".join(ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"])
+    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
+    load_globals = ", ".join(
+        ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals
+    )
     save_globals = load_globals
+    # Build snapshot dict literal: {"Count": _t_Count, "Total": _t_Total}
+    snapshot_entries = ", ".join(
+        f'"{name}": {ctx.symbol_for_tag(tag)}' for name, tag in sorted(ctx.retentive_tags.items())
+    )
+    snapshot_literal = "{" + snapshot_entries + "}"
     lines.extend(
         [
             "def _mount_sd():",
@@ -401,20 +413,32 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "        return",
             "    _sd_write_status = True",
             "    if microcontroller is not None and len(microcontroller.nvm) > 0 and microcontroller.nvm[0] == 1:",
-            "        _sd_error = True",
-            f"        _sd_error_code = {_SD_LOAD_ERROR}",
-            "        _sd_write_status = False",
-            '        print("Retentive load skipped: interrupted previous save detected")',
-            "        return",
-            "    try:",
-            '        with open(_MEMORY_PATH, "r", encoding="utf-8") as f:',
-            "            payload = json.load(f)",
-            "    except Exception as exc:",
-            "        _sd_error = True",
-            f"        _sd_error_code = {_SD_LOAD_ERROR}",
-            "        _sd_write_status = False",
-            '        print(f"Retentive load skipped: {exc}")',
-            "        return",
+            "        try:",
+            '            with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:',
+            "                payload = json.load(f)",
+            '            print("Retentive memory recovered from backup")',
+            "        except Exception:",
+            "            _sd_error = True",
+            f"            _sd_error_code = {_SD_LOAD_ERROR}",
+            "            _sd_write_status = False",
+            '            print("Retentive load skipped: interrupted save, no backup available")',
+            "            return",
+            "        microcontroller.nvm[0] = 0",
+            "    else:",
+            "        try:",
+            '            with open(_MEMORY_PATH, "r", encoding="utf-8") as f:',
+            "                payload = json.load(f)",
+            "        except Exception as exc:",
+            "            try:",
+            '                with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:',
+            "                    payload = json.load(f)",
+            '                print(f"Retentive memory loaded from backup ({exc})")',
+            "            except Exception:",
+            "                _sd_error = True",
+            f"                _sd_error_code = {_SD_LOAD_ERROR}",
+            "                _sd_write_status = False",
+            '                print(f"Retentive load skipped: {exc}")',
+            "                return",
             '    if payload.get("schema") != _RET_SCHEMA:',
             "        _sd_error = True",
             f"        _sd_error_code = {_SD_LOAD_ERROR}",
@@ -443,6 +467,8 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    _sd_error = False",
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
+            f"    _ret_snapshot = {snapshot_literal}",
+            "    _ret_last_save_ts = time.monotonic()",
             "",
             "def save_memory():",
         ]
@@ -476,7 +502,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             '        with open(_MEMORY_TMP_PATH, "w", encoding="utf-8") as f:',
             "            json.dump(payload, f)",
             "        try:",
-            "            os.remove(_MEMORY_PATH)",
+            "            os.rename(_MEMORY_PATH, _MEMORY_BAK_PATH)",
             "        except OSError:",
             "            pass",
             "        os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)",
@@ -488,9 +514,15 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "        return",
             "    if dirty_armed:",
             "        microcontroller.nvm[0] = 0",
+            "    try:",
+            "        os.remove(_MEMORY_BAK_PATH)",
+            "    except OSError:",
+            "        pass",
             "    _sd_error = False",
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
+            f"    _ret_snapshot = {snapshot_literal}",
+            "    _ret_last_save_ts = time.monotonic()",
             "",
             "_mount_sd()",
             "load_memory()",
@@ -548,7 +580,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
         "    _command_failed = False",
         "    if _do_delete:",
         "        try:",
-        "            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):",
+        "            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH, _MEMORY_BAK_PATH):",
         "                try:",
         "                    os.remove(_path)",
         "                except OSError:",
@@ -595,6 +627,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             {
                 "_mem",
                 "_prev",
+                "_ret_snapshot",
                 "_sd_save_cmd",
                 "_sd_eject_cmd",
                 "_sd_delete_all_cmd",
@@ -607,6 +640,7 @@ def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = Fa
             [
                 "    _mem = {}",
                 "    _prev = {}",
+                "    _ret_snapshot = {}",
                 "    _sd_save_cmd = False",
                 "    _sd_eject_cmd = False",
                 "    _sd_delete_all_cmd = False",
@@ -1106,6 +1140,7 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "            _reset_for_run_transition()",
                 '            print("Mode: RUN")',
                 "        else:",
+                "            save_memory()",
                 '            print("Mode: STOP")',
                 "        _mode_run = _desired_run",
             ]
@@ -1142,6 +1177,23 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
             lines.append("    service_modbus_client()")
     if ctx.modbus_server is not None or ctx.modbus_client is not None:
         lines.append("")
+
+    if ctx.retentive_tags:
+        dirty_parts = []
+        for name, tag in sorted(ctx.retentive_tags.items()):
+            symbol = ctx.symbol_for_tag(tag)
+            dirty_parts.append(f'{symbol} != _ret_snapshot.get("{name}")')
+        dirty_check = " or ".join(dirty_parts)
+        lines.extend(
+            [
+                "    if (scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S:",
+                f"        if {dirty_check}:",
+                "            save_memory()",
+                "        else:",
+                "            _ret_last_save_ts = scan_start",
+                "",
+            ]
+        )
 
     for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]

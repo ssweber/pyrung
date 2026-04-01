@@ -51,6 +51,7 @@ def _ctx_and_source(program: Program, mapping: TagMap) -> CircuitPyOutput:
         program,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=mapping,
     )
@@ -63,6 +64,7 @@ def _client_source(program: Program, mapping: TagMap | None = None) -> CircuitPy
         program,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_client=ModbusClientConfig(
             targets=(ModbusTcpTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17),)
         ),
@@ -196,6 +198,7 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
         prog,
         _hw_with_slot(),
         target_scan_ms=10.0,
+        runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=TagMap(),
         mapped_tag_scope="all_mapped",
@@ -831,6 +834,7 @@ def test_codegen_server_first_and_last_of_every_bank(monkeypatch):
         prog,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=mapping,
         mapped_tag_scope="all_mapped",
@@ -1305,6 +1309,7 @@ def _raw_client_source(program: Program) -> CircuitPyOutput:
         program,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_client=ModbusClientConfig(targets=(_RAW_TARGET,)),
         tag_map=TagMap(),
     )

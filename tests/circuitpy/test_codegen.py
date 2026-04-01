@@ -368,13 +368,13 @@ class TestGenerateCircuitPyAPI:
         empty_hw = P1AM()
         prog = Program(strict=False)
         with pytest.raises(ValueError, match="at least one configured slot"):
-            generate_circuitpy(prog, empty_hw, target_scan_ms=10.0)
+            generate_circuitpy(prog, empty_hw, target_scan_ms=10.0, runstop=None)
 
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         hw.slot(3, "P1-08TRS")
         with pytest.raises(ValueError, match="contiguous"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0)
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
 
     def test_allows_zero_slot_codegen_when_board_tags_are_used(self):
         hw = P1AM()
@@ -690,7 +690,7 @@ class TestInstructionCoverage:
         step_symbol = ctx.symbol_for_tag(step)
         acc_symbol = ctx.symbol_for_tag(acc)
         out4_symbol = ctx.symbol_for_tag(out4)
-        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
         source_code = result.code
 
         assert "_drum_event_prev:i" in source_code
@@ -788,8 +788,10 @@ class TestPersistenceWatchdogAndDiagnostics:
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)" in source_code
         assert "_MEMORY_TMP_PATH" in source_code
+        assert "_MEMORY_BAK_PATH" in source_code
         assert "os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)" in source_code
-        assert "for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):" in source_code
+        assert "os.rename(_MEMORY_PATH, _MEMORY_BAK_PATH)" in source_code
+        assert "for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH, _MEMORY_BAK_PATH):" in source_code
         assert "os.remove(_path)" in source_code
         assert 'payload = {"schema": _RET_SCHEMA, "values": values}' in source_code
         assert "_sd_error_code = 1" in source_code
@@ -816,6 +818,99 @@ class TestPersistenceWatchdogAndDiagnostics:
             in helper_section
         )
         assert "_t_storage_sd_copy_system_cmd" not in source_code
+
+    def test_bak_recovery_in_load_memory(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        step = Int("Step")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, step)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        # NVM dirty flag path tries .bak
+        assert '_MEMORY_BAK_PATH = "/sd/memory.json.bak"' in source_code
+        assert "open(_MEMORY_BAK_PATH" in source_code
+        assert 'print("Retentive memory recovered from backup")' in source_code
+        assert (
+            'print("Retentive load skipped: interrupted save, no backup available")' in source_code
+        )
+        # Normal path falls back to .bak when primary fails
+        assert "Retentive memory loaded from backup" in source_code
+
+    def test_auto_save_globals_emitted(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_ret_snapshot = {}" in source_code
+        assert "_ret_last_save_ts = 0.0" in source_code
+        assert "_RET_AUTO_SAVE_S = 30.0" in source_code
+
+    def test_auto_save_dirty_check_in_scan_loop(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "(scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S" in source_code
+        assert '_ret_snapshot.get("Count")' in source_code
+        assert "save_memory()" in source_code
+
+    def test_save_memory_updates_snapshot(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        save_section = source_code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
+        assert "_ret_snapshot" in save_section
+        assert "_ret_last_save_ts = time.monotonic()" in save_section
+
+    def test_runstop_save_on_stop_transition(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+
+        with Program(strict=False) as prog:
+            pass
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        # save_memory() should appear before print("Mode: STOP")
+        stop_idx = source_code.index('print("Mode: STOP")')
+        save_before_stop = source_code.rfind("save_memory()", 0, stop_idx)
+        assert save_before_stop != -1
+
+    def test_runstop_default(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+
+        with Program(strict=False) as prog:
+            pass
+
+        # Default should include RunStopConfig behavior
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_mode_run" in source_code
+        assert "_runstop_debounced" in source_code
+        assert 'print("Mode: RUN")' in source_code
+        assert 'print("Mode: STOP")' in source_code
+
+        # Explicit runstop=None should NOT include it
+        source_no_rs = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None).code
+        assert "_runstop_debounced" not in source_no_rs
 
     def test_watchdog_and_scan_diagnostics_emit(self):
         hw, di, do = _basic_hw()
@@ -1057,7 +1152,7 @@ class TestCopyConverterCodegen:
         ch_symbol = ctx.symbol_for_block(ch)
         ds_symbol = ctx.symbol_for_block(ds)
 
-        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1118,7 +1213,7 @@ class TestCopyConverterCodegen:
         ds_symbol = ctx.symbol_for_block(ds)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
 
-        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1165,7 +1260,7 @@ class TestCopyConverterCodegen:
         ctx = _context_for_program(prog, hw)
         target_symbol = ctx.symbol_for_tag(target)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
-        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1200,7 +1295,9 @@ class TestGeneratedSourceSmoke:
             with Rung(di[1]):
                 out(do[1])
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None).code
+        source = generate_circuitpy(
+            prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None
+        ).code
         assert 'getattr(base, "config_watchdog", None)' not in source
         assert "_wd_pet()" not in source
         compile(source, "code.py", "exec")
@@ -1282,7 +1379,9 @@ class TestGeneratedSourceSmoke:
         parsed_symbol = ctx.symbol_for_tag(parsed)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None).code
+        source = generate_circuitpy(
+            prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None
+        ).code
         single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
         class StubBase:
