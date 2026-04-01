@@ -122,7 +122,6 @@ def _generate_export_file() -> str:
     return '''\
 """Export this pyrung project back to Click ladder CSV files."""
 
-import shutil
 from pathlib import Path
 
 from pyrung.click import pyrung_to_ladder
@@ -134,9 +133,7 @@ output_dir = here / "csv_output"
 bundle = pyrung_to_ladder(logic, mapping)
 bundle.write(output_dir)
 
-nicknames = here / "nicknames.csv"
-if nicknames.exists():
-    shutil.copy(nicknames, output_dir / "nicknames.csv")
+mapping.to_nickname_file(output_dir / "nicknames.csv")
 
 print(f"Wrote CSV to {output_dir}")
 '''
