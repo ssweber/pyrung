@@ -9,7 +9,7 @@
 default: install verify
 
 install:
-	uv sync --all-extras --dev
+	uv sync --locked --all-extras --dev
 
 lint:
 	uv run devtools/lint.py
@@ -23,7 +23,8 @@ test-integration:
 verify: lint test docs-check
 
 upgrade:
-	uv sync --upgrade
+	uv lock --upgrade
+	uv sync --locked --all-extras --dev
 
 build:
 	uv build

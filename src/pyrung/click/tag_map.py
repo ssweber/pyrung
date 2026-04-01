@@ -29,7 +29,6 @@ from pyclickplc.validation import validate_nickname
 
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
-from pyrung.core.memory_block import UNSET
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
 
@@ -772,12 +771,14 @@ class TagMap:
                 default_changed = default != sv.default
                 comment_changed = comment != sv.comment
                 if retentive_changed or default_changed or comment_changed:
-                    logical_block.slot(
-                        logical_addr,
-                        retentive=row.retentive if retentive_changed else None,
-                        default=default if default_changed else UNSET,
-                        comment=comment if comment_changed else UNSET,
-                    )
+                    slot_kw: dict[str, Any] = {}
+                    if retentive_changed:
+                        slot_kw["retentive"] = row.retentive
+                    if default_changed:
+                        slot_kw["default"] = default
+                    if comment_changed:
+                        slot_kw["comment"] = comment
+                    logical_block.slot(logical_addr, **slot_kw)
 
         def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
             if explicit_start is not None:
@@ -1048,12 +1049,14 @@ class TagMap:
                         default_changed = default != sv.default
                         comment_changed = comment != sv.comment
                         if retentive_changed or default_changed or comment_changed:
-                            block.slot(
-                                instance,
-                                retentive=row.retentive if retentive_changed else None,
-                                default=default if default_changed else UNSET,
-                                comment=comment if comment_changed else UNSET,
-                            )
+                            slot_kw: dict[str, Any] = {}
+                            if retentive_changed:
+                                slot_kw["retentive"] = row.retentive
+                            if default_changed:
+                                slot_kw["default"] = default
+                            if comment_changed:
+                                slot_kw["comment"] = comment
+                            block.slot(instance, **slot_kw)
 
                 mappings.extend(runtime.map_to(spec.hardware_range))
                 append_structure(

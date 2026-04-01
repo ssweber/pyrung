@@ -2298,7 +2298,7 @@ def _compile_target_write_lines(
         for addr in target.addresses:
             index = addr - binding.start
             lines.append(f"{sp}{symbol}[{index}] = {value_expr}")
-        return lines or [f"{sp}pass"]
+        return lines if lines else [f"{sp}pass"]
 
     binding = ctx.block_bindings[id(target.block)]
     symbol = ctx.symbol_for_block(target.block)

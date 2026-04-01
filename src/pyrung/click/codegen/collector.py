@@ -39,7 +39,7 @@ from pyrung.click.codegen.utils import (
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
 if TYPE_CHECKING:
-    from pyrung.click.tag_map import TagMap
+    from pyrung.click.tag_map import OwnerInfo, TagMap
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +421,7 @@ def _enrich_with_ownership(
         # Named-array whole-instance ranges (end may land on a gap slot for sparse)
         if start_owner.structure_type == "named_array":
             decl = _ensure_structure_decl(start_owner.structure_name)
-            if decl is not None:
+            if decl is not None and decl.stride is not None:
                 first_field = decl.fields[0][0]
                 start_instance = start_owner.instance or 1
                 range_len = range_decl.end - range_decl.start + 1

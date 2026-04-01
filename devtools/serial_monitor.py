@@ -1,14 +1,16 @@
 """Connect to P1AM-200 serial console. Ctrl+] to exit."""
+
 # /// script
 # dependencies = ["pyserial"]
 # ///
 import ctypes
 import ctypes.wintypes
-import serial
-import serial.tools.list_ports
+import msvcrt
 import sys
 import threading
-import msvcrt
+
+import serial
+import serial.tools.list_ports
 
 # Disable Windows console processed-input so Ctrl+C is readable via msvcrt
 _kernel32 = ctypes.windll.kernel32
@@ -61,7 +63,7 @@ try:
     while True:
         if msvcrt.kbhit():
             ch = msvcrt.getch()
-            if ch == b'\x1d':  # Ctrl+] — exit monitor
+            if ch == b"\x1d":  # Ctrl+] — exit monitor
                 break
             ser.write(ch)
         else:

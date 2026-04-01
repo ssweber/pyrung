@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, NoReturn, cast
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from pyrung.core.condition import (
     AllCondition,
@@ -597,8 +597,7 @@ class _TranslatorMixin:
                 message=f"Unable to parse hardware bank from {hardware_addr!r}.",
                 source=source,
             )
-        parsed_address = cast(tuple[str, int], parsed_hardware)
-        bank, _ = parsed_address
+        bank, _ = parsed_hardware
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
         if offset == 0:
             return f"{bank}[{pointer}]"
@@ -613,7 +612,7 @@ class _TranslatorMixin:
                 message=f"Indirect block {block_name!r} is not mapped in TagMap.",
                 source=source,
             )
-        return cast("_BlockEntry", entry)
+        return entry
 
     def _require_compact_range(
         self,
@@ -625,7 +624,7 @@ class _TranslatorMixin:
     ) -> str:
         if not isinstance(compact, str):
             self._raise_issue(path=path, message=message, source=source)
-        return cast(str, compact)
+        return compact
 
     def _require_tag(self, value: Any, *, path: str, source: Any, message: str) -> Tag:
         if not isinstance(value, Tag):

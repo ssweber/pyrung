@@ -50,10 +50,7 @@ dependencies = [
 dev = [
     "pytest>=8.3.5",
     "ruff>=0.11.0",
-    "codespell>=2.4.1",
-    "rich>=13.9.4",
     "ty>=0.0.14",
-    "funlog>=0.2.0",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -94,6 +91,9 @@ exclude = ["scratchpad"]
 # The source location for the package.
 packages = ["src/pyrung"]
 
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { pyclickplc = "0 days" }
 
 [tool.ruff]
 # Set as desired, typically 88 (black standard) or 100 (wide).
@@ -155,11 +155,6 @@ exclude = [
 unresolved-import = "ignore"
 unused-ignore-comment = "error"
 
-
-[tool.codespell]
-# Add here as needed:
-# ignore-words-list = ""
-# skip = "foo.py,bar.py"
 
 [tool.pytest.ini_options]
 python_files = ["*.py"]
