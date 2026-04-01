@@ -439,6 +439,7 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
         )
     lines.extend(
         [
+            '    print("Retentive memory loaded")',
             "    _sd_error = False",
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
@@ -474,7 +475,11 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
             "    try:",
             '        with open(_MEMORY_TMP_PATH, "w", encoding="utf-8") as f:',
             "            json.dump(payload, f)",
-            "        os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)",
+            "        try:",
+            "            os.remove(_MEMORY_PATH)",
+            "        except OSError:",
+            "            pass",
+            "        os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)",
             "    except Exception as exc:",
             "        _sd_error = True",
             f"        _sd_error_code = {_SD_SAVE_ERROR}",
@@ -1099,6 +1104,9 @@ def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
+                '            print("Mode: RUN")',
+                "        else:",
+                '            print("Mode: STOP")',
                 "        _mode_run = _desired_run",
             ]
         )
