@@ -3,7 +3,7 @@
   "displayName": "pyrung Debugger",
   "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
   "version": "0.1.0",
-  "publisher": "pyrung",
+  "publisher": "ssweber",
   "license": "MPL-2.0",
   "icon": "icon.png",
   "repository": {
