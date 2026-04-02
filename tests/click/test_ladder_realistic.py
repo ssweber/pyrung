@@ -527,6 +527,28 @@ def test_realistic_indirect_ref_tokens():
     assert len(indirect_copies) >= 1, "Expected at least one indirect-ref copy token"
 
 
+def test_indirect_ref_prebuilt_click_block_unmapped():
+    """Pre-built Click blocks (ds, dd, …) work in IndirectRef without TagMap entry."""
+    Pointer = Int("Pointer")
+    Dest = Int("Dest")
+
+    with Program() as logic:
+        with Rung():
+            copy(ds[Pointer], Dest)
+
+    mapping = TagMap(
+        {
+            Pointer: ds[1],
+            Dest: ds[2],
+        },
+        include_system=False,
+    )
+
+    bundle = pyrung_to_ladder(logic, mapping)
+    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
+    assert any("DS[DS1]" in t for t in tokens), f"Expected DS[DS1] indirect ref, got {tokens}"
+
+
 def test_realistic_compare_condition():
     """The compare rung has DS3>0 in a condition cell."""
     logic, mapping = _build_program_and_mapping()
