@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from pyclickplc.banks import BANKS
+
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -58,7 +60,6 @@ from pyrung.core.expression import (
     TagExpr,
     XorExpr,
 )
-from pyclickplc.banks import BANKS
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
