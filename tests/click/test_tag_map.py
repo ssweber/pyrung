@@ -200,16 +200,24 @@ def test_name_conflict_standalone_and_block_slot_raises():
 def test_name_conflict_across_blocks_raises():
     alarm_a = Block("AlarmA", TagType.BOOL, 1, 1)
     alarm_b = Block("AlarmB", TagType.BOOL, 1, 1)
-    alarm_a.rename_slot(1, "Shared")
-    alarm_b.rename_slot(1, "Shared")
+    alarm_a.slot(1, name="Shared")
+    alarm_b.slot(1, name="Shared")
 
     with pytest.raises(ValueError, match="Duplicate user logical tag name"):
         TagMap({alarm_a: c.select(101, 101), alarm_b: c.select(201, 201)})
 
 
+def test_name_conflict_from_block_name_ending_in_digit_has_specific_hint():
+    template = Block("Template.Subroutines", TagType.BOOL, 26, 26)
+    template_2 = Block("Template.Subroutines2", TagType.BOOL, 6, 6)
+
+    with pytest.raises(ValueError, match="does not end in a number"):
+        TagMap({template: c.select(101, 101), template_2: c.select(201, 201)})
+
+
 def test_block_slot_name_rename_exported_to_csv(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    alarms.rename_slot(1, "Alarm_1")
+    alarms.slot(1, name="Alarm_1")
     mapping = TagMap({alarms: c.select(101, 102)})
     path = tmp_path / "renamed.csv"
     mapping.to_nickname_file(path)
@@ -257,8 +265,7 @@ def test_to_nickname_file_sparse_only_mapped_rows(tmp_path):
 
 def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path):
     alarms = Block("Alarm", TagType.BOOL, 1, 1, retentive=False)
-    alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, retentive=True, default=True, comment="First alarm")
+    alarms.slot(1, name="Alarm_1", retentive=True, default=True, comment="First alarm")
     mapping = TagMap({alarms: c.select(101, 101)})
 
     path = tmp_path / "slot_metadata.csv"
@@ -269,12 +276,12 @@ def test_to_nickname_file_uses_first_class_slot_name_and_runtime_policy(tmp_path
     assert record.nickname == "Alarm_1"
     assert record.retentive is True
     assert record.initial_value == "1"
-    assert record.comment == "<Alarm /> First alarm"
+    assert record.comment == "<Alarm:block /> First alarm"
 
 
 def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
     alarms = Block("AlarmCfg", TagType.BOOL, 1, 1, retentive=False)
-    alarms.configure_slot(1, retentive=True, default=True)
+    alarms.slot(1, retentive=True, default=True)
     mapping = TagMap({alarms: c.select(301, 301)})
 
     path = tmp_path / "slot_runtime.csv"
@@ -289,9 +296,8 @@ def test_to_nickname_file_uses_first_class_slot_runtime_policy(tmp_path):
 def test_from_nickname_file_round_trip(tmp_path):
     valve = Bool("Valve", comment="Main valve")
     alarms = Block("Alarm", TagType.BOOL, 1, 2)
-    alarms.rename_slot(1, "Alarm_1")
-    alarms.configure_slot(1, default=True, comment="First alarm")
-    alarms.configure_slot(2, comment="Last alarm")
+    alarms.slot(1, name="Alarm_1", default=True, comment="First alarm")
+    alarms.slot(2, comment="Last alarm")
     mapping = TagMap({valve: c[1], alarms: c.select(101, 102)})
 
     path = tmp_path / "round_trip.csv"
@@ -315,7 +321,7 @@ def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -324,7 +330,7 @@ def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):
             memory_type="C",
             address=402,
             nickname="AlarmCfg2",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -347,7 +353,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1",
-            comment="<Alarm>",
+            comment="<Alarm:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -356,7 +362,7 @@ def test_from_nickname_file_sparse_block_rows_preserve_full_span(tmp_path):
             memory_type="C",
             address=200,
             nickname="Alarm100",
-            comment="</Alarm>",
+            comment="</Alarm:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -381,7 +387,7 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -390,7 +396,7 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
             memory_type="C",
             address=402,
             nickname="",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="",
             retentive=False,
             data_type=DataType.BIT,
@@ -407,14 +413,14 @@ def test_from_nickname_file_rejects_blank_block_nickname(tmp_path):
     assert block[2].name == "AlarmCfg2"
 
 
-def test_from_nickname_file_rejects_blank_block_nickname_when_boundary_has_extra_metadata(tmp_path):
+def test_from_nickname_file_allows_blank_block_nickname_when_boundary_has_extra_metadata(tmp_path):
     path = tmp_path / "blank_block_name.csv"
     records = {
         get_addr_key("C", 401): AddressRecord(
             memory_type="C",
             address=401,
             nickname="AlarmCfg1",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -423,16 +429,65 @@ def test_from_nickname_file_rejects_blank_block_nickname_when_boundary_has_extra
             memory_type="C",
             address=402,
             nickname="",
-            comment="</AlarmCfg> Needs nickname",
-            initial_value="",
+            comment="</AlarmCfg:block> Boundary note",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+
+    assert restored.resolve(block, 2) == "C402"
+    assert block[2].name == "AlarmCfg2"
+    assert block[2].comment == "Boundary note"
+    assert block[2].default is True
+    assert block[2].retentive is True
+
+
+def test_from_nickname_file_allows_blank_block_nickname_for_internal_metadata_row(tmp_path):
+    path = tmp_path / "blank_internal_block_name.csv"
+    records = {
+        get_addr_key("C", 501): AddressRecord(
+            memory_type="C",
+            address=501,
+            nickname="AlarmCfg1",
+            comment="<AlarmCfg:block>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 502): AddressRecord(
+            memory_type="C",
+            address=502,
+            nickname="",
+            comment="Held state",
+            initial_value="1",
+            retentive=True,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 503): AddressRecord(
+            memory_type="C",
+            address=503,
+            nickname="AlarmCfg3",
+            comment="</AlarmCfg:block>",
+            initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
         ),
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="C402"):
-        TagMap.from_nickname_file(path)
+    restored = TagMap.from_nickname_file(path)
+    block = restored.blocks()[0].logical
+
+    assert restored.resolve(block, 2) == "C502"
+    assert block[2].name == "AlarmCfg2"
+    assert block[2].comment == "Held state"
+    assert block[2].default is True
+    assert block[2].retentive is True
 
 
 def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
@@ -442,7 +497,7 @@ def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
             memory_type="C",
             address=501,
             nickname="Bad-Name",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -451,7 +506,7 @@ def test_from_nickname_file_rejects_invalid_block_nickname(tmp_path):
             memory_type="C",
             address=502,
             nickname="AlarmCfg2",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -470,7 +525,7 @@ def test_from_nickname_file_rejects_duplicate_block_nickname(tmp_path):
             memory_type="C",
             address=601,
             nickname="AlarmCfg",
-            comment="<AlarmCfg>",
+            comment="<AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -479,7 +534,7 @@ def test_from_nickname_file_rejects_duplicate_block_nickname(tmp_path):
             memory_type="C",
             address=602,
             nickname="AlarmCfg",
-            comment="</AlarmCfg>",
+            comment="</AlarmCfg:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -513,7 +568,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.INT,
@@ -522,7 +577,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -531,7 +586,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On>",
+            comment="<Alarm.On:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -540,7 +595,7 @@ def test_from_nickname_file_udt_grouping_success(tmp_path):
             memory_type="C",
             address=102,
             nickname="Alarm2_On",
-            comment="</Alarm.On>",
+            comment="</Alarm.On:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -570,7 +625,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=False,
             data_type=DataType.INT,
@@ -579,7 +634,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -588,7 +643,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On />",
+            comment="<Alarm.On:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -612,7 +667,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=False,
             data_type=DataType.INT,
@@ -621,7 +676,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -630,7 +685,7 @@ def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On />",
+            comment="<Alarm.On:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -649,7 +704,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Alarm1_id",
-            comment="<Alarm.id>",
+            comment="<Alarm.id:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.INT,
@@ -658,7 +713,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Alarm2_id",
-            comment="</Alarm.id>",
+            comment="</Alarm.id:udt>",
             initial_value="2",
             retentive=False,
             data_type=DataType.INT,
@@ -667,7 +722,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1_On",
-            comment="<Alarm.On>",
+            comment="<Alarm.On:udt>",
             initial_value="1",
             retentive=True,
             data_type=DataType.BIT,
@@ -676,7 +731,7 @@ def test_from_nickname_file_udt_grouping_success_in_strict_mode(tmp_path):
             memory_type="C",
             address=102,
             nickname="Alarm2_On",
-            comment="</Alarm.On>",
+            comment="</Alarm.On:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -765,8 +820,9 @@ def test_from_nickname_file_named_array_success(tmp_path):
     assert restored.resolve(runtime[2].val) == "DS505"
 
 
-def test_from_nickname_file_named_array_missing_required_rows_raises(tmp_path):
-    path = tmp_path / "named_array_missing.csv"
+def test_from_nickname_file_named_array_sparse_nicknames_accepted(tmp_path):
+    """Sparse nicknames are fine — only populated rows are registered."""
+    path = tmp_path / "named_array_sparse.csv"
     records = {
         get_addr_key("DS", 501): AddressRecord(
             memory_type="DS",
@@ -807,57 +863,12 @@ def test_from_nickname_file_named_array_missing_required_rows_raises(tmp_path):
     }
     pyclickplc.write_csv(path, records)
 
-    with pytest.raises(ValueError, match="missing required row"):
-        TagMap.from_nickname_file(path)
-
-
-@pytest.mark.parametrize("mode", ["warn", "strict"])
-def test_from_nickname_file_named_array_missing_required_rows_raises_in_both_modes(
-    tmp_path, mode: str
-):
-    path = tmp_path / f"named_array_missing_{mode}.csv"
-    records = {
-        get_addr_key("DS", 501): AddressRecord(
-            memory_type="DS",
-            address=501,
-            nickname="AlarmPacked1_id",
-            comment="<AlarmPacked:named_array(2,3)>",
-            initial_value="1",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 502): AddressRecord(
-            memory_type="DS",
-            address=502,
-            nickname="AlarmPacked1_val",
-            comment="",
-            initial_value="10",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 504): AddressRecord(
-            memory_type="DS",
-            address=504,
-            nickname="AlarmPacked2_id",
-            comment="",
-            initial_value="2",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-        get_addr_key("DS", 506): AddressRecord(
-            memory_type="DS",
-            address=506,
-            nickname="",
-            comment="</AlarmPacked:named_array(2,3)>",
-            initial_value="",
-            retentive=False,
-            data_type=DataType.INT,
-        ),
-    }
-    pyclickplc.write_csv(path, records)
-
-    with pytest.raises(ValueError, match="missing required row"):
-        TagMap.from_nickname_file(path, mode=cast(Any, mode))
+    mapping = TagMap.from_nickname_file(path)
+    struct = mapping.structure_by_name("AlarmPacked")
+    assert struct is not None
+    runtime = cast(Any, struct.runtime)
+    assert mapping.resolve(runtime[1].id) == "DS501"
+    assert mapping.resolve(runtime[2].id) == "DS504"
 
 
 def test_from_nickname_file_named_array_bad_nickname_pattern_raises(tmp_path):
@@ -934,6 +945,108 @@ def test_from_nickname_file_named_array_inconsistent_offset_raises(tmp_path):
         TagMap.from_nickname_file(path)
 
 
+def test_from_nickname_file_named_array_count_one_compact_names_infer_no_always_number(tmp_path):
+    """count=1 with compact nicknames (Task_call) → always_number=False."""
+    path = tmp_path / "na_compact.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Task_call",
+            comment="<Task:named_array(1,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Task_done",
+            comment="</Task:named_array(1,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 1
+    runtime = cast(Any, struct.runtime)
+    assert runtime.always_number is False
+    assert restored.resolve(runtime.call) == "DS501"
+    assert restored.resolve(runtime.done) == "DS502"
+
+
+def test_from_nickname_file_named_array_count_one_numbered_names_infer_always_number(tmp_path):
+    """count=1 with numbered nicknames (Task1_call) → always_number=True."""
+    path = tmp_path / "na_numbered.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Task1_call",
+            comment="<Task:named_array(1,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Task1_done",
+            comment="</Task:named_array(1,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 1
+    runtime = cast(Any, struct.runtime)
+    assert runtime.always_number is True
+    assert restored.resolve(runtime[1].call) == "DS501"
+    assert restored.resolve(runtime[1].done) == "DS502"
+
+
+def test_from_nickname_file_named_array_explicit_always_number_marker(tmp_path):
+    """Explicit always_number in marker overrides inference."""
+    path = tmp_path / "na_explicit.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Task1_call",
+            comment="<Task:named_array(1,2,always_number)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Task1_done",
+            comment="</Task:named_array(1,2,always_number)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    runtime = cast(Any, struct.runtime)
+    assert runtime.always_number is True
+    assert restored.resolve(runtime[1].call) == "DS501"
+
+
 def test_from_nickname_file_structured_identifier_policy_rejects_invalid_tokens(tmp_path):
     path = tmp_path / "invalid_structured_name.csv"
     records = {
@@ -941,7 +1054,7 @@ def test_from_nickname_file_structured_identifier_policy_rejects_invalid_tokens(
             memory_type="DS",
             address=701,
             nickname="Bad1",
-            comment="<Alarm.bad-name />",
+            comment="<Alarm.bad-name:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -960,7 +1073,7 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
             memory_type="DS",
             address=801,
             nickname="A1",
-            comment="<Alarm.id />",
+            comment="<Alarm.id:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -969,7 +1082,7 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
             memory_type="DS",
             address=802,
             nickname="A2",
-            comment="<Alarm.id />",
+            comment="<Alarm.id:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -981,6 +1094,351 @@ def test_from_nickname_file_rejects_duplicate_block_definition_names(tmp_path):
         TagMap.from_nickname_file(path)
 
 
+def test_from_nickname_file_named_array_bare_marker_infers_count_and_stride(tmp_path):
+    """Task:named_array (no args) → count=1, stride inferred from row span."""
+    path = tmp_path / "na_bare.csv"
+    records = {
+        get_addr_key("DS", 601): AddressRecord(
+            memory_type="DS",
+            address=601,
+            nickname="Task_call",
+            comment="<Task:named_array>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 602): AddressRecord(
+            memory_type="DS",
+            address=602,
+            nickname="Task_done",
+            comment="</Task:named_array>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 1
+    assert struct.stride == 2
+    runtime = cast(Any, struct.runtime)
+    assert restored.resolve(runtime.call) == "DS601"
+    assert restored.resolve(runtime.done) == "DS602"
+
+
+def test_from_nickname_file_named_array_count_only_infers_stride(tmp_path):
+    """Task:named_array(2) → count=2, stride inferred from row span / count."""
+    path = tmp_path / "na_count_only.csv"
+    records = {
+        get_addr_key("DS", 701): AddressRecord(
+            memory_type="DS",
+            address=701,
+            nickname="Task1_call",
+            comment="<Task:named_array(2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 702): AddressRecord(
+            memory_type="DS",
+            address=702,
+            nickname="Task1_done",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 703): AddressRecord(
+            memory_type="DS",
+            address=703,
+            nickname="Task2_call",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 704): AddressRecord(
+            memory_type="DS",
+            address=704,
+            nickname="Task2_done",
+            comment="</Task:named_array(2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    struct = restored.structures[0]
+    assert struct.name == "Task"
+    assert struct.count == 2
+    assert struct.stride == 2
+    runtime = cast(Any, struct.runtime)
+    assert restored.resolve(runtime[1].call) == "DS701"
+    assert restored.resolve(runtime[2].done) == "DS704"
+
+
+def test_from_nickname_file_named_array_indivisible_row_count_raises(tmp_path):
+    """Task:named_array(3) with 4 rows → not divisible, raises."""
+    path = tmp_path / "na_indivisible.csv"
+    records = {
+        get_addr_key("DS", 801): AddressRecord(
+            memory_type="DS",
+            address=801,
+            nickname="Task1_a",
+            comment="<Task:named_array(3)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 802): AddressRecord(
+            memory_type="DS",
+            address=802,
+            nickname="",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 803): AddressRecord(
+            memory_type="DS",
+            address=803,
+            nickname="",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 804): AddressRecord(
+            memory_type="DS",
+            address=804,
+            nickname="",
+            comment="</Task:named_array(3)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="not divisible"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_named_array_then_udt_same_name(tmp_path):
+    """Same base name as :named_array then .attr:udt → error."""
+    path = tmp_path / "na_then_udt.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Alarm_id",
+            comment="<Alarm:named_array(1,1) />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="A1",
+            comment="<Alarm.On:udt />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="used as both"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_udt_then_named_array_same_name(tmp_path):
+    """Same base name as .attr:udt then :named_array → error (DS bank first)."""
+    path = tmp_path / "udt_then_na.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Alarm_id",
+            comment="<Alarm:named_array(1,1) />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 601): AddressRecord(
+            memory_type="DS",
+            address=601,
+            nickname="A1",
+            comment="<Alarm.On:udt />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="used as both named_array and udt"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_duplicate_named_array_markers(tmp_path):
+    """Two :named_array markers for the same base name → error."""
+    path = tmp_path / "dup_na.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Task_call",
+            comment="<Task:named_array(1,1) />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="Task_done",
+            comment="<Task:named_array(1,1) />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="Duplicate block definition name|used as both"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_rejects_block_and_named_array_collision(tmp_path):
+    """Same base name as :block and :named_array → error."""
+    path = tmp_path / "block_na_collision.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Alarm1",
+            comment="<Alarm:block />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 601): AddressRecord(
+            memory_type="DS",
+            address=601,
+            nickname="Alarm_id",
+            comment="<Alarm:named_array(1,1) />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="used as both block and named_array"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_named_array_instance2_new_field_raises(tmp_path):
+    """Instance 2 introduces a field not in instance 1 → error."""
+    path = tmp_path / "na_inst2_new_field.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="Alarm1_id",
+            comment="<Alarm:named_array(2,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="",
+            comment="",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 503): AddressRecord(
+            memory_type="DS",
+            address=503,
+            nickname="Alarm2_id",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 504): AddressRecord(
+            memory_type="DS",
+            address=504,
+            nickname="Alarm2_extra",
+            comment="</Alarm:named_array(2,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="instance 2 introduces field.*not present in instance 1"):
+        TagMap.from_nickname_file(path)
+
+
+def test_from_nickname_file_named_array_instance1_no_named_fields_raises(tmp_path):
+    """Instance 1 has no named fields but instance 2 does → error."""
+    path = tmp_path / "na_inst1_empty.csv"
+    records = {
+        get_addr_key("DS", 501): AddressRecord(
+            memory_type="DS",
+            address=501,
+            nickname="",
+            comment="<Alarm:named_array(2,2)>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 502): AddressRecord(
+            memory_type="DS",
+            address=502,
+            nickname="",
+            comment="",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 503): AddressRecord(
+            memory_type="DS",
+            address=503,
+            nickname="Alarm2_id",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("DS", 504): AddressRecord(
+            memory_type="DS",
+            address=504,
+            nickname="",
+            comment="</Alarm:named_array(2,2)>",
+            initial_value="",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="instance 1 has no named fields"):
+        TagMap.from_nickname_file(path)
+
+
 def test_from_nickname_file_plain_block_auto_starts_at_zero_for_zero_address(tmp_path):
     path = tmp_path / "plain_block_start_zero.csv"
     records = {
@@ -988,7 +1446,7 @@ def test_from_nickname_file_plain_block_auto_starts_at_zero_for_zero_address(tmp
             memory_type="XD",
             address=0,
             nickname="Word0",
-            comment="<WordBank>",
+            comment="<WordBank:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.HEX,
@@ -997,7 +1455,7 @@ def test_from_nickname_file_plain_block_auto_starts_at_zero_for_zero_address(tmp
             memory_type="XD",
             address=2,
             nickname="Word2",
-            comment="</WordBank>",
+            comment="</WordBank:block>",
             initial_value="0",
             retentive=False,
             data_type=DataType.HEX,
@@ -1225,7 +1683,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="DS",
             address=1001,
             nickname="Motor1_speed",
-            comment="<Motor.speed>",
+            comment="<Motor.speed:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -1234,7 +1692,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="DS",
             address=1002,
             nickname="Motor2_speed",
-            comment="</Motor.speed>",
+            comment="</Motor.speed:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.INT,
@@ -1243,7 +1701,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="C",
             address=101,
             nickname="Motor1_running",
-            comment="<Motor.running>",
+            comment="<Motor.running:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1252,7 +1710,7 @@ def test_owner_of_udt(tmp_path):
             memory_type="C",
             address=102,
             nickname="Motor2_running",
-            comment="</Motor.running>",
+            comment="</Motor.running:udt>",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1284,7 +1742,7 @@ def test_owner_of_singleton(tmp_path):
             memory_type="DS",
             address=301,
             nickname="Config1_timeout",
-            comment="<Config.timeout />",
+            comment="<Config.timeout:udt />",
             initial_value="100",
             retentive=False,
             data_type=DataType.INT,
@@ -1293,7 +1751,7 @@ def test_owner_of_singleton(tmp_path):
             memory_type="C",
             address=201,
             nickname="Config1_enabled",
-            comment="<Config.enabled />",
+            comment="<Config.enabled:udt />",
             initial_value="0",
             retentive=False,
             data_type=DataType.BIT,
@@ -1317,6 +1775,39 @@ def test_owner_of_plain_block(tmp_path):
             memory_type="C",
             address=101,
             nickname="Alarm1",
+            comment="<Alarm:block>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="Alarm2",
+            comment="</Alarm:block>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    owner = restored.owner_of("C101")
+    assert owner is not None
+    assert owner.structure_name == "Alarm"
+    assert owner.instance == 1
+    assert owner.field is None
+    assert owner.structure_type == "block"
+
+
+def test_bare_plain_block_marker_is_group_only(tmp_path):
+    path = tmp_path / "bare_plain_group.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="Alarm1",
             comment="<Alarm>",
             initial_value="0",
             retentive=False,
@@ -1335,12 +1826,72 @@ def test_owner_of_plain_block(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("C101")
-    assert owner is not None
-    assert owner.structure_name == "Alarm"
-    assert owner.instance == 1
-    assert owner.field is None
-    assert owner.structure_type == "block"
+    assert restored.blocks() == ()
+    assert restored.owner_of("C101") is None
+    assert restored.resolve("Alarm1") == "C101"
+    assert restored.resolve("Alarm2") == "C102"
+
+
+def test_bare_dotted_marker_is_group_only(tmp_path):
+    path = tmp_path / "bare_dotted_group.csv"
+    records = {
+        get_addr_key("DS", 301): AddressRecord(
+            memory_type="DS",
+            address=301,
+            nickname="Config1_timeout",
+            comment="<Config.timeout />",
+            initial_value="100",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("C", 201): AddressRecord(
+            memory_type="C",
+            address=201,
+            nickname="Config1_enabled",
+            comment="<Config.enabled />",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    assert restored.structures == ()
+    assert restored.owner_of("DS301") is None
+    assert restored.resolve("Config1_timeout") == "DS301"
+    assert restored.resolve("Config1_enabled") == "C201"
+
+
+def test_group_block_import_stays_standalone_tags(tmp_path):
+    path = tmp_path / "group.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="AlarmA",
+            comment="<Alarm:group>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="AlarmB",
+            comment="</Alarm:group>",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    assert restored.block_entry_by_name("Alarm") is None
+    assert restored.owner_of("C101") is None
+    assert restored.resolve("AlarmA") == "C101"
+    assert restored.resolve("AlarmB") == "C102"
 
 
 def test_owner_of_structure_wins_over_block(tmp_path):
@@ -1373,6 +1924,59 @@ def test_owner_of_structure_wins_over_block(tmp_path):
     assert owner is not None
     assert owner.structure_type == "named_array"
     assert owner.structure_name == "Packed"
+
+
+def test_from_nickname_file_preserves_custom_sc_sd_nicknames_for_non_reserved_addresses(tmp_path):
+    path = tmp_path / "custom_system_banks.csv"
+    records = {
+        get_addr_key("SC", 20): AddressRecord(
+            memory_type="SC",
+            address=20,
+            nickname="ModeReady",
+            comment="",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("SD", 91): AddressRecord(
+            memory_type="SD",
+            address=91,
+            nickname="RecipeShadow",
+            comment="",
+            initial_value="123",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+        get_addr_key("SD", 20): AddressRecord(
+            memory_type="SD",
+            address=20,
+            nickname="DontOverrideRtcYear2",
+            comment="",
+            initial_value="2026",
+            retentive=False,
+            data_type=DataType.INT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    custom_slots = {
+        slot.logical_name: slot for slot in restored.mapped_slots() if slot.source == "user"
+    }
+    system_slots = {
+        slot.logical_name: slot for slot in restored.mapped_slots() if slot.source == "system"
+    }
+
+    assert restored.resolve("ModeReady") == "SC20"
+    assert restored.resolve("RecipeShadow") == "SD91"
+    assert custom_slots["ModeReady"].hardware_address == "SC20"
+    assert custom_slots["RecipeShadow"].hardware_address == "SD91"
+
+    with pytest.raises(KeyError):
+        restored.resolve("DontOverrideRtcYear2")
+
+    assert restored.resolve("rtc.year2") == "SD20"
+    assert system_slots["rtc.year2"].hardware_address == "SD20"
 
 
 # ── tags_from_plc_data ──────────────────────────────────────────────

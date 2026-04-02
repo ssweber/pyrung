@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _scan_file_refs
 from pyrung.click.codegen.emitter import (
-    _emit_range_declarations,
+    _emit_plain_block_declarations,
     _emit_rung_sequence,
     _emit_structure_declarations,
     _emit_tag_declarations,
@@ -122,7 +122,6 @@ def _generate_export_file() -> str:
     return '''\
 """Export this pyrung project back to Click ladder CSV files."""
 
-import shutil
 from pathlib import Path
 
 from pyrung.click import pyrung_to_ladder
@@ -134,9 +133,7 @@ output_dir = here / "csv_output"
 bundle = pyrung_to_ladder(logic, mapping)
 bundle.write(output_dir)
 
-nicknames = here / "nicknames.csv"
-if nicknames.exists():
-    shutil.copy(nicknames, output_dir / "nicknames.csv")
+mapping.to_nickname_file(output_dir / "nicknames.csv")
 
 print(f"Wrote CSV to {output_dir}")
 '''
@@ -156,22 +153,25 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     lines.append("")
 
     # Tag declarations
-    has_flat_tags = any(op not in collection.structure_owned_operands for op in collection.tags)
+    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
     if has_flat_tags:
+        lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection, suppress_comments=True)
         lines.append("")
 
-    # Range declarations
-    if collection.ranges:
-        _emit_range_declarations(lines, collection)
+    if collection.plain_blocks:
+        lines.append("# --- Blocks ---")
+        _emit_plain_block_declarations(lines, collection)
         lines.append("")
 
     # Structure declarations
     if collection.structures:
+        lines.append("# --- Structures ---")
         _emit_structure_declarations(lines, collection)
         lines.append("")
 
     # TagMap
+    lines.append("# --- Tag Map ---")
     _emit_tag_map(lines, collection)
     lines.append("")
 
@@ -182,8 +182,8 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     """Emit imports for tags.py (types, blocks, TagMap)."""
     core: list[str] = []
 
-    # Block/TagType if ranges
-    if collection.ranges:
+    # Block/TagType for reconstructed plain named blocks
+    if collection.plain_blocks:
         core.append("Block")
         core.append("TagType")
 
@@ -301,6 +301,7 @@ def _generate_main_file(
     # from tags import mapping, ...
     refs_with_mapping = _FileRefs(
         tag_var_names=set(refs.tag_var_names),
+        block_var_names=set(refs.block_var_names),
         range_var_names=set(refs.range_var_names),
         structure_names=set(refs.structure_names),
     )
@@ -397,6 +398,8 @@ def _emit_logic_imports(
 
     if refs.has_branch:
         parts.append("branch")
+    if refs.has_comment:
+        parts.append("comment")
     if refs.has_forloop:
         parts.append("forloop")
 
@@ -445,6 +448,7 @@ def _emit_tags_import_line(
     if include_mapping:
         names.append("mapping")
     names.extend(sorted(refs.tag_var_names))
+    names.extend(sorted(refs.block_var_names))
     names.extend(sorted(refs.range_var_names))
     names.extend(sorted(refs.structure_names))
 

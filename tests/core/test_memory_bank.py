@@ -128,7 +128,7 @@ class TestBlock:
         DS = Block("DS", TagType.INT, 1, 4500, retentive=True)
         assert DS[1].retentive is True
 
-    def test_slot_config_effective_policy_and_overrides(self):
+    def test_slot_inspect_effective_policy_and_overrides(self):
         DS = Block(
             "DS",
             TagType.INT,
@@ -138,7 +138,7 @@ class TestBlock:
             default_factory=lambda addr: addr * 10,
         )
 
-        inherited = DS.slot_config(3)
+        inherited = DS.slot(3)
         assert inherited.name == "DS3"
         assert inherited.retentive is False
         assert inherited.default == 30
@@ -148,9 +148,8 @@ class TestBlock:
         assert inherited.default_overridden is False
         assert inherited.comment_overridden is False
 
-        DS.rename_slot(3, "Speed_Command")
-        DS.configure_slot(3, retentive=True, default=999, comment="Speed command")
-        configured = DS.slot_config(3)
+        DS.slot(3, name="Speed_Command", retentive=True, default=999, comment="Speed command")
+        configured = DS.slot(3)
         assert configured.name == "Speed_Command"
         assert configured.retentive is True
         assert configured.default == 999
@@ -166,29 +165,46 @@ class TestBlock:
         assert tag.default == 999
         assert tag.comment == "Speed command"
 
-    def test_slot_name_clear_restores_generated_name(self):
+    def test_slot_reset_restores_defaults(self):
         DS = Block("DS", TagType.INT, 1, 10)
-        DS.rename_slot(4, "ManualName")
-        assert DS.slot_config(4).name == "ManualName"
-        assert DS.slot_config(4).name_overridden is True
+        DS.slot(4, name="ManualName")
+        assert DS.slot(4).name == "ManualName"
+        assert DS.slot(4).name_overridden is True
 
-        DS.clear_slot_name(4)
-        restored = DS.slot_config(4)
+        DS.slot(4).reset()
+        restored = DS.slot(4)
         assert restored.name == "DS4"
         assert restored.name_overridden is False
 
-    def test_configure_range_applies_to_sparse_addresses_only(self):
+    def test_slot_configure_accepts_all_overrides(self):
+        DS = Block("DS", TagType.INT, 1, 10)
+        DS.slot(4, name="ManualName", retentive=True, default=999, comment="Recipe")
+
+        configured = DS.slot(4)
+        assert configured.name == "ManualName"
+        assert configured.name_overridden is True
+        assert configured.retentive is True
+        assert configured.default == 999
+        assert configured.comment == "Recipe"
+
+        tag = DS[4]
+        assert tag.name == "ManualName"
+        assert tag.retentive is True
+        assert tag.default == 999
+        assert tag.comment == "Recipe"
+
+    def test_slot_range_applies_to_sparse_addresses_only(self):
         sparse = Block("X", TagType.BOOL, 1, 6, valid_ranges=((1, 2), (5, 6)))
-        sparse.configure_range(1, 6, retentive=True, default=True)
+        sparse.slot(1, 6, retentive=True, default=True)
 
-        assert sparse.slot_config(1).default is True
-        assert sparse.slot_config(2).default is True
-        assert sparse.slot_config(5).default is True
-        assert sparse.slot_config(6).default is True
+        assert sparse.slot(1).default is True
+        assert sparse.slot(2).default is True
+        assert sparse.slot(5).default is True
+        assert sparse.slot(6).default is True
         with pytest.raises(IndexError):
-            sparse.slot_config(3)
+            sparse.slot(3)
 
-    def test_clear_slot_and_range_config_restore_inherited_policy(self):
+    def test_slot_reset_restores_inherited_policy(self):
         DS = Block(
             "DS",
             TagType.INT,
@@ -197,48 +213,45 @@ class TestBlock:
             retentive=False,
             default_factory=lambda addr: addr,
         )
-        DS.configure_slot(2, retentive=True, default=200, comment="Recipe")
-        DS.clear_slot_config(2)
-        after_clear_slot = DS.slot_config(2)
-        assert after_clear_slot.retentive is False
-        assert after_clear_slot.default == 2
-        assert after_clear_slot.comment == ""
+        DS.slot(2, retentive=True, default=200, comment="Recipe")
+        DS.slot(2).reset()
+        after_reset = DS.slot(2)
+        assert after_reset.retentive is False
+        assert after_reset.default == 2
+        assert after_reset.comment == ""
 
-        DS.configure_range(1, 6, retentive=True, default=100)
-        DS.clear_range_config(1, 6)
-        assert DS.slot_config(1).retentive is False
-        assert DS.slot_config(1).default == 1
-        assert DS.slot_config(6).retentive is False
-        assert DS.slot_config(6).default == 6
+        DS.slot(1, 6, retentive=True, default=100)
+        DS.slot(1, 6).reset()
+        assert DS.slot(1).retentive is False
+        assert DS.slot(1).default == 1
+        assert DS.slot(6).retentive is False
+        assert DS.slot(6).default == 6
 
-    def test_slot_policy_mutation_after_materialization_raises(self):
+    def test_slot_mutation_after_materialization_raises(self):
         DS = Block("DS", TagType.INT, 1, 10)
         _ = DS[2]
 
         with pytest.raises(ValueError, match="materialization"):
-            DS.rename_slot(2, "Renamed")
+            DS.slot(2, name="Renamed")
 
         with pytest.raises(ValueError, match="materialization"):
-            DS.clear_slot_name(2)
+            DS.slot(2, default=99)
 
         with pytest.raises(ValueError, match="materialization"):
-            DS.configure_slot(2, default=99)
+            DS.slot(1, 3, retentive=True)
 
         with pytest.raises(ValueError, match="materialization"):
-            DS.configure_range(1, 3, retentive=True)
+            DS.slot(2).reset()
 
         with pytest.raises(ValueError, match="materialization"):
-            DS.clear_slot_config(2)
-
-        with pytest.raises(ValueError, match="materialization"):
-            DS.clear_range_config(1, 3)
+            DS.slot(1, 3).reset()
 
     def test_input_output_block_slot_overrides_support_retentive_and_default(self):
         X = InputBlock("X", TagType.BOOL, 1, 2)
         Y = OutputBlock("Y", TagType.BOOL, 1, 2)
 
-        X.configure_slot(1, retentive=True, default=True)
-        Y.configure_slot(2, retentive=True, default=True)
+        X.slot(1, retentive=True, default=True)
+        Y.slot(2, retentive=True, default=True)
 
         assert X[1].retentive is True
         assert X[1].default is True

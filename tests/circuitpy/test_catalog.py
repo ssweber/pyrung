@@ -241,10 +241,10 @@ def test_every_entry_has_description(part: str):
 def test_module_spec_is_frozen():
     spec = MODULE_CATALOG["P1-08SIM"]
     with pytest.raises(AttributeError):
-        spec.part_number = "changed"  # type: ignore[misc]
+        spec.part_number = "changed"  # ty: ignore[invalid-assignment]
 
 
 def test_channel_group_is_frozen():
     group = ChannelGroup(ModuleDirection.INPUT, 8, TagType.BOOL)
     with pytest.raises(AttributeError):
-        group.count = 99  # type: ignore[misc]
+        group.count = 99  # ty: ignore[invalid-assignment]

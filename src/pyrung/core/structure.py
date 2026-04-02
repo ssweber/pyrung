@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import LiveTag, MappingEntry, TagType, _TagTypeBase
+from pyrung.core.tag import LiveTag, MappingEntry, Tag, TagType, _TagTypeBase
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -23,6 +23,8 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
+        "instance",
+        "instance_select",
         "stride",
         "type",
     }
@@ -32,6 +34,14 @@ _PRIMITIVE_TYPE_MAP = {
     int: TagType.INT,
     float: TagType.REAL,
     str: TagType.CHAR,
+}
+_TYPE_DEFAULT_RETENTIVE: dict[TagType, bool] = {
+    TagType.BOOL: False,
+    TagType.INT: True,
+    TagType.DINT: True,
+    TagType.REAL: True,
+    TagType.WORD: True,
+    TagType.CHAR: True,
 }
 _STRING_TYPE_MAP = {
     "bool": TagType.BOOL,
@@ -51,17 +61,23 @@ _STRING_TYPE_MAP = {
 
 @dataclass(frozen=True)
 class Field:
-    """Field metadata used by `udt` and `named_array` declarations."""
+    """Field metadata used by `udt` and `named_array` declarations.
+
+    When ``retentive`` is ``None`` (the default), the field inherits
+    its retentive policy from the resolved tag type (e.g. ``Int`` →
+    ``True``, ``Bool`` → ``False``).  Pass an explicit ``bool`` only
+    when you need to override the type default.
+    """
 
     type: TagType | None = None
     default: Any = UNSET
-    retentive: bool = False
+    retentive: bool | None = None
 
     def __new__(
         cls,
         type: TagType | None = None,
         default: Any = UNSET,
-        retentive: bool = False,
+        retentive: bool | None = None,
     ) -> Any:
         _ = (type, default, retentive)
         return super().__new__(cls)
@@ -114,6 +130,68 @@ class InstanceView:
         return f"InstanceView({self._owner.name}[{self._index}])"
 
 
+class _SelectedTagRange(BlockRange):
+    """BlockRange-like wrapper backed by an explicit ordered tag list."""
+
+    _selected_tags: tuple[LiveTag, ...]
+    _label: str
+    _instance_start: int
+    _instance_end: int
+
+    def __init__(
+        self,
+        block: Block,
+        start: int,
+        end: int,
+        tags: tuple[LiveTag, ...],
+        *,
+        reverse_order: bool = False,
+        label: str,
+        instance_start: int,
+        instance_end: int,
+    ):
+        super().__init__(block=block, start=start, end=end, reverse_order=reverse_order)
+        object.__setattr__(self, "_selected_tags", tags)
+        object.__setattr__(self, "_label", label)
+        object.__setattr__(self, "_instance_start", instance_start)
+        object.__setattr__(self, "_instance_end", instance_end)
+
+    @property
+    def addresses(self) -> range:
+        if not self.reverse_order:
+            return range(self.start, self.end + 1)
+        return range(self.end, self.start - 1, -1)
+
+    def tags(self) -> list[Tag]:
+        result: list[Tag] = list(self._selected_tags)
+        if self.reverse_order:
+            result.reverse()
+        return result
+
+    def reverse(self) -> _SelectedTagRange:
+        return _SelectedTagRange(
+            self.block,
+            self.start,
+            self.end,
+            self._selected_tags,
+            reverse_order=not self.reverse_order,
+            label=self._label,
+            instance_start=self._instance_start,
+            instance_end=self._instance_end,
+        )
+
+    def __len__(self) -> int:
+        return len(self._selected_tags)
+
+    def __iter__(self):
+        yield from self.tags()
+
+    def __repr__(self) -> str:
+        if self._instance_start == self._instance_end:
+            return f"{self._label}.instance({self._instance_start})"
+        return f"{self._label}.instance_select({self._instance_start}, {self._instance_end})"
+
+
 class _StructRuntime:
     """Runtime object returned by `@udt`."""
 
@@ -123,7 +201,8 @@ class _StructRuntime:
         count: int,
         field_specs: tuple[_FieldSpec, ...],
         *,
-        numbered: bool = False,
+        always_number: bool = False,
+        kind: str = "udt",
     ):
         _validate_name(name)
         _validate_count(count)
@@ -131,7 +210,8 @@ class _StructRuntime:
 
         self.name = name
         self.count = count
-        self.numbered = numbered
+        self.always_number = always_number
+        self._structure_kind = kind
         self._original_field_specs = field_specs
         self._field_specs: dict[str, Field] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
@@ -143,7 +223,7 @@ class _StructRuntime:
                 default=field_spec.default,
                 retentive=field_spec.retentive,
             )
-            self._blocks[field_spec.name] = Block(
+            block = Block(
                 name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
                 start=1,
@@ -151,11 +231,16 @@ class _StructRuntime:
                 retentive=field_spec.retentive,
                 address_formatter=(
                     _make_compact_formatter(name, field_spec.name)
-                    if self.count == 1 and not self.numbered
+                    if self.count == 1 and not self.always_number
                     else _make_formatter(name, field_spec.name)
                 ),
                 default_factory=_make_default_factory(field_spec.default),
             )
+            block._pyrung_structure_runtime = self  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_kind = self._structure_kind  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_name = name  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
+            self._blocks[field_spec.name] = block
 
     def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
@@ -163,7 +248,8 @@ class _StructRuntime:
             name=name,
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
-            numbered=self.numbered,
+            always_number=self.always_number,
+            kind=self._structure_kind,
         )
 
     @property
@@ -207,6 +293,7 @@ class _NamedArrayRuntime(_StructRuntime):
         count: int,
         stride: int,
         field_specs: tuple[_FieldSpec, ...],
+        always_number: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -216,7 +303,14 @@ class _NamedArrayRuntime(_StructRuntime):
 
         self.type = type
         self.stride = stride
-        super().__init__(name=name, count=count, field_specs=field_specs)
+        self._instance_block = Block(name=name, type=type, start=1, end=count * stride)
+        super().__init__(
+            name=name,
+            count=count,
+            field_specs=field_specs,
+            always_number=always_number,
+            kind="named_array",
+        )
 
     def clone(
         self,
@@ -232,6 +326,7 @@ class _NamedArrayRuntime(_StructRuntime):
             count=self.count if count is None else count,
             stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
+            always_number=self.always_number,
         )
 
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
@@ -260,6 +355,39 @@ class _NamedArrayRuntime(_StructRuntime):
                 entries.append(logical.map_to(hardware))
         return entries
 
+    def instance(self, index: int) -> BlockRange:
+        """Select a single named-array instance as a contiguous BlockRange."""
+        return self._instance_range(index, index)
+
+    def instance_select(self, start: int, end: int) -> BlockRange:
+        """Select a range of named-array instances as a contiguous BlockRange."""
+        return self._instance_range(start, end)
+
+    def _instance_range(self, start: int, end: int) -> BlockRange:
+        if not isinstance(start, int) or not isinstance(end, int):
+            raise TypeError("instance bounds must be integers.")
+        if start < 1 or end < 1 or start > self.count or end > self.count:
+            raise IndexError(f"instance bounds {start}..{end} out of range 1..{self.count}.")
+        if start > end:
+            raise ValueError(f"instance start ({start}) must be <= end ({end}) for {self.name}.")
+
+        tags: list[LiveTag] = []
+        for inst in range(start, end + 1):
+            for field_name in self._field_order:
+                tags.append(self._blocks[field_name][inst])
+
+        raw_start = (start - 1) * self.stride + 1
+        raw_end = end * self.stride
+        return _SelectedTagRange(
+            self._instance_block,
+            raw_start,
+            raw_end,
+            tuple(tags),
+            label=self.name,
+            instance_start=start,
+            instance_end=end,
+        )
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}({self.name!r}, {self.type}, count={self.count}, "
@@ -267,7 +395,7 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1, numbered: bool = False) -> Callable[[type[Any]], _StructRuntime]:
+def udt(*, count: int = 1, always_number: bool = False) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
@@ -275,13 +403,15 @@ def udt(*, count: int = 1, numbered: bool = False) -> Callable[[type[Any]], _Str
         name = cls.__name__
         _validate_name(name)
         field_specs = _parse_udt_fields(cls)
-        return _StructRuntime(name=name, count=count, field_specs=field_specs, numbered=numbered)
+        return _StructRuntime(
+            name=name, count=count, field_specs=field_specs, always_number=always_number
+        )
 
     return _decorator
 
 
 def named_array(
-    base_type: object, *, count: int = 1, stride: int = 1
+    base_type: object, *, count: int = 1, stride: int = 1, always_number: bool = False
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -298,6 +428,7 @@ def named_array(
             count=count,
             stride=stride,
             field_specs=field_specs,
+            always_number=always_number,
         )
 
     return _decorator
@@ -381,7 +512,7 @@ def _should_skip_named_array_attr(name: str, value: object, *, classvar_names: s
 def _build_field_spec(
     field_name: str, type: TagType, raw_default: object, *, source: str
 ) -> _FieldSpec:
-    retentive = False
+    retentive: bool | None = None
     default_spec = raw_default
 
     if isinstance(raw_default, Field):
@@ -397,6 +528,9 @@ def _build_field_spec(
             )
         retentive = raw_default.retentive
         default_spec = raw_default.default
+
+    if retentive is None:
+        retentive = _TYPE_DEFAULT_RETENTIVE[type]
 
     _validate_auto_default_allowed(field_name, default_spec, type)
     return _FieldSpec(name=field_name, type=type, default=default_spec, retentive=retentive)
@@ -420,7 +554,7 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
     if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
         return annotation._tag_type
 
-    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)
+    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)  # ty: ignore[invalid-argument-type]
     if primitive is not None:
         return primitive
 

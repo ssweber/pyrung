@@ -259,15 +259,20 @@ class TestContinueMethodChaining:
         rung.continued()
         assert rung._rung._use_prior_snapshot is True
 
-    def test_continued_rung_cannot_set_comment(self):
-        """Setting a comment on a continued() rung raises."""
-        A = Bool("A")
-        rung = Rung(A).continued()
-        with pytest.raises(RuntimeError, match="continued\\(\\) rung cannot have its own comment"):
-            rung.comment = "not allowed"
+    def test_continued_rung_cannot_have_comment(self):
+        """comment() before a continued() rung raises."""
+        from pyrung.core.program import comment
 
-    def test_continued_rung_allows_none_comment(self):
-        """Setting comment to None on a continued() rung is fine (no-op)."""
         A = Bool("A")
-        rung = Rung(A).continued()
-        rung.comment = None  # should not raise
+        B = Bool("B")
+        Light = Bool("Light")
+
+        with Program():
+            with Rung(A):
+                out(Light)
+            comment("not allowed")
+            with pytest.raises(
+                RuntimeError, match="continued\\(\\) rung cannot have its own comment"
+            ):
+                with Rung(B).continued():
+                    out(Light)

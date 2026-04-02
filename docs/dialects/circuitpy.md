@@ -64,7 +64,7 @@ Programs use the same DSL as any other pyrung dialect — only the hardware setu
 
 ```python
 from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, out, copy, rise
-from pyrung.circuitpy import P1AM, generate_circuitpy
+from pyrung.circuitpy import P1AM, write_circuitpy
 
 # 1. Configure hardware
 hw = P1AM()
@@ -89,20 +89,29 @@ with runner.active():
     runner.step()
     assert Light.value is True
 
-# 4. Generate deployable CircuitPython code
-source = generate_circuitpy(logic, hw, target_scan_ms=10.0, watchdog_ms=500)
+# 4. Generate code.py — copy to CIRCUITPY drive
+write_circuitpy(logic, hw, target_scan_ms=10.0, watchdog_ms=500, output_dir=".")
 ```
 
 ## Code generation
 
 ```python
-source = generate_circuitpy(
-    program,
-    hw,
-    target_scan_ms=10.0,
-    watchdog_ms=500,
-    runstop=RunStopConfig(),
-)
+from pyrung.circuitpy import write_circuitpy
+
+# Write code.py to a directory — the common case
+write_circuitpy(logic, hw, target_scan_ms=10.0, output_dir=".")
+```
+
+`write_circuitpy` generates and writes `code.py` to `output_dir`. It accepts the same parameters as `generate_circuitpy` plus `output_dir`.
+
+For programmatic use (no file I/O):
+
+```python
+from pyrung.circuitpy import generate_circuitpy
+
+result = generate_circuitpy(logic, hw, target_scan_ms=10.0)
+result.code     # code.py content (str)
+result.runtime  # pyrung_rt.py content (str) — for maintainer use
 ```
 
 | Parameter | Type | Description |
@@ -117,20 +126,28 @@ source = generate_circuitpy(
 | `tag_map` | `TagMap \| None` | Click address mapping for Modbus-visible tags; required with server/client |
 | `mapped_tag_scope` | `MappedTagScope` | `"referenced_only"` (default) or `"all_mapped"` |
 
-Returns a complete, self-contained CircuitPython source file as a string. The generator runs strict validation internally and checks the generated source for syntax errors before returning.
+The generator runs strict validation internally and checks the generated source for syntax errors before returning.
 
-### Generated file structure
+### Generated output
 
-The output is a single `.py` file organized as:
+Code generation produces two files:
 
-1. **Imports** — `time`, `json`, `board`, `busio`, `P1AM`, `sdcardio`, `storage`, `microcontroller`
+- **`code.py`** — your program. Tags, ladder logic, I/O, scan loop. Regenerated every time you change your logic.
+- **`pyrung_rt.mpy`** — the pyrung runtime library (pre-compiled). Helper functions, Modbus TCP server/client state machine. Same for every project — install once.
+
+`code.py` imports from `pyrung_rt` at runtime. The `.mpy` format loads faster and uses less memory than `.py` on CircuitPython.
+
+### code.py structure
+
+1. **Imports** — `time`, `json`, `board`, `busio`, `P1AM`, `sdcardio`, `storage`, `microcontroller`, `pyrung_rt`
 2. **Configuration** — `TARGET_SCAN_MS`, `WATCHDOG_MS`, slot module list, retentive schema hash
 3. **Hardware bootstrap** — `P1AM.Base()`, `rollCall()`, optional watchdog init
 4. **Tag declarations** — one variable per scalar tag, one list per block
 5. **Memory buffers** — edge-detection state, scan timing
 6. **SD mount / retentive load/save** — generated when retentive tags exist
-7. **Helper functions** — rising edge, type conversions, math helpers
-8. **`while True` scan loop** — reads inputs, executes rungs, writes outputs, paces to target scan time
+7. **Modbus address mapping** — wires tags to the runtime's Modbus server/client
+8. **Ladder logic** — compiled rungs
+9. **`while True` scan loop** — reads inputs, executes rungs, writes outputs, paces to target scan time
 
 ### Retentive tag persistence
 
@@ -221,12 +238,20 @@ In `"warn"` mode these produce hints. In `"strict"` mode, `CPY_IO_BLOCK_UNTRACKE
 
 ## Deploying to hardware
 
-The generated code uses the [CircuitPython P1AM library](https://github.com/facts-engineering/CircuitPython_P1AM). Make sure the library is installed on your P1AM-200 before deploying (see [P1AM-200 getting started guide](https://facts-engineering.github.io/modules/P1AM-200/P1AM-200.html)).
+### One-time board setup
 
-1. Call `generate_circuitpy()` to produce the source string
-2. Write it to a file (e.g. `code.py`)
-3. Copy `code.py` to the P1AM-200's CIRCUITPY drive — it runs automatically on boot
-4. Insert an SD card for retentive tag storage (FAT-formatted)
+1. Install [CircuitPython](https://circuitpython.org/board/p1am_200/) on the P1AM-200
+2. Install the [CircuitPython P1AM library](https://github.com/facts-engineering/CircuitPython_P1AM) and its dependencies into `CIRCUITPY/lib/`
+3. Download `pyrung_rt.mpy` from the [pyrung releases page](https://github.com/ssweber/pyrung/releases) and copy it to `CIRCUITPY/lib/`
+4. Insert a FAT-formatted SD card for retentive tag storage (if using retentive tags)
+
+### Iterate
+
+```python
+write_circuitpy(logic, hw, target_scan_ms=10.0, output_dir=".")
+```
+
+Copy the generated `code.py` to the P1AM-200's `CIRCUITPY` drive. It runs automatically on boot.
 
 If your program uses `FunctionCallInstruction`, the callable's source is embedded verbatim. Ensure it only uses CircuitPython-compatible modules and APIs.
 

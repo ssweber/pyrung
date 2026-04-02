@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, cast
 
+from pyclickplc.addresses import format_address_display
+
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -19,18 +21,25 @@ from pyrung.click.codegen.models import (
     Series,
     SPNode,
     _AnalyzedRung,
+    _BlockSlotDecl,
     _FieldHw,
     _FileRefs,
     _OperandCollection,
+    _PlainBlockDecl,
     _RangeDecl,
+    _SemanticRender,
     _StructureDecl,
     _TagDecl,
 )
-from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
+from pyrung.click.codegen.utils import (
+    _make_safe_identifier,
+    _parse_operand_prefix,
+    _strip_quoted_strings,
+)
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
 
 if TYPE_CHECKING:
-    from pyrung.click.tag_map import TagMap
+    from pyrung.click.tag_map import OwnerInfo, TagMap
 
 
 # ---------------------------------------------------------------------------
@@ -49,15 +58,52 @@ def _walk_tree_labels(node: SPNode | None) -> Iterator[str]:
             yield from _walk_tree_labels(child)
 
 
-def _tree_has_parallel(node: SPNode | None) -> bool:
-    """Check if tree contains any Parallel node."""
+def _is_bool_operand_token(token: str, collection: _OperandCollection) -> bool:
+    """Return True when a raw operand token resolves to a BOOL-style contact."""
+    token = token.strip()
+    if not token:
+        return False
+    tag_decl = collection.tags.get(token)
+    if tag_decl is not None:
+        return tag_decl.tag_type == "Bool"
+    parsed = _parse_operand_prefix(token)
+    return parsed is not None and parsed[1] == "Bool"
+
+
+def _is_pipe_safe_or_token(token: str, collection: _OperandCollection) -> bool:
+    """Return True when a condition token can be emitted safely with ``|``."""
+    token = token.strip()
+    if not token or _COMPARE_RE.match(token):
+        return False
+    if token.startswith("~"):
+        return _is_pipe_safe_or_token(token[1:], collection)
+    match = _FUNC_RE.match(token)
+    if match:
+        func_name = match.group(2)
+        args_str = (match.group(3) or "").strip()
+        return func_name in _CONDITION_WRAPPERS and _is_bool_operand_token(args_str, collection)
+    return _is_bool_operand_token(token, collection)
+
+
+def _parallel_renders_with_pipe(node: Parallel, collection: _OperandCollection) -> bool:
+    """Return True when a parallel group should emit as ``a | b`` instead of ``any_of``."""
+    return len(node.children) == 2 and all(
+        isinstance(child, Leaf) and _is_pipe_safe_or_token(child.label, collection)
+        for child in node.children
+    )
+
+
+def _tree_uses_any_of(node: SPNode | None, collection: _OperandCollection) -> bool:
+    """Check if tree requires an ``any_of(...)`` helper in emitted code."""
     if node is None:
         return False
-    if isinstance(node, Parallel):
-        return True
+    if isinstance(node, Leaf):
+        return False
     if isinstance(node, Series):
-        return any(_tree_has_parallel(c) for c in node.children)
-    return False
+        return any(_tree_uses_any_of(c, collection) for c in node.children)
+    if _parallel_renders_with_pipe(node, collection):
+        return any(_tree_uses_any_of(c, collection) for c in node.children)
+    return True
 
 
 def _tree_has_all_of(node: SPNode | None) -> bool:
@@ -90,11 +136,13 @@ def _collect_operands(
     collection = _OperandCollection()
 
     for rung in rungs:
-        if _tree_has_parallel(rung.condition_tree):
+        if _tree_uses_any_of(rung.condition_tree, collection):
             collection.has_any_of = True
         if _tree_has_all_of(rung.condition_tree):
             collection.has_all_of = True
 
+        if rung.comment:
+            collection.has_comment = True
         if rung.is_forloop_start:
             collection.has_forloop = True
 
@@ -107,7 +155,7 @@ def _collect_operands(
             _scan_af_token(instr.af_token, collection, nicknames)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _scan_token_for_operands(cond, collection, nicknames)
-            if _tree_has_parallel(instr.branch_tree):
+            if _tree_uses_any_of(instr.branch_tree, collection):
                 collection.has_any_of = True
             if _tree_has_all_of(instr.branch_tree):
                 collection.has_all_of = True
@@ -119,102 +167,95 @@ def _collect_operands(
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
-    # Enrich with structured metadata if available
+    # Enrich with semantic ownership metadata if available
     if structured_map is not None:
-        _enrich_with_structures(collection, structured_map)
+        _enrich_with_ownership(collection, structured_map)
 
     return collection
 
 
-def _enrich_with_structures(
+def _enrich_with_ownership(
     collection: _OperandCollection,
     structured_map: TagMap,
 ) -> None:
-    """Mark structure-owned operands and build _StructureDecl entries."""
+    """Build semantic ownership metadata for structures and plain named blocks."""
 
     seen_structures: dict[str, _StructureDecl] = {}
+    seen_plain_blocks: dict[str, _PlainBlockDecl] = {}
+    used_symbol_names = (
+        {decl.var_name for decl in collection.tags.values()}
+        | {decl.var_name for decl in collection.ranges.values()}
+        | {structure.name for structure in structured_map.structures}
+    )
+    _TAG_TYPE_MAP = {
+        "BOOL": "Bool",
+        "INT": "Int",
+        "DINT": "Dint",
+        "REAL": "Real",
+        "WORD": "Word",
+        "CHAR": "Char",
+    }
+    _MEM_TO_BLOCK = {
+        "X": "x",
+        "Y": "y",
+        "C": "c",
+        "DS": "ds",
+        "DD": "dd",
+        "DH": "dh",
+        "DF": "df",
+        "T": "t",
+        "TD": "td",
+        "CT": "ct",
+        "CTD": "ctd",
+        "SC": "sc",
+        "SD": "sd",
+        "TXT": "txt",
+        "XD": "xd",
+        "YD": "yd",
+    }
 
-    for operand in list(collection.tags):
-        owner = structured_map.owner_of(operand)
-        if owner is None:
-            continue
-        if owner.structure_type not in ("named_array", "udt"):
-            continue
+    from pyclickplc.addresses import parse_address
 
-        collection.structure_owned_operands.add(operand)
+    def _resolve_hw_tag(slot_tag: Any) -> Any:
+        """Resolve a logical slot to its hardware tag."""
+        hw = structured_map._block_slot_forward_by_name.get(slot_tag.name)
+        if hw is None:
+            hw = structured_map._block_slot_forward_by_id.get(id(slot_tag))
+        if hw is None:
+            tag_entry = structured_map._tag_forward.get(slot_tag.name)
+            if tag_entry is not None:
+                hw = tag_entry.hardware
+        return hw
 
-        if owner.structure_name in seen_structures:
-            continue
+    def _ensure_structure_decl(structure_name: str) -> _StructureDecl | None:
+        existing = seen_structures.get(structure_name)
+        if existing is not None:
+            return existing
 
-        # Build _StructureDecl from StructuredImport metadata
-        si = structured_map.structure_by_name(owner.structure_name)
+        si = structured_map.structure_by_name(structure_name)
         if si is None:
-            continue
+            return None
 
         runtime = cast(Any, si.runtime)
         field_names = runtime.field_names
-
-        _TAG_TYPE_MAP = {
-            "BOOL": "Bool",
-            "INT": "Int",
-            "DINT": "Dint",
-            "REAL": "Real",
-            "WORD": "Word",
-            "CHAR": "Char",
-        }
 
         fields: list[tuple[str, str, object]] = []
         field_retentive: dict[str, bool] = {}
         for fn in field_names:
             block = runtime._blocks[fn]
             type_name = _TAG_TYPE_MAP.get(block.type.name, block.type.name)
-            default = block.slot_config(1).default
-            fields.append((fn, type_name, default))
-            field_retentive[fn] = block.slot_config(1).retentive
+            sv = block.slot(1)
+            fields.append((fn, type_name, sv.default))
+            field_retentive[fn] = sv.retentive
 
-        # Determine base_type for named_array (all fields share same type)
         base_type: str | None = None
         if si.kind == "named_array":
             base_type = _TAG_TYPE_MAP.get(runtime.type.name, runtime.type.name)
 
-        # Determine hw_block_var and hw address range
         hw_block_var = ""
         hw_start = 0
         hw_end = 0
 
-        def _resolve_hw_tag(slot_tag: Any) -> Any:
-            """Resolve a logical slot to its hardware tag."""
-            hw = structured_map._block_slot_forward_by_name.get(slot_tag.name)
-            if hw is None:
-                hw = structured_map._block_slot_forward_by_id.get(id(slot_tag))
-            if hw is None:
-                tag_entry = structured_map._tag_forward.get(slot_tag.name)
-                if tag_entry is not None:
-                    hw = tag_entry.hardware
-            return hw
-
-        _MEM_TO_BLOCK = {
-            "X": "x",
-            "Y": "y",
-            "C": "c",
-            "DS": "ds",
-            "DD": "dd",
-            "DH": "dh",
-            "DF": "df",
-            "T": "t",
-            "TD": "td",
-            "CT": "ct",
-            "CTD": "ctd",
-            "SC": "sc",
-            "SD": "sd",
-            "TXT": "txt",
-            "XD": "xd",
-            "YD": "yd",
-        }
-
-        from pyclickplc.addresses import parse_address
-
-        # Build per-field hardware info
         per_field_hw: dict[str, _FieldHw] = {}
         for fn in field_names:
             fblock = runtime._blocks[fn]
@@ -227,7 +268,6 @@ def _enrich_with_structures(
                 per_field_hw[fn] = _FieldHw(block_var=bvar, start=fstart, end=fend)
                 collection.used_blocks.add(bvar)
 
-        # For named_array, use overall span; for udt, use per-field
         first_field_block = runtime._blocks[field_names[0]]
         first_slot = first_field_block[1]
         hw_tag = _resolve_hw_tag(first_slot)
@@ -254,17 +294,221 @@ def _enrich_with_structures(
             hw_end=hw_end,
             field_retentive=field_retentive,
             field_hw=per_field_hw,
+            always_number=getattr(runtime, "always_number", False),
         )
         seen_structures[si.name] = decl
         collection.structures.append(decl)
 
-        # Ensure types from structure fields are imported
         if si.kind == "udt":
             for _, type_name, _ in fields:
                 collection.used_types.add(type_name)
-        # Ensure hw block var is in used_blocks
         if hw_block_var:
             collection.used_blocks.add(hw_block_var)
+
+        return decl
+
+    def _ensure_plain_block_decl(block_name: str) -> _PlainBlockDecl | None:
+        existing = seen_plain_blocks.get(block_name)
+        if existing is not None:
+            return existing
+
+        entry = structured_map.block_entry_by_name(block_name)
+        if entry is None or not entry.hardware_addresses:
+            return None
+
+        logical_block = entry.logical
+        first_hw = entry.hardware.block[entry.hardware_addresses[0]]
+        last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
+        mem_type, hw_start = parse_address(first_hw.name)
+        _, hw_end = parse_address(last_hw.name)
+        var_name = _make_safe_identifier(
+            logical_block.name,
+            used_names=used_symbol_names,
+            fallback="block",
+        )
+        used_symbol_names.add(var_name)
+
+        decl = _PlainBlockDecl(
+            name=logical_block.name,
+            var_name=var_name,
+            tag_type=logical_block.type.name,
+            start=logical_block.start,
+            end=logical_block.end,
+            hw_block_var=_MEM_TO_BLOCK.get(mem_type, mem_type.lower()),
+            hw_start=hw_start,
+            hw_end=hw_end,
+        )
+        for logical_addr in entry.logical_addresses:
+            slot = logical_block.slot(logical_addr)
+            decl.slots[logical_addr] = _BlockSlotDecl(
+                index=logical_addr,
+                tag_name=slot.name,
+                name_overridden=slot.name_overridden,
+                retentive=slot.retentive,
+                retentive_overridden=slot.retentive_overridden,
+                default=slot.default,
+                default_overridden=slot.default_overridden,
+                comment=slot.comment,
+                comment_overridden=slot.comment_overridden,
+            )
+
+        seen_plain_blocks[block_name] = decl
+        collection.plain_blocks.append(decl)
+        collection.used_blocks.add(decl.hw_block_var)
+        return decl
+
+    for operand in list(collection.tags):
+        owner = structured_map.owner_of(operand)
+        if owner is None:
+            continue
+        if owner.structure_type in ("named_array", "udt"):
+            _ensure_structure_decl(owner.structure_name)
+            if owner.instance is None:
+                expr = f"{owner.structure_name}.{owner.field}"
+            else:
+                expr = f"{owner.structure_name}[{owner.instance}].{owner.field}"
+            collection.semantic_operands[operand] = _SemanticRender(
+                expr=expr,
+                import_kind="structure",
+                import_name=owner.structure_name,
+            )
+            continue
+
+        if owner.structure_type != "block" or owner.instance is None:
+            continue
+
+        decl = _ensure_plain_block_decl(owner.structure_name)
+        if decl is None:
+            continue
+        slot = decl.slots.get(owner.instance)
+        if slot is not None and slot.name_overridden:
+            if slot.alias_var_name is None:
+                existing_decl = collection.tags.get(operand)
+                if existing_decl is not None:
+                    slot.alias_var_name = existing_decl.var_name
+                else:
+                    slot.alias_var_name = _make_safe_identifier(
+                        slot.tag_name,
+                        used_names=used_symbol_names,
+                        fallback="tag",
+                    )
+                    used_symbol_names.add(slot.alias_var_name)
+            collection.semantic_operands[operand] = _SemanticRender(
+                expr=slot.alias_var_name,
+                import_kind="tag",
+                import_name=slot.alias_var_name,
+            )
+            continue
+
+        collection.semantic_operands[operand] = _SemanticRender(
+            expr=f"{decl.var_name}[{owner.instance}]",
+            import_kind="block",
+            import_name=decl.var_name,
+        )
+
+    for range_str, range_decl in collection.ranges.items():
+        start_owner = structured_map.owner_of(
+            format_address_display(range_decl.prefix, range_decl.start)
+        )
+        end_owner = structured_map.owner_of(
+            format_address_display(range_decl.prefix, range_decl.end)
+        )
+        if start_owner is None:
+            continue
+
+        resolved = False
+
+        # Named-array whole-instance ranges (end may land on a gap slot for sparse)
+        if start_owner.structure_type == "named_array":
+            decl = _ensure_structure_decl(start_owner.structure_name)
+            if decl is not None and decl.stride is not None:
+                first_field = decl.fields[0][0]
+                start_instance = start_owner.instance or 1
+                range_len = range_decl.end - range_decl.start + 1
+                if start_owner.field == first_field and range_len % decl.stride == 0:
+                    n_instances = range_len // decl.stride
+                    end_instance = start_instance + n_instances - 1
+                    ok = end_instance <= decl.count
+                    if ok and end_owner is not None and end_owner.structure_type == "named_array":
+                        ok = end_owner.structure_name == start_owner.structure_name
+                    if ok:
+                        expr = (
+                            f"{start_owner.structure_name}.instance({start_instance})"
+                            if start_instance == end_instance
+                            else f"{start_owner.structure_name}.instance_select({start_instance}, {end_instance})"
+                        )
+                        collection.semantic_ranges[range_str] = _SemanticRender(
+                            expr=expr,
+                            import_kind="structure",
+                            import_name=start_owner.structure_name,
+                        )
+                        resolved = True
+
+        if not resolved and end_owner is not None:
+            if start_owner.structure_type == "block" and end_owner.structure_type == "block":
+                if (
+                    start_owner.structure_name == end_owner.structure_name
+                    and start_owner.instance is not None
+                    and end_owner.instance is not None
+                    and start_owner.instance <= end_owner.instance
+                ):
+                    decl = _ensure_plain_block_decl(start_owner.structure_name)
+                    if decl is not None:
+                        collection.semantic_ranges[range_str] = _SemanticRender(
+                            expr=f"{decl.var_name}.select({start_owner.instance}, {end_owner.instance})",
+                            import_kind="block",
+                            import_name=decl.var_name,
+                        )
+                        resolved = True
+
+            if (
+                not resolved
+                and start_owner.structure_type == "udt"
+                and end_owner.structure_type == "udt"
+                and start_owner.structure_name == end_owner.structure_name
+                and start_owner.field == end_owner.field
+                and start_owner.instance is not None
+                and end_owner.instance is not None
+                and start_owner.instance <= end_owner.instance
+            ):
+                _ensure_structure_decl(start_owner.structure_name)
+                collection.semantic_ranges[range_str] = _SemanticRender(
+                    expr=(
+                        f"{start_owner.structure_name}.{start_owner.field}.select("
+                        f"{start_owner.instance}, {end_owner.instance})"
+                    ),
+                    import_kind="structure",
+                    import_name=start_owner.structure_name,
+                )
+                resolved = True
+
+        # Partial-structure range: keep raw ds.select() but add a comment
+        if not resolved:
+            comment = _build_partial_range_comment(start_owner, end_owner)
+            if comment is not None:
+                collection.range_comments[range_str] = comment
+
+
+def _build_partial_range_comment(
+    start_owner: OwnerInfo,
+    end_owner: OwnerInfo | None,
+) -> str | None:
+    """Build an inline comment for a range that falls within a structure."""
+    name = start_owner.structure_name
+    start_field = start_owner.field
+    end_field = end_owner.field if end_owner is not None else None
+
+    # Both endpoints in the same structure
+    if end_owner is not None and end_owner.structure_name == name:
+        if start_field == end_field:
+            return f"# {name}.{start_field}"
+        return f"# {name}: {start_field}..{end_field}"
+
+    # Only start is owned
+    if start_field is not None:
+        return f"# {name}.{start_field}.."
+
+    return None
 
 
 def _scan_token_for_operands(
@@ -307,6 +551,10 @@ def _scan_af_token(
 ) -> None:
     """Scan an AF token for instruction name and operands."""
     if not token:
+        return
+
+    # Bare NOP — becomes an empty rung (pass), not an instruction import.
+    if token == "NOP":
         return
 
     match = _FUNC_RE.match(token)
@@ -362,6 +610,10 @@ def _register_operands_from_text(
     nicknames: dict[str, str] | None,
 ) -> None:
     """Find and register all operands in a text fragment."""
+    used_var_names = {decl.var_name for decl in collection.tags.values()} | {
+        decl.var_name for decl in collection.ranges.values()
+    }
+
     # Check for ranges first — collect range spans to suppress individual tags
     range_spans: set[str] = set()
     for range_match in _RANGE_RE.finditer(text):
@@ -377,8 +629,12 @@ def _register_operands_from_text(
                     _, tag_type, block_var, _ = parsed
                     # IEC type constants for Block declaration
                     iec_type = tag_type.upper()
+                    var_name = _make_safe_identifier(
+                        range_str.replace("..", "_to_"), used_names=used_var_names
+                    )
+                    used_var_names.add(var_name)
                     collection.ranges[range_str] = _RangeDecl(
-                        var_name=range_str.replace("..", "_to_"),
+                        var_name=var_name,
                         block_var=block_var,
                         tag_type=iec_type,
                         prefix=prefix1,
@@ -411,7 +667,8 @@ def _register_operands_from_text(
         collection.used_blocks.add(block_var)
 
         nick = nicknames.get(operand) if nicknames else None
-        var_name = nick if nick else operand
+        var_name = _make_safe_identifier(nick if nick else operand, used_names=used_var_names)
+        used_var_names.add(var_name)
         tag_name = nick if nick else operand
         comment_str = f"  # {operand}" if nick else ""
 
@@ -447,10 +704,12 @@ def _scan_file_refs(
     refs = _FileRefs()
 
     for rung in rungs:
-        if _tree_has_parallel(rung.condition_tree):
+        if _tree_uses_any_of(rung.condition_tree, collection):
             refs.has_any_of = True
         if _tree_has_all_of(rung.condition_tree):
             refs.has_all_of = True
+        if rung.comment:
+            refs.has_comment = True
         if rung.is_forloop_start:
             refs.has_forloop = True
 
@@ -461,7 +720,7 @@ def _scan_file_refs(
             _ref_af_token(instr.af_token, collection, refs, call_func_map=call_func_map)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _ref_token(cond, collection, refs)
-            if _tree_has_parallel(instr.branch_tree):
+            if _tree_uses_any_of(instr.branch_tree, collection):
                 refs.has_any_of = True
             if _tree_has_all_of(instr.branch_tree):
                 refs.has_all_of = True
@@ -513,6 +772,10 @@ def _ref_af_token(
 ) -> None:
     """Record references in an AF (instruction) token."""
     if not token:
+        return
+
+    # Bare NOP — becomes an empty rung (pass), not an instruction import.
+    if token == "NOP":
         return
 
     match = _FUNC_RE.match(token)
@@ -570,11 +833,22 @@ def _ref_operands_in_text(
     refs: _FileRefs,
 ) -> None:
     """Record which tags/ranges/structures from *collection* appear in *text*."""
+
+    def _record_semantic_ref(render: _SemanticRender) -> None:
+        if render.import_kind == "tag":
+            refs.tag_var_names.add(render.import_name)
+        elif render.import_kind == "block":
+            refs.block_var_names.add(render.import_name)
+        elif render.import_kind == "structure":
+            refs.structure_names.add(render.import_name)
+
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):
         range_str = range_match.group(0)
-        if range_str in collection.ranges:
-            refs.range_var_names.add(collection.ranges[range_str].var_name)
+        render = collection.semantic_ranges.get(range_str)
+        if render is not None:
+            _record_semantic_ref(render)
+            continue
 
     # Check individual operands
     for op_match in _OPERAND_RE.finditer(text):
@@ -582,22 +856,8 @@ def _ref_operands_in_text(
         if operand in SYSTEM_OPERAND_PATHS:
             refs.has_system_import = True
             continue
-        if operand in collection.structure_owned_operands:
-            # Find which structure owns it
-            for sdecl in collection.structures:
-                # Check if operand falls within structure's address space
-                parsed = _parse_operand_prefix(operand)
-                if parsed is None:
-                    continue
-                _, _, block_var, index = parsed
-                if sdecl.structure_type == "named_array":
-                    if block_var == sdecl.hw_block_var and sdecl.hw_start <= index <= sdecl.hw_end:
-                        refs.structure_names.add(sdecl.name)
-                        break
-                elif sdecl.structure_type == "udt":
-                    for fhw in sdecl.field_hw.values():
-                        if block_var == fhw.block_var and fhw.start <= index <= fhw.end:
-                            refs.structure_names.add(sdecl.name)
-                            break
+        render = collection.semantic_operands.get(operand)
+        if render is not None:
+            _record_semantic_ref(render)
         elif operand in collection.tags:
             refs.tag_var_names.add(collection.tags[operand].var_name)

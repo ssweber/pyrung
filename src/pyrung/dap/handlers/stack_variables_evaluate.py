@@ -67,7 +67,7 @@ def on_stack_trace(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             for idx in order
         ]
     else:
-        frame = {"id": 0, "name": "Scan", "line": 1, "column": 1}
+        frame: dict[str, Any] = {"id": 0, "name": "Scan", "line": 1, "column": 1}
         if program_path is not None:
             frame["source"] = {"name": Path(program_path).name, "path": program_path}
         frames = [frame]

@@ -10,9 +10,9 @@
     "response_hex": "0002000000050103020007"
   },
   {
-    "name": "read_valid_unmapped_ds2",
+    "name": "read_unmapped_ds2_error",
     "request_hex": "000300000006010300010001",
-    "response_hex": "0003000000050103020000"
+    "response_hex": "000300000003018302"
   },
   {
     "name": "write_c1_false",

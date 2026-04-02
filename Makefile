@@ -9,7 +9,7 @@
 default: install verify
 
 install:
-	uv sync --all-extras --dev
+	uv sync --locked --all-extras --dev
 
 lint:
 	uv run devtools/lint.py
@@ -23,19 +23,20 @@ test-integration:
 verify: lint test docs-check
 
 upgrade:
-	uv sync --upgrade
+	uv lock --upgrade
+	uv sync --locked --all-extras --dev
 
 build:
 	uv build
 
 docs-serve:
-	uv run --group docs mkdocs serve
+	DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs serve
 
 docs-clean:
 	$(RM_SITE)
 
 docs-build: docs-clean
-	uv run --group docs mkdocs build --strict
+	DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs build --strict
 
 docs-check: docs-build
 

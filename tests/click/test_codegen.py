@@ -16,6 +16,8 @@ from pyrung.click import (
     ds,
     ladder_to_pyrung,
     pyrung_to_ladder,
+    sc,
+    sd,
     t,
     td,
     x,
@@ -41,6 +43,7 @@ from pyrung.core import (
 from pyrung.core.program import (
     branch,
     calc,
+    comment,
     copy,
     count_up,
     event_drum,
@@ -322,8 +325,8 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Start motor"
+            comment("Start motor")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -339,8 +342,8 @@ class TestTopologyAnalysis:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Line 1\nLine 2"
+            comment("Line 1\nLine 2")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -875,6 +878,8 @@ class TestRoundTrip:
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(X001 | X002):" in code
+        assert "any_of" not in code
         assert orig == repro
 
     def test_or_with_trailing_and(self, tmp_path: Path):
@@ -894,6 +899,7 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(X001 | X002, C1):" in code
         assert orig == repro
 
     def test_three_way_or(self, tmp_path: Path):
@@ -913,6 +919,22 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
+        assert "with Rung(any_of(X001, X002, C1)):" in code
+        assert orig == repro
+
+    def test_two_way_comparison_or_stays_any_of(self, tmp_path: Path):
+        """2-way comparison OR stays as any_of(...) for readability and precedence."""
+        Step = Int("Step")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(Step == 1, Step == 2)):
+                out(Y)
+
+        mapping = TagMap({Step: ds[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "with Rung(any_of(DS1 == 1, DS1 == 2)):" in code
         assert orig == repro
 
     def test_mid_rung_or(self, tmp_path: Path):
@@ -989,8 +1011,8 @@ class TestRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Start motor"
+            comment("Start motor")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -1004,8 +1026,8 @@ class TestRoundTrip:
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(A) as r:
-                r.comment = "Line 1\nLine 2"
+            comment("Line 1\nLine 2")
+            with Rung(A):
                 out(Y)
 
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
@@ -1968,7 +1990,7 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "any_of(rise(C1), fall(C2))" in code
+        assert "with Rung(rise(C1) | fall(C2)):" in code
         assert orig == repro
 
 
@@ -2083,7 +2105,7 @@ class TestInMemoryRoundTrip:
     def test_bundle_round_trip_type_error(self):
         """ladder_to_pyrung rejects unsupported source types."""
         with pytest.raises(TypeError, match="source must be"):
-            ladder_to_pyrung(42)  # type: ignore[arg-type]
+            ladder_to_pyrung(42)  # ty: ignore[invalid-argument-type]
 
 
 # ---------------------------------------------------------------------------
@@ -2112,6 +2134,43 @@ class TestNicknameMerge:
         assert "# X001" in code
         assert "# Y001" in code
         assert "out(motor_out)" in code
+
+    def test_dict_nicknames_reserved_python_names_prefixed(self, tmp_path: Path):
+        """Reserved Python names become safe variable identifiers."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dst = Int("Dst")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dst)
+
+        mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
+        nicks = {"DS1": "True", "DS2": "False"}
+        code, orig, repro = _round_trip(logic, mapping, tmp_path, nicknames=nicks)
+
+        assert '_True = Int("True")' in code
+        assert '_False = Int("False")' in code
+        assert "copy(_True, _False)" in code
+        assert orig == repro
+
+    def test_dict_nicknames_prefixed_names_remain_unique(self, tmp_path: Path):
+        """Sanitized identifiers stay unique if a nickname already has the prefix."""
+        Enable = Bool("Enable")
+        Src = Int("Src")
+        Dst = Int("Dst")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dst)
+
+        mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
+        nicks = {"DS1": "True", "DS2": "_True"}
+        code = ladder_to_pyrung(_export_csv(logic, mapping, tmp_path), nicknames=nicks)
+
+        assert '_True = Int("True")' in code
+        assert '_True_2 = Int("_True")' in code
+        assert "copy(_True, _True_2)" in code
 
     def test_dict_nicknames_round_trip(self, tmp_path: Path):
         """Nicknames round-trip: generated code re-exports same CSV."""
@@ -2391,6 +2450,86 @@ class TestStructuredCodegen:
         assert "mapping = TagMap([" in code
         assert "*Channel.map_to(" in code
 
+    def test_named_array_codegen_accepts_sparse_nicknames(self, tmp_path: Path):
+        """Sparse named_array nicknames still round-trip through codegen."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Channel_id_1 = Int("Channel1_id")
+        Channel_id_2 = Int("Channel2_id")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Channel_id_1, Channel_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Channel_id_1: ds[101], Channel_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 103): AddressRecord(
+                    memory_type="DS",
+                    address=103,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 104): AddressRecord(
+                    memory_type="DS",
+                    address=104,
+                    nickname="",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@named_array(Int, count=2, stride=2)" in code
+        assert "class Channel:" in code
+        assert "id = Field(retentive=False)" in code
+        assert "Channel[1].id" in code or "Channel[2].id" in code
+        assert "val =" not in code
+
     def test_udt_codegen(self, tmp_path: Path):
         """UDT: codegen emits @udt decorator and .map_to()."""
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -2419,7 +2558,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=1001,
                     nickname="Motor1_speed",
-                    comment="<Motor.speed>",
+                    comment="<Motor.speed:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2428,7 +2567,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=1002,
                     nickname="Motor2_speed",
-                    comment="</Motor.speed>",
+                    comment="</Motor.speed:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2437,7 +2576,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=101,
                     nickname="Motor1_running",
-                    comment="<Motor.running>",
+                    comment="<Motor.running:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2446,7 +2585,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=102,
                     nickname="Motor2_running",
-                    comment="</Motor.running>",
+                    comment="</Motor.running:udt>",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2471,6 +2610,570 @@ class TestStructuredCodegen:
         assert "mapping = TagMap([" in code
         assert "Motor.running.map_to(" in code
         assert "Motor.speed.map_to(" in code
+
+    def test_udt_field_range_codegen_uses_structure_not_plain_block(self, tmp_path: Path):
+        """A range that exactly matches one UDT field should stay structured."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 10)
+
+        with Program() as logic:
+            with Rung(Enable):
+                reset(Bits.select(1, 10))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1031, 1040)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1031): AddressRecord(
+                    memory_type="C",
+                    address=1031,
+                    nickname="Sts1_TagBitsA",
+                    comment="<Sts.TagBitsA:udt>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1040): AddressRecord(
+                    memory_type="C",
+                    address=1040,
+                    nickname="Sts10_TagBitsA",
+                    comment="</Sts.TagBitsA:udt>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@udt(" in code
+        assert "class Sts:" in code
+        assert "TagBitsA: Bool = False" in code
+        assert "Sts.TagBitsA.map_to(c.select(1031, 1040))" in code
+        assert "reset(Sts.TagBitsA.select(1, 10))" in code
+        assert 'C1031_to_C1040 = Block("C1031_to_C1040"' not in code
+
+    def test_plain_block_range_codegen_uses_full_block_and_aliases(self, tmp_path: Path):
+        """Plain named blocks become first-class Blocks with used slot aliases."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in code
+        assert "CmdTagBits.slot(4, name='Cmd_Mode_Production')" in code
+        assert "Cmd_Mode_Production = CmdTagBits[4]" in code
+        assert "out(Cmd_Mode_Production)" in code
+        assert "reset(CmdTagBits.select(4, 6))" in code
+        assert "CmdTagBits: c.select(1001, 1019)" in code
+        assert 'Bool("Cmd_Mode_Production")' not in code
+        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
+
+    def test_plain_block_explicit_start_uses_logical_indices(self, tmp_path: Path):
+        """Explicit plain-block starts should preserve logical slot numbering."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block(10)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block(10)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 10, 28)' in code
+        assert "reset(CmdTagBits.select(13, 15))" in code
+
+    def test_raw_range_codegen_inlines_hardware_bank_without_helper(self, tmp_path: Path):
+        """Unnamed raw windows should use bank .select() inline, not helper Blocks."""
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "reset(c.select(1004, 1006))" in code
+        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
+        assert "C1004_to_C1006:" not in code
+        assert orig == repro
+
+    def test_dense_named_array_backing_range_codegen_uses_instance_select(self, tmp_path: Path):
+        """Dense named_array backing windows should rewrite to instance_select()."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 4)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(1, 4))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Channel1_val",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Channel2_val",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@named_array(Int, count=2)" in code
+        assert "fill(0, Channel.instance_select(1, 2))" in code
+
+    def test_sparse_named_array_backing_range_uses_instance_select(self, tmp_path: Path):
+        """Named_array windows with stride gaps should rewrite to instance_select()."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 6)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(1, 6))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 506)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Sensor1_raw",
+                    comment="<Sensor:named_array(2,3)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Sensor1_scaled",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Sensor2_raw",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 505): AddressRecord(
+                    memory_type="DS",
+                    address=505,
+                    nickname="Sensor2_scaled",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 506): AddressRecord(
+                    memory_type="DS",
+                    address=506,
+                    nickname="",
+                    comment="</Sensor:named_array(2,3)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "@named_array(Int, count=2, stride=3)" in code
+        assert "fill(0, Sensor.instance_select(1, 2))" in code
+
+    def test_partial_named_array_range_gets_comment(self, tmp_path: Path):
+        """Sub-instance range within a named_array emits raw select with comment."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Window = Block("Window", TagType.INT, 1, 4)
+
+        with Program() as logic:
+            with Rung(Enable):
+                fill(0, Window.select(2, 3))
+
+        mapping = TagMap({Enable: x[1], Window: ds.select(501, 504)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 501): AddressRecord(
+                    memory_type="DS",
+                    address=501,
+                    nickname="Channel1_id",
+                    comment="<Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 502): AddressRecord(
+                    memory_type="DS",
+                    address=502,
+                    nickname="Channel1_val",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 503): AddressRecord(
+                    memory_type="DS",
+                    address=503,
+                    nickname="Channel2_id",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 504): AddressRecord(
+                    memory_type="DS",
+                    address=504,
+                    nickname="Channel2_val",
+                    comment="</Channel:named_array(2,2)>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "ds.select(502, 503)" in code
+        assert "# Channel: val..id" in code
+
+    def test_bare_block_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
+        """Bare block markers should be grouping-only and not reconstruct semantics."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Cmd_Mode_Production = Bool("Cmd_Mode_Production")' in code
+        assert "out(Cmd_Mode_Production)" in code
+        assert "reset(c.select(1004, 1006))" in code
+        assert 'CmdTagBits = Block("CmdTagBits"' not in code
+        assert "Cmd_Mode_Production = CmdTagBits[4]" not in code
+
+    def test_bare_dotted_marker_stays_raw_and_imports_tags(self, tmp_path: Path):
+        """Bare dotted markers should stay grouping-only and not reconstruct UDTs."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Config_timeout = Int("Config1_timeout")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Config_timeout, Config_timeout)
+
+        mapping = TagMap({Enable: x[1], Config_timeout: ds[301]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DS", 301): AddressRecord(
+                    memory_type="DS",
+                    address=301,
+                    nickname="Config1_timeout",
+                    comment="<Config.timeout />",
+                    initial_value="100",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("C", 201): AddressRecord(
+                    memory_type="C",
+                    address=201,
+                    nickname="Config1_enabled",
+                    comment="<Config.enabled />",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Config1_timeout = Int("Config1_timeout")' in code
+        assert "@udt(" not in code
+        assert "Config.timeout" not in code
+        assert "copy(Config1_timeout, Config1_timeout)" in code
 
     def test_mixed_structured_and_flat(self, tmp_path: Path):
         """Mixed: some tags in structures, some flat → both coexist."""
@@ -2571,7 +3274,7 @@ class TestStructuredCodegen:
                     memory_type="DS",
                     address=301,
                     nickname="Config1_timeout",
-                    comment="<Config.timeout />",
+                    comment="<Config.timeout:udt />",
                     initial_value="100",
                     retentive=False,
                     data_type=DataType.INT,
@@ -2580,7 +3283,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=201,
                     nickname="Config1_enabled",
-                    comment="<Config.enabled />",
+                    comment="<Config.enabled:udt />",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -2602,3 +3305,123 @@ class TestStructuredCodegen:
         # Singleton → should use Config.timeout not Config[1].timeout
         assert "Config.timeout" in code
         assert "Config[1]" not in code
+
+    def test_nickname_csv_preserves_custom_non_reserved_sc_sd_aliases(self, tmp_path: Path):
+        """Custom SC/SD nicknames should import for non-reserved system addresses."""
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        ModeReady = Bool("ModeReady")
+        RecipeShadow = Int("RecipeShadow")
+        Mirror = Int("Mirror")
+
+        with Program() as logic:
+            with Rung(ModeReady):
+                copy(RecipeShadow, Mirror)
+
+        mapping = TagMap(
+            {ModeReady: sc[20], RecipeShadow: sd[91], Mirror: ds[1]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("SC", 20): AddressRecord(
+                    memory_type="SC",
+                    address=20,
+                    nickname="ModeReady",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("SD", 91): AddressRecord(
+                    memory_type="SD",
+                    address=91,
+                    nickname="RecipeShadow",
+                    comment="",
+                    initial_value="123",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 1): AddressRecord(
+                    memory_type="DS",
+                    address=1,
+                    nickname="Mirror",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'ModeReady = Bool("ModeReady")' in code
+        assert 'RecipeShadow = Int("RecipeShadow")' in code
+        assert 'Mirror = Int("Mirror")' in code
+        assert "with Rung(ModeReady):" in code
+        assert "copy(RecipeShadow, Mirror)" in code
+        assert "ModeReady: sc[20]" in code
+        assert "RecipeShadow: sd[91]" in code
+        assert "Mirror: ds[1]" in code
+        assert "system.rtc.year2" not in code
+
+
+class TestNop:
+    """Test NOP / empty rung codegen and round-trip."""
+
+    def test_empty_rung_round_trip(self, tmp_path: Path):
+        """Empty (pass) rung survives program → CSV NOP → codegen → exec → CSV₂."""
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            comment("Section header")
+            with Rung():
+                pass
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # Codegen should emit pass, not nop()
+        assert "pass" in code
+        assert "nop()" not in code
+        assert orig == repro
+
+    def test_explicit_nop_round_trip(self, tmp_path: Path):
+        """Explicit nop() rung survives round-trip via NOP in CSV."""
+        from pyrung.click import nop
+
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            comment("Explicit NOP")
+            with Rung():
+                nop()
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # Round-trip normalises nop() → pass (both map to CSV NOP)
+        assert "pass" in code
+        assert orig == repro
+
+    def test_bare_text_rejected(self, tmp_path: Path):
+        """Unknown bare text in AF column raises ValueError."""
+        from pyrung.click.codegen.emitter import _render_af_token
+        from pyrung.click.codegen.models import _OperandCollection
+
+        collection = _OperandCollection()
+        with pytest.raises(ValueError, match="Unrecognised AF token"):
+            _render_af_token("BOGUS", collection, None)

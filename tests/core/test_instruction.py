@@ -1345,7 +1345,7 @@ class TestCalcInstruction:
         Result = Word("Result")
 
         with pytest.raises(TypeError):
-            CalcInstruction(MaskA + 1, Result, mode="hex")  # type: ignore[unknown-argument]
+            CalcInstruction(MaskA + 1, Result, mode="hex")  # ty: ignore[unknown-argument]
 
     def test_math_literal_expression(self):
         """MATH works with literal values."""
@@ -1457,7 +1457,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="comparison must use a .select\\(\\) range"):
             SearchInstruction(
-                RangeComparison(Int("NotARange"), "==", 1),  # type: ignore[arg-type]
+                RangeComparison(Int("NotARange"), "==", 1),  # ty: ignore[invalid-argument-type]
                 result=Result,
                 found=Found,
             )
@@ -1470,7 +1470,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="expects a comparison expression"):
             SearchInstruction(
-                "not a comparison",  # type: ignore[arg-type]
+                "not a comparison",  # ty: ignore[invalid-argument-type]
                 result=Result,
                 found=Found,
             )
@@ -1964,3 +1964,59 @@ class TestPackTextInstruction:
         new_state = execute(instr, state)
         assert new_state.tags["Dest"] == 12
         assert new_state.tags.get("fault.out_of_range", False) is False
+
+
+class TestNopInstruction:
+    """Test NOP instruction (Click dialect)."""
+
+    def test_nop_is_no_op(self):
+        """NOP does nothing to state."""
+        from pyrung.click.nop import NopInstruction
+
+        instr = NopInstruction()
+        state = SystemState().with_tags({"X": True})
+        new_state = execute(instr, state)
+        assert new_state.tags["X"] is True
+
+    def test_nop_is_terminal(self):
+        """NOP must be terminal — nothing can follow it in a rung."""
+        from pyrung.click.nop import NopInstruction
+
+        assert NopInstruction().is_terminal() is True
+
+    def test_nop_dsl_in_rung(self):
+        """nop() works in a rung context."""
+        from pyrung.click import nop
+        from pyrung.core import Program, Rung, comment
+
+        with Program() as logic:
+            comment("Header")
+            with Rung():
+                nop()
+
+        assert len(logic.rungs) == 1
+        assert len(logic.rungs[0]._instructions) == 1
+
+    def test_nop_rejects_other_instructions(self):
+        """Cannot add instructions after nop()."""
+        from pyrung.click import nop
+        from pyrung.core import Bool, Program, Rung, out
+
+        Light = Bool("Light")
+        with pytest.raises(RuntimeError, match="terminal"):
+            with Program():
+                with Rung():
+                    nop()
+                    out(Light)
+
+    def test_nop_rejects_if_instructions_exist(self):
+        """Cannot add nop() if rung already has instructions."""
+        from pyrung.click import nop
+        from pyrung.core import Bool, Program, Rung, out
+
+        Light = Bool("Light")
+        with pytest.raises(RuntimeError, match="only instruction"):
+            with Program():
+                with Rung():
+                    out(Light)
+                    nop()

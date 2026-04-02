@@ -247,7 +247,7 @@ class TestValidation:
     def test_slot_non_int_raises(self):
         hw = P1AM()
         with pytest.raises(ValueError, match="1.15"):
-            hw.slot("1", "P1-08SIM")  # type: ignore[arg-type]
+            hw.slot("1", "P1-08SIM")  # ty: ignore[no-matching-overload]
 
     def test_unknown_module_raises(self):
         hw = P1AM()
@@ -424,4 +424,4 @@ class TestP1AMBoardModel:
         assert cfg.expose_mode_tags is True
 
         with pytest.raises(ValueError, match="source"):
-            RunStopConfig(source="board.led")  # type: ignore[arg-type]
+            RunStopConfig(source="board.led")  # ty: ignore[invalid-argument-type]

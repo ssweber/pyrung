@@ -11,6 +11,7 @@ from pyclickplc.modbus import plc_to_modbus
 from pyrung import Block, Bool, Char, Dint, Int, Program, Real, Rung, TagType, Word
 from pyrung.circuitpy import (
     P1AM,
+    CircuitPyOutput,
     ModbusClientConfig,
     ModbusServerConfig,
     generate_circuitpy,
@@ -43,26 +44,27 @@ def _mbap(tid: int, pdu: bytes, uid: int = 1) -> bytes:
     return struct.pack(">HHHB", tid, 0, len(pdu) + 1, uid) + pdu
 
 
-def _ctx_and_source(program: Program, mapping: TagMap) -> str:
-    hw = P1AM()
-    hw.slot(1, "P1-08SIM")
-    source = generate_circuitpy(
-        program,
-        hw,
-        target_scan_ms=10.0,
-        modbus_server=ModbusServerConfig(ip="192.168.1.200"),
-        tag_map=mapping,
-    )
-    return source
-
-
-def _client_source(program: Program, mapping: TagMap | None = None) -> str:
+def _ctx_and_source(program: Program, mapping: TagMap) -> CircuitPyOutput:
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
     return generate_circuitpy(
         program,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
+        modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+        tag_map=mapping,
+    )
+
+
+def _client_source(program: Program, mapping: TagMap | None = None) -> CircuitPyOutput:
+    hw = P1AM()
+    hw.slot(1, "P1-08SIM")
+    return generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=10.0,
+        runstop=None,
         modbus_client=ModbusClientConfig(
             targets=(ModbusTcpTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17),)
         ),
@@ -80,12 +82,12 @@ def test_modbus_server_source_emits_imports_and_scan_service():
         target_scan_ms=10.0,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=TagMap(),
-    )
+    ).code
     assert "from adafruit_wiznet5k.adafruit_wiznet5k import WIZNET5K" in source
-    assert "import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket" in source
+    assert "import adafruit_wiznet5k.adafruit_wiznet5k_socketpool as _mb_socketpool" in source
     assert "_mb_cs = digitalio.DigitalInOut(board.D5)" in source
     assert "_mb_server.listen(2)" in source
-    assert "service_modbus_server()" in source
+    assert "_rt.service_modbus_server()" in source
 
 
 def _hw_with_slot() -> P1AM:
@@ -101,7 +103,8 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
     with Program(strict=False) as prog:
         pass
 
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -122,7 +125,9 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
     coil_symbol = "_t_Coil"
     reg_symbol = "_t_Reg"
 
@@ -143,12 +148,13 @@ def test_read_and_write_backed_coil_and_register(monkeypatch):
     assert namespace[reg_symbol] == 42
 
 
-def test_valid_unmapped_register_reads_zero_and_invalid_address_errors(monkeypatch):
+def test_unmapped_and_invalid_register_addresses_return_error(monkeypatch):
     mapped = Int("Mapped", default=5)
     mapping = TagMap({mapped: ds[1]})
     with Program(strict=False) as prog:
         pass
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -169,12 +175,16 @@ def test_valid_unmapped_register_reads_zero_and_invalid_address_errors(monkeypat
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
 
+    # Unmapped-but-valid Click address (DS2) — sparse lookup returns error
     resp = namespace["_mb_handle"](_mbap(10, struct.pack(">BHH", 3, 1, 1)), 12)
     assert resp is not None
-    assert struct.unpack(">H", resp[-2:])[0] == 0
+    assert resp[-2:] == bytes([0x83, 0x02])
 
+    # Completely invalid address — also returns error
     resp = namespace["_mb_handle"](_mbap(11, struct.pack(">BHH", 3, 5000, 1)), 12)
     assert resp is not None
     assert resp[-2:] == bytes([0x83, 0x02])
@@ -184,14 +194,16 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
     with Program(strict=False) as prog:
         pass
 
-    source = generate_circuitpy(
+    result = generate_circuitpy(
         prog,
         _hw_with_slot(),
         target_scan_ms=10.0,
+        runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=TagMap(),
         mapped_tag_scope="all_mapped",
     )
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -212,7 +224,9 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
 
     coil_resp = namespace["_mb_handle"](_mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00)), 12)
     assert coil_resp == _mbap(12, struct.pack(">BHH", 5, 61441, 0xFF00))
@@ -224,11 +238,12 @@ def test_read_only_system_writes_acknowledge_without_exception(monkeypatch):
 def test_yd_mirror_read_and_write(monkeypatch):
     outputs = Block("OutBits", TagType.BOOL, 1, 16)
     for idx in range(1, 17):
-        outputs.configure_slot(idx, default=True)
+        outputs.slot(idx, default=True)
     mapping = TagMap({outputs: y.select(1, 16)})
     with Program(strict=False) as prog:
         pass
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -249,7 +264,9 @@ def test_yd_mirror_read_and_write(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
     block_symbol = "_b_OutBits"
     out_bits = namespace[block_symbol]
     assert isinstance(out_bits, list)
@@ -272,11 +289,12 @@ def test_yd_mirror_read_and_write(monkeypatch):
 def test_xd_mirror_read(monkeypatch):
     inputs = Block("InBits", TagType.BOOL, 1, 16)
     for idx in range(1, 17):
-        inputs.configure_slot(idx, default=True)
+        inputs.slot(idx, default=True)
     mapping = TagMap({inputs: x.select(1, 16)})
     with Program(strict=False) as prog:
         pass
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -297,7 +315,9 @@ def test_xd_mirror_read(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
     block_symbol = "_b_InBits"
     in_bits = namespace[block_symbol]
     assert isinstance(in_bits, list)
@@ -310,10 +330,12 @@ def test_xd_mirror_read(monkeypatch):
     assert struct.unpack(">H", resp[-2:])[0] == 0x8081
 
 
-def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
+def test_service_modbus_server_keeps_idle_client(monkeypatch):
+    """recv_into returning 0 means no data on WIZNET5K — keep the connection."""
     with Program(strict=False) as prog:
         pass
-    source = _ctx_and_source(prog, TagMap())
+    result = _ctx_and_source(prog, TagMap())
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -334,9 +356,11 @@ def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
 
-    class ClosingClient:
+    class IdleClient:
         def __init__(self):
             self.closed = False
 
@@ -346,15 +370,15 @@ def test_service_modbus_server_closes_client_on_clean_disconnect(monkeypatch):
         def close(self):
             self.closed = True
 
-    client = ClosingClient()
+    client = IdleClient()
     clients = namespace["_mb_clients"]
     assert isinstance(clients, list)
     clients[0] = client
 
     namespace["service_modbus_server"]()
 
-    assert client.closed is True
-    assert clients[0] is None
+    assert client.closed is False
+    assert clients[0] is client
 
 
 def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
@@ -363,12 +387,13 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
     outputs = Block("OutBits", TagType.BOOL, 1, 16)
     yd_word = 0x1234
     for idx in range(1, 17):
-        outputs.configure_slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
+        outputs.slot(idx, default=bool((yd_word >> (idx - 1)) & 0x1))
     mapping = TagMap({coil: c[1], reg: ds[1], outputs: y.select(1, 16)})
     with Program(strict=False) as prog:
         pass
 
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -389,7 +414,9 @@ def test_pyclickplc_fixture_subset_matches_generated_server(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
     out_bits = namespace["_b_OutBits"]
     assert isinstance(out_bits, list)
     for idx in range(16):
@@ -476,11 +503,13 @@ def test_modbus_client_send_codegen_builds_expected_request_and_states(monkeypat
         def close(self):
             return None
 
+    result = _client_source(prog)
     namespace = _run_single_scan_source(
-        _client_source(prog),
+        result.code,
         monkeypatch,
         StubBase(),
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
+        runtime_source=result.runtime,
     )
     job_name = next(
         name
@@ -572,11 +601,13 @@ def test_modbus_client_connect_would_block_keeps_request_in_flight(monkeypatch):
         def close(self):
             return None
 
+    result = _client_source(prog)
     namespace = _run_single_scan_source(
-        _client_source(prog),
+        result.code,
         monkeypatch,
         StubBase(),
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
+        runtime_source=result.runtime,
     )
     job_name = next(
         name
@@ -663,11 +694,13 @@ def test_modbus_client_receive_codegen_applies_response(monkeypatch):
         def close(self):
             return None
 
+    result = _client_source(prog)
     namespace = _run_single_scan_source(
-        _client_source(prog),
+        result.code,
         monkeypatch,
         StubBase(),
         socket_factory=lambda *args, **kwargs: ScriptedSocket(*args, **kwargs),
+        runtime_source=result.runtime,
     )
     job_name = next(
         name
@@ -701,7 +734,8 @@ def test_txt_single_odd_index_read_and_write(monkeypatch):
     with Program(strict=False) as prog:
         pass
 
-    source = _ctx_and_source(prog, mapping)
+    result = _ctx_and_source(prog, mapping)
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -722,7 +756,9 @@ def test_txt_single_odd_index_read_and_write(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+    namespace = _run_single_scan_source(
+        source, monkeypatch, StubBase(), runtime_source=result.runtime
+    )
 
     # TXT base=36864; register 36864 holds TXT1 (low) + TXT2 (high)
     # Only TXT1 is mapped, so high byte should be 0
@@ -794,14 +830,16 @@ def test_codegen_server_first_and_last_of_every_bank(monkeypatch):
         pass
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
-    source = generate_circuitpy(
+    result = generate_circuitpy(
         prog,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_server=ModbusServerConfig(ip="192.168.1.200"),
         tag_map=mapping,
         mapped_tag_scope="all_mapped",
     )
+    source = result.code
 
     class StubBase:
         def rollCall(self, modules):
@@ -822,7 +860,7 @@ def test_codegen_server_first_and_last_of_every_bank(monkeypatch):
         def readTemperature(self, slot, ch):
             return 0.0
 
-    ns = _run_single_scan_source(source, monkeypatch, StubBase())
+    ns = _run_single_scan_source(source, monkeypatch, StubBase(), runtime_source=result.runtime)
     handle = ns["_mb_handle"]
     _tid = [0]
 
@@ -1027,11 +1065,13 @@ def _run_client_job(monkeypatch, prog):
         def readTemperature(self, slot, ch):
             return 0.0
 
+    result = _client_source(prog)
     ns = _run_single_scan_source(
-        _client_source(prog),
+        result.code,
         monkeypatch,
         _Stub(),
         socket_factory=lambda *a, **kw: _Sock(*a, **kw),
+        runtime_source=result.runtime,
     )
     return ns, sockets
 
@@ -1262,13 +1302,14 @@ def test_codegen_client_send_first_and_last_of_every_bank(monkeypatch):
 _RAW_TARGET = ModbusTcpTarget(name="peer", ip="192.168.1.50", port=1502, device_id=17)
 
 
-def _raw_client_source(program: Program) -> str:
+def _raw_client_source(program: Program) -> CircuitPyOutput:
     hw = P1AM()
     hw.slot(1, "P1-08SIM")
     return generate_circuitpy(
         program,
         hw,
         target_scan_ms=10.0,
+        runstop=None,
         modbus_client=ModbusClientConfig(targets=(_RAW_TARGET,)),
         tag_map=TagMap(),
     )
@@ -1324,11 +1365,13 @@ def _run_raw_client_job(monkeypatch, prog):
         def readTemperature(self, slot, ch):
             return 0.0
 
+    result = _raw_client_source(prog)
     ns = _run_single_scan_source(
-        _raw_client_source(prog),
+        result.code,
         monkeypatch,
         _Stub(),
         socket_factory=lambda *a, **kw: _Sock(*a, **kw),
+        runtime_source=result.runtime,
     )
     return ns, sockets
 

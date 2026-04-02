@@ -19,18 +19,22 @@ from pyrung.click import (
     y,
 )
 from pyrung.core import (
+    Block,
     Bool,
     Dint,
     Int,
     Program,
     Rung,
+    TagType,
     Tms,
+    any_of,
 )
 from pyrung.core.program import (
     call,
     count_up,
     on_delay,
     out,
+    reset,
     subroutine,
 )
 
@@ -205,6 +209,157 @@ class TestProjectBasic:
         bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
         assert len(bundle.main_rows) > 0
 
+    def test_plain_block_range_project_imports_block_symbol(self, tmp_path: Path):
+        """Project output should import reconstructed plain blocks, not range helpers."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv"
+        bundle.write(csv_dir)
+
+        nick_path = tmp_path / "nicknames.csv"
+        pyclickplc.write_csv(
+            nick_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="",
+                    comment="<CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1004): AddressRecord(
+                    memory_type="C",
+                    address=1004,
+                    nickname="Cmd_Mode_Production",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1019): AddressRecord(
+                    memory_type="C",
+                    address=1019,
+                    nickname="",
+                    comment="</CmdTagBits:block>",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+
+        assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in files["tags.py"]
+        assert "Cmd_Mode_Production = CmdTagBits[4]" in files["tags.py"]
+        assert "from tags import mapping" in files["main.py"]
+        assert "Cmd_Mode_Production" in files["main.py"]
+        assert "CmdTagBits" in files["main.py"]
+        assert "out(Cmd_Mode_Production)" in files["main.py"]
+        assert "reset(CmdTagBits.select(4, 6))" in files["main.py"]
+        assert "C1004_to_C1006" not in files["tags.py"]
+        assert "C1004_to_C1006" not in files["main.py"]
+
+    def test_plain_block_project_lifts_uniform_retentive_to_block_default(self, tmp_path: Path):
+        """Uniform plain-block retentive policy should lift to the Block constructor."""
+        import pyclickplc
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Bits[1])
+                reset(Bits.select(1, 3))
+
+        mapping = TagMap({Enable: x[1], Bits: c.select(1001, 1003)}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv"
+        bundle.write(csv_dir)
+
+        nick_path = tmp_path / "nicknames.csv"
+        pyclickplc.write_csv(
+            nick_path,
+            {
+                get_addr_key("C", 1001): AddressRecord(
+                    memory_type="C",
+                    address=1001,
+                    nickname="AlarmCoil_PLC",
+                    comment="<AlarmCoil:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1002): AddressRecord(
+                    memory_type="C",
+                    address=1002,
+                    nickname="AlarmCoil_LostData",
+                    comment="",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 1003): AddressRecord(
+                    memory_type="C",
+                    address=1003,
+                    nickname="AlarmCoil_Watchdog",
+                    comment="</AlarmCoil:block>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir, nickname_csv=nick_path)
+
+        assert (
+            'AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 3, retentive=True)' in files["tags.py"]
+        )
+        assert "AlarmCoil.slot(1, name='AlarmCoil_PLC')" in files["tags.py"]
+        assert "AlarmCoil.slot(2, name='AlarmCoil_LostData')" in files["tags.py"]
+        assert "AlarmCoil.slot(3, name='AlarmCoil_Watchdog')" in files["tags.py"]
+        assert (
+            "retentive=True"
+            not in files["tags.py"].split(
+                'AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 3, retentive=True)', 1
+            )[1]
+        )
+
 
 class TestProjectWithSubroutines:
     """Project generation with subroutines."""
@@ -369,6 +524,24 @@ class TestPerFileImports:
         from_tags_line = [ln for ln in main_py.splitlines() if ln.startswith("from tags import")]
         assert len(from_tags_line) == 1
         assert "mapping" in from_tags_line[0]
+
+    def test_main_omits_any_of_for_two_way_bool_or(self, tmp_path: Path):
+        """Two-way BOOL OR renders with | and does not import any_of."""
+        A = Bool("A")
+        B = Bool("B")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            with Rung(any_of(A, B)):
+                out(Y)
+
+        mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
+        files = _project_from_program(logic, mapping, tmp_path)
+
+        main_py = files["main.py"]
+        assert "with Rung(" in main_py
+        assert " | " in main_py
+        assert "any_of" not in main_py
 
 
 class TestSubroutineCallsSubroutine:

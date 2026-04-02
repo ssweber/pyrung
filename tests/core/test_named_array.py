@@ -99,6 +99,42 @@ def test_named_array_width_greater_than_one_emits_tag_mappings():
     assert all(isinstance(entry.target, Tag) for entry in entries)
 
 
+def test_named_array_retentive_inherits_from_base_type():
+    """Fields inherit retentive from the named_array base type."""
+    from pyrung.core import Bool
+
+    @named_array(Int, count=1, stride=2)
+    class IntFields:
+        speed = 0
+        preset = 0
+
+    @named_array(Bool, count=1, stride=2)
+    class BoolFields:
+        running = None
+        alarm = None
+
+    int_fields = cast(Any, IntFields)
+    bool_fields = cast(Any, BoolFields)
+
+    assert int_fields.speed.retentive is True  # Int → retentive
+    assert int_fields.preset.retentive is True
+    assert bool_fields.running.retentive is False  # Bool → non-retentive
+    assert bool_fields.alarm.retentive is False
+
+
+def test_named_array_retentive_explicit_field_overrides_base_type():
+    """Field(retentive=...) overrides the base type default."""
+
+    @named_array(Int, count=1, stride=2)
+    class Setpoints:
+        speed = Field(retentive=False)  # override Int's default True
+        pressure = 0  # inherits Int default True
+
+    sp = cast(Any, Setpoints)
+    assert sp.speed.retentive is False
+    assert sp.pressure.retentive is True
+
+
 def test_named_array_auto_default_restricted_by_base_type():
     with pytest.raises(ValueError, match="not numeric"):
 
@@ -204,3 +240,117 @@ def test_named_array_count_one_map_to_succeeds():
     assert len(entries) == 2
     assert [entry.source.name for entry in entries] == ["Alarm_id", "Alarm_val"]
     assert [cast(Tag, entry.target).name for entry in entries] == ["HW1", "HW2"]
+
+
+def test_named_array_instance_returns_single_instance_range():
+    @named_array(Int, count=2, stride=2)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.instance(1)
+
+    assert isinstance(selected, BlockRange)
+    assert list(selected.addresses) == [1, 2]
+    assert [tag.name for tag in selected.tags()] == ["Alarm1_id", "Alarm1_val"]
+    assert repr(selected) == "Alarm.instance(1)"
+
+
+def test_named_array_instance_select_multiple_instances():
+    @named_array(Int, count=3, stride=2)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.instance_select(2, 3)
+
+    assert list(selected.addresses) == [3, 4, 5, 6]
+    assert [tag.name for tag in selected.tags()] == [
+        "Alarm2_id",
+        "Alarm2_val",
+        "Alarm3_id",
+        "Alarm3_val",
+    ]
+    assert [tag.name for tag in selected.reverse().tags()] == [
+        "Alarm3_val",
+        "Alarm3_id",
+        "Alarm2_val",
+        "Alarm2_id",
+    ]
+    assert repr(selected) == "Alarm.instance_select(2, 3)"
+
+
+def test_named_array_instance_works_with_sparse_layout():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.instance(1)
+
+    assert list(selected.addresses) == [1, 2, 3]
+    assert [tag.name for tag in selected.tags()] == ["Alarm1_id", "Alarm1_val"]
+
+
+def test_named_array_instance_select_works_with_sparse_layout():
+    @named_array(Int, count=2, stride=3)
+    class Alarm:
+        id = auto()
+        val = 0
+
+    alarms = cast(Any, Alarm)
+    selected = alarms.instance_select(1, 2)
+
+    assert list(selected.addresses) == [1, 2, 3, 4, 5, 6]
+    assert [tag.name for tag in selected.tags()] == [
+        "Alarm1_id",
+        "Alarm1_val",
+        "Alarm2_id",
+        "Alarm2_val",
+    ]
+
+
+def test_named_array_always_number_forces_numbered_names_for_count_one():
+    @named_array(Int, stride=2, always_number=True)
+    class Task:
+        call = auto()
+        done = 0
+
+    task = cast(Any, Task)
+    assert task.call.name == "Task1_call"
+    assert task.done.name == "Task1_done"
+    assert task[1].call.name == "Task1_call"
+
+
+def test_named_array_always_number_has_no_effect_when_count_greater_than_one():
+    @named_array(Int, count=2, stride=2, always_number=True)
+    class Task:
+        call = auto()
+        done = 0
+
+    tasks = cast(Any, Task)
+    assert tasks[1].call.name == "Task1_call"
+    assert tasks[2].done.name == "Task2_done"
+
+
+def test_named_array_always_number_default_is_false():
+    @named_array(Int)
+    class Task:
+        call = auto()
+
+    task = cast(Any, Task)
+    assert task.always_number is False
+    assert task.call.name == "Task_call"
+
+
+def test_named_array_always_number_clone_preserves_flag():
+    @named_array(Int, always_number=True)
+    class Task:
+        call = auto()
+
+    Job = cast(Any, Task).clone("Job")
+    assert Job.call.name == "Job1_call"
+    assert Job.always_number is True

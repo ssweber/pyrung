@@ -34,15 +34,15 @@ class TestModbusAddress:
         assert addr.register_type == RegisterType.HOLDING
 
     def test_hex_h_suffix(self):
-        addr = ModbusAddress("64h")  # type: ignore[arg-type]  # str accepted at runtime
+        addr = ModbusAddress("64h")  # ty: ignore[invalid-argument-type]  # str accepted at runtime
         assert addr.address == 0x64
 
     def test_hex_h_suffix_upper(self):
-        addr = ModbusAddress("FFFEh")  # type: ignore[arg-type]  # str accepted at runtime
+        addr = ModbusAddress("FFFEh")  # ty: ignore[invalid-argument-type]  # str accepted at runtime
         assert addr.address == 0xFFFE
 
     def test_hex_zero_h(self):
-        addr = ModbusAddress("0h")  # type: ignore[arg-type]  # str accepted at runtime
+        addr = ModbusAddress("0h")  # ty: ignore[invalid-argument-type]  # str accepted at runtime
         assert addr.address == 0
 
     def test_984_holding(self):
@@ -83,7 +83,7 @@ class TestModbusAddress:
 
     def test_invalid_hex_string(self):
         with pytest.raises(ValueError, match="valid hex"):
-            ModbusAddress("xyz")  # type: ignore[arg-type]  # str accepted at runtime
+            ModbusAddress("xyz")  # ty: ignore[invalid-argument-type]  # str accepted at runtime
 
     def test_register_type(self):
         addr = ModbusAddress(0, RegisterType.INPUT)
@@ -91,12 +91,12 @@ class TestModbusAddress:
 
     def test_bad_register_type(self):
         with pytest.raises(TypeError, match="RegisterType"):
-            ModbusAddress(0, "holding")  # type: ignore[arg-type]
+            ModbusAddress(0, "holding")  # ty: ignore[invalid-argument-type]
 
     def test_frozen(self):
         addr = ModbusAddress(100)
         with pytest.raises(AttributeError):
-            addr.address = 200  # type: ignore[misc]
+            addr.address = 200  # ty: ignore[invalid-assignment]
 
 
 class TestModbusRtuTarget:

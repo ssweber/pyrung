@@ -40,8 +40,10 @@ from pyrung.circuitpy.codegen.render_modbus import (
     _render_ethernet_setup,
     _render_modbus_accessors,
     _render_modbus_client,
+    _render_modbus_client_codepy,
     _render_modbus_protocol,
     _render_modbus_server,
+    _render_modbus_server_init,
 )
 
 
@@ -98,18 +100,77 @@ def _section(label: str) -> str:
     return prefix + "-" * max(0, 80 - len(prefix))
 
 
-def _render_code(ctx: CodegenContext) -> str:
+def _runtime_import_names(ctx: CodegenContext) -> set[str]:
+    """Return the set of names to ``from pyrung_rt import ...``."""
+    needed = set(ctx.used_helpers)
+    if "_store_numeric_text_digit" in needed:
+        needed.add("_as_single_ascii_char")
+    if "_termination_char" in needed:
+        needed.update({"_as_single_ascii_char", "_ascii_char_from_code"})
+    if "_render_text_from_numeric" in needed:
+        needed.add("_format_int_text")
+    # Client pack/unpack helpers and constants used by per-job code in code.py
+    if ctx.modbus_client is not None:
+        specs = list(ctx.modbus_client_specs)
+        if specs:
+            needed.add("_MB_CLIENT_IDLE")
+            needed.add("_mb_client_pack_register_values")
+            needed.add("_mb_client_unpack_register_values")
+            if any(s.bank is None for s in specs):
+                needed.add("_mb_client_raw_pack_register_values")
+                needed.add("_mb_client_raw_unpack_register_values")
+    if ctx.modbus_client is not None and ctx.modbus_client_specs:
+        needed.add("_store_copy_value_to_type")
+    return needed
+
+
+def _render_runtime_wiring(ctx: CodegenContext) -> list[str]:
+    """Emit assignment lines that wire code.py functions into pyrung_rt slots."""
+    lines: list[str] = ["", "# -- Wire runtime " + "-" * 60]
+    if ctx.modbus_server is not None:
+        lines.extend(
+            [
+                "_rt._mb_read_coil = _mb_read_coil",
+                "_rt._mb_write_coil = _mb_write_coil",
+                "_rt._mb_read_reg = _mb_read_reg",
+                "_rt._mb_write_reg = _mb_write_reg",
+                "_rt._mb_server = _mb_server",
+                "_rt._mb_clients = _mb_clients",
+                "_rt._mb_buf = _mb_buf",
+            ]
+        )
+    if ctx.modbus_client is not None:
+        lines.extend(
+            [
+                "_rt._mb_pool = _mb_pool",
+                "_rt._mb_client_jobs = _mb_client_jobs",
+            ]
+        )
+    lines.append("")
+    return lines
+
+
+def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
     main_fn_lines = _render_main_function(ctx)
     sub_fn_lines = _render_subroutine_functions(ctx)
     io_lines = _render_io_helpers(ctx)
-    helper_lines = _render_helper_section(ctx)
+    helper_lines = _render_helper_section(ctx, helpers_in_runtime=has_runtime)
     function_source_lines = _render_embedded_functions(ctx)
     modbus_imports_enabled = ctx.modbus_server is not None or ctx.modbus_client is not None
     modbus_bootstrap_lines = _render_ethernet_setup(ctx)
-    modbus_server_lines = _render_modbus_server(ctx)
+    if has_runtime:
+        modbus_server_lines: list[str] = []
+        modbus_protocol_lines: list[str] = []
+        modbus_client_lines: list[str] = []
+        modbus_server_init_lines = _render_modbus_server_init(ctx)
+        modbus_client_codepy_lines = _render_modbus_client_codepy(ctx)
+    else:
+        modbus_server_lines = _render_modbus_server(ctx)
+        modbus_protocol_lines = _render_modbus_protocol(ctx)
+        modbus_client_lines = _render_modbus_client(ctx)
+        modbus_server_init_lines = []
+        modbus_client_codepy_lines = []
     modbus_accessor_lines = _render_modbus_accessors(ctx)
-    modbus_protocol_lines = _render_modbus_protocol(ctx)
-    modbus_client_lines = _render_modbus_client(ctx)
     needs_digitalio = ctx.uses_board_switch or ctx.uses_board_led or modbus_imports_enabled
     needs_neopixel = ctx.uses_board_neopixel
 
@@ -119,7 +180,6 @@ def _render_code(ctx: CodegenContext) -> str:
     lines.append(_section("Imports"))
     lines.extend(
         [
-            "import gc",
             "import json",
             "import math",
             "import os",
@@ -143,7 +203,7 @@ def _render_code(ctx: CodegenContext) -> str:
         lines.extend(
             [
                 "from adafruit_wiznet5k.adafruit_wiznet5k import WIZNET5K",
-                "import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket",
+                "import adafruit_wiznet5k.adafruit_wiznet5k_socketpool as _mb_socketpool",
                 "",
             ]
         )
@@ -156,6 +216,12 @@ def _render_code(ctx: CodegenContext) -> str:
             "",
         ]
     )
+    if has_runtime:
+        lines.append("import pyrung_rt as _rt")
+        rt_imports = _runtime_import_names(ctx)
+        if rt_imports:
+            lines.append(f"from pyrung_rt import {', '.join(sorted(rt_imports))}")
+        lines.append("")
 
     # 2) config constants
     lines.append(_section("Configuration"))
@@ -175,13 +241,16 @@ def _render_code(ctx: CodegenContext) -> str:
 
     # 3) hardware bootstrap + roll-call
     lines.append(_section("Hardware bootstrap"))
-    lines.extend(
-        [
-            "base = P1AM.Base()",
-            "base.rollCall(_SLOT_MODULES)",
-            "",
-        ]
-    )
+    if ctx.hw.configured_slots:
+        lines.extend(
+            [
+                "base = P1AM.Base()",
+                "base.rollCall(_SLOT_MODULES)",
+                "",
+            ]
+        )
+    else:
+        lines.append("")
     if modbus_bootstrap_lines:
         lines.extend(modbus_bootstrap_lines)
     if needs_digitalio:
@@ -259,6 +328,7 @@ def _render_code(ctx: CodegenContext) -> str:
             "_sd_available = False",
             '_MEMORY_PATH = "/sd/memory.json"',
             '_MEMORY_TMP_PATH = "/sd/_memory.tmp"',
+            '_MEMORY_BAK_PATH = "/sd/memory.json.bak"',
             "_sd_spi = None",
             "_sd = None",
             "_sd_vfs = None",
@@ -268,6 +338,9 @@ def _render_code(ctx: CodegenContext) -> str:
             "_sd_save_cmd = False",
             "_sd_eject_cmd = False",
             "_sd_delete_all_cmd = False",
+            "_ret_snapshot = {}",
+            "_ret_last_save_ts = 0.0",
+            "_RET_AUTO_SAVE_S = 30.0",
             "",
         ]
     )
@@ -282,18 +355,34 @@ def _render_code(ctx: CodegenContext) -> str:
                 "",
             ]
         )
-    if modbus_server_lines or modbus_client_lines:
-        lines.append(_section("Modbus TCP"))
-    if modbus_server_lines:
-        lines.extend(modbus_server_lines)
-    if modbus_client_lines:
-        lines.extend(modbus_client_lines)
+    if has_runtime:
+        if modbus_server_init_lines or modbus_client_codepy_lines:
+            lines.append(_section("Modbus TCP"))
+        if modbus_server_init_lines:
+            lines.extend(modbus_server_init_lines)
+        if modbus_client_codepy_lines:
+            lines.extend(modbus_client_codepy_lines)
+    else:
+        if modbus_server_lines or modbus_client_lines:
+            lines.append(_section("Modbus TCP"))
+        if modbus_server_lines:
+            lines.extend(modbus_server_lines)
+        if modbus_client_lines:
+            lines.extend(modbus_client_lines)
 
     # 7) SD mount + load memory startup call
     lines.append(_section("Retentive memory (SD card)"))
     ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
-    load_globals = ", ".join(ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"])
+    snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
+    load_globals = ", ".join(
+        ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals
+    )
     save_globals = load_globals
+    # Build snapshot dict literal: {"Count": _t_Count, "Total": _t_Total}
+    snapshot_entries = ", ".join(
+        f'"{name}": {ctx.symbol_for_tag(tag)}' for name, tag in sorted(ctx.retentive_tags.items())
+    )
+    snapshot_literal = "{" + snapshot_entries + "}"
     lines.extend(
         [
             "def _mount_sd():",
@@ -324,20 +413,32 @@ def _render_code(ctx: CodegenContext) -> str:
             "        return",
             "    _sd_write_status = True",
             "    if microcontroller is not None and len(microcontroller.nvm) > 0 and microcontroller.nvm[0] == 1:",
-            "        _sd_error = True",
-            f"        _sd_error_code = {_SD_LOAD_ERROR}",
-            "        _sd_write_status = False",
-            '        print("Retentive load skipped: interrupted previous save detected")',
-            "        return",
-            "    try:",
-            '        with open(_MEMORY_PATH, "r", encoding="utf-8") as f:',
-            "            payload = json.load(f)",
-            "    except Exception as exc:",
-            "        _sd_error = True",
-            f"        _sd_error_code = {_SD_LOAD_ERROR}",
-            "        _sd_write_status = False",
-            '        print(f"Retentive load skipped: {exc}")',
-            "        return",
+            "        try:",
+            '            with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:',
+            "                payload = json.load(f)",
+            '            print("Retentive memory recovered from backup")',
+            "        except Exception:",
+            "            _sd_error = True",
+            f"            _sd_error_code = {_SD_LOAD_ERROR}",
+            "            _sd_write_status = False",
+            '            print("Retentive load skipped: interrupted save, no backup available")',
+            "            return",
+            "        microcontroller.nvm[0] = 0",
+            "    else:",
+            "        try:",
+            '            with open(_MEMORY_PATH, "r", encoding="utf-8") as f:',
+            "                payload = json.load(f)",
+            "        except Exception as exc:",
+            "            try:",
+            '                with open(_MEMORY_BAK_PATH, "r", encoding="utf-8") as f:',
+            "                    payload = json.load(f)",
+            '                print(f"Retentive memory loaded from backup ({exc})")',
+            "            except Exception:",
+            "                _sd_error = True",
+            f"                _sd_error_code = {_SD_LOAD_ERROR}",
+            "                _sd_write_status = False",
+            '                print(f"Retentive load skipped: {exc}")',
+            "                return",
             '    if payload.get("schema") != _RET_SCHEMA:',
             "        _sd_error = True",
             f"        _sd_error_code = {_SD_LOAD_ERROR}",
@@ -362,9 +463,12 @@ def _render_code(ctx: CodegenContext) -> str:
         )
     lines.extend(
         [
+            '    print("Retentive memory loaded")',
             "    _sd_error = False",
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
+            f"    _ret_snapshot = {snapshot_literal}",
+            "    _ret_last_save_ts = time.monotonic()",
             "",
             "def save_memory():",
         ]
@@ -397,7 +501,11 @@ def _render_code(ctx: CodegenContext) -> str:
             "    try:",
             '        with open(_MEMORY_TMP_PATH, "w", encoding="utf-8") as f:',
             "            json.dump(payload, f)",
-            "        os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)",
+            "        try:",
+            "            os.rename(_MEMORY_PATH, _MEMORY_BAK_PATH)",
+            "        except OSError:",
+            "            pass",
+            "        os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)",
             "    except Exception as exc:",
             "        _sd_error = True",
             f"        _sd_error_code = {_SD_SAVE_ERROR}",
@@ -406,9 +514,15 @@ def _render_code(ctx: CodegenContext) -> str:
             "        return",
             "    if dirty_armed:",
             "        microcontroller.nvm[0] = 0",
+            "    try:",
+            "        os.remove(_MEMORY_BAK_PATH)",
+            "    except OSError:",
+            "        pass",
             "    _sd_error = False",
             "    _sd_error_code = 0",
             "    _sd_write_status = False",
+            f"    _ret_snapshot = {snapshot_literal}",
+            "    _ret_last_save_ts = time.monotonic()",
             "",
             "_mount_sd()",
             "load_memory()",
@@ -422,7 +536,10 @@ def _render_code(ctx: CodegenContext) -> str:
     if modbus_accessor_lines:
         lines.append(_section("Modbus address mapping"))
         lines.extend(modbus_accessor_lines)
-        lines.extend(modbus_protocol_lines)
+        if has_runtime:
+            lines.extend(_render_runtime_wiring(ctx))
+        else:
+            lines.extend(modbus_protocol_lines)
 
     # 9) embedded user function sources
     lines.extend(function_source_lines)
@@ -440,14 +557,12 @@ def _render_code(ctx: CodegenContext) -> str:
 
     # 13) main scan loop
     lines.append(_section("Main scan loop"))
-    lines.append("gc.disable()")
-    lines.append("")
-    lines.extend(_render_scan_loop(ctx))
+    lines.extend(_render_scan_loop(ctx, has_runtime=has_runtime))
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_helper_section(ctx: CodegenContext) -> list[str]:
+def _render_helper_section(ctx: CodegenContext, *, helpers_in_runtime: bool = False) -> list[str]:
     lines = [
         "def _service_sd_commands():",
         "    global _sd_write_status, _sd_error, _sd_error_code",
@@ -465,7 +580,7 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
         "    _command_failed = False",
         "    if _do_delete:",
         "        try:",
-        "            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):",
+        "            for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH, _MEMORY_BAK_PATH):",
         "                try:",
         "                    os.remove(_path)",
         "                except OSError:",
@@ -512,6 +627,7 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
             {
                 "_mem",
                 "_prev",
+                "_ret_snapshot",
                 "_sd_save_cmd",
                 "_sd_eject_cmd",
                 "_sd_delete_all_cmd",
@@ -524,6 +640,7 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
             [
                 "    _mem = {}",
                 "    _prev = {}",
+                "    _ret_snapshot = {}",
                 "    _sd_save_cmd = False",
                 "    _sd_eject_cmd = False",
                 "    _sd_delete_all_cmd = False",
@@ -762,9 +879,10 @@ def _render_helper_section(ctx: CodegenContext) -> list[str]:
     if "_render_text_from_numeric" in needed_helpers:
         needed_helpers.add("_format_int_text")
 
-    for helper in _HELPER_ORDER:
-        if helper in needed_helpers:
-            lines.extend(helper_defs[helper])
+    if not helpers_in_runtime:
+        for helper in _HELPER_ORDER:
+            if helper in needed_helpers:
+                lines.extend(helper_defs[helper])
     return lines
 
 
@@ -927,7 +1045,7 @@ def _render_io_helpers(ctx: CodegenContext) -> list[str]:
     return lines
 
 
-def _render_scan_loop(ctx: CodegenContext) -> list[str]:
+def _render_scan_loop(ctx: CodegenContext, *, has_runtime: bool = False) -> list[str]:
     sd_ready_symbol = ctx.symbol_if_referenced(_SD_READY_TAG)
     sd_write_symbol = ctx.symbol_if_referenced(_SD_WRITE_STATUS_TAG)
     sd_error_symbol = ctx.symbol_if_referenced(_SD_ERROR_TAG)
@@ -1020,6 +1138,10 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
                 "    if _desired_run != _mode_run:",
                 "        if _desired_run:",
                 "            _reset_for_run_transition()",
+                '            print("Mode: RUN")',
+                "        else:",
+                "            save_memory()",
+                '            print("Mode: STOP")',
                 "        _mode_run = _desired_run",
             ]
         )
@@ -1044,11 +1166,34 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
             ]
         )
     if ctx.modbus_server is not None:
-        lines.append("    service_modbus_server()")
+        if has_runtime:
+            lines.append("    _rt.service_modbus_server()")
+        else:
+            lines.append("    service_modbus_server()")
     if ctx.modbus_client is not None:
-        lines.append("    service_modbus_client()")
+        if has_runtime:
+            lines.append("    _rt.service_modbus_client()")
+        else:
+            lines.append("    service_modbus_client()")
     if ctx.modbus_server is not None or ctx.modbus_client is not None:
         lines.append("")
+
+    if ctx.retentive_tags:
+        dirty_parts = []
+        for name, tag in sorted(ctx.retentive_tags.items()):
+            symbol = ctx.symbol_for_tag(tag)
+            dirty_parts.append(f'{symbol} != _ret_snapshot.get("{name}")')
+        dirty_check = " or ".join(dirty_parts)
+        lines.extend(
+            [
+                "    if (scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S:",
+                f"        if {dirty_check}:",
+                "            save_memory()",
+                "        else:",
+                "            _ret_last_save_ts = scan_start",
+                "",
+            ]
+        )
 
     for tag_name in sorted(ctx.edge_prev_tags):
         tag = ctx.referenced_tags[tag_name]
@@ -1067,8 +1212,6 @@ def _render_scan_loop(ctx: CodegenContext) -> list[str]:
             "        _scan_overrun_count += 1",
             "        if PRINT_SCAN_OVERRUNS:",
             '            print(f"Scan overrun #{_scan_overrun_count}: {-sleep_ms:.3f} ms late")',
-            "",
-            "    gc.collect()",
             "",
         ]
     )

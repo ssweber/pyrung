@@ -29,7 +29,7 @@ def _make_condition(
     condition.source_file, condition.source_line = source_file, source_line
 
     if propagate_children and hasattr(condition, "conditions"):
-        for child in condition.conditions:  # type: ignore[attr-defined]
+        for child in condition.conditions:  # ty: ignore[not-iterable]
             if child.source_file is None:
                 child.source_file = source_file
             if child.source_line is None:

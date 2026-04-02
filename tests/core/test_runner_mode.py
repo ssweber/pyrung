@@ -154,8 +154,8 @@ def test_cmd_mode_stop_written_in_scan_transitions_runner_to_stop():
 
 def test_stop_restart_mixed_block_slot_retentive_and_default_policy():
     regs = Block("Reg", TagType.INT, 1, 2, retentive=False)
-    regs.configure_slot(1, retentive=False, default=111)
-    regs.configure_slot(2, retentive=True, default=222)
+    regs.slot(1, retentive=False, default=111)
+    regs.slot(2, retentive=True, default=222)
 
     runner = PLCRunner(logic=[])
     runner.patch({regs[1]: 5, regs[2]: 6})

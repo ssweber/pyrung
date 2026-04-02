@@ -238,7 +238,7 @@ def test_run_function_non_callable_raises_type_error():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_function(123)  # type: ignore[arg-type]
+                run_function(123)  # ty: ignore[invalid-argument-type]
     assert str(exc_info.value) == "run_function() fn must be callable, got int"
 
 
@@ -251,7 +251,7 @@ def test_run_function_async_function_rejected():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_function(callback)  # type: ignore[arg-type]
+                run_function(callback)  # ty: ignore[invalid-argument-type]
     assert (
         str(exc_info.value) == "run_function() fn must be synchronous (async def is not supported)"
     )
@@ -280,7 +280,7 @@ def test_run_function_ins_must_be_dict():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_function(callback, ins=1)  # type: ignore[arg-type]
+                run_function(callback, ins=1)  # ty: ignore[invalid-argument-type]
     assert str(exc_info.value) == "run_function() ins must be a dict, got int"
 
 

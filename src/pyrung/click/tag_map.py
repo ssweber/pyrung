@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -24,15 +24,17 @@ from pyclickplc.blocks import (
     compute_all_block_ranges,
     format_block_tag,
     parse_block_tag,
-    parse_structured_block_name,
 )
 from pyclickplc.validation import validate_nickname
 
 from pyrung.click.system_mappings import SYSTEM_CLICK_SLOTS
 from pyrung.core import Block, BlockRange, InputBlock, OutputBlock, Tag, TagType
-from pyrung.core.memory_block import UNSET
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import MappingEntry
+
+_RESERVED_SYSTEM_HARDWARE_KEYS: frozenset[int] = frozenset(
+    get_addr_key(*parse_address(slot.hardware.name)) for slot in SYSTEM_CLICK_SLOTS
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,18 @@ _DATA_TYPE_TO_TAG_TYPE: dict[DataType, TagType] = {
 }
 
 _HARDWARE_BLOCK_CACHE: dict[str, Block | InputBlock | OutputBlock] = {}
+_BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
+_IDENTIFIER_TOKEN_RE = r"[A-Za-z_][A-Za-z0-9_]*"
+_EXPLICIT_NAMED_ARRAY_RE = re.compile(
+    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):named_array(?:\((?P<args>[^)]*)\))?$"
+)
+_EXPLICIT_UDT_RE = re.compile(
+    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE})\.(?P<field>{_IDENTIFIER_TOKEN_RE}):udt$"
+)
+_EXPLICIT_BLOCK_RE = re.compile(rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block$")
+_EXPLICIT_BLOCK_START_RE = re.compile(
+    rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block\((?P<start>start=(?:0|[1-9][0-9]*)|0|[1-9][0-9]*)\)$"
+)
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -280,54 +294,116 @@ def _format_default(value: object, tag_type: TagType) -> str:
 def _parse_structured_block_name(
     name: str,
 ) -> tuple[
-    Literal["plain", "udt", "named_array"],
+    Literal["plain", "udt", "named_array", "group"],
     str | None,
     str | None,
     int | None,
     int | None,
     str,
     int | None,
+    bool | None,
 ]:
-    structured = parse_structured_block_name(name)
+    if name.endswith(":group"):
+        base = name[: -len(":group")]
+        if base == "":
+            raise ValueError(
+                f"Invalid group block tag {name!r}. Expected Base:group with a non-empty base name."
+            )
+        return ("group", base, None, None, None, name, None, None)
 
-    if structured.kind == "named_array":
-        assert structured.count is not None
-        assert structured.stride is not None
+    named_array_match = _EXPLICIT_NAMED_ARRAY_RE.fullmatch(name)
+    if named_array_match is not None:
+        count_val: int | None = None
+        stride_val: int | None = None
+        explicit_always_number = False
+        args_str = named_array_match.group("args")
+        if args_str is not None:
+            tokens = [t.strip() for t in args_str.split(",") if t.strip()]
+            numeric_tokens: list[int] = []
+            for token in tokens:
+                if token == "always_number":
+                    explicit_always_number = True
+                elif token.isdigit() and int(token) >= 1:
+                    numeric_tokens.append(int(token))
+                else:
+                    raise ValueError(
+                        f"Invalid named_array argument {token!r} in {name!r}. "
+                        "Expected positive integers and/or 'always_number'."
+                    )
+            if len(numeric_tokens) == 1:
+                count_val = numeric_tokens[0]
+            elif len(numeric_tokens) == 2:
+                count_val = numeric_tokens[0]
+                stride_val = numeric_tokens[1]
+            elif len(numeric_tokens) > 2:
+                raise ValueError(
+                    f"Too many numeric arguments in {name!r}. "
+                    "Expected :named_array, :named_array(count), or :named_array(count,stride)."
+                )
         return (
             "named_array",
-            structured.base,
+            named_array_match.group("base"),
             None,
-            structured.count,
-            structured.stride,
+            count_val,
+            stride_val,
             name,
             None,
+            True if explicit_always_number else None,
         )
 
-    if ":named_array(" in name:
+    if ":named_array" in name:
         raise ValueError(
-            f"Invalid named_array block tag {name!r}. Expected Base:named_array(count,stride) "
-            "with identifier tokens and positive integers."
+            f"Invalid named_array block tag {name!r}. Expected Base:named_array "
+            "or Base:named_array(count) or Base:named_array(count,stride)."
         )
 
-    if structured.kind == "udt":
-        assert structured.field is not None
-        return ("udt", structured.base, structured.field, None, None, name, None)
+    udt_match = _EXPLICIT_UDT_RE.fullmatch(name)
+    if udt_match is not None:
+        return (
+            "udt",
+            udt_match.group("base"),
+            udt_match.group("field"),
+            None,
+            None,
+            name,
+            None,
+            None,
+        )
 
-    if structured.kind == "block":
-        assert structured.start is not None
-        return ("plain", None, None, None, None, structured.base, structured.start)
-
-    if "." in name:
+    if name.endswith(":udt") or ":udt" in name:
         raise ValueError(
-            f"Invalid UDT block tag {name!r}. Expected Base.field with identifier tokens."
+            f"Invalid UDT block tag {name!r}. Expected Base.field:udt with identifier tokens."
         )
 
-    if ":block(" in name:
+    block_match = _EXPLICIT_BLOCK_RE.fullmatch(name)
+    if block_match is not None:
+        return ("plain", None, None, None, None, block_match.group("base"), None, None)
+
+    block_start_match = _EXPLICIT_BLOCK_START_RE.fullmatch(name)
+    if block_start_match is not None:
+        start_token = block_start_match.group("start")
+        if start_token.startswith("start="):
+            explicit_start = int(start_token.split("=", maxsplit=1)[1])
+        else:
+            explicit_start = int(start_token)
+        return (
+            "plain",
+            None,
+            None,
+            None,
+            None,
+            block_start_match.group("base"),
+            explicit_start,
+            None,
+        )
+
+    if ":block" in name:
         raise ValueError(
-            f"Invalid block start tag {name!r}. Expected Base:block(n) or Base:block(start=n)."
+            f"Invalid block start tag {name!r}. Expected Base:block, Base:block(n), or "
+            "Base:block(start=n)."
         )
 
-    return ("plain", None, None, None, None, name, None)
+    return ("group", name, None, None, None, name, None, None)
 
 
 def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -> _BlockImportSpec:
@@ -353,6 +429,12 @@ def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -
         hardware_range=hardware_range,
         hardware_addresses=hardware_addresses,
     )
+
+
+def _default_logical_block_start(hardware_addresses: tuple[int, ...]) -> int:
+    if hardware_addresses and hardware_addresses[0] == 0:
+        return 0
+    return 1
 
 
 def _extract_address_comment(comment: str) -> str:
@@ -462,7 +544,7 @@ class TagMap:
         self._system_read_only: dict[str, bool] = {}
         self._block_lookup: dict[int, _BlockEntry] = {}
         self._block_by_name: dict[str, _BlockEntry] = {}
-        self._user_logical_names: set[str] = set()
+        self._user_logical_name_owners: dict[str, str] = {}
         self._block_slot_forward_by_id: dict[int, Tag] = {}
         self._block_slot_forward_by_name: dict[str, Tag] = {}
         self._warnings: tuple[str, ...] = ()
@@ -565,6 +647,7 @@ class TagMap:
                 self._system_alias_forward[slot.click_nickname] = entry
                 self._system_read_only[slot.logical.name] = slot.read_only
 
+        self._populate_programmatic_structures()
         self._freeze_entries()
         self._refresh_nickname_validation()
 
@@ -580,8 +663,10 @@ class TagMap:
         Reads the CSV produced by Click Programming Software and reconstructs
         logical-to-hardware mappings:
 
-        - **Block tag pairs** (rows with ``<Name>`` / ``</Name>`` comments) →
-          ``Block`` objects mapped to hardware ranges.
+        - **Explicit semantic markers** (`:block`, `:udt`, `:named_array`) →
+          semantic blocks and structures mapped to hardware ranges.
+        - **Bare/group markers** (for example ``<Name>`` or ``<Base.field>``) →
+          editor grouping only; inner nicknames import as standalone tags.
         - **Standalone nicknames** → individual ``Tag`` objects.
         - ``_D`` suffix pairs (timer/counter accumulators) are linked
           automatically.
@@ -589,7 +674,7 @@ class TagMap:
 
         Args:
             path: Path to the Click nickname CSV file.
-            mode: Behavior for dotted UDT grouping failures:
+            mode: Behavior for explicit ``:udt`` grouping failures:
                 ``"warn"`` (default) falls back to plain blocks and records
                 ``structure_warnings``; ``"strict"`` raises ``ValueError``.
 
@@ -617,7 +702,7 @@ class TagMap:
         named_array_spans: dict[str, tuple[str, int, int]] = {}
         seen_names: dict[str, tuple[str, int]] = {}
         covered_rows: set[int] = set()
-        seen_block_names: set[str] = set()
+        seen_semantic_block_names: set[str] = set()
         udt_groups: dict[str, list[tuple[_BlockImportSpec, str]]] = defaultdict(list)
 
         from pyrung.core import Field, named_array, udt
@@ -641,10 +726,7 @@ class TagMap:
         ) -> None:
             display = format_address_display(memory_type, address)
             if name == "":
-                raise ValueError(
-                    f"Block row nickname at {display} cannot be blank; a representable slot "
-                    "name must be non-empty."
-                )
+                return
             is_valid, error = validate_nickname(name)
             if not is_valid:
                 raise ValueError(f"Block row nickname at {display} is not representable: {error}.")
@@ -670,7 +752,7 @@ class TagMap:
                 logical_addr = hardware_to_logical.get(row.address)
                 if logical_addr is None:
                     continue
-                slot_config = logical_block.slot_config(logical_addr)
+                sv = logical_block.slot(logical_addr)
                 if _is_marker_only_boundary_row(row, block_name=spec.name):
                     continue
 
@@ -680,35 +762,28 @@ class TagMap:
                         address=row.address,
                         name=row.nickname,
                     )
-                    if row.nickname != slot_config.name:
-                        logical_block.rename_slot(logical_addr, row.nickname)
-                        slot_config = logical_block.slot_config(logical_addr)
-                else:
-                    require_representable_block_nickname(
-                        memory_type=row.memory_type,
-                        address=row.address,
-                        name=row.nickname,
-                    )
+                    if row.nickname != sv.name:
+                        logical_block.slot(logical_addr, name=row.nickname)
 
                 default = _parse_default(row.initial_value, logical_block.type)
                 comment = _extract_address_comment(row.comment)
-                retentive_changed = row.retentive != slot_config.retentive
-                default_changed = default != slot_config.default
-                comment_changed = comment != slot_config.comment
+                retentive_changed = row.retentive != sv.retentive
+                default_changed = default != sv.default
+                comment_changed = comment != sv.comment
                 if retentive_changed or default_changed or comment_changed:
-                    logical_block.configure_slot(
-                        logical_addr,
-                        retentive=row.retentive if retentive_changed else None,
-                        default=default if default_changed else UNSET,
-                        comment=comment if comment_changed else UNSET,
-                    )
+                    slot_kw: dict[str, Any] = {}
+                    if retentive_changed:
+                        slot_kw["retentive"] = row.retentive
+                    if default_changed:
+                        slot_kw["default"] = default
+                    if comment_changed:
+                        slot_kw["comment"] = comment
+                    logical_block.slot(logical_addr, **slot_kw)
 
         def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
             if explicit_start is not None:
                 return explicit_start
-            if spec.hardware_addresses and spec.hardware_addresses[0] == 0:
-                return 0
-            return 1
+            return _default_logical_block_start(spec.hardware_addresses)
 
         def import_plain_block(
             spec: _BlockImportSpec,
@@ -730,23 +805,40 @@ class TagMap:
             apply_block_rows(logical_block, spec)
             mappings.append(logical_block.map_to(spec.hardware_range))
 
+        seen_base_names: dict[str, str] = {}  # base_name → kind label
+
+        def _check_base_name(name: str, kind_label: str) -> None:
+            existing = seen_base_names.get(name)
+            if existing is not None:
+                raise ValueError(f"Name {name!r} used as both {existing} and {kind_label}.")
+            seen_base_names[name] = kind_label
+
         def append_structure(structure: StructuredImport) -> None:
             if any(existing.name == structure.name for existing in structures):
                 raise ValueError(f"Duplicate structured import name {structure.name!r}.")
             structures.append(structure)
 
         for block_range in ranges:
-            if block_range.name in seen_block_names:
-                raise ValueError(f"Duplicate block definition name {block_range.name!r}.")
-            seen_block_names.add(block_range.name)
-            covered_rows.update(range(block_range.start_idx, block_range.end_idx + 1))
-
             spec = _build_block_spec(rows, block_range)
-            kind, base_name, field_name, count, stride, logical_block_name, explicit_start = (
-                _parse_structured_block_name(spec.name)
-            )
+            (
+                kind,
+                base_name,
+                field_name,
+                count,
+                stride,
+                logical_block_name,
+                explicit_start,
+                explicit_always_number,
+            ) = _parse_structured_block_name(spec.name)
+
+            if kind != "group":
+                if block_range.name in seen_semantic_block_names:
+                    raise ValueError(f"Duplicate block definition name {block_range.name!r}.")
+                seen_semantic_block_names.add(block_range.name)
+                covered_rows.update(range(block_range.start_idx, block_range.end_idx + 1))
 
             if kind == "plain":
+                _check_base_name(logical_block_name, "block")
                 import_plain_block(
                     spec,
                     logical_name=logical_block_name,
@@ -754,26 +846,74 @@ class TagMap:
                 )
                 continue
 
+            if kind == "group":
+                continue
+
             if kind == "named_array":
                 assert base_name is not None
-                assert count is not None
-                assert stride is not None
+                _check_base_name(base_name, "named_array")
+
+                total_rows = len(spec.hardware_addresses)
+                if count is None:
+                    count = 1
+                if stride is None:
+                    if total_rows % count != 0:
+                        raise ValueError(
+                            f"Named array {base_name!r} has {total_rows} rows "
+                            f"which is not divisible by count={count}."
+                        )
+                    stride = total_rows // count
 
                 expected_span = count * stride
-                if len(spec.hardware_addresses) != expected_span:
+                if total_rows != expected_span:
                     raise ValueError(
-                        f"Named array {base_name!r} expects span {expected_span}, "
-                        f"got {len(spec.hardware_addresses)}."
+                        f"Named array {base_name!r} expects span {expected_span}, got {total_rows}."
                     )
 
                 address_to_position = {
                     address: position
                     for position, address in enumerate(spec.hardware_addresses, start=0)
                 }
-                nickname_pattern = re.compile(
+                numbered_pattern = re.compile(
                     rf"^{re.escape(base_name)}(?P<instance>[1-9][0-9]*)_(?P<field>[A-Za-z_][A-Za-z0-9_]*)$"
                 )
+                compact_pattern = (
+                    re.compile(rf"^{re.escape(base_name)}_(?P<field>[A-Za-z_][A-Za-z0-9_]*)$")
+                    if count == 1
+                    else None
+                )
 
+                # Determine which naming convention to use.
+                if count > 1 or explicit_always_number is True:
+                    use_always_number = True
+                elif explicit_always_number is False:
+                    use_always_number = False
+                else:
+                    # count==1, no explicit flag — detect from CSV field names.
+                    has_numbered = False
+                    has_compact = False
+                    for row_idx in range(spec.start_idx, spec.end_idx + 1):
+                        row = rows[row_idx]
+                        if row.memory_type != spec.memory_type or row.nickname == "":
+                            continue
+                        if address_to_position.get(row.address) is None:
+                            continue
+                        if _is_marker_only_boundary_row(row, block_name=spec.name):
+                            continue
+                        if numbered_pattern.fullmatch(row.nickname):
+                            has_numbered = True
+                        elif compact_pattern is not None and compact_pattern.fullmatch(
+                            row.nickname
+                        ):
+                            has_compact = True
+                    use_always_number = has_numbered and not has_compact
+
+                nickname_pattern = (
+                    numbered_pattern if use_always_number or count > 1 else compact_pattern
+                )
+                assert nickname_pattern is not None
+
+                is_compact = not use_always_number and count == 1
                 field_offsets: dict[str, int] = {}
                 field_rows: dict[tuple[str, int], AddressRecord] = {}
                 for row_idx in range(spec.start_idx, spec.end_idx + 1):
@@ -786,15 +926,25 @@ class TagMap:
                     if row.nickname == "":
                         continue
 
+                    if _is_marker_only_boundary_row(row, block_name=spec.name):
+                        continue
+
                     match = nickname_pattern.fullmatch(row.nickname)
                     display = format_address_display(row.memory_type, row.address)
                     if match is None:
+                        if is_compact:
+                            expected_fmt = f"{base_name}_{{field}}"
+                        else:
+                            expected_fmt = f"{base_name}{{instance}}_{{field}}"
                         raise ValueError(
                             f"Named array {base_name!r} row at {display} has invalid nickname "
-                            f"{row.nickname!r}; expected {base_name}{{instance}}_{{field}}."
+                            f"{row.nickname!r}; expected {expected_fmt}."
                         )
 
-                    instance = int(match.group("instance"))
+                    if is_compact:
+                        instance = 1
+                    else:
+                        instance = int(match.group("instance"))
                     field = match.group("field")
                     if instance < 1 or instance > count:
                         raise ValueError(
@@ -835,6 +985,21 @@ class TagMap:
                         f"Named array {base_name!r} did not infer any fields from nicknames."
                     )
 
+                if count > 1:
+                    # Instance 1 defines the template — all fields must appear there.
+                    instance1_fields = {f for (f, inst) in field_rows if inst == 1}
+                    if not instance1_fields:
+                        raise ValueError(
+                            f"Named array {base_name!r} instance 1 has no named fields; "
+                            "instance 1 must define the field template."
+                        )
+                    for f, inst in field_rows:
+                        if inst > 1 and f not in instance1_fields:
+                            raise ValueError(
+                                f"Named array {base_name!r} instance {inst} introduces field "
+                                f"{f!r} not present in instance 1."
+                            )
+
                 ordered_fields_with_offsets = sorted(
                     field_offsets.items(), key=lambda item: item[1]
                 )
@@ -844,13 +1009,7 @@ class TagMap:
                         row = field_rows.get(key)
                         expected_address = spec.hardware_addresses[(instance - 1) * stride + offset]
                         if row is None:
-                            expected_display = format_address_display(
-                                spec.memory_type, expected_address
-                            )
-                            raise ValueError(
-                                f"Named array {base_name!r} missing required row for field "
-                                f"{field!r}, instance {instance} at {expected_display}."
-                            )
+                            continue
                         if row.address != expected_address:
                             display = format_address_display(row.memory_type, row.address)
                             expected_display = format_address_display(
@@ -865,34 +1024,39 @@ class TagMap:
                 for field, _ in ordered_fields_with_offsets:
                     runtime_namespace[field] = Field()
                 runtime_type = cast(type[Any], type(base_name, (), runtime_namespace))
+                inferred_always_number = use_always_number and count == 1
                 runtime = named_array(
                     _tag_type_for_memory_type(spec.memory_type),
                     count=count,
                     stride=stride,
+                    always_number=inferred_always_number,
                 )(runtime_type)
                 runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
 
                 for field, _ in ordered_fields_with_offsets:
                     block = runtime_blocks[field]
                     for instance in range(1, count + 1):
-                        row = field_rows[(field, instance)]
-                        slot_config = block.slot_config(instance)
-                        if row.nickname != slot_config.name:
-                            block.rename_slot(instance, row.nickname)
-                            slot_config = block.slot_config(instance)
+                        row = field_rows.get((field, instance))
+                        if row is None:
+                            continue
+                        sv = block.slot(instance)
+                        if row.nickname != sv.name:
+                            block.slot(instance, name=row.nickname)
 
                         default = _parse_default(row.initial_value, block.type)
                         comment = _extract_address_comment(row.comment)
-                        retentive_changed = row.retentive != slot_config.retentive
-                        default_changed = default != slot_config.default
-                        comment_changed = comment != slot_config.comment
+                        retentive_changed = row.retentive != sv.retentive
+                        default_changed = default != sv.default
+                        comment_changed = comment != sv.comment
                         if retentive_changed or default_changed or comment_changed:
-                            block.configure_slot(
-                                instance,
-                                retentive=row.retentive if retentive_changed else None,
-                                default=default if default_changed else UNSET,
-                                comment=comment if comment_changed else UNSET,
-                            )
+                            slot_kw: dict[str, Any] = {}
+                            if retentive_changed:
+                                slot_kw["retentive"] = row.retentive
+                            if default_changed:
+                                slot_kw["default"] = default
+                            if comment_changed:
+                                slot_kw["comment"] = comment
+                            block.slot(instance, **slot_kw)
 
                 mappings.extend(runtime.map_to(spec.hardware_range))
                 append_structure(
@@ -914,6 +1078,8 @@ class TagMap:
             assert kind == "udt"
             assert base_name is not None
             assert field_name is not None
+            if base_name not in udt_groups:
+                _check_base_name(base_name, "udt")
             udt_groups[base_name].append((spec, field_name))
 
         for base_name, grouped_specs in udt_groups.items():
@@ -975,15 +1141,15 @@ class TagMap:
             structure_warnings.append(
                 f"UDT grouping for {base_name!r} failed ({fallback_reason}); imported as plain blocks."
             )
-            for spec, _ in grouped_specs:
-                import_plain_block(spec)
+            for spec, field_name in grouped_specs:
+                import_plain_block(spec, logical_name=f"{base_name}.{field_name}")
 
         for idx, row in enumerate(rows):
             if idx in covered_rows:
                 continue
             if row.nickname == "":
                 continue
-            if row.memory_type in {"SC", "SD"}:
+            if get_addr_key(row.memory_type, row.address) in _RESERVED_SYSTEM_HARDWARE_KEYS:
                 continue
 
             register_logical_name(row.nickname, memory_type=row.memory_type, address=row.address)
@@ -1011,9 +1177,9 @@ class TagMap:
         """Write mapped addresses to a Click nickname CSV file.
 
         Emits one row per mapped hardware address.  Block entries produce
-        rows with ``<Name>`` / ``</Name>`` comment markers that Click
-        Programming Software can parse as block tag groups.  Unmapped
-        addresses are omitted.
+        rows with explicit semantic markers (``:block``, ``:udt``,
+        ``:named_array(...)``) or raw grouping tags for non-semantic
+        comments. Unmapped addresses are omitted.
 
         Args:
             path: Destination CSV path. Parent directories must exist.
@@ -1022,6 +1188,21 @@ class TagMap:
             Number of rows written.
         """
         records: dict[int, AddressRecord] = {}
+
+        def block_tag_name_for_entry(entry: _BlockEntry) -> str | None:
+            provenance = self._structure_provenance(entry.logical)
+            if provenance is not None:
+                kind, name, _ = provenance
+                if kind == "named_array":
+                    return None
+                if kind == "udt":
+                    field = cast(str, entry.logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+                    return f"{name}.{field}:udt"
+
+            default_start = _default_logical_block_start(entry.hardware_addresses)
+            if entry.logical.start == default_start:
+                return f"{entry.logical.name}:block"
+            return f"{entry.logical.name}:block({entry.logical.start})"
 
         for entry in self._tag_entries_tuple:
             memory_type, address = self._parse_hardware_tag(entry.hardware)
@@ -1038,6 +1219,7 @@ class TagMap:
         for entry in self._block_entries_tuple:
             if not entry.hardware_addresses:
                 continue
+            block_tag_name = block_tag_name_for_entry(entry)
             memory_type, _ = self._parse_hardware_tag(
                 entry.hardware.block[entry.hardware_addresses[0]]
             )
@@ -1048,12 +1230,13 @@ class TagMap:
             ):
                 slot = entry.logical[logical_addr]
                 block_tag = ""
-                if block_len == 1:
-                    block_tag = format_block_tag(entry.logical.name, "self-closing")
-                elif i == 0:
-                    block_tag = format_block_tag(entry.logical.name, "open")
-                elif i == block_len - 1:
-                    block_tag = format_block_tag(entry.logical.name, "close")
+                if block_tag_name is not None:
+                    if block_len == 1:
+                        block_tag = format_block_tag(block_tag_name, "self-closing")
+                    elif i == 0:
+                        block_tag = format_block_tag(block_tag_name, "open")
+                    elif i == block_len - 1:
+                        block_tag = format_block_tag(block_tag_name, "close")
 
                 records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                     memory_type=memory_type,
@@ -1096,7 +1279,14 @@ class TagMap:
 
             memory_type, start_address, end_address = span
             stride = cast(int, structure.stride)
-            block_name = f"{structure.name}:named_array({structure.count},{stride})"
+            always_number_suffix = (
+                ",always_number"
+                if getattr(structure.runtime, "always_number", False) and structure.count == 1
+                else ""
+            )
+            block_name = (
+                f"{structure.name}:named_array({structure.count},{stride}{always_number_suffix})"
+            )
             if structure.count * stride == 1:
                 write_boundary_comment(
                     memory_type,
@@ -1236,7 +1426,7 @@ class TagMap:
 
     def tags_from_plc_data(
         self,
-        data: dict[str, bool | int | float | str],
+        data: Mapping[str, bool | int | float | str],
     ) -> dict[str, bool | int | float | str]:
         """Return logical tag values from a PLC data dump.
 
@@ -1484,6 +1674,103 @@ class TagMap:
         used_hardware[addr_key] = owner
         used_hardware_logical[addr_key] = logical_name
 
+    @staticmethod
+    def _structure_provenance(logical: Tag | Block) -> tuple[str, str, Any] | None:
+        runtime = getattr(logical, "_pyrung_structure_runtime", None)
+        kind = getattr(logical, "_pyrung_structure_kind", None)
+        name = getattr(logical, "_pyrung_structure_name", None)
+        if runtime is None or kind not in {"udt", "named_array"} or not isinstance(name, str):
+            return None
+        return cast(str, kind), name, runtime
+
+    def _populate_programmatic_structures(self) -> None:
+        structures: dict[str, StructuredImport] = {}
+        named_array_spans: dict[str, tuple[str, int, int]] = {}
+
+        def register_structure(logical: Tag | Block) -> tuple[str, str, Any] | None:
+            provenance = self._structure_provenance(logical)
+            if provenance is None:
+                return None
+
+            kind, name, runtime = provenance
+            existing = structures.get(name)
+            stride = cast(int | None, getattr(runtime, "stride", None))
+            if existing is None:
+                structures[name] = StructuredImport(
+                    name=name,
+                    kind=cast(Literal["udt", "named_array"], kind),
+                    runtime=runtime,
+                    count=cast(int, runtime.count),
+                    stride=stride,
+                )
+                return provenance
+
+            if existing.kind != kind or existing.runtime is not runtime:
+                raise ValueError(f"Duplicate structured mapping name {name!r}.")
+            return provenance
+
+        def record_named_array_span(logical: Tag | Block, memory_type: str, address: int) -> None:
+            provenance = register_structure(logical)
+            if provenance is None:
+                return
+
+            kind, name, runtime = provenance
+            if kind != "named_array":
+                return
+
+            field_name = cast(str, logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+            field_offset = cast(tuple[str, ...], runtime.field_names).index(field_name)
+            stride = cast(int, runtime.stride)
+            instance = (
+                logical.start
+                if isinstance(logical, Block)
+                else cast(int, logical._pyrung_structure_index)  # ty: ignore[unresolved-attribute]
+            )
+            span_start = address - ((instance - 1) * stride + field_offset)
+            span_end = span_start + cast(int, runtime.count) * stride - 1
+            existing = named_array_spans.get(name)
+            if existing is None:
+                named_array_spans[name] = (memory_type, span_start, span_end)
+                return
+            existing_memory_type, start, end = existing
+            if existing_memory_type != memory_type:
+                raise ValueError(
+                    f"Named array {name!r} spans multiple memory types: "
+                    f"{existing_memory_type} and {memory_type}."
+                )
+            named_array_spans[name] = (
+                memory_type,
+                min(start, span_start),
+                max(end, span_end),
+            )
+
+        for entry in self._block_entries:
+            provenance = register_structure(entry.logical)
+            if provenance is None:
+                continue
+            kind, _, _ = provenance
+            if kind != "named_array":
+                continue
+            if not entry.hardware_addresses:
+                continue
+            sample_tag = entry.hardware.block[entry.hardware_addresses[0]]
+            memory_type, address = self._parse_hardware_tag(sample_tag)
+            record_named_array_span(entry.logical, memory_type, address)
+
+        for entry in self._tag_entries:
+            provenance = register_structure(entry.logical)
+            if provenance is None:
+                continue
+            kind, _, _ = provenance
+            if kind != "named_array":
+                continue
+            memory_type, address = self._parse_hardware_tag(entry.hardware)
+            record_named_array_span(entry.logical, memory_type, address)
+
+        self._structures = tuple(structures.values())
+        self._structure_by_name = dict(structures)
+        self._named_array_spans = named_array_spans
+
     def _freeze_entries(self) -> None:
         self._tag_entries_tuple = tuple(self._tag_entries)
         self._block_entries_tuple = tuple(self._block_entries)
@@ -1517,10 +1804,38 @@ class TagMap:
         if name in SYSTEM_TAGS_BY_NAME:
             raise ValueError(f"Logical tag name {name!r} is reserved for system points.")
 
+    def _duplicate_user_logical_name_hint(
+        self, name: str, *, owner: str, existing_owner: str
+    ) -> str:
+        for candidate_owner in (owner, existing_owner):
+            match = _BLOCK_SLOT_OWNER_RE.fullmatch(candidate_owner)
+            if match is None:
+                continue
+            block_name = match.group("block_name")
+            addr = int(match.group("addr"))
+            if not block_name.endswith(tuple("0123456789")):
+                continue
+            if name != f"{block_name}{addr}":
+                continue
+            return (
+                " Auto-generated block slot names concatenate the block tag and slot number, "
+                f"so {block_name}[{addr}] becomes {name!r}. If a block tag ends in digits, "
+                "that can collide with another block's later slot numbers. Consider renaming "
+                "the block tag so it does not end in a number, or rename the slot explicitly."
+            )
+        return ""
+
     def _register_user_logical_name(self, name: str, *, owner: str) -> None:
-        if name in self._user_logical_names:
-            raise ValueError(f"Duplicate user logical tag name {name!r} (from {owner}).")
-        self._user_logical_names.add(name)
+        existing_owner = self._user_logical_name_owners.get(name)
+        if existing_owner is not None:
+            hint = self._duplicate_user_logical_name_hint(
+                name, owner=owner, existing_owner=existing_owner
+            )
+            raise ValueError(
+                f"Duplicate user logical tag name {name!r} (from {owner}; already used by "
+                f"{existing_owner}).{hint}"
+            )
+        self._user_logical_name_owners[name] = owner
 
     def _iter_export_slots(self) -> Iterable[Tag]:
         for entry in self._tag_entries_tuple:

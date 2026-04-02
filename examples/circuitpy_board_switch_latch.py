@@ -11,5 +11,5 @@ with Program() as logic:
 
 
 hw = P1AM()  # No slots required when only onboard board tags are used.
-source = generate_circuitpy(logic, hw, target_scan_ms=10.0)
-print(source)
+result = generate_circuitpy(logic, hw, target_scan_ms=10.0)
+print(result.code)

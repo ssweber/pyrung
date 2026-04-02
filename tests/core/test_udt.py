@@ -12,7 +12,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
-from pyrung.core import Bool, Field, Int, TagType, auto, udt
+from pyrung.core import Bool, Field, Int, Real, TagType, auto, udt
 from pyrung.core.tag import LiveTag
 
 
@@ -56,12 +56,40 @@ def test_udt_literal_and_auto_defaults_resolve_per_instance():
 def test_udt_retentive_policy_inherited_by_generated_tags():
     @udt(count=2)
     class Alarm:
-        id: Int = Field(retentive=True)  # type: ignore[invalid-assignment]
-        On: Bool = Field(retentive=False)  # type: ignore[invalid-assignment]
+        id: Int = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=False)  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms[1].id.retentive is True
     assert alarms[1].On.retentive is False
+
+
+def test_udt_retentive_inherits_from_base_type():
+    """Fields without explicit retentive inherit from their tag type."""
+
+    @udt(count=1)
+    class Sensor:
+        active: Bool  # Bool → retentive=False
+        reading: Int  # Int → retentive=True
+        hi_limit: Real  # Real → retentive=True
+
+    sensor = cast(Any, Sensor)
+    assert sensor.active.retentive is False
+    assert sensor.reading.retentive is True
+    assert sensor.hi_limit.retentive is True
+
+
+def test_udt_retentive_explicit_overrides_type_default():
+    """Field(retentive=...) overrides the type default."""
+
+    @udt(count=1)
+    class Sensor:
+        active: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        reading: Int = Field(retentive=False)  # ty: ignore[invalid-assignment]
+
+    sensor = cast(Any, Sensor)
+    assert sensor.active.retentive is True  # overridden from Bool default False
+    assert sensor.reading.retentive is False  # overridden from Int default True
 
 
 def test_udt_rejects_invalid_declarations():
@@ -111,8 +139,8 @@ def test_instance_view_validates_index_and_missing_attributes():
 def test_udt_allows_underscored_fields():
     @udt(count=1)
     class Alarm:
-        _x: Int = 0  # type: ignore[invalid-assignment]
-        val: Int = 1  # type: ignore[invalid-assignment]
+        _x: Int = 0  # ty: ignore[invalid-assignment]
+        val: Int = 1  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("_x", "val")
@@ -149,7 +177,7 @@ def test_udt_skips_classvar_fields():
     @udt(count=1)
     class Alarm:
         _meta: ClassVar[int] = 123
-        val: Int = 1  # type: ignore[invalid-assignment]
+        val: Int = 1  # ty: ignore[invalid-assignment]
 
     alarms = cast(Any, Alarm)
     assert alarms.field_names == ("val",)
@@ -220,8 +248,8 @@ def test_udt_clone_allows_count_override():
 def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:
-        id: Int = 1  # type: ignore[invalid-assignment]
-        On: Bool = Field(retentive=True)  # type: ignore[invalid-assignment]
+        id: Int = 1  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
 
     alarm = cast(Any, Alarm)
     assert alarm.field_names == ("id", "On")
@@ -231,8 +259,8 @@ def test_udt_count_one_fields_and_field_names():
     assert alarm.fields["On"].retentive is True
 
 
-def test_udt_numbered_forces_numbered_names_for_count_one():
-    @udt(numbered=True)
+def test_udt_always_number_forces_numbered_names_for_count_one():
+    @udt(always_number=True)
     class Alarm:
         id: Int
         On: Bool
@@ -243,8 +271,8 @@ def test_udt_numbered_forces_numbered_names_for_count_one():
     assert alarm[1].id.name == "Alarm1_id"
 
 
-def test_udt_numbered_has_no_effect_when_count_greater_than_one():
-    @udt(count=3, numbered=True)
+def test_udt_always_number_has_no_effect_when_count_greater_than_one():
+    @udt(count=3, always_number=True)
     class Alarm:
         id: Int
 
@@ -253,21 +281,21 @@ def test_udt_numbered_has_no_effect_when_count_greater_than_one():
     assert alarms[3].id.name == "Alarm3_id"
 
 
-def test_udt_numbered_clone_preserves_flag():
-    @udt(numbered=True)
+def test_udt_always_number_clone_preserves_flag():
+    @udt(always_number=True)
     class Device:
         total: Int
 
     Pump = cast(Any, Device).clone("Pump")
     assert Pump.total.name == "Pump1_total"
-    assert Pump.numbered is True
+    assert Pump.always_number is True
 
 
-def test_udt_numbered_default_is_false():
+def test_udt_always_number_default_is_false():
     @udt()
     class Alarm:
         id: Int
 
     alarm = cast(Any, Alarm)
-    assert alarm.numbered is False
+    assert alarm.always_number is False
     assert alarm.id.name == "Alarm_id"

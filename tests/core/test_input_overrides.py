@@ -36,7 +36,7 @@ def test_patch_rejects_non_string_non_tag_key() -> None:
     manager = _manager()
 
     with pytest.raises(TypeError, match="patch\\(\\) keys must be str or Tag"):
-        manager.patch({1: True})  # type: ignore[arg-type]
+        manager.patch({1: True})  # ty: ignore[invalid-argument-type]
 
 
 def test_force_lifecycle_add_remove_clear_and_read_only_guard() -> None:
@@ -90,7 +90,7 @@ def test_forces_property_is_read_only_view() -> None:
     assert dict(active) == {"A": True}
 
     with pytest.raises(TypeError):
-        active["A"] = False  # type: ignore[index]
+        active["A"] = False  # ty: ignore[invalid-assignment]
 
 
 def test_get_live_override_prefers_pending_patch_over_force() -> None:
@@ -113,7 +113,7 @@ def test_apply_pre_scan_applies_patch_then_force_and_clears_patches() -> None:
     manager.patch({"A": 1})
     manager.add_force("B", True)
 
-    manager.apply_pre_scan(ctx)  # type: ignore[arg-type]
+    manager.apply_pre_scan(ctx)  # ty: ignore[invalid-argument-type]
 
     assert ctx.calls == [{"A": 1}, {"B": True}]
     assert manager.pending_patches == {}
@@ -126,7 +126,7 @@ def test_apply_post_logic_applies_forces_only() -> None:
     manager.patch({"A": 1})
     manager.add_force("B", True)
 
-    manager.apply_post_logic(ctx)  # type: ignore[arg-type]
+    manager.apply_post_logic(ctx)  # ty: ignore[invalid-argument-type]
 
     assert ctx.calls == [{"B": True}]
     assert manager.pending_patches == {"A": 1}

@@ -186,6 +186,7 @@ txt: Block = _block_from_bank_config(BANKS["TXT"])
 from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
+from pyrung.click.nop import NopInstruction, nop
 from pyrung.click.raw import RawInstruction, raw
 from pyrung.click.tag_map import TagMap
 from pyrung.click.validation import (
@@ -257,6 +258,8 @@ __all__ = [
     "WordOrder",
     "send",
     "receive",
+    "NopInstruction",
+    "nop",
     "RawInstruction",
     "raw",
     "ladder_to_pyrung",

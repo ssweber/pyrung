@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math as _math
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pyrung.circuitpy.codegen._constants import _TYPE_DEFAULTS
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render import _render_code
+from pyrung.circuitpy.codegen.render_runtime import _render_runtime
 from pyrung.circuitpy.hardware import P1AM
 from pyrung.circuitpy.modbus import ModbusClientConfig, ModbusServerConfig
 from pyrung.circuitpy.p1am import RunStopConfig, board
@@ -19,6 +22,22 @@ from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME, system
 from pyrung.core.tag import Tag
 
 MappedTagScope = Literal["referenced_only", "all_mapped"]
+
+_DEFAULT_RUNSTOP = RunStopConfig()
+
+
+@dataclass(frozen=True)
+class CircuitPyOutput:
+    """Result of :func:`generate_circuitpy`.
+
+    *code* is the ``code.py`` content (program-specific, stays as ``.py``).
+    *runtime* is the ``pyrung_rt.py`` content (generic runtime library,
+    intended to be compiled to ``.mpy`` via ``mpy-cross``).  An empty
+    string means no runtime module is needed.
+    """
+
+    code: str
+    runtime: str
 
 
 def _needs_modbus_backing(tag: Tag, mode: MappedTagScope) -> bool:
@@ -33,12 +52,12 @@ def generate_circuitpy(
     *,
     target_scan_ms: float,
     watchdog_ms: int | None = None,
-    runstop: RunStopConfig | None = None,
+    runstop: RunStopConfig | None = _DEFAULT_RUNSTOP,
     modbus_server: ModbusServerConfig | None = None,
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
     mapped_tag_scope: MappedTagScope = "referenced_only",
-) -> str:
+) -> CircuitPyOutput:
     if not isinstance(program, Program):
         raise TypeError(f"program must be Program, got {type(program).__name__}")
     if not isinstance(hw, P1AM):
@@ -132,9 +151,58 @@ def generate_circuitpy(
     ctx.collect_retentive_tags()
     ctx.assign_symbols()
 
-    source = _render_code(ctx)
+    # Predict has_runtime from config — modbus requires a runtime module.
+    # Render code first so compile_rung populates ctx.used_helpers and
+    # ctx.modbus_client_specs; _render_runtime needs those.
+    has_runtime = ctx.modbus_server is not None or ctx.modbus_client is not None
+    source = _render_code(ctx, has_runtime=has_runtime)
+    runtime_source = _render_runtime(ctx) if has_runtime else ""
+
+    if runtime_source:
+        try:
+            compile(runtime_source, "pyrung_rt.py", "exec")
+        except SyntaxError as exc:
+            raise RuntimeError(f"Generated runtime source is invalid: {exc}") from exc
     try:
         compile(source, "code.py", "exec")
     except SyntaxError as exc:
         raise RuntimeError(f"Generated source is invalid: {exc}") from exc
-    return source
+    return CircuitPyOutput(code=source, runtime=runtime_source)
+
+
+def write_circuitpy(
+    program: Program,
+    hw: P1AM,
+    *,
+    output_dir: str | Path,
+    target_scan_ms: float,
+    watchdog_ms: int | None = None,
+    runstop: RunStopConfig | None = _DEFAULT_RUNSTOP,
+    modbus_server: ModbusServerConfig | None = None,
+    modbus_client: ModbusClientConfig | None = None,
+    tag_map: TagMap | None = None,
+    mapped_tag_scope: MappedTagScope = "referenced_only",
+) -> Path:
+    """Generate and write ``code.py`` (and ``pyrung_rt.py`` when needed) to *output_dir*.
+
+    Accepts the same parameters as :func:`generate_circuitpy` plus
+    ``output_dir``.  Returns the path to the written ``code.py``.
+    """
+    result = generate_circuitpy(
+        program,
+        hw,
+        target_scan_ms=target_scan_ms,
+        watchdog_ms=watchdog_ms,
+        runstop=runstop,
+        modbus_server=modbus_server,
+        modbus_client=modbus_client,
+        tag_map=tag_map,
+        mapped_tag_scope=mapped_tag_scope,
+    )
+    out = Path(output_dir)
+    code_path = out / "code.py"
+    code_path.write_text(result.code, encoding="utf-8")
+    if result.runtime:
+        runtime_path = out / "pyrung_rt.py"
+        runtime_path.write_text(result.runtime, encoding="utf-8")
+    return code_path

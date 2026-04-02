@@ -3,12 +3,25 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pyrung.click.codegen.collector import _parallel_renders_with_pipe
+
+# Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
+_TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
+    "Bool": False,
+    "Int": True,
+    "Dint": True,
+    "Real": True,
+    "Word": True,
+    "Char": True,
+}
+
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
     _DROP_KWARGS,
     _FUNC_RE,
     _OPERAND_PREFIXES,
+    _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
     Leaf,
@@ -19,6 +32,7 @@ from pyrung.click.codegen.models import (
     _InstructionInfo,
     _OperandCollection,
     _PinInfo,
+    _PlainBlockDecl,
     _StructureDecl,
     _SubroutineInfo,
 )
@@ -102,17 +116,16 @@ def _generate_code(
     _emit_imports(lines, collection)
     lines.append("")
 
-    # Tag declarations (skip structure-owned)
-    has_flat_tags = any(op not in collection.structure_owned_operands for op in collection.tags)
+    # Tag declarations (skip semantic-owned)
+    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
     if has_flat_tags:
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
-    # Range declarations
-    if collection.ranges:
-        lines.append("# --- Ranges ---")
-        _emit_range_declarations(lines, collection)
+    if collection.plain_blocks:
+        lines.append("# --- Blocks ---")
+        _emit_plain_block_declarations(lines, collection)
         lines.append("")
 
     # Structure declarations
@@ -146,8 +159,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     # Core imports
     core_imports: list[str] = ["Program", "Rung"]
 
-    # Block/TagType if ranges are used
-    if collection.ranges:
+    # Block/TagType for reconstructed plain named blocks
+    if collection.plain_blocks:
         core_imports.append("Block")
         core_imports.append("TagType")
 
@@ -209,6 +222,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
 
     if collection.has_branch:
         core_imports.append("branch")
+    if collection.has_comment:
+        core_imports.append("comment")
     if collection.has_forloop:
         core_imports.append("forloop")
     if collection.has_subroutine:
@@ -266,7 +281,7 @@ def _emit_tag_declarations(
         key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
     )
     for decl in sorted_tags:
-        if decl.operand in collection.structure_owned_operands:
+        if decl.operand in collection.semantic_operands:
             continue
         line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
         if decl.comment and not suppress_comments:
@@ -274,13 +289,38 @@ def _emit_tag_declarations(
         lines.append(line)
 
 
-def _emit_range_declarations(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit logical Block declarations for ranges."""
-    for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-        lines.append(
-            f'{decl.var_name} = Block("{decl.var_name}", TagType.{decl.tag_type}, '
-            f"{decl.start}, {decl.end})"
-        )
+def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit reconstructed plain named block declarations and used aliases."""
+    sorted_blocks = sorted(collection.plain_blocks, key=lambda decl: decl.var_name)
+    for i, decl in enumerate(sorted_blocks):
+        if i:
+            lines.append("")
+        _emit_plain_block_decl(lines, decl)
+
+
+def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
+    """Emit one first-class plain named block."""
+    block_args = [f'"{decl.name}"', f"TagType.{decl.tag_type}", str(decl.start), str(decl.end)]
+    block_retentive = bool(decl.slots) and all(slot.retentive for slot in decl.slots.values())
+    if block_retentive:
+        block_args.append("retentive=True")
+    lines.append(f"{decl.var_name} = Block({', '.join(block_args)})")
+    for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
+        kwargs: list[str] = []
+        if slot.name_overridden:
+            kwargs.append(f"name={slot.tag_name!r}")
+        if slot.retentive_overridden and slot.retentive != block_retentive:
+            kwargs.append(f"retentive={slot.retentive}")
+        if slot.default_overridden:
+            kwargs.append(f"default={_format_literal(slot.default)}")
+        if slot.comment_overridden:
+            kwargs.append(f"comment={slot.comment!r}")
+        if kwargs:
+            lines.append(f"{decl.var_name}.slot({slot.index}, {', '.join(kwargs)})")
+
+    for slot in sorted(decl.slots.values(), key=lambda slot: slot.index):
+        if slot.alias_var_name is not None:
+            lines.append(f"{slot.alias_var_name} = {decl.var_name}[{slot.index}]")
 
 
 def _emit_structure_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -298,37 +338,46 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
     if decl.stride is not None and decl.stride != len(decl.fields):
         stride_part = f", stride={decl.stride}"
     count_part = f"count={decl.count}" if decl.count > 1 else ""
+    always_number_part = ", always_number=True" if decl.always_number and decl.count == 1 else ""
     deco_args = decl.base_type or "Int"
     if count_part:
         deco_args += f", {count_part}"
     deco_args += stride_part
+    deco_args += always_number_part
     lines.append(f"@named_array({deco_args})")
     lines.append(f"class {decl.name}:")
+    type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(decl.base_type or "Int", True)
     for field_name, _type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
-        if retentive:
-            lines.append(f"    {field_name} = Field(retentive=True)")
+        if retentive != type_default_ret:
+            # Only emit Field() when retentive differs from the type default.
+            lines.append(f"    {field_name} = Field(retentive={retentive})")
         else:
-            default_repr = _format_field_default(default)
+            default_repr = _format_literal(default)
             lines.append(f"    {field_name} = {default_repr}")
 
 
 def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
     """Emit a @udt decorator + class."""
-    count_part = f"count={decl.count}" if decl.count > 1 else ""
-    lines.append(f"@udt({count_part})")
+    parts: list[str] = []
+    if decl.count > 1:
+        parts.append(f"count={decl.count}")
+    if decl.always_number and decl.count == 1:
+        parts.append("always_number=True")
+    lines.append(f"@udt({', '.join(parts)})")
     lines.append(f"class {decl.name}:")
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
-        if retentive:
-            lines.append(f"    {field_name}: {type_name} = Field(retentive=True)")
+        type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+        if retentive != type_default_ret:
+            lines.append(f"    {field_name}: {type_name} = Field(retentive={retentive})")
         else:
-            default_repr = _format_field_default(default)
+            default_repr = _format_literal(default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
 
 
-def _format_field_default(default: object) -> str:
-    """Format a field default value for code emission."""
+def _format_literal(default: object) -> str:
+    """Format a Python literal for generated code."""
     if isinstance(default, bool):
         return "True" if default else "False"
     if isinstance(default, float):
@@ -405,10 +454,14 @@ def _emit_rung_sequence(
         return
 
     i = 0
+    first = True
     while i < len(rungs):
         rung = rungs[i]
 
         if rung.is_forloop_start:
+            if not first:
+                lines.append("")
+            first = False
             _emit_forloop(
                 lines,
                 rungs,
@@ -431,6 +484,9 @@ def _emit_rung_sequence(
             i += 1
             continue
 
+        if not first:
+            lines.append("")
+        first = False
         _emit_rung(
             lines,
             rung,
@@ -506,16 +562,15 @@ def _emit_rung_header(
     conditions_str: str,
     indent: int,
 ) -> None:
-    """Emit 'with Rung(...):' or 'with Rung(...) as r:' + comment lines."""
+    """Emit comment() call (if any) followed by 'with Rung(...):' line."""
     pad = "    " * indent
-    as_clause = " as r" if rung.comment else ""
+    if rung.comment:
+        _emit_comment(lines, rung.comment, indent)
     continued = ".continued()" if rung.is_continued else ""
     if conditions_str:
-        lines.append(f"{pad}with Rung({conditions_str}){continued}{as_clause}:")
+        lines.append(f"{pad}with Rung({conditions_str}){continued}:")
     else:
-        lines.append(f"{pad}with Rung(){continued}{as_clause}:")
-    if rung.comment:
-        _emit_comment(lines, rung.comment, indent + 1)
+        lines.append(f"{pad}with Rung(){continued}:")
 
 
 def _emit_rung(
@@ -530,19 +585,28 @@ def _emit_rung(
     """Emit a single rung."""
     pad = "    " * indent
 
-    if not rung.instructions:
+    # Filter out bare NOP tokens — they become empty rungs (pass).
+    real_instructions = [i for i in rung.instructions if i.af_token != "NOP"]
+
+    if not real_instructions:
+        # Empty or NOP-only rung — preserve with pass (comment-only rungs survive).
+        if not rung.instructions and not rung.comment:
+            return  # truly empty, no comment — skip
+        conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
+        _emit_rung_header(lines, rung, conditions_str, indent)
+        lines.append(f"{pad}    pass")
         return
 
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
 
     # Check if we need branch() blocks
-    has_branches = any(instr.branch_tree is not None for instr in rung.instructions)
-    multi_output = len(rung.instructions) > 1
+    has_branches = any(instr.branch_tree is not None for instr in real_instructions)
+    multi_output = len(real_instructions) > 1
 
     if has_branches and multi_output:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             if instr.branch_tree is not None:
                 branch_cond = _render_sp_node(
                     instr.branch_tree, collection, nicknames, structured_map
@@ -558,14 +622,14 @@ def _emit_rung(
     elif multi_output and not has_branches:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             _emit_instruction(
                 lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
             )
     else:
         _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in rung.instructions:
+        for instr in real_instructions:
             _emit_instruction(
                 lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
             )
@@ -587,6 +651,11 @@ def _render_sp_node(
         )
 
     if isinstance(node, Parallel):
+        if _parallel_renders_with_pipe(node, collection):
+            return " | ".join(
+                _render_sp_node(child, collection, nicknames, structured_map)
+                for child in node.children
+            )
         parts: list[str] = []
         for child in node.children:
             rendered = _render_sp_node(child, collection, nicknames, structured_map)
@@ -670,10 +739,21 @@ def _emit_instruction(
         pin_rendered = _render_pin(pin, collection, nicknames, structured_map)
         pin_strs.append(pin_rendered)
 
-    if pin_strs:
-        lines.append(f"{pad}{rendered}{''.join(pin_strs)}")
-    else:
-        lines.append(f"{pad}{rendered}")
+    line = f"{pad}{rendered}{''.join(pin_strs)}"
+
+    # Append inline comment for partial-structure ranges
+    if collection.range_comments:
+        comments: list[str] = []
+        all_tokens = af + " ".join(pin.arg for pin in instr.pins if pin.arg)
+        for rm in _RANGE_RE.finditer(all_tokens):
+            range_key = rm.group(0)
+            comment = collection.range_comments.get(range_key)
+            if comment is not None and comment not in comments:
+                comments.append(comment)
+        if comments:
+            line += "  " + "  ".join(comments)
+
+    lines.append(line)
 
 
 _SEARCH_OP_RE = re.compile(r"^(.+?)\s+(==|!=|<=|>=|<|>)\s+(.+)$")
@@ -716,7 +796,16 @@ def _render_af_token(
     """Render an AF token to a pyrung DSL call."""
     match = _FUNC_RE.match(token)
     if not match:
-        return _sub_operand(token, collection, nicknames, structured_map)
+        # Safeguard: reject unknown bare text that isn't a recognised operand.
+        # Known operands are substituted normally; anything else is an error
+        # that would produce invalid Python (bare undefined names).
+        sub = _sub_operand(token, collection, nicknames, structured_map)
+        if sub == token and token not in collection.tags:
+            raise ValueError(
+                f"Unrecognised AF token {token!r} — not a known instruction or operand. "
+                f"If this is a new Click instruction, add it to the codegen."
+            )
+        return sub
 
     func_name = match.group(2)
     args_str = match.group(3) or ""
@@ -782,18 +871,20 @@ def _render_pin(
 
 
 def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
-    """Emit a rung comment assignment."""
+    """Emit a comment() call above the rung."""
     pad = "    " * indent
     if "\n" in comment:
-        # Multi-line comment
-        escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        comment_lines = escaped.split("\n")
-        lines.append(
-            f'{pad}r.comment = "' + comment_lines[0] + "\\n" + "\\n".join(comment_lines[1:]) + '"'
-        )
+        # Multi-line → triple-quoted string
+        escaped = comment.replace("\\", "\\\\")
+        parts = escaped.split("\n")
+        content_pad = "    " * (indent + 1)
+        lines.append(f'{pad}comment("""\\')
+        for part in parts[:-1]:
+            lines.append(f"{content_pad}{part}" if part else "")
+        lines.append(f'{content_pad}{parts[-1]}""")')
     else:
         escaped = comment.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f'{pad}r.comment = "{escaped}"')
+        lines.append(f'{pad}comment("{escaped}")')
 
 
 def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
@@ -833,23 +924,24 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
                             f"    {sdecl.name}.{fn}.map_to("
                             f"{fhw.block_var}.select({fhw.start}, {fhw.end})),"
                         )
+        for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
+            lines.append(
+                f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501
+            )
         # Flat tags (non-structure-owned)
         for decl in sorted_tags:
-            if decl.operand in collection.structure_owned_operands:
+            if decl.operand in collection.semantic_operands:
                 continue
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
-        # Flat ranges
-        for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-            lines.append(
-                f"    {decl.var_name}.map_to({decl.block_var}.select({decl.start}, {decl.end})),"
-            )
         lines.append("])")
     else:
+        for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
+            lines.append(
+                f"    {bdecl.var_name}: {bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end}),"
+            )
         for decl in sorted_tags:
+            if decl.operand in collection.semantic_operands:
+                continue
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
-
-        # Add ranges
-        for decl in sorted(collection.ranges.values(), key=lambda r: r.operand_str):
-            lines.append(f"    {decl.var_name}: {decl.block_var}.select({decl.start}, {decl.end}),")
 
         lines.append("})")

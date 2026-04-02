@@ -198,7 +198,7 @@ def _render_ethernet_setup(ctx: CodegenContext) -> list[str]:
         )
     lines.extend(
         [
-            "_mb_socket.set_interface(_mb_eth)",
+            "_mb_pool = _mb_socketpool.SocketPool(_mb_eth)",
             "",
         ]
     )
@@ -213,43 +213,65 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     reg_write_globals = sorted({_backing_global_for_slot(ctx, slot) for slot in reg_slots})
     if ctx.runstop is not None:
         coil_write_globals = sorted({*coil_write_globals, "_mode_run"})
+    # Build sparse reverse-lookup dicts from only the backed slots.
+    coil_map: dict[int, tuple[str, int]] = {}
+    for slot in coil_slots:
+        addr, _ = plc_to_modbus(slot.bank, slot.index)
+        coil_map[addr] = (slot.bank, slot.index)
+    reg_map: dict[int, tuple[str, int, int]] = {}
+    for slot in reg_slots:
+        if slot.data_type == DataType.TXT:
+            pair_index = (slot.index - 1) // 2 * 2 + 1
+            mapping = MODBUS_MAPPINGS["TXT"]
+            reg_addr = mapping.base + (pair_index - 1) // 2
+            reg_map[reg_addr] = ("TXT", pair_index, 0)
+        else:
+            addr, width = plc_to_modbus(slot.bank, slot.index)
+            for i in range(width):
+                reg_map[addr + i] = (slot.bank, slot.index, i)
+
+    # Add XD/YD word mirrors when X/Y coils are backed.
+    has_x_coils = any(slot.bank == "X" for slot in coil_slots)
+    has_y_coils = any(slot.bank == "Y" for slot in coil_slots)
+    has_xy_words = (
+        has_x_coils or has_y_coils or any(slot.bank in ("XD", "YD") for slot in reg_slots)
+    )
+    if has_x_coils:
+        xd_cfg = BANKS["XD"]
+        for idx in range(xd_cfg.min_addr, xd_cfg.max_addr + 1):
+            addr, _ = plc_to_modbus("XD", idx)
+            reg_map[addr] = ("XD", idx, 0)
+    if has_y_coils:
+        yd_cfg = BANKS["YD"]
+        for idx in range(yd_cfg.min_addr, yd_cfg.max_addr + 1):
+            addr, _ = plc_to_modbus("YD", idx)
+            reg_map[addr] = ("YD", idx, 0)
+
     lines: list[str] = [
+        f"_MB_COIL_MAP = {coil_map!r}",
+        "",
         "def _mb_reverse_coil(addr):",
+        "    return _MB_COIL_MAP.get(int(addr))",
+        "",
+        f"_MB_REG_MAP = {reg_map!r}",
+        "",
+        "def _mb_reverse_register(addr):",
+        "    return _MB_REG_MAP.get(int(addr))",
+        "",
     ]
-    for bank in ("X", "Y"):
-        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
-        lines.extend(_render_sparse_reverse_coil(bank, MODBUS_MAPPINGS[bank].base))
-    for bank in ("C", "T", "CT", "SC"):
-        mapping = MODBUS_MAPPINGS[bank]
-        cfg = BANKS[bank]
-        max_addr = mapping.base + cfg.max_addr - 1
-        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
+    if has_xy_words:
         lines.extend(
             [
-                f"    if {mapping.base} <= addr <= {max_addr}:",
-                f'        return ("{bank}", (addr - {mapping.base}) + 1)',
+                "def _mb_xy_word_start(word_index):",
+                "    _idx = int(word_index)",
+                "    if _idx < 0 or _idx > 16:",
+                "        return None",
+                f"    return {_word_start_expr('word_index')}",
+                "",
             ]
         )
     lines.extend(
         [
-            "    return None",
-            "",
-            "def _mb_reverse_register(addr):",
-        ]
-    )
-    for bank in ("DS", "DD", "DH", "DF", "TXT", "TD", "CTD", "XD", "YD", "SD"):
-        lines.append(f"    # {bank} ({_BANK_DESCRIPTIONS[bank]})")
-        lines.extend(_render_reverse_register_case(bank))
-    lines.extend(
-        [
-            "    return None",
-            "",
-            "def _mb_xy_word_start(word_index):",
-            "    _idx = int(word_index)",
-            "    if _idx < 0 or _idx > 16:",
-            "        return None",
-            f"    return {_word_start_expr('word_index')}",
-            "",
             "def _mb_read_coil_plc(bank, index):",
         ]
     )
@@ -332,32 +354,46 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
             f"        return index in {sorted(MODBUS_MAPPINGS['SC'].writable or [])!r}",
             "    return False",
             "",
-            "def _mb_read_mirrored_word(bank, word_index):",
-            "    _start = _mb_xy_word_start(word_index)",
-            "    if _start is None:",
-            "        return 0",
-            "    _word = 0",
-            "    for _bit_index in range(16):",
-            "        if _mb_read_coil_plc(bank, _start + _bit_index):",
-            "            _word |= (1 << _bit_index)",
-            "    return _word",
-            "",
-            "def _mb_write_mirrored_word(word_index, value):",
-            "    _start = _mb_xy_word_start(word_index)",
-            "    if _start is None:",
-            "        return False",
-            "    _word = int(value) & 0xFFFF",
-            "    for _bit_index in range(16):",
-            '        _mb_write_coil_plc("Y", _start + _bit_index, bool((_word >> _bit_index) & 0x1))',
-            "    return True",
-            "",
-            "def _mb_read_reg_plc(bank, index, reg_pos):",
-            '    if bank == "XD":',
-            '        return _mb_read_mirrored_word("X", index)',
-            '    if bank == "YD":',
-            '        return _mb_read_mirrored_word("Y", index)',
         ]
     )
+    if has_xy_words:
+        lines.extend(
+            [
+                "def _mb_read_mirrored_word(bank, word_index):",
+                "    _start = _mb_xy_word_start(word_index)",
+                "    if _start is None:",
+                "        return 0",
+                "    _word = 0",
+                "    for _bit_index in range(16):",
+                "        if _mb_read_coil_plc(bank, _start + _bit_index):",
+                "            _word |= (1 << _bit_index)",
+                "    return _word",
+                "",
+                "def _mb_write_mirrored_word(word_index, value):",
+                "    _start = _mb_xy_word_start(word_index)",
+                "    if _start is None:",
+                "        return False",
+                "    _word = int(value) & 0xFFFF",
+                "    for _bit_index in range(16):",
+                '        _mb_write_coil_plc("Y", _start + _bit_index, bool((_word >> _bit_index) & 0x1))',
+                "    return True",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "def _mb_read_reg_plc(bank, index, reg_pos):",
+        ]
+    )
+    if has_xy_words:
+        lines.extend(
+            [
+                '    if bank == "XD":',
+                '        return _mb_read_mirrored_word("X", index)',
+                '    if bank == "YD":',
+                '        return _mb_read_mirrored_word("Y", index)',
+            ]
+        )
     for slot in reg_slots:
         if slot.data_type == DataType.INT:
             pack_expr = f"struct.unpack('<H', struct.pack('<h', int({slot.symbol})))[0]"
@@ -418,15 +454,16 @@ def _render_modbus_accessors(ctx: CodegenContext) -> list[str]:
     )
     if reg_write_globals:
         lines.append(f"    global {', '.join(reg_write_globals)}")
-    lines.extend(
-        [
-            "    _word = int(value) & 0xFFFF",
-            '    if bank == "XD":',
-            "        return False",
-            '    if bank == "YD":',
-            "        return _mb_write_mirrored_word(index, _word)",
-        ]
-    )
+    lines.append("    _word = int(value) & 0xFFFF")
+    if has_xy_words:
+        lines.extend(
+            [
+                '    if bank == "XD":',
+                "        return False",
+                '    if bank == "YD":',
+                "        return _mb_write_mirrored_word(index, _word)",
+            ]
+        )
     for slot in reg_slots:
         if slot.read_only and slot.logical_name != system.sys.cmd_mode_stop.name:
             lines.extend(
@@ -635,12 +672,28 @@ def _render_modbus_protocol(ctx: CodegenContext) -> list[str]:
     return lines
 
 
+def _render_modbus_server_init(ctx: CodegenContext) -> list[str]:
+    """Render only the socket-creation lines for code.py (runtime handles the service fn)."""
+    if ctx.modbus_server is None:
+        return []
+    server = ctx.modbus_server
+    return [
+        "_mb_server = _mb_pool.socket()",
+        f"_mb_server.bind(('', {server.port}))",
+        f"_mb_server.listen({server.max_clients})",
+        "_mb_server.settimeout(0)",
+        f"_mb_clients = [None] * {server.max_clients}",
+        "_mb_buf = bytearray(260)",
+        "",
+    ]
+
+
 def _render_modbus_server(ctx: CodegenContext) -> list[str]:
     if ctx.modbus_server is None:
         return []
     server = ctx.modbus_server
     return [
-        "_mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)",
+        "_mb_server = _mb_pool.socket()",
         f"_mb_server.bind(('', {server.port}))",
         f"_mb_server.listen({server.max_clients})",
         "_mb_server.settimeout(0)",
@@ -650,7 +703,7 @@ def _render_modbus_server(ctx: CodegenContext) -> list[str]:
         "def service_modbus_server():",
         "    try:",
         "        _client, _addr = _mb_server.accept()",
-        "    except OSError:",
+        "    except (OSError, RuntimeError):",
         "        _client = None",
         "    if _client is not None:",
         "        _client.settimeout(0)",
@@ -667,20 +720,18 @@ def _render_modbus_server(ctx: CodegenContext) -> list[str]:
         "            continue",
         "        try:",
         "            _n = _sock.recv_into(_mb_buf)",
-        "        except OSError:",
+        "        except (OSError, RuntimeError):",
         "            _sock.close()",
         "            _mb_clients[_idx] = None",
         "            continue",
-        "        if not _n:",
-        "            _sock.close()",
-        "            _mb_clients[_idx] = None",
+        "        if _n == 0:",
         "            continue",
         "        _resp = _mb_handle(_mb_buf, int(_n))",
         "        if _resp is None:",
         "            continue",
         "        try:",
         "            _sock.send(_resp)",
-        "        except OSError:",
+        "        except (OSError, RuntimeError):",
         "            _sock.close()",
         "            _mb_clients[_idx] = None",
         "",
@@ -1125,15 +1176,15 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "        if _job['state'] == _MB_CLIENT_CONNECTING:",
             "            if _job['socket'] is None:",
             "                try:",
-            "                    _job['socket'] = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)",
+            "                    _job['socket'] = _mb_pool.socket()",
             "                    _job['socket'].settimeout(0)",
-            "                except OSError:",
+            "                except (OSError, RuntimeError):",
             "                    _job['set_status'](False, False, True, 0)",
             "                    _job['state'] = _MB_CLIENT_ERROR",
             "                    continue",
             "            try:",
             "                _job['socket'].connect((_job['host'], int(_job['port'])))",
-            "            except OSError:",
+            "            except (OSError, RuntimeError):",
             "                if _now >= float(_job['deadline']):",
             "                    _job['set_status'](False, False, True, 0)",
             "                    _job['state'] = _MB_CLIENT_ERROR",
@@ -1146,7 +1197,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "        if _job['state'] == _MB_CLIENT_SENDING:",
             "            try:",
             "                _sent = int(_job['socket'].send(_job['request'][int(_job['sent_offset']):]))",
-            "            except OSError:",
+            "            except (OSError, RuntimeError):",
             "                _job['set_status'](False, False, True, 0)",
             "                _job['state'] = _MB_CLIENT_ERROR",
             "                _mb_client_close(_job)",
@@ -1166,7 +1217,7 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "        try:",
             "            _view = memoryview(_job['rx_buf'])[int(_job['rx_len']):]",
             "            _n = int(_job['socket'].recv_into(_view))",
-            "        except OSError:",
+            "        except (OSError, RuntimeError):",
             "            _n = 0",
             "        if _n > 0:",
             "            _job['rx_len'] = int(_job['rx_len']) + _n",
@@ -1188,4 +1239,53 @@ def _render_modbus_client(ctx: CodegenContext) -> list[str]:
             "",
         ]
     )
+    return lines
+
+
+def _render_modbus_client_codepy(ctx: CodegenContext) -> list[str]:
+    """Render per-job helpers, job dicts, and job list for code.py (runtime has the state machine)."""
+    if ctx.modbus_client is None:
+        return []
+    specs = list(ctx.modbus_client_specs)
+    if not specs:
+        return [
+            "_mb_client_jobs = []",
+            "",
+        ]
+
+    targets = _modbus_client_target_lookup(ctx)
+    lines: list[str] = []
+
+    for spec in specs:
+        target = targets[spec.target_name]
+        lines.extend(_render_client_status_helper(spec))
+        lines.extend(_render_client_values_helper(spec))
+        lines.extend(_render_client_request_helper(spec, target))
+        lines.extend(_render_client_apply_helper(spec, target))
+        lines.extend(
+            [
+                f"{spec.var_name} = {{",
+                f"    'name': '{spec.var_name}',",
+                "    'enabled': False,",
+                "    'state': _MB_CLIENT_IDLE,",
+                "    'socket': None,",
+                "    'request': b'',",
+                "    'sent_offset': 0,",
+                "    'rx_buf': bytearray(260),",
+                "    'rx_len': 0,",
+                "    'deadline': 0.0,",
+                "    'tid': 0,",
+                f"    'host': '{target.ip}',",
+                f"    'port': {target.port},",
+                f"    'timeout_s': {target.timeout_ms / 1000.0!r},",
+                f"    'build': {spec.var_name}_build_request,",
+                f"    'apply': {spec.var_name}_apply_response,",
+                f"    'set_status': {spec.var_name}_set_status,",
+                "}",
+                "",
+            ]
+        )
+
+    lines.append(f"_mb_client_jobs = [{', '.join(spec.var_name for spec in specs)}]")
+    lines.append("")
     return lines

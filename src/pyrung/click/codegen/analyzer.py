@@ -322,6 +322,7 @@ def _make_parallel(children: list[SPNode]) -> SPNode:
         flat.extend(_flatten_parallel(c))
     if len(flat) == 1:
         return flat[0]
+    flat.sort(key=_min_row)
     return Parallel(flat)
 
 
@@ -683,7 +684,11 @@ def _analyze_single_rung(
     is_forloop_next: bool = False,
 ) -> _AnalyzedRung:
     """Analyze a single rung's topology via SP graph reduction."""
-    comment = "\n".join(rung.comment_lines) if rung.comment_lines else None
+    # Strip trailing empty comment lines (Click IDE visual padding).
+    cleaned = list(rung.comment_lines) if rung.comment_lines else []
+    while cleaned and not cleaned[-1]:
+        cleaned.pop()
+    comment = "\n".join(cleaned) if cleaned else None
     rows = rung.rows
 
     if not rows:

@@ -20,6 +20,7 @@ from pyrung.click import TagMap, c
 from pyrung.core import (
     Block,
     Bool,
+    Char,
     Dint,
     InputBlock,
     Int,
@@ -129,6 +130,7 @@ def _run_single_scan_source(
     stub_base: object,
     *,
     socket_factory=None,
+    runtime_source: str = "",
 ) -> dict[str, object]:
     single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
@@ -223,16 +225,22 @@ def _run_single_scan_source(
     adafruit_wiznet5k_core_mod = _stub_module(
         "adafruit_wiznet5k.adafruit_wiznet5k", WIZNET5K=_StubWiznet5k
     )
-    adafruit_wiznet5k_socket_mod = _stub_module(
-        "adafruit_wiznet5k.adafruit_wiznet5k_socket",
-        AF_INET=2,
-        SOCK_STREAM=1,
-        socket=(
-            socket_factory
-            if socket_factory is not None
-            else (lambda *args, **kwargs: _StubSocket(*args, **kwargs))
-        ),
-        set_interface=lambda *_args, **_kwargs: None,
+    _socket_fn = (
+        socket_factory
+        if socket_factory is not None
+        else (lambda *args, **kwargs: _StubSocket(*args, **kwargs))
+    )
+
+    class _StubSocketPool:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def socket(self, *_args, **_kwargs):
+            return _socket_fn(*_args, **_kwargs)
+
+    adafruit_wiznet5k_socketpool_mod = _stub_module(
+        "adafruit_wiznet5k.adafruit_wiznet5k_socketpool",
+        SocketPool=_StubSocketPool,
     )
     storage_mod = _stub_module(
         "storage",
@@ -253,15 +261,28 @@ def _run_single_scan_source(
     )
     monkeypatch.setitem(
         sys.modules,
-        "adafruit_wiznet5k.adafruit_wiznet5k_socket",
-        adafruit_wiznet5k_socket_mod,
+        "adafruit_wiznet5k.adafruit_wiznet5k_socketpool",
+        adafruit_wiznet5k_socketpool_mod,
     )
     monkeypatch.setitem(sys.modules, "storage", storage_mod)
     monkeypatch.setitem(sys.modules, "P1AM", p1am_mod)
     monkeypatch.setitem(sys.modules, "microcontroller", microcontroller_mod)
 
+    rt_module = None
+    if runtime_source:
+        rt_module = types.ModuleType("pyrung_rt")
+        exec(compile(runtime_source, "pyrung_rt.py", "exec"), rt_module.__dict__)
+        monkeypatch.setitem(sys.modules, "pyrung_rt", rt_module)
+
     namespace: dict[str, object] = {}
     exec(compile(single_scan_source, "code.py", "exec"), namespace, namespace)
+
+    # Expose runtime-resident names so tests can call them directly.
+    if rt_module is not None:
+        for key, value in rt_module.__dict__.items():
+            if not key.startswith("__"):
+                namespace.setdefault(key, value)
+
     return namespace
 
 
@@ -272,23 +293,23 @@ class TestGenerateCircuitPyAPI:
         prog = Program(strict=False)
 
         with pytest.raises(TypeError, match="program"):
-            generate_circuitpy("nope", hw, target_scan_ms=10.0)  # type: ignore[arg-type]
+            generate_circuitpy("nope", hw, target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
         with pytest.raises(TypeError, match="hw"):
-            generate_circuitpy(prog, object(), target_scan_ms=10.0)  # type: ignore[arg-type]
+            generate_circuitpy(prog, object(), target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=0.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=math.inf)
         with pytest.raises(TypeError, match="watchdog_ms"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # type: ignore[arg-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # ty: ignore[invalid-argument-type]
         with pytest.raises(TypeError, match="runstop"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # type: ignore[arg-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # ty: ignore[invalid-argument-type]
         with pytest.raises(TypeError, match="modbus_server"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")  # type: ignore[arg-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")  # ty: ignore[invalid-argument-type]
         with pytest.raises(TypeError, match="tag_map"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")  # type: ignore[arg-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")  # ty: ignore[invalid-argument-type]
         with pytest.raises(ValueError, match="mapped_tag_scope"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")  # type: ignore[arg-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")  # ty: ignore[invalid-argument-type]
 
     def test_modbus_requires_tag_map(self):
         hw = P1AM()
@@ -309,7 +330,7 @@ class TestGenerateCircuitPyAPI:
         prog = Program(strict=False)
         mapping = TagMap({Bool("Mapped"): c[1]})
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping)
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map=mapping).code
         assert "def _run_main_rungs():" in source
 
     def test_mapped_tag_scope_defaults_to_referenced_only(self):
@@ -324,7 +345,7 @@ class TestGenerateCircuitPyAPI:
             target_scan_ms=10.0,
             modbus_server=ModbusServerConfig(ip="192.168.1.200"),
             tag_map=mapping,
-        )
+        ).code
         assert 'if bank == "C" and index == 1:' not in source
 
     def test_mapped_tag_scope_all_mapped_emits_all_mapped_slots(self):
@@ -340,28 +361,29 @@ class TestGenerateCircuitPyAPI:
             modbus_server=ModbusServerConfig(ip="192.168.1.200"),
             tag_map=mapping,
             mapped_tag_scope="all_mapped",
-        )
+        ).code
         assert 'if bank == "C" and index == 1:' in source
 
     def test_rejects_empty_and_non_contiguous_slots(self):
         empty_hw = P1AM()
         prog = Program(strict=False)
         with pytest.raises(ValueError, match="at least one configured slot"):
-            generate_circuitpy(prog, empty_hw, target_scan_ms=10.0)
+            generate_circuitpy(prog, empty_hw, target_scan_ms=10.0, runstop=None)
 
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
         hw.slot(3, "P1-08TRS")
         with pytest.raises(ValueError, match="contiguous"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0)
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None)
 
     def test_allows_zero_slot_codegen_when_board_tags_are_used(self):
         hw = P1AM()
         with Program(strict=False) as prog:
             with Rung(board.switch):
                 out(board.led)
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
-        assert "base.rollCall(_SLOT_MODULES)" in source_code
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "base.rollCall" not in source_code
+        assert "P1AM.Base()" not in source_code
         assert "_SLOT_MODULES = []" in source_code
         assert "import digitalio" in source_code
 
@@ -404,7 +426,7 @@ class TestGenerateCircuitPyAPI:
                 on_delay(done, acc, preset=5, unit=Tms)
                 run_function(fn, outs={"result": dest})
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "def _run_main_rungs():" in source_code
 
 
@@ -415,8 +437,8 @@ class TestDeterministicOutput:
             with Rung(di[1]):
                 out(do[1])
 
-        s1 = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000)
-        s2 = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000)
+        s1 = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000).code
+        s2 = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000).code
         assert s1 == s2
 
 
@@ -428,7 +450,7 @@ class TestPrevSnapshotScope:
             with Rung(Bool("Enable")):
                 out(Bool("Light"))
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert '_prev["' not in source_code
 
     def test_prev_snapshots_only_include_edge_tags(self):
@@ -447,7 +469,7 @@ class TestPrevSnapshotScope:
             with Rung(FallingEdgeCondition(log_enable)):
                 out(light)
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert '_prev["Car_Sensor"]' in source_code
         assert '_prev["Car_LogEnable"]' in source_code
         assert source_code.count('_prev["') == 2
@@ -553,7 +575,7 @@ class TestInstructionCoverage:
                 blockcopy(ds.select(1, 3), dd.select(1, 3))
                 fill(7, dd.select(idx, idx + 2))
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_frac:" in source_code
         assert "_dt_units" in source_code
         assert "_delta" in source_code
@@ -594,7 +616,7 @@ class TestInstructionCoverage:
                 with forloop(loop_count, oneshot=True) as lp:
                     copy(lp.idx + 1, target)
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_cursor_index" in source_code
         assert "_shift_prev_clock:" in source_code
         assert "_int_to_float_bits(" in source_code
@@ -668,7 +690,8 @@ class TestInstructionCoverage:
         step_symbol = ctx.symbol_for_tag(step)
         acc_symbol = ctx.symbol_for_tag(acc)
         out4_symbol = ctx.symbol_for_tag(out4)
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
+        source_code = result.code
 
         assert "_drum_event_prev:i" in source_code
         assert "_drum_time_frac:i" in source_code
@@ -694,7 +717,9 @@ class TestInstructionCoverage:
             def readTemperature(self, slot, ch_num):
                 return 0.0
 
-        namespace = _run_single_scan_source(source_code, monkeypatch, StubBase())
+        namespace = _run_single_scan_source(
+            source_code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
         assert namespace[step_symbol] == 4
         assert namespace[acc_symbol] == 0
         assert namespace[out4_symbol] is True
@@ -723,7 +748,7 @@ class TestInstructionCoverage:
                 with Rung(Bool("Enable")):
                     out(Bool("Light"))
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "def _sub_worker():" in source_code
         assert "return" in source_code
         assert "_fn_plus_one" in source_code
@@ -760,11 +785,13 @@ class TestPersistenceWatchdogAndDiagnostics:
                 out(system.storage.sd.eject_cmd)
                 out(system.storage.sd.delete_all_cmd)
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "busio.SPI(board.SD_SCK, board.SD_MOSI, board.SD_MISO)" in source_code
         assert "_MEMORY_TMP_PATH" in source_code
-        assert "os.replace(_MEMORY_TMP_PATH, _MEMORY_PATH)" in source_code
-        assert "for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH):" in source_code
+        assert "_MEMORY_BAK_PATH" in source_code
+        assert "os.rename(_MEMORY_TMP_PATH, _MEMORY_PATH)" in source_code
+        assert "os.rename(_MEMORY_PATH, _MEMORY_BAK_PATH)" in source_code
+        assert "for _path in (_MEMORY_PATH, _MEMORY_TMP_PATH, _MEMORY_BAK_PATH):" in source_code
         assert "os.remove(_path)" in source_code
         assert 'payload = {"schema": _RET_SCHEMA, "values": values}' in source_code
         assert "_sd_error_code = 1" in source_code
@@ -792,13 +819,106 @@ class TestPersistenceWatchdogAndDiagnostics:
         )
         assert "_t_storage_sd_copy_system_cmd" not in source_code
 
+    def test_bak_recovery_in_load_memory(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        step = Int("Step")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, step)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        # NVM dirty flag path tries .bak
+        assert '_MEMORY_BAK_PATH = "/sd/memory.json.bak"' in source_code
+        assert "open(_MEMORY_BAK_PATH" in source_code
+        assert 'print("Retentive memory recovered from backup")' in source_code
+        assert (
+            'print("Retentive load skipped: interrupted save, no backup available")' in source_code
+        )
+        # Normal path falls back to .bak when primary fails
+        assert "Retentive memory loaded from backup" in source_code
+
+    def test_auto_save_globals_emitted(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_ret_snapshot = {}" in source_code
+        assert "_ret_last_save_ts = 0.0" in source_code
+        assert "_RET_AUTO_SAVE_S = 30.0" in source_code
+
+    def test_auto_save_dirty_check_in_scan_loop(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "(scan_start - _ret_last_save_ts) >= _RET_AUTO_SAVE_S" in source_code
+        assert '_ret_snapshot.get("Count")' in source_code
+        assert "save_memory()" in source_code
+
+    def test_save_memory_updates_snapshot(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        count = Int("Count")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(1, count)
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        save_section = source_code.split("def save_memory():", 1)[1].split("\ndef ", 1)[0]
+        assert "_ret_snapshot" in save_section
+        assert "_ret_last_save_ts = time.monotonic()" in save_section
+
+    def test_runstop_save_on_stop_transition(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+
+        with Program(strict=False) as prog:
+            pass
+
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        # save_memory() should appear before print("Mode: STOP")
+        stop_idx = source_code.index('print("Mode: STOP")')
+        save_before_stop = source_code.rfind("save_memory()", 0, stop_idx)
+        assert save_before_stop != -1
+
+    def test_runstop_default(self):
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+
+        with Program(strict=False) as prog:
+            pass
+
+        # Default should include RunStopConfig behavior
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
+        assert "_mode_run" in source_code
+        assert "_runstop_debounced" in source_code
+        assert 'print("Mode: RUN")' in source_code
+        assert 'print("Mode: STOP")' in source_code
+
+        # Explicit runstop=None should NOT include it
+        source_no_rs = generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop=None).code
+        assert "_runstop_debounced" not in source_no_rs
+
     def test_watchdog_and_scan_diagnostics_emit(self):
         hw, di, do = _basic_hw()
         with Program(strict=False) as prog:
             with Rung(di[1]):
                 out(do[1])
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1000).code
         assert 'getattr(base, "config_watchdog", None)' in source_code
         assert (
             'raise RuntimeError("P1AM snake_case watchdog API not found on Base() instance")'
@@ -810,22 +930,6 @@ class TestPersistenceWatchdogAndDiagnostics:
         assert "    _wd_pet()" in source_code
         assert "_scan_overrun_count += 1" in source_code
         assert "PRINT_SCAN_OVERRUNS" in source_code
-
-    def test_gc_management_emitted(self):
-        hw, di, do = _basic_hw()
-        with Program(strict=False) as prog:
-            with Rung(di[1]):
-                out(do[1])
-
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
-        assert "import gc\n" in source_code
-        assert "\ngc.disable()\n" in source_code
-        # gc.disable() must appear before the scan loop
-        assert source_code.index("gc.disable()") < source_code.index("while True:")
-        # gc.collect() must appear inside the scan loop, after scan pacing
-        loop_body = source_code[source_code.index("while True:") :]
-        assert "    gc.collect()" in loop_body
-        assert loop_body.index("sleep_ms") < loop_body.index("gc.collect()")
 
 
 class TestIOMappingAndBranching:
@@ -843,7 +947,7 @@ class TestIOMappingAndBranching:
             with Rung(combo_in[1]):
                 out(combo_out[1])
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "base.readDiscrete(1)" in source_code
         assert "base.writeDiscrete(" in source_code
         assert "base.readTemperature(3, 1)" in source_code
@@ -888,7 +992,7 @@ class TestBoardPeripheralsAndRunStop:
                 copy(-3, board.neopixel.g)
                 copy(128, board.neopixel.b)
 
-        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "import digitalio" in source_code
         assert "_board_switch_io = digitalio.DigitalInOut(board.SWITCH)" in source_code
         assert "_board_led_io = digitalio.DigitalInOut(board.LED)" in source_code
@@ -908,7 +1012,7 @@ class TestBoardPeripheralsAndRunStop:
             hw,
             target_scan_ms=10.0,
             runstop=RunStopConfig(debounce_ms=15),
-        )
+        ).code
         assert "_runstop_initialized = False" in source_code
         assert "_runstop_debounced" in source_code
         assert "_reset_for_run_transition()" in source_code
@@ -927,7 +1031,7 @@ class TestBoardPeripheralsAndRunStop:
             with Rung(enable):
                 out(outputs[1])
 
-        source = generate_circuitpy(
+        result = generate_circuitpy(
             prog,
             hw,
             target_scan_ms=10.0,
@@ -957,7 +1061,9 @@ class TestBoardPeripheralsAndRunStop:
                 return 0.0
 
         stub_base = StubBase()
-        namespace = _run_single_scan_source(source, monkeypatch, stub_base)
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, stub_base, runtime_source=result.runtime
+        )
         assert stub_base.discrete_writes[-1] == (2, 0)
         out_block_symbol = _context_for_program(prog, hw).symbol_for_block(outputs)
         out_values = _namespace_list(namespace, out_block_symbol)
@@ -973,7 +1079,7 @@ class TestBoardPeripheralsAndRunStop:
             with Rung(enable):
                 out(outputs[1])
 
-        source = generate_circuitpy(
+        result = generate_circuitpy(
             prog,
             hw,
             target_scan_ms=10.0,
@@ -1003,7 +1109,7 @@ class TestBoardPeripheralsAndRunStop:
                 return 0.0
 
         stub_base = StubBase()
-        _run_single_scan_source(source, monkeypatch, stub_base)
+        _run_single_scan_source(result.code, monkeypatch, stub_base, runtime_source=result.runtime)
         assert stub_base.discrete_writes[-1] == (2, 1)
 
 
@@ -1019,7 +1125,7 @@ class TestCopyConverterCodegen:
                 copy(ch[1], ds[1], convert=to_value)
                 blockcopy(ch.select(1, 3), ds.select(1, 3), convert=to_ascii)
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0)
+        source = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
         assert "_store_numeric_text_digit(" in source
 
     def test_copy_converter_runtime_modes_smoke(self, monkeypatch):
@@ -1046,7 +1152,7 @@ class TestCopyConverterCodegen:
         ch_symbol = ctx.symbol_for_block(ch)
         ds_symbol = ctx.symbol_for_block(ds)
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1067,7 +1173,9 @@ class TestCopyConverterCodegen:
             def readTemperature(self, slot, ch_num):
                 return 0.0
 
-        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
         ch_values = _namespace_list(namespace, ch_symbol)
         ds_values = _namespace_list(namespace, ds_symbol)
 
@@ -1105,7 +1213,7 @@ class TestCopyConverterCodegen:
         ds_symbol = ctx.symbol_for_block(ds)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1126,7 +1234,9 @@ class TestCopyConverterCodegen:
             def readTemperature(self, slot, ch_num):
                 return 0.0
 
-        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
         ds_values = _namespace_list(namespace, ds_symbol)
         assert ds_values[0] == 9
         assert ds_values[1] == 9
@@ -1150,7 +1260,7 @@ class TestCopyConverterCodegen:
         ctx = _context_for_program(prog, hw)
         target_symbol = ctx.symbol_for_tag(target)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        result = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None)
 
         class StubBase:
             def rollCall(self, modules):
@@ -1171,7 +1281,9 @@ class TestCopyConverterCodegen:
             def readTemperature(self, slot, ch_num):
                 return 0.0
 
-        namespace = _run_single_scan_source(source, monkeypatch, StubBase())
+        namespace = _run_single_scan_source(
+            result.code, monkeypatch, StubBase(), runtime_source=result.runtime
+        )
         assert namespace[target_symbol] == 9
         assert namespace[fault_seen_symbol] is True
 
@@ -1183,7 +1295,9 @@ class TestGeneratedSourceSmoke:
             with Rung(di[1]):
                 out(do[1])
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        source = generate_circuitpy(
+            prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None
+        ).code
         assert 'getattr(base, "config_watchdog", None)' not in source
         assert "_wd_pet()" not in source
         compile(source, "code.py", "exec")
@@ -1265,7 +1379,9 @@ class TestGeneratedSourceSmoke:
         parsed_symbol = ctx.symbol_for_tag(parsed)
         fault_seen_symbol = ctx.symbol_for_tag(fault_seen)
 
-        source = generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=None)
+        source = generate_circuitpy(
+            prog, hw, target_scan_ms=10.0, watchdog_ms=None, runstop=None
+        ).code
         single_scan_source = source.replace("while True:", "for __scan_once in range(1):", 1)
 
         class StubBase:
@@ -1322,3 +1438,137 @@ class TestGeneratedSourceSmoke:
         assert namespace[fault_symbol] is True
         assert namespace[fault_seen_symbol] is True
         assert namespace[parsed_symbol] == 0
+
+
+# ---------------------------------------------------------------------------
+# Runtime split validation
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeSplit:
+    """Verify the pyrung_rt / code.py split produces correct output shapes."""
+
+    def test_modbus_program_produces_nonempty_runtime(self):
+        """Traffic-light-style Modbus program: runtime is non-empty and
+        code.py is significantly smaller than the single-file baseline."""
+        from pyrung.circuitpy import ModbusClientConfig, ModbusServerConfig
+        from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
+        from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
+
+        State = Char("State", default="r")
+        RedDone, GreenDone, YellowDone = Bool("RedDone"), Bool("GreenDone"), Bool("YellowDone")
+        RedAcc, GreenAcc, YellowAcc = Int("RedAcc"), Int("GreenAcc"), Int("YellowAcc")
+        WalkRequest = Bool("WalkRequest")
+        RxBusy, RxOk, RxErr = Bool("RxBusy"), Bool("RxOk"), Bool("RxErr")
+        RxExCode = Int("RxExCode")
+
+        with Program(strict=False) as prog:
+            with Rung(State == "r"):
+                on_delay(RedDone, RedAcc, preset=5000, unit=Tms)
+            with Rung(RedDone):
+                copy("g", State)
+            with Rung(State == "g"):
+                on_delay(GreenDone, GreenAcc, preset=4000, unit=Tms)
+            with Rung(GreenDone):
+                copy("y", State)
+            with Rung(State == "y"):
+                on_delay(YellowDone, YellowAcc, preset=1500, unit=Tms)
+            with Rung(YellowDone):
+                copy("r", State)
+            with Rung():
+                receive(
+                    target="panel",
+                    remote_start=ModbusAddress(0, RegisterType.COIL),
+                    dest=WalkRequest,
+                    receiving=RxBusy,
+                    success=RxOk,
+                    error=RxErr,
+                    exception_response=RxExCode,
+                )
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        hw.slot(2, "P1-15TD2")
+        mapping = TagMap(
+            {
+                State: txt[1],
+                RedDone: t[1],
+                RedAcc: td[1],
+                GreenDone: t[2],
+                GreenAcc: td[2],
+                YellowDone: t[3],
+                YellowAcc: td[3],
+                WalkRequest: c[1],
+                RxBusy: c[2],
+                RxOk: c[3],
+                RxErr: c[4],
+                RxExCode: ds[1],
+            }
+        )
+
+        result = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            modbus_client=ModbusClientConfig(
+                targets=(ModbusTcpTarget(name="panel", ip="192.168.1.50"),)
+            ),
+            tag_map=mapping,
+        )
+
+        assert result.runtime, "Modbus program must produce non-empty runtime"
+        assert "service_modbus_server" in result.runtime
+        assert "service_modbus_client" in result.runtime
+
+        code_lines = result.code.strip().splitlines()
+        runtime_lines = result.runtime.strip().splitlines()
+        # code.py should be smaller than a single-file version: the runtime
+        # absorbs helpers + Modbus infrastructure, so code.py < 65% of total.
+        total = len(code_lines) + len(runtime_lines)
+        assert len(code_lines) < total * 0.65, (
+            f"code.py should be <65% of total ({len(code_lines)}/{total})"
+        )
+
+    def test_non_modbus_program_produces_empty_runtime(self):
+        """Neopixel-style program (no Modbus, no slots): runtime is empty."""
+        State = Char("State", default="r")
+        RedDone = Bool("RedDone")
+        RedAcc = Int("RedAcc")
+
+        with Program(strict=False) as prog:
+            with Rung(State == "r"):
+                on_delay(RedDone, RedAcc, preset=3000, unit=Tms)
+            with Rung(RedDone):
+                copy("g", State)
+            with Rung(State == "g"):
+                copy(0, board.neopixel.r)
+                copy(255, board.neopixel.g)
+
+        result = generate_circuitpy(prog, P1AM(), target_scan_ms=10.0)
+        assert result.runtime == "", "Non-Modbus program must produce empty runtime"
+        assert "import pyrung_rt" not in result.code
+
+    def test_both_generated_files_compile(self):
+        """Both code.py and pyrung_rt.py must be valid Python."""
+        from pyrung.circuitpy import ModbusServerConfig
+        from pyrung.click import TagMap, c
+
+        flag = Bool("Flag", default=True)
+        with Program(strict=False) as prog:
+            with Rung(flag):
+                out(flag)
+
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        result = generate_circuitpy(
+            prog,
+            hw,
+            target_scan_ms=10.0,
+            modbus_server=ModbusServerConfig(ip="192.168.1.200"),
+            tag_map=TagMap({flag: c[1]}),
+        )
+
+        # generate_circuitpy already compiles internally, but verify here too
+        compile(result.code, "code.py", "exec")
+        compile(result.runtime, "pyrung_rt.py", "exec")

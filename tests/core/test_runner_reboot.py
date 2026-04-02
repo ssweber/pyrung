@@ -82,8 +82,8 @@ def test_battery_default_is_present():
 
 def test_reboot_without_battery_uses_per_slot_defaults_regardless_of_retentive():
     regs = Block("RebootSlot", TagType.INT, 1, 2, retentive=False)
-    regs.configure_slot(1, retentive=False, default=10)
-    regs.configure_slot(2, retentive=True, default=20)
+    regs.slot(1, retentive=False, default=10)
+    regs.slot(2, retentive=True, default=20)
 
     runner = PLCRunner(logic=[])
     runner.patch({regs[1]: 101, regs[2]: 202})

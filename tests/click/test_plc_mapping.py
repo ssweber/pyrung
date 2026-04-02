@@ -72,15 +72,16 @@ def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path)
     assert rows[get_addr_key("DS", 3001)].initial_value == "1"
     assert rows[get_addr_key("DS", 3002)].initial_value == "2"
     assert rows[get_addr_key("DS", 3003)].nickname == "Alarm1_val"
-    assert rows[get_addr_key("DS", 3003)].retentive is False
-    assert rows[get_addr_key("DS", 3001)].comment == "<Alarm.id>"
-    assert rows[get_addr_key("DS", 3002)].comment == "</Alarm.id>"
+    assert rows[get_addr_key("DS", 3003)].retentive is True  # inherits Int default
+    assert rows[get_addr_key("DS", 3001)].comment == "<Alarm.id:udt>"
+    assert rows[get_addr_key("DS", 3002)].comment == "</Alarm.id:udt>"
     assert rows[get_addr_key("DS", 4001)].nickname == "AlarmPacked1_id"
     assert rows[get_addr_key("DS", 4001)].retentive is True
-    assert rows[get_addr_key("DS", 4001)].comment == ""
+    assert rows[get_addr_key("DS", 4001)].comment == "<AlarmPacked:named_array(2,3)>"
+    assert rows[get_addr_key("DS", 4006)].comment == "</AlarmPacked:named_array(2,3)>"
 
 
-def test_named_array_export_without_structured_metadata_has_no_named_array_markers(tmp_path):
+def test_named_array_export_includes_named_array_markers_for_runtime_metadata(tmp_path):
     @named_array(Int, count=2, stride=3)
     class AlarmPacked:
         id = auto()
@@ -93,4 +94,5 @@ def test_named_array_export_without_structured_metadata_has_no_named_array_marke
     mapping.to_nickname_file(path)
     rows = pyclickplc.read_csv(path)
 
-    assert all("named_array(" not in row.comment for row in rows.values())
+    assert rows[get_addr_key("DS", 4201)].comment == "<AlarmPacked:named_array(2,3)>"
+    assert rows[get_addr_key("DS", 4206)].comment == "</AlarmPacked:named_array(2,3)>"

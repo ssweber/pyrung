@@ -142,12 +142,12 @@ class Expression(ABC):
     # Comparison Operators -> Condition
     # =========================================================================
 
-    def __eq__(self, other: object) -> ExprCompareEq:  # type: ignore[override]
+    def __eq__(self, other: object) -> ExprCompareEq:  # ty: ignore[invalid-method-override]
         cond = ExprCompareEq(self, _wrap(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __ne__(self, other: object) -> ExprCompareNe:  # type: ignore[override]
+    def __ne__(self, other: object) -> ExprCompareNe:  # ty: ignore[invalid-method-override]
         cond = ExprCompareNe(self, _wrap(other))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond

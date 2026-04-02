@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import keyword
 import re
 from typing import TYPE_CHECKING
 
@@ -197,23 +198,20 @@ def _sub_operand(
     if text in SYSTEM_OPERAND_PATHS:
         return SYSTEM_OPERAND_PATHS[text]
 
-    # Check structured ownership first
-    if structured_map is not None and text in collection.structure_owned_operands:
-        owner = structured_map.owner_of(text)
-        if owner is not None and owner.structure_type in ("named_array", "udt"):
-            if owner.instance is not None:
-                return f"{owner.structure_name}[{owner.instance}].{owner.field}"
-            else:
-                return f"{owner.structure_name}.{owner.field}"
+    render = collection.semantic_operands.get(text)
+    if render is not None:
+        return render.expr
 
     # Check if entire text is a known operand
     if text in collection.tags:
         return collection.tags[text].var_name
 
-    # Check if entire text is a known range → use logical block's .select()
+    render = collection.semantic_ranges.get(text)
+    if render is not None:
+        return render.expr
     if text in collection.ranges:
         r = collection.ranges[text]
-        return f"{r.var_name}.select({r.start}, {r.end})"
+        return _render_inline_range(r.prefix, r.start, r.end)
 
     # Check for time units
     if text in _TIME_UNITS:
@@ -268,10 +266,7 @@ def _sub_operand(
                 prefix = sum_match.group(1)
                 start_num = int(sum_match.group(2))
                 end_num = int(sum_match.group(4))
-                parsed = _parse_operand_prefix(f"{prefix}{start_num}")
-                if parsed:
-                    _, _, block_var, _ = parsed
-                    return f"{block_var}.select({start_num}, {end_num}).sum()"
+                return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
         # Click expression functions (SQRT, LSH, SIN, etc.)
         py_name = _CLICK_FUNC_TO_PYTHON.get(func_name)
         if py_name is not None:
@@ -293,17 +288,10 @@ def _sub_operand(
     # Check for ranges like DS100..DS102
     range_match = _RANGE_RE.match(text)
     if range_match:
-        range_str = range_match.group(0)
-        if range_str in collection.ranges:
-            return collection.ranges[range_str].var_name
-        # Inline range: block.select(start, end)
         prefix = range_match.group(1)
         start_num = int(range_match.group(2))
         end_num = int(range_match.group(4))
-        parsed = _parse_operand_prefix(f"{prefix}{start_num}")
-        if parsed:
-            _, _, block_var, _ = parsed
-            return f"{block_var}.select({start_num}, {end_num})"
+        return _render_range_expr(prefix, start_num, end_num, collection)
 
     # Expression with operators: convert Click-native operators to Python,
     # then substitute operand tokens within.
@@ -313,11 +301,7 @@ def _sub_operand(
         prefix = m.group(1)
         start_num = int(m.group(2))
         end_num = int(m.group(4))
-        parsed = _parse_operand_prefix(f"{prefix}{start_num}")
-        if parsed:
-            _, _, block_var, _ = parsed
-            return f"{block_var}.select({start_num}, {end_num}).sum()"
-        return m.group(0)
+        return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
 
     result = _SUM_RE.sub(_sub_sum, text)
     result = _click_expr_to_python(result)
@@ -327,13 +311,9 @@ def _sub_operand(
         op = m.group(0)
         if op in SYSTEM_OPERAND_PATHS:
             return SYSTEM_OPERAND_PATHS[op]
-        if structured_map is not None and op in collection.structure_owned_operands:
-            owner = structured_map.owner_of(op)
-            if owner is not None and owner.structure_type in ("named_array", "udt"):
-                if owner.instance is not None:
-                    return f"{owner.structure_name}[{owner.instance}].{owner.field}"
-                else:
-                    return f"{owner.structure_name}.{owner.field}"
+        render = collection.semantic_operands.get(op)
+        if render is not None:
+            return render.expr
         if op in collection.tags:
             return collection.tags[op].var_name
         return op
@@ -356,17 +336,36 @@ def _sub_range(
 ) -> str:
     """Substitute a range match."""
     range_str = match.group(0)
-    if range_str in collection.ranges:
-        r = collection.ranges[range_str]
-        return f"{r.var_name}.select({r.start}, {r.end})"
     prefix = match.group(1)
     start_num = int(match.group(2))
     end_num = int(match.group(4))
+    render = collection.semantic_ranges.get(range_str)
+    if render is not None:
+        return render.expr
+    return _render_inline_range(prefix, start_num, end_num)
+
+
+def _render_range_expr(
+    prefix: str,
+    start_num: int,
+    end_num: int,
+    collection: _OperandCollection,
+) -> str:
+    """Render a range using semantic ownership when available."""
+    range_str = f"{prefix}{start_num}..{prefix}{end_num}"
+    render = collection.semantic_ranges.get(range_str)
+    if render is not None:
+        return render.expr
+    return _render_inline_range(prefix, start_num, end_num)
+
+
+def _render_inline_range(prefix: str, start_num: int, end_num: int) -> str:
+    """Render a raw hardware-bank range inline."""
     parsed = _parse_operand_prefix(f"{prefix}{start_num}")
     if parsed:
         _, _, block_var, _ = parsed
         return f"{block_var}.select({start_num}, {end_num})"
-    return range_str
+    return f"{prefix}{start_num}..{prefix}{end_num}"
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +374,11 @@ def _sub_range(
 
 
 def _slugify(name: str) -> str:
-    """Convert a subroutine name to a filename slug (matching ladder.py)."""
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
+    """Convert a subroutine name to a snake_case filename slug."""
+    # Insert underscores at CamelCase boundaries (e.g. AlarmHandler → Alarm_Handler)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
     return slug if slug else "subroutine"
 
 
@@ -431,6 +433,47 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "Field",
     }
 )
+
+_CODEGEN_RESERVED_IDENTIFIERS: frozenset[str] = frozenset(
+    set(_RESERVED_IMPORT_NAMES)
+    | set(_EXPR_FUNC_IMPORT_NAMES)
+    | {block_var for _, _, block_var in _OPERAND_PREFIXES}
+    | {
+        "TagMap",
+        "logic",
+        "mapping",
+        "system",
+        "PLCRunner",
+    }
+)
+
+
+def _make_safe_identifier(
+    name: str,
+    *,
+    used_names: set[str] | None = None,
+    fallback: str = "tag",
+) -> str:
+    """Convert a logical tag/block name into a safe Python identifier."""
+    safe = re.sub(r"\W+", "_", name)
+    if not safe:
+        safe = fallback
+    if safe[0].isdigit():
+        safe = f"_{safe}"
+
+    is_softkeyword = getattr(keyword, "issoftkeyword", lambda _: False)
+    if keyword.iskeyword(safe) or is_softkeyword(safe) or safe in _CODEGEN_RESERVED_IDENTIFIERS:
+        safe = f"_{safe}"
+
+    if used_names is None:
+        return safe
+
+    candidate = safe
+    suffix = 2
+    while candidate in used_names:
+        candidate = f"{safe}_{suffix}"
+        suffix += 1
+    return candidate
 
 
 def _build_sub_name_map(

@@ -238,13 +238,14 @@ def test_click_prebuilt_block_allows_in_place_slot_policy_before_materialization
         pytest.skip("No unmaterialized DS slot available for in-place policy test.")
     assert candidate is not None
 
-    baseline = ds.slot_config(candidate)
-    ds.configure_slot(candidate, retentive=not baseline.retentive, default=1234)
-    configured = ds.slot_config(candidate)
-    assert configured.retentive is (not baseline.retentive)
+    orig_retentive = ds.slot(candidate).retentive
+    orig_default = ds.slot(candidate).default
+    ds.slot(candidate, retentive=not orig_retentive, default=1234)
+    configured = ds.slot(candidate)
+    assert configured.retentive is (not orig_retentive)
     assert configured.default == 1234
 
-    ds.clear_slot_config(candidate)
-    restored = ds.slot_config(candidate)
-    assert restored.retentive == baseline.retentive
-    assert restored.default == baseline.default
+    ds.slot(candidate).reset()
+    restored = ds.slot(candidate)
+    assert restored.retentive == orig_retentive
+    assert restored.default == orig_default

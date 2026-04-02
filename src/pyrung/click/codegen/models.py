@@ -105,7 +105,7 @@ class _TagDecl:
 
 @dataclass
 class _RangeDecl:
-    """A block range declaration — generates a logical Block mapped to hardware."""
+    """Parsed range metadata from the source ladder."""
 
     var_name: str  # Python variable name for the Block
     block_var: str  # hardware block (e.g. "ds")
@@ -126,6 +126,37 @@ class _FieldHw:
 
 
 @dataclass
+class _BlockSlotDecl:
+    """One logical slot in a reconstructed plain named block."""
+
+    index: int
+    tag_name: str
+    name_overridden: bool
+    retentive: bool
+    retentive_overridden: bool
+    default: object
+    default_overridden: bool
+    comment: str
+    comment_overridden: bool
+    alias_var_name: str | None = None
+
+
+@dataclass
+class _PlainBlockDecl:
+    """A first-class plain named block reconstructed from nickname metadata."""
+
+    name: str  # logical block name
+    var_name: str  # safe Python identifier used in generated code
+    tag_type: str  # TagType enum member, e.g. "BOOL"
+    start: int  # logical block start index
+    end: int  # logical block end index
+    hw_block_var: str  # hardware block var, e.g. "c"
+    hw_start: int  # first mapped hardware address
+    hw_end: int  # last mapped hardware address
+    slots: dict[int, _BlockSlotDecl] = field(default_factory=dict)
+
+
+@dataclass
 class _StructureDecl:
     """A structured type declaration (named_array or udt)."""
 
@@ -140,6 +171,17 @@ class _StructureDecl:
     hw_end: int  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
+    always_number: bool = False
+
+
+@dataclass
+class _SemanticRender:
+    """How an imported operand/range should render and what symbol it imports."""
+
+    expr: str
+    import_kind: str  # "tag", "block", "structure", or "comment"
+    import_name: str
+    comment: str | None = None
 
 
 @dataclass
@@ -158,14 +200,18 @@ class _OperandCollection:
     has_any_of: bool = False
     has_all_of: bool = False
     has_branch: bool = False
+    has_comment: bool = False
     has_subroutine: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
     has_system_operands: bool = False
+    plain_blocks: list[_PlainBlockDecl] = field(default_factory=list)
     structures: list[_StructureDecl] = field(default_factory=list)
-    structure_owned_operands: set[str] = field(default_factory=set)
+    semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)
+    semantic_ranges: dict[str, _SemanticRender] = field(default_factory=dict)
+    range_comments: dict[str, str] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +224,7 @@ class _FileRefs:
     """Symbols referenced by a single generated file (main.py or a subroutine)."""
 
     tag_var_names: set[str] = field(default_factory=set)
+    block_var_names: set[str] = field(default_factory=set)
     range_var_names: set[str] = field(default_factory=set)
     structure_names: set[str] = field(default_factory=set)
     used_instructions: set[str] = field(default_factory=set)
@@ -188,6 +235,7 @@ class _FileRefs:
     has_any_of: bool = False
     has_all_of: bool = False
     has_branch: bool = False
+    has_comment: bool = False
     has_forloop: bool = False
     has_modbus_target: bool = False
     has_modbus_rtu_target: bool = False

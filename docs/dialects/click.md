@@ -76,9 +76,9 @@ x.select(1, 21)   # yields X001..X016 and X021 (17 tags, not 21)
 Pre-built blocks support per-slot runtime policy for retention, default values, and naming. Configure before first access to a slot:
 
 ```python
-ds.rename_slot(10, "RecipeStep")
-ds.configure_slot(200, retentive=True, default=123)
-td.configure_range(1, 5, retentive=False, default=0)
+ds.slot(10, name="RecipeStep")
+ds.slot(200, retentive=True, default=123)
+td.slot(1, 5, retentive=False, default=0)
 ```
 
 If a slot is already materialized (`block[n]` accessed), later configuration for that slot raises `ValueError`.
@@ -209,20 +209,36 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 
 | Marker | Example | Meaning |
 |--------|---------|---------|
-| Opening | `<Alarms>` | Start of a plain block |
-| Closing | `</Alarms>` | End of a plain block |
-| Self-closing | `<Alarms />` | Single-slot block (open + close on same row) |
+| Opening | `<Alarms:block>` | Start of a semantic plain block |
+| Closing | `</Alarms:block>` | End of a semantic plain block |
+| Self-closing | `<Config.timeout:udt />` | Single-row semantic marker |
 
-**Plain blocks** use bare names: `<Alarms>` / `</Alarms>`. The importer infers the block's start index and size from the hardware address span. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
+Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, and `<Base.field />` do not reconstruct pyrung semantics. They simply group rows visually, and any inner nicknames import as ordinary standalone tags.
 
-**Named arrays** encode count and stride in the marker:
+**Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
+
+**Named arrays** use `:named_array` markers. Count and stride are optional — the importer infers them from the row span between open/close tags:
 
 ```
-<Channel:named_array(count,stride)>
-</Channel:named_array(count,stride)>
+<Task:named_array>            count=1, stride from row count
+<Task:named_array(2)>         count=2, stride = rows / count
+<Task:named_array(2,3)>       count=2, stride=3 (fully explicit)
 ```
 
-Nicknames must follow the pattern `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Stride is always explicit — the importer can't distinguish 10 fields × 5 instances from 5 fields × 10 instances without it, even when there are no gaps.
+When both count and stride are given, the row span must equal `count × stride`. When stride is omitted, the row count must be divisible by count.
+
+**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_id` → field `id`).
+
+For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
+
+```
+<Task:named_array(1,2,always_number)>
+</Task:named_array(1,2,always_number)>
+```
+
+The `always_number` flag only matters for singletons — `count > 1` is always numbered regardless.
+
+**Instance rules.** Instance 1 defines the field template — all its fields must be explicitly named. Instance 2+ fields must match instance 1's pattern (correct field name and instance number). Unnamed slots in instance 2+ are fine (silently skipped). A field name in instance 2+ that wasn't defined in instance 1 is an error.
 
 Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 
@@ -235,6 +251,13 @@ Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 | DS105 | `Channel2_val` | |
 | DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
 
+Singleton with compact names (`count=1`):
+
+| Address | Nickname | Comment |
+|---------|----------|---------|
+| DS501 | `Task_call` | `<Task:named_array(1,2)>` |
+| DS502 | `Task_done` | `</Task:named_array(1,2)>` |
+
 If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 
 | Address | Nickname | Comment |
@@ -246,9 +269,33 @@ If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 | DS105 | `Sensor2_scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
-**UDTs** use dotted nicknames (`Base.field`) within plain block markers per memory bank. Fields spanning different banks each get their own block marker pair. The importer groups them by base name.
+Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
+
+```python
+blockcopy(RecipeProfile.instance(2), WorkingRecipe.select(1, 3))
+fill(0, RecipeProfile.instance_select(1, 2))
+```
+
+**UDTs** use explicit `:udt` markers per field and memory bank. Each attribute range is a separate marker:
+
+```text
+<Motor.speed:udt>
+</Motor.speed:udt>
+<Config.timeout:udt />
+```
+
+The importer collects all `Base.field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
+
+Bare dotted tags such as `<Motor.speed>` are grouping-only and do not reconstruct a UDT.
 
 Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
+
+**Conflict rules.** The same base name cannot be used across different marker kinds. These combinations are all errors:
+
+- Same name as both `:named_array` and `.attr:udt`
+- Same name as both `:block` and `:named_array`
+- Same name as both `:block` and `.attr:udt`
+- Duplicate `:named_array` or `:block` markers for the same name
 
 ### To nickname file
 
@@ -295,167 +342,29 @@ bundle.write("./output")  # write main.csv + subroutines/*.csv to disk
 
 For the consumer-facing CSV decode contract (files, row semantics, token formats, branch wiring, and supported tokens), see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
 
-## Python codegen
+To convert ladder CSV back into pyrung Python source, see [Click Python Codegen](click-codegen.md).
 
-`ladder_to_pyrung()` converts Click ladder data back into executable pyrung Python source. Accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
+### Empty and comment-only rungs
 
-```python
-from pyrung.click import ladder_to_pyrung
-
-code = ladder_to_pyrung("main.csv")                    # from CSV file
-code = ladder_to_pyrung("ladder_dir/")                  # from directory with subroutines/*.csv
-code = ladder_to_pyrung(bundle)                         # from LadderBundle (no disk)
-code = ladder_to_pyrung("main.csv", output_path="generated.py")  # write to file
-```
-
-### Round-trip
+Empty rungs survive the round-trip. A `with Rung(): pass` in pyrung exports as `NOP` in the Click CSV AF column and imports back as `pass`.
 
 ```python
-from pyrung.click import pyrung_to_ladder, ladder_to_pyrung
-
-bundle = pyrung_to_ladder(logic, mapping)
-code = ladder_to_pyrung(bundle)          # no CSV files needed
+comment("--- Motor Control Section ---")
+with Rung():
+    pass  # becomes NOP in Click ladder CSV
 ```
 
-### Nickname substitution
-
-Three ways to provide nicknames for readable variable names:
-
-1. `nickname_csv=` — path to a Click nickname CSV (Address.csv). Recommended, because it also enables structured type inference (see below).
-2. `nicknames=` — pre-parsed `{operand: nickname}` dict (e.g. `{"X001": "start_button"}`).
-3. Neither — raw operand names used as-is (`X001`, `DS1`, etc.).
-
-Cannot provide both `nickname_csv` and `nicknames`.
+For Click programs that want to be explicit, `pyrung.click` also provides `nop()`:
 
 ```python
-code = ladder_to_pyrung("main.csv", nickname_csv="Address.csv")
+from pyrung.click import nop
 
-code = ladder_to_pyrung("main.csv", nicknames={"X001": "start_button", "Y001": "motor"})
+comment("Section header")
+with Rung():
+    nop()  # one per rung, must be the sole instruction
 ```
 
-### Structured type inference
-
-When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` internally, which reconstructs `@named_array` and `@udt` metadata from the CSV markers. The generated code emits idiomatic structure declarations instead of hundreds of flat tags.
-
-Without `nickname_csv`, a named-array group comes back flat:
-
-```python
-Channel1_id = Int("Channel1_id")
-Channel1_val = Int("Channel1_val")
-Channel2_id = Int("Channel2_id")
-Channel2_val = Int("Channel2_val")
-
-# in the program:
-copy(Channel1_id, Channel2_val)
-
-# in TagMap:
-mapping = TagMap({
-    Channel1_id: ds[101],
-    Channel1_val: ds[102],
-    ...
-})
-```
-
-With `nickname_csv=` pointing to a CSV that has named-array markers:
-
-```python
-@named_array(Int, count=2)
-class Channel:
-    id = 0
-    val = 0
-
-# in the program:
-copy(Channel[1].id, Channel[2].val)
-
-# in TagMap:
-mapping = TagMap([
-    *Channel.map_to(ds.select(101, 104)),
-], include_system=False)
-```
-
-For UDTs (fields spanning different memory banks), per-field `map_to` is emitted:
-
-```python
-@udt(count=2)
-class Motor:
-    running: Bool = False
-    speed: Int = 0
-
-mapping = TagMap([
-    Motor.running.map_to(c.select(101, 102)),
-    Motor.speed.map_to(ds.select(1001, 1002)),
-], include_system=False)
-```
-
-Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`.
-
-For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md).
-
-### What codegen infers
-
-Tag types from operand prefixes (`X`→Bool, `DS`→Int, etc.), block ranges from `DS100..DS102` notation, OR expansion via `any_of()`, branch conditions, timer/counter pin chains, `for`/`next` loops, and comments.
-
-For the CSV format that codegen reads, see the [laddercodec CSV format guide](https://ssweber.github.io/laddercodec/guides/csv-format/).
-
-### Round-trip guarantee
-
-The generated code is designed to round-trip: `exec()` the output, then `pyrung_to_ladder(logic, mapping)` reproduces the original CSV. This is tested extensively.
-
-## Multi-file project codegen
-
-`ladder_to_pyrung_project()` generates a complete Python project instead of a single file. Each subroutine gets its own file with a `@subroutine` decorator, tags and the TagMap live in `tags.py`, and `main.py` ties everything together.
-
-```python
-from pyrung.click import ladder_to_pyrung_project
-
-files = ladder_to_pyrung_project("ladder_dir/")
-files = ladder_to_pyrung_project("ladder_dir/", nickname_csv="Address.csv")
-files = ladder_to_pyrung_project("ladder_dir/", output_dir="pump_project_py/")
-```
-
-The return value is a `dict[str, str]` mapping relative paths to content:
-
-```
-tags.py                  # tag declarations, structures, TagMap
-main.py                  # Program context, main rungs, call() statements
-subroutines/
-  __init__.py
-  startup.py             # @subroutine("startup") decorated function
-  alarm_handler.py
-```
-
-### How subroutines are represented
-
-Each subroutine file defines a decorated function that auto-registers with the Program when called:
-
-```python
-# subroutines/startup.py
-from pyrung import Rung, subroutine, out
-from tags import SubLight
-
-@subroutine("startup")
-def startup():
-    with Rung():
-        out(SubLight)
-```
-
-`main.py` imports and calls it by reference (not by string name):
-
-```python
-from subroutines.startup import startup
-
-with Program() as logic:
-    with Rung(Button):
-        call(startup)
-```
-
-### Per-file imports
-
-Each generated file imports only what it uses. A subroutine that touches `X001` and `Y001` won't import `X002` or `DS1`. `tags.py` is the single source of truth for all tag declarations; other files import from it.
-
-### Nickname and structure support
-
-Same as `ladder_to_pyrung()` — pass `nickname_csv=` for readable variable names and automatic `@named_array` / `@udt` inference, or `nicknames=` for a pre-parsed dict. `tags.py` suppresses the inline `# X001` address comments since the TagMap and nickname CSV already provide that mapping.
+Both forms produce identical CSV output.
 
 ## Loading PLC state
 
