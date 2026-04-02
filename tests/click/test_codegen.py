@@ -1400,6 +1400,31 @@ class TestRoundTrip:
         ns: dict = {}
         exec(code, ns)
 
+    def test_pointer_indirect_addressing(self, tmp_path: Path):
+        """Click pointer syntax DH[DS134] renders as dh[tag_var] with correct import."""
+        csv_path = tmp_path / "test.csv"
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        rows = [
+            header,
+            ["R", "-", *["-"] * 30, "copy(DH[DS134],DH051)"],
+        ]
+        with csv_path.open("w", newline="") as f:
+            csv.writer(f).writerows(rows)
+
+        code = ladder_to_pyrung(csv_path)
+        # Should use lowercase block variable
+        assert "dh[" in code
+        # Should not have raw uppercase prefix
+        assert "DH[" not in code
+        # Must be valid Python
+        ns: dict = {}
+        exec(code, ns)
+
     def test_calc_sum_round_trip(self, tmp_path: Path):
         """Calc with SUM(range) round-trips through colon-range syntax."""
         from pyrung.core import Block, TagType

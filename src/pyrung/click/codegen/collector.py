@@ -32,6 +32,8 @@ from pyrung.click.codegen.models import (
     _TagDecl,
 )
 from pyrung.click.codegen.utils import (
+    _POINTER_RE,
+    _PREFIX_TO_BLOCK,
     _make_safe_identifier,
     _parse_operand_prefix,
     _strip_quoted_strings,
@@ -625,6 +627,13 @@ def _register_operands_from_text(
         decl.var_name for decl in collection.ranges.values()
     }
 
+    # Pointer/indirect addressing: DH[DS134] → register the block variable
+    for ptr_match in _POINTER_RE.finditer(text):
+        prefix = ptr_match.group(1)
+        collection.used_blocks.add(_PREFIX_TO_BLOCK[prefix])
+        # Also register the inner operand
+        _register_operands_from_text(ptr_match.group(2), collection, nicknames)
+
     # Check for ranges first — collect range spans to suppress individual tags
     range_spans: set[str] = set()
     for range_match in _RANGE_RE.finditer(text):
@@ -860,6 +869,23 @@ def _ref_operands_in_text(
         if render is not None:
             _record_semantic_ref(render)
             continue
+        # Non-semantic range → emitted as block_var.select(); track the Click block
+        range_decl = collection.ranges.get(range_str)
+        if range_decl is not None:
+            refs.used_click_blocks.add(range_decl.block_var)
+        else:
+            # Fallback: parse prefix from the range text
+            first_operand = range_str.split("..")[0] if ".." in range_str else range_str
+            parsed = _parse_operand_prefix(first_operand)
+            if parsed is not None:
+                refs.used_click_blocks.add(parsed[2])
+
+    # Pointer/indirect addressing: DH[DS134] → need to import dh
+    for ptr_match in _POINTER_RE.finditer(text):
+        prefix = ptr_match.group(1)
+        refs.used_click_blocks.add(_PREFIX_TO_BLOCK[prefix])
+        # Also scan the inner operand for tag references
+        _ref_operands_in_text(ptr_match.group(2), collection, refs)
 
     # Check individual operands
     for op_match in _OPERAND_RE.finditer(text):

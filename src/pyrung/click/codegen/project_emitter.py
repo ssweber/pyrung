@@ -415,6 +415,8 @@ def _emit_logic_imports(
 
     # Click imports (only if needed)
     click_parts: list[str] = []
+    for bv in sorted(refs.used_click_blocks):
+        click_parts.append(bv)
     if refs.has_modbus_target:
         click_parts.append("ModbusTcpTarget")
     if refs.has_modbus_rtu_target:
