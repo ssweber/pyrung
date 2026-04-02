@@ -146,6 +146,7 @@ root = ["./src", "./tests", "./devtools"]
 [tool.ty.src]
 exclude = [
     "scratchpad/*",
+    "devtools/serial_monitor.py",  # Windows-only APIs (ctypes.windll, msvcrt)
 ]
 
 [tool.ty.rules]
