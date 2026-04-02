@@ -179,6 +179,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# VS Code extensions
+*.vsix
+
 # Tools
 .aider*
 .codemap*
