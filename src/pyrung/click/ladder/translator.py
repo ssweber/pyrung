@@ -58,12 +58,17 @@ from pyrung.core.expression import (
     TagExpr,
     XorExpr,
 )
+from pyclickplc.banks import BANKS
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap, _BlockEntry
+
+# Pre-built Click bank names that can be used directly as hardware prefixes
+# in indirect addressing without an explicit TagMap block entry.
+_CLICK_BANK_NAMES: frozenset[str] = frozenset(BANKS)
 
 # ---- Expression/condition operator maps ----
 _BINARY_OP_SYMBOL: dict[type[Expression], str] = {
@@ -574,30 +579,44 @@ class _TranslatorMixin:
         return f"[{','.join(addresses)}]"
 
     def _render_indirect_ref(self, indirect: IndirectRef, *, path: str, source: Any) -> str:
-        entry = self._require_block_entry(indirect.block.name, path=path, source=source)
+        entry = self._tag_map.block_entry_by_name(indirect.block.name)
 
-        try:
-            offset = self._tag_map.offset_for(entry.logical)
-        except Exception:
-            self._raise_issue(
-                path=path,
-                message=(
-                    f"Indirect block {indirect.block.name!r} must have an affine mapping "
-                    "for Click ladder export."
-                ),
-                source=source,
-            )
+        if entry is not None:
+            try:
+                offset = self._tag_map.offset_for(entry.logical)
+            except Exception:
+                self._raise_issue(
+                    path=path,
+                    message=(
+                        f"Indirect block {indirect.block.name!r} must have an affine mapping "
+                        "for Click ladder export."
+                    ),
+                    source=source,
+                )
 
-        sample_logical = entry.logical_addresses[0]
-        hardware_addr = self._tag_map.resolve(entry.logical, sample_logical)
-        parsed_hardware = _parse_display_address(hardware_addr)
-        if not isinstance(parsed_hardware, tuple):
-            self._raise_issue(
-                path=path,
-                message=f"Unable to parse hardware bank from {hardware_addr!r}.",
-                source=source,
-            )
-        bank, _ = parsed_hardware
+            sample_logical = entry.logical_addresses[0]
+            hardware_addr = self._tag_map.resolve(entry.logical, sample_logical)
+            parsed_hardware = _parse_display_address(hardware_addr)
+            if not isinstance(parsed_hardware, tuple):
+                self._raise_issue(
+                    path=path,
+                    message=f"Unable to parse hardware bank from {hardware_addr!r}.",
+                    source=source,
+                )
+            bank, _ = parsed_hardware
+        else:
+            # Unmapped block — accept pre-built Click banks (DS, DD, DH, …)
+            # directly.  Their block name IS the hardware bank prefix and
+            # the addressing is identity (offset 0).
+            if indirect.block.name not in _CLICK_BANK_NAMES:
+                self._raise_issue(
+                    path=path,
+                    message=f"Indirect block {indirect.block.name!r} is not mapped in TagMap.",
+                    source=source,
+                )
+            bank = indirect.block.name
+            offset = 0
+
         pointer = self._resolve_tag(indirect.pointer, path=f"{path}.pointer", source=source)
         if offset == 0:
             return f"{bank}[{pointer}]"
