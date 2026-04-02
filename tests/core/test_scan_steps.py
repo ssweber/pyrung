@@ -109,22 +109,23 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
     scan_gen = runner.scan_steps_debug()
     first_step = next(scan_gen)
 
-    assert first_step.kind == "instruction"
+    assert first_step.kind == "rung"
     assert runner.current_state.scan_id == 0
     assert "Output" not in runner.current_state.tags
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     second_step = next(scan_gen)
-    assert second_step.kind == "rung"
-    assert second_step.ctx.get_tag("Output") is True
+    assert second_step.kind == "instruction"
     assert runner.current_state.scan_id == 0
     assert "Output" not in runner.current_state.tags
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     # Commit only happens once the generator is exhausted.
+    # The instruction executes when the generator advances past the instruction step.
     for _ in scan_gen:
         pass
 
+    assert second_step.ctx.get_tag("Output") is True
     assert runner.current_state.scan_id == 1
     assert runner.current_state.tags["Output"] is True
     assert [state.scan_id for state in runner.history.latest(10)] == [0, 1]
@@ -171,12 +172,12 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
     steps = list(runner.scan_steps_debug())
 
     boundary_steps = [step for step in steps if step.kind != "instruction"]
-    assert [step.kind for step in boundary_steps] == ["subroutine", "branch", "rung"]
-    assert [step.depth for step in boundary_steps] == [1, 1, 0]
+    assert [step.kind for step in boundary_steps] == ["rung", "subroutine", "branch"]
+    assert [step.depth for step in boundary_steps] == [0, 1, 1]
     assert [step.rung_index for step in boundary_steps] == [0, 0, 0]
-    assert boundary_steps[0].subroutine_name == "init_sub"
-    assert boundary_steps[0].call_stack == ("init_sub",)
-    assert boundary_steps[1].call_stack == ()
+    assert boundary_steps[0].call_stack == ()
+    assert boundary_steps[1].subroutine_name == "init_sub"
+    assert boundary_steps[1].call_stack == ("init_sub",)
     assert boundary_steps[2].call_stack == ()
     assert runner.current_state.tags["SubLight"] is True
     assert runner.current_state.tags["BranchLight"] is True
@@ -254,7 +255,7 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
     steps = list(runner.scan_steps_debug())
 
     kinds = [entry.kind for entry in steps]
-    assert [kind for kind in kinds if kind != "instruction"] == ["branch", "subroutine", "rung"]
+    assert [kind for kind in kinds if kind != "instruction"] == ["rung", "branch", "subroutine"]
     assert runner.current_state.tags["Step"] == 1
     assert runner.current_state.tags["BranchDone"] is True
     assert runner.current_state.tags["SubLight"] is True

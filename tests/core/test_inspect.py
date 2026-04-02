@@ -29,7 +29,7 @@ def test_inspect_returns_trace_for_fully_consumed_debug_scan() -> None:
     assert trace.scan_id == scan_id
     assert trace.rung_id == 0
     assert isinstance(trace.events, tuple)
-    assert [event.kind for event in trace.events] == ["instruction", "rung"]
+    assert [event.kind for event in trace.events] == ["rung", "instruction"]
     assert trace.events[-1].trace is not None
 
 
@@ -93,7 +93,7 @@ def test_partial_debug_scan_does_not_store_inspect_trace() -> None:
     scan_gen = runner.scan_steps_debug()
     first_step = next(scan_gen)
 
-    assert first_step.kind == "instruction"
+    assert first_step.kind == "rung"
     assert runner.current_state.scan_id == 0
 
     with pytest.raises(KeyError) as exc:
@@ -112,7 +112,7 @@ def test_inspect_event_returns_inflight_step_during_partial_debug_scan() -> None
     scan_gen = runner.scan_steps_debug()
     first_step = next(scan_gen)
 
-    assert first_step.kind == "instruction"
+    assert first_step.kind == "rung"
     assert runner.current_state.scan_id == 0
 
     event_result = runner.inspect_event()
@@ -120,7 +120,7 @@ def test_inspect_event_returns_inflight_step_during_partial_debug_scan() -> None
     scan_id, rung_id, event = event_result
     assert scan_id == 1
     assert rung_id == 0
-    assert event.kind == "instruction"
+    assert event.kind == "rung"
     assert event.trace is not None
 
 
@@ -136,7 +136,7 @@ def test_inspect_event_returns_committed_rung_event_after_debug_scan() -> None:
     scan_id, rung_id, event = event_result
     assert scan_id == 1
     assert rung_id == 0
-    assert event.kind == "rung"
+    assert event.kind == "instruction"
 
     retained = runner.inspect(rung_id=0, scan_id=1)
     assert retained.events[-1] == event

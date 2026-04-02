@@ -17,11 +17,13 @@ pyrung includes a Debug Adapter Protocol (DAP) server that exposes PLC scan exec
 
 ## Requirements
 
-> **Pending publish** — the pyrung VS Code extension is not yet available on the marketplace. This section will be updated with install instructions when it ships. In the meantime, the extension can be built and installed locally from `editors/vscode/pyrung-debug`.
-
 - VS Code with the Python extension
 - `pyrung` installed: `pip install pyrung`
-- The pyrung VS Code extension *(marketplace link pending)*
+- The pyrung VS Code extension — download `pyrung-debug-0.1.0.vsix` from the [GitHub releases](https://github.com/ssweber/pyrung/releases) page, then install:
+
+```bash
+code --install-extension pyrung-debug-0.1.0.vsix
+```
 
 ## Launch configuration
 
@@ -115,6 +117,8 @@ Modes:
 - `next`: stop at rung-level boundaries.
 - `stepIn`: stop at finer-grained instruction/subroutine boundaries.
 - `scan`: execute to the next scan boundary (`pyrungStepScan`), then stop.
+
+Rungs are skipped during stepping when no state change will occur. For example, a false rung containing only `latch()` is skipped because `latch()` is a no-op when false, but a false rung with `out()` still stops because `out()` de-energizes its tag.
 
 Status bar:
 

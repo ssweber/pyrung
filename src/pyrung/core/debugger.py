@@ -148,6 +148,16 @@ class PLCDebugger:
             branch_trace_map=branch_trace_map,
         )
 
+        if execution.kind != "branch" or execution.enabled:
+            yield self._emit_step(
+                execution=execution,
+                rung=rung,
+                kind=execution.kind,
+                source=self._span_from_rung(rung),
+                trace=step_trace,
+                instruction_kind=None,
+            )
+
         try:
             for item in rung._execution_items:
                 if isinstance(item, RungClass):
@@ -184,26 +194,7 @@ class PLCDebugger:
                         )
                     )
         except SubroutineReturnSignal:
-            if execution.kind != "branch":
-                yield self._emit_step(
-                    execution=execution,
-                    rung=rung,
-                    kind=execution.kind,
-                    source=self._span_from_rung(rung),
-                    trace=step_trace,
-                    instruction_kind=None,
-                )
             raise
-
-        if execution.kind != "branch" or execution.enabled:
-            yield self._emit_step(
-                execution=execution,
-                rung=rung,
-                kind=execution.kind,
-                source=self._span_from_rung(rung),
-                trace=step_trace,
-                instruction_kind=None,
-            )
 
     def _iter_instruction_steps(
         self,
