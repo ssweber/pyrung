@@ -97,12 +97,89 @@ def _generate_project(
     # project_to_csv.py
     files["project_to_csv.py"] = _generate_export_file()
 
+    # .vscode/launch.json
+    files[".vscode/launch.json"] = _generate_launch_json()
+
+    # .vscode/extensions.json
+    files[".vscode/extensions.json"] = _generate_extensions_json()
+
+    # pyproject.toml
+    files["pyproject.toml"] = _generate_pyproject()
+
+    # README
+    files["README.md"] = _generate_readme()
+
     return files
 
 
 # ---------------------------------------------------------------------------
 # run.py
 # ---------------------------------------------------------------------------
+
+
+def _generate_pyproject() -> str:
+    """Generate pyproject.toml with pyrung as a dependency."""
+    return """\
+[project]
+name = "plc-logic"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pyrung>=0.2.0",
+]
+"""
+
+
+def _generate_readme() -> str:
+    """Generate README.md with setup instructions."""
+    return """\
+# Setup
+
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already.
+
+2. Create the virtual environment and install dependencies:
+
+       uv sync
+
+3. Install the pyrung debugger extension for VS Code.
+   Download `pyrung-debug-*.vsix` from the
+   [latest release](https://github.com/ssweber/pyrung/releases), then:
+
+       code --install-extension pyrung-debug-0.1.0.vsix
+
+4. Open this folder in VS Code, press F5 to debug.
+"""
+
+
+def _generate_extensions_json() -> str:
+    """Generate .vscode/extensions.json recommending the pyrung debugger."""
+    import json
+
+    config = {
+        "recommendations": [
+            "ssweber.pyrung-debug",
+        ]
+    }
+    return json.dumps(config, indent=2) + "\n"
+
+
+def _generate_launch_json() -> str:
+    """Generate .vscode/launch.json for the pyrung debugger extension."""
+    import json
+
+    config = {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Debug PLC Logic",
+                "type": "pyrung",
+                "request": "launch",
+                "program": "${workspaceFolder}/run.py",
+                "pythonPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+            }
+        ],
+    }
+    return json.dumps(config, indent=2) + "\n"
 
 
 def _generate_run_file() -> str:
