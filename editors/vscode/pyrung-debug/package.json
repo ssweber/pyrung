@@ -2,9 +2,13 @@
   "name": "pyrung-debug",
   "displayName": "pyrung Debugger",
   "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "pyrung",
   "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ssweber/pyrung"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
