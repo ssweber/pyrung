@@ -68,7 +68,7 @@ def test_motor_start_stop():
         assert DisplaySpeed.value == 75.0  # Didn't update — motor is off
 ```
 
-Same logic, deterministic timing, real assertions. Run with `make test`.
+Same logic, deterministic timing, real assertions. Run with `pytest`.
 
 ## Map to Click hardware
 

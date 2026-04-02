@@ -69,7 +69,7 @@ def test_button_press():
         assert Light.value is False
 ```
 
-Run with `make test`. The logic is verified before it touches hardware.
+Run with `pytest`. The logic is verified before it touches hardware.
 
 ## Generate code
 
