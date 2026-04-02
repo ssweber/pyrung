@@ -276,18 +276,29 @@ def _enrich_with_ownership(
             hw_start = addr
             hw_block_var = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
 
-        last_field_block = runtime._blocks[field_names[-1]]
-        last_slot = last_field_block[si.count]
-        last_hw_tag = _resolve_hw_tag(last_slot)
-        if last_hw_tag is not None:
-            _, hw_end = parse_address(last_hw_tag.name)
+        # For count=1, stride padding is irrelevant (no next instance).
+        # Cap to field count so map_to range matches the actual fields.
+        effective_stride = si.stride
+        if si.count == 1 and effective_stride is not None and effective_stride > len(fields):
+            effective_stride = len(fields)
+
+        # Compute hw_end: use stride to include gap slots for multi-instance,
+        # or fall back to last-field address.
+        if hw_start is not None and effective_stride is not None and si.count > 1:
+            hw_end = hw_start + si.count * effective_stride - 1
+        else:
+            last_field_block = runtime._blocks[field_names[-1]]
+            last_slot = last_field_block[si.count]
+            last_hw_tag = _resolve_hw_tag(last_slot)
+            if last_hw_tag is not None:
+                _, hw_end = parse_address(last_hw_tag.name)
 
         decl = _StructureDecl(
             name=si.name,
             structure_type=si.kind,
             base_type=base_type,
             count=si.count,
-            stride=si.stride,
+            stride=effective_stride,
             fields=fields,
             hw_block_var=hw_block_var,
             hw_start=hw_start,
