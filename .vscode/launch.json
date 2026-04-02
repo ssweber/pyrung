@@ -2,12 +2,11 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Launch Extension Dev Host",
-      "type": "extensionHost",
+      "name": "Debug PLC Logic",
+      "type": "pyrung",
       "request": "launch",
-      "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}/editors/vscode/pyrung-debug"
-      ]
+      "program": "${file}",
+      "pythonPath": "${workspaceFolder}/.venv/Scripts/python.exe"
     }
   ]
 }

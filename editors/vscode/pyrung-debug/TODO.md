@@ -1,64 +1,31 @@
-# Publishing the pyrung VS Code Extension
+# VS Code Extension — Publishing Plan
 
-## Prerequisites
+## Current approach: GitHub Release artifact
 
-- Install the VS Code Extension CLI:
-  ```bash
-  npm install -g @vscode/vsce
-  ```
-
-## Steps
-
-### 1. Create a Publisher Account
-
-1. Go to https://marketplace.visualstudio.com/manage
-2. Sign in with a Microsoft account (or create one)
-3. Create a publisher — the ID must match `"publisher"` in `package.json` (currently `"pyrung"`)
-
-### 2. Create a Personal Access Token (PAT)
-
-1. Go to https://dev.azure.com → User Settings → Personal Access Tokens
-2. Create a new token:
-   - **Organization**: All accessible organizations
-   - **Scopes**: Marketplace → **Manage**
-3. Save the token (not shown again)
-
-### 3. Update `package.json`
-
-Fields to add/verify before publishing:
-
-- [ ] `"repository"` — add GitHub repo URL
-- [ ] `"icon"` — 128x128 PNG icon (optional but recommended for discoverability)
-- [ ] `"version"` — bump from `0.0.1` to `0.1.0` to match the pyrung release
-
-### 4. Package and Publish
+The `.vsix` is distributed as a GitHub release asset. Users download and install manually:
 
 ```bash
-cd editors/vscode/pyrung-debug
-
-# Login (once)
-vsce login pyrung
-# Paste PAT when prompted
-
-# Package locally to verify
-vsce package
-# Creates pyrung-debug-<version>.vsix
-
-# Test install
 code --install-extension pyrung-debug-0.1.0.vsix
-
-# Publish
-vsce publish
 ```
 
-### 5. Post-publish
+## Building the .vsix
 
-- [ ] Update `docs/guides/dap-vscode.md` — replace "Pending publish" notice with install instructions
-- [ ] Add marketplace badge to the extension README
+```bash
+npm install -g @vscode/vsce
+cd editors/vscode/pyrung-debug
+vsce package
+```
 
-## Optional: CI Publishing
+## Future: Marketplace publishing
 
-Add a GitHub Actions workflow to auto-publish on tag:
+When the extension stabilizes, publish to the VS Code Marketplace:
+
+1. Create a publisher account at https://marketplace.visualstudio.com/manage (publisher ID: `ssweber`)
+2. Create a Personal Access Token at https://dev.azure.com → User Settings → Personal Access Tokens (Organization: All accessible, Scopes: Marketplace → Manage)
+3. `vsce login ssweber` and paste the PAT
+4. `vsce publish`
+
+### Optional: CI publishing
 
 ```yaml
 # .github/workflows/vscode-extension.yml
@@ -79,11 +46,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 ```
 
-Store the PAT as a GitHub repository secret named `VSCE_PAT`.
-
-## Open VSX (alternative)
-
-To also publish to Open VSX (used by VSCodium, Gitpod):
+### Open VSX (alternative)
 
 ```bash
 npm install -g ovsx

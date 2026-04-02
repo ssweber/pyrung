@@ -48,8 +48,19 @@ _CLICK_FUNC_RE = re.compile(r"\b(" + "|".join(re.escape(k) for k in _CLICK_FUNC_
 # Regex matching standalone PI (not followed by digits, which would be a prefix match)
 _CLICK_PI_RE = re.compile(r"\bPI\b")
 
+# Click hex literal: hex digits followed by lowercase 'h' (e.g. 0000h, FFFFh).
+# Safe on raw Click text because operand prefixes use uppercase H (DH, TH).
+# Used as fullmatch in _sub_operand (standalone) and .sub() in expressions.
+_CLICK_HEX_RE = re.compile(r"\b([0-9A-Fa-f]+)h\b")
+
 # Regex matching SUM with colon-range: SUM ( DS1 : DS10 ) or SUM(DS1:DS10)
 _SUM_RE = re.compile(r"SUM\s*\(\s*([A-Z]+)(\d+)\s*:\s*([A-Z]+)(\d+)\s*\)")
+
+# Pointer/indirect addressing: DH[DS134] means "DH at index stored in DS134"
+_POINTER_RE = re.compile(r"(CTD|CT|TD|TXT|SC|SD|DS|DD|DH|DF|X|Y|C|T)\[(.+?)\]")
+
+# Map Click memory-type prefix → pyrung block variable for pointer addressing
+_PREFIX_TO_BLOCK: dict[str, str] = {p: bv for p, _, bv in _OPERAND_PREFIXES}
 
 # Expression function names that require import from pyrung.core.expression
 _EXPR_FUNC_IMPORT_NAMES = frozenset(_CLICK_FUNC_TO_PYTHON.values()) | {"PI"}
@@ -228,6 +239,11 @@ def _sub_operand(
     except ValueError:
         pass
 
+    # Check for Click hex literal (e.g. 0000h, FFFFh → 0x0000, 0xFFFF)
+    hex_match = _CLICK_HEX_RE.fullmatch(text)
+    if hex_match:
+        return f"0x{hex_match.group(1).upper()}"
+
     # Check for none
     if text == "none":
         return "None"
@@ -285,6 +301,15 @@ def _sub_operand(
         rendered = [_sub_operand(item, collection, nicknames, structured_map) for item in items]
         return f"[{', '.join(rendered)}]"
 
+    # Pointer/indirect addressing: DH[DS134] → dh[tag_var_name]
+    ptr_match = _POINTER_RE.fullmatch(text)
+    if ptr_match:
+        prefix = ptr_match.group(1)
+        block_var = _PREFIX_TO_BLOCK[prefix]
+        collection.used_blocks.add(block_var)
+        inner = _sub_operand(ptr_match.group(2), collection, nicknames, structured_map)
+        return f"{block_var}[{inner}]"
+
     # Check for ranges like DS100..DS102
     range_match = _RANGE_RE.match(text)
     if range_match:
@@ -296,16 +321,30 @@ def _sub_operand(
     # Expression with operators: convert Click-native operators to Python,
     # then substitute operand tokens within.
 
-    # Convert SUM colon-ranges first (before general expression conversion)
+    # Hex literals first, while text is still raw Click (uppercase operand
+    # names like DH001 won't false-match because H is not a hex digit).
+    result = _CLICK_HEX_RE.sub(lambda m: f"0x{m.group(1).upper()}", text)
+
+    # Convert SUM colon-ranges (before general expression conversion)
     def _sub_sum(m: re.Match[str]) -> str:
         prefix = m.group(1)
         start_num = int(m.group(2))
         end_num = int(m.group(4))
         return f"{_render_range_expr(prefix, start_num, end_num, collection)}.sum()"
 
-    result = _SUM_RE.sub(_sub_sum, text)
+    result = _SUM_RE.sub(_sub_sum, result)
     result = _click_expr_to_python(result)
     result = _RANGE_RE.sub(lambda m: _sub_range(m, collection, nicknames), result)
+
+    # Pointer/indirect addressing within expressions: DH[DS134] → dh[tag_var]
+    def _sub_pointer(m: re.Match[str]) -> str:
+        prefix = m.group(1)
+        block_var = _PREFIX_TO_BLOCK[prefix]
+        collection.used_blocks.add(block_var)
+        inner = _sub_operand(m.group(2), collection, nicknames, structured_map)
+        return f"{block_var}[{inner}]"
+
+    result = _POINTER_RE.sub(_sub_pointer, result)
 
     def _sub_operand_token(m: re.Match[str]) -> str:
         op = m.group(0)

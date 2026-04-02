@@ -1035,6 +1035,21 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_multiline_comment_with_triple_quotes(self, tmp_path: Path):
+        """Multi-line comment containing triple-double-quotes must not break syntax."""
+        A = Bool("A")
+        Y = Bool("Y")
+
+        with Program() as logic:
+            comment('Has """triple""" quotes\nin comment text')
+            with Rung(A):
+                out(Y)
+
+        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert orig == repro
+
     def test_comparison_condition(self, tmp_path: Path):
         """Comparison: DS1 == 5 → out(Y001)."""
         Counter = Int("Counter")
@@ -1331,6 +1346,84 @@ class TestRoundTrip:
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
         assert orig == repro
+
+    def test_click_hex_literal_in_comparison(self, tmp_path: Path):
+        """Click hex literal ``0000h`` in a condition becomes ``0x0000`` in Python."""
+        csv_path = tmp_path / "test.csv"
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        rows = [
+            header,
+            ["R", "DH001==0000h", *["-"] * 30, "out(C001)"],
+            ["R", "DH001==FFFFh", *["-"] * 30, "out(C002)"],
+        ]
+        with csv_path.open("w", newline="") as f:
+            csv.writer(f).writerows(rows)
+
+        code = ladder_to_pyrung(csv_path)
+        assert "0x0000" in code
+        assert "0xFFFF" in code
+        assert "0000h" not in code
+        assert "FFFFh" not in code
+
+        # Generated code must be valid Python
+        ns: dict = {}
+        exec(code, ns)
+
+    def test_click_hex_literal_in_calc(self, tmp_path: Path):
+        """Click hex literal in a calc expression becomes ``0x`` in Python."""
+        csv_path = tmp_path / "test.csv"
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        rows = [
+            header,
+            ["R", "-", *["-"] * 30, "math(DH001 AND 00FFh,DH002)"],
+            ["R", "-", *["-"] * 30, "math(DH001 AND FFFFh,DH003)"],
+        ]
+        with csv_path.open("w", newline="") as f:
+            csv.writer(f).writerows(rows)
+
+        code = ladder_to_pyrung(csv_path)
+        assert "0x00FF" in code
+        assert "0xFFFF" in code
+        assert "00FFh" not in code
+        assert "FFFFh" not in code
+
+        ns: dict = {}
+        exec(code, ns)
+
+    def test_pointer_indirect_addressing(self, tmp_path: Path):
+        """Click pointer syntax DH[DS134] renders as dh[tag_var] with correct import."""
+        csv_path = tmp_path / "test.csv"
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        rows = [
+            header,
+            ["R", "-", *["-"] * 30, "copy(DH[DS134],DH051)"],
+        ]
+        with csv_path.open("w", newline="") as f:
+            csv.writer(f).writerows(rows)
+
+        code = ladder_to_pyrung(csv_path)
+        # Should use lowercase block variable
+        assert "dh[" in code
+        # Should not have raw uppercase prefix
+        assert "DH[" not in code
+        # Must be valid Python
+        ns: dict = {}
+        exec(code, ns)
 
     def test_calc_sum_round_trip(self, tmp_path: Path):
         """Calc with SUM(range) round-trips through colon-range syntax."""
@@ -2883,7 +2976,7 @@ class TestStructuredCodegen:
 
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
-        assert "@named_array(Int, count=2)" in code
+        assert "@named_array(Int, count=2, stride=2)" in code
         assert "fill(0, Channel.instance_select(1, 2))" in code
 
     def test_sparse_named_array_backing_range_uses_instance_select(self, tmp_path: Path):

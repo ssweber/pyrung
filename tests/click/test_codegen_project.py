@@ -543,6 +543,81 @@ class TestPerFileImports:
         assert " | " in main_py
         assert "any_of" not in main_py
 
+    def test_subroutine_imports_click_block_for_raw_range(self, tmp_path: Path):
+        """Subroutine using reset(c.select(...)) must import c from pyrung.click."""
+        Enable = Bool("Enable")
+        Coil = Bool("Coil")
+        Bits = Block("Bits", TagType.BOOL, 1, 3)
+
+        with Program() as logic:
+            with Rung(Enable):
+                call("worker")
+
+            with subroutine("worker"):
+                with Rung():
+                    out(Coil)
+                    reset(Bits.select(1, 3))
+
+        mapping = TagMap(
+            {Enable: x[1], Coil: y[1], Bits: c.select(1004, 1006)},
+            include_system=False,
+        )
+        files = _project_from_program(logic, mapping, tmp_path)
+        sub_py = files["subroutines/worker.py"]
+
+        # Must have a pyrung.click import that includes 'c'
+        click_import = [
+            ln for ln in sub_py.splitlines() if ln.startswith("from pyrung.click import")
+        ]
+        assert click_import, "subroutine should have a pyrung.click import line"
+        assert "c" in click_import[0].split("import")[1]
+
+        # Verify the project can actually be imported and executed
+        ns = _exec_project(files, tmp_path)
+        assert ns["logic"] is not None
+
+    def test_subroutine_imports_click_block_for_pointer(self, tmp_path: Path):
+        """Subroutine using copy(DH[idx], dest) must import dh from pyrung.click."""
+        from pyrung.click.codegen.collector import _collect_operands
+        from pyrung.click.codegen.models import (
+            _AnalyzedRung,
+            _InstructionInfo,
+            _SubroutineInfo,
+        )
+        from pyrung.click.codegen.project_emitter import _generate_project
+
+        main_rung = _AnalyzedRung(
+            comment=None,
+            condition_tree=None,
+            instructions=[_InstructionInfo(af_token='call("worker")', branch_tree=None, pins=[])],
+        )
+        sub_rung = _AnalyzedRung(
+            comment=None,
+            condition_tree=None,
+            instructions=[
+                _InstructionInfo(af_token="copy(DH[DS134],DH051)", branch_tree=None, pins=[]),
+            ],
+        )
+
+        subroutines = [_SubroutineInfo(name="worker", analyzed=[sub_rung])]
+        all_rungs = [main_rung, sub_rung]
+        collection = _collect_operands(all_rungs, None)
+        collection.has_subroutine = True
+
+        files = _generate_project([main_rung], collection, None, subroutines)
+        sub_py = files["subroutines/worker.py"]
+
+        # Must have dh imported from pyrung.click
+        click_import = [
+            ln for ln in sub_py.splitlines() if ln.startswith("from pyrung.click import")
+        ]
+        assert click_import, "subroutine should have a pyrung.click import line"
+        assert " dh" in click_import[0] or ",dh" in click_import[0]
+
+        # Should use lowercase block variable, not uppercase Click prefix
+        assert "dh[" in sub_py
+        assert "DH[" not in sub_py
+
 
 class TestSubroutineCallsSubroutine:
     """Subroutine that calls another subroutine.

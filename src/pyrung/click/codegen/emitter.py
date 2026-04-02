@@ -335,7 +335,7 @@ def _emit_structure_declarations(lines: list[str], collection: _OperandCollectio
 def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
     """Emit a @named_array decorator + class."""
     stride_part = ""
-    if decl.stride is not None and decl.stride != len(decl.fields):
+    if decl.stride is not None and decl.stride > 1:
         stride_part = f", stride={decl.stride}"
     count_part = f"count={decl.count}" if decl.count > 1 else ""
     always_number_part = ", always_number=True" if decl.always_number and decl.count == 1 else ""
@@ -875,7 +875,7 @@ def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
     pad = "    " * indent
     if "\n" in comment:
         # Multi-line → triple-quoted string
-        escaped = comment.replace("\\", "\\\\")
+        escaped = comment.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
         parts = escaped.split("\n")
         content_pad = "    " * (indent + 1)
         lines.append(f'{pad}comment("""\\')

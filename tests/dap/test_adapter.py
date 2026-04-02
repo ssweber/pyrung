@@ -238,6 +238,23 @@ def _unconditional_script() -> str:
     )
 
 
+def _two_rung_unconditional_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "\n"
+        "light = Bool('Light')\n"
+        "other = Bool('Other')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        out(light)\n"
+        "    with Rung():\n"
+        "        out(other)\n"
+        "\n"
+        "runner = PLCRunner(prog)\n"
+    )
+
+
 def _empty_logic_runner_script() -> str:
     return "from pyrung.core import PLCRunner\n\nrunner = PLCRunner()\n"
 
@@ -1200,7 +1217,7 @@ def test_trace_body_uses_committed_core_event_when_no_inflight_scan_context(tmp_
     assert body["traceSource"] == "inspect"
     assert body["scanId"] == 1
     assert body["rungId"] == 0
-    assert body["step"]["kind"] == "rung"
+    assert body["step"]["kind"] == "instruction"
     assert body["regions"]
 
 
@@ -1439,7 +1456,7 @@ def test_continue_hits_subroutine_breakpoint(tmp_path: Path):
 
     assert _wait_for_stop_reason(adapter, out_stream, reason="breakpoint") is True
     assert adapter._current_step is not None
-    assert adapter._current_step.kind == "instruction"
+    assert adapter._current_step.kind == "subroutine"
     assert adapter._current_step.subroutine_name == "init_sub"
 
 
@@ -1632,17 +1649,22 @@ def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
 def test_variables_overlay_pending_mid_scan_values(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "logic_unconditional.py", _unconditional_script())
+    script = _write_script(tmp_path, "logic_two_rung.py", _two_rung_unconditional_script())
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    # First next lands on rung 0 step (before instructions).
     _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+    # Second next advances past rung 0 content, landing on rung 1 step.
+    # Rung 0's out(light) has now executed; its effect is pending in the scan context.
+    _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=3,
+        seq=4,
         command="variables",
         arguments={"variablesReference": adapter.TAGS_SCOPE_REF},
     )
@@ -1929,17 +1951,21 @@ def test_evaluate_watch_struct_instance_reference_ambiguous_suffix_errors(tmp_pa
 def test_evaluate_watch_uses_pending_values_mid_scan(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
-    script = _write_script(tmp_path, "logic_unconditional.py", _unconditional_script())
+    script = _write_script(tmp_path, "logic_two_rung.py", _two_rung_unconditional_script())
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    # First next lands on rung 0 step (before instructions).
     _send_request(adapter, out_stream, seq=2, command="next")
+    _drain_messages(out_stream)
+    # Second next advances past rung 0 content, landing on rung 1 step.
+    _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=3,
+        seq=4,
         command="evaluate",
         arguments={"expression": "Light", "context": "watch"},
     )

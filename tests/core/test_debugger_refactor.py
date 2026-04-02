@@ -149,5 +149,5 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
     debugger = PLCDebugger(step_factory=ScanStep)
     steps = list(debugger.scan_steps_debug(RunnerFacade(runner)))
 
-    assert [step.kind for step in steps] == ["instruction", "rung"]
+    assert [step.kind for step in steps] == ["rung", "instruction"]
     assert runner.current_state.tags["Light"] is True

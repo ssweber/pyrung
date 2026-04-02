@@ -248,7 +248,10 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
 
     runner = PLCRunner(prog)
     runner.patch({"Enable": True, "Reset": False})
-    step = next(runner.scan_steps_debug())
+    scan_gen = runner.scan_steps_debug()
+    rung_step = next(scan_gen)
+    assert rung_step.kind == "rung"
+    step = next(scan_gen)
     assert step.kind == "instruction"
     assert step.source_line == count_up_line
     assert step.end_line == count_up_line
