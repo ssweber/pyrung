@@ -31,6 +31,7 @@ nav:
       - Program Control: instructions/program-control.md
       - Communication: instructions/communication.md
   - Guides:
+      - Click Cheatsheet: guides/click-cheatsheet.md
       - Click Quickstart: guides/click-quickstart.md
       - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tag Structures: guides/tag-structures.md
