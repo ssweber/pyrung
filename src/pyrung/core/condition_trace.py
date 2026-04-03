@@ -28,12 +28,7 @@ from pyrung.core.condition import (
 )
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.expression import (
-    ExprCompareEq,
-    ExprCompareGe,
-    ExprCompareGt,
-    ExprCompareLe,
-    ExprCompareLt,
-    ExprCompareNe,
+    ExprCompare,
     Expression,
 )
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
@@ -55,14 +50,6 @@ _INDIRECT_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
     "IndirectCompareLe": "<=",
     "IndirectCompareGt": ">",
     "IndirectCompareGe": ">=",
-}
-_EXPR_COMPARE_OPERATOR_BY_CLASS_NAME: dict[str, str] = {
-    "ExprCompareEq": "==",
-    "ExprCompareNe": "!=",
-    "ExprCompareLt": "<",
-    "ExprCompareLe": "<=",
-    "ExprCompareGt": ">",
-    "ExprCompareGe": ">=",
 }
 
 
@@ -240,12 +227,7 @@ class ConditionTraceEngine:
             *right_details,
         ]
 
-    @_evaluate.register(ExprCompareEq)
-    @_evaluate.register(ExprCompareNe)
-    @_evaluate.register(ExprCompareLt)
-    @_evaluate.register(ExprCompareLe)
-    @_evaluate.register(ExprCompareGt)
-    @_evaluate.register(ExprCompareGe)
+    @_evaluate.register(ExprCompare)
     def _evaluate_expr_compare(
         self, condition: Any, ctx: ScanContext
     ) -> tuple[bool, list[dict[str, Any]]]:
@@ -354,15 +336,9 @@ class ConditionTraceEngine:
             f"{op} {self._value_text(condition.value)}"
         )
 
-    @_expression.register(ExprCompareEq)
-    @_expression.register(ExprCompareNe)
-    @_expression.register(ExprCompareLt)
-    @_expression.register(ExprCompareLe)
-    @_expression.register(ExprCompareGt)
-    @_expression.register(ExprCompareGe)
-    def _expression_expr_compare(self, condition: Any) -> str:
-        op = _EXPR_COMPARE_OPERATOR_BY_CLASS_NAME[type(condition).__name__]
-        return f"{condition.left!r} {op} {condition.right!r}"
+    @_expression.register(ExprCompare)
+    def _expression_expr_compare(self, condition: ExprCompare) -> str:
+        return f"{condition.left!r} {condition.symbol} {condition.right!r}"
 
     @_expression.register
     def _(self, condition: AllCondition) -> str:

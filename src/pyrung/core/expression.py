@@ -8,6 +8,7 @@ Enables native Python expressions with Tags in conditions and instruction argume
 from __future__ import annotations
 
 import math
+import operator
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,41 @@ if TYPE_CHECKING:
     from pyrung.core.tag import Tag
 
 Numeric = int | float
+
+
+# =============================================================================
+# Operator functions
+# =============================================================================
+
+
+def _op_div(a: Numeric, b: Numeric) -> Numeric:
+    if b == 0:
+        return float("inf") if a >= 0 else float("-inf")
+    return a / b
+
+
+def _op_and(a: Numeric, b: Numeric) -> int:
+    return int(a) & int(b)
+
+
+def _op_or(a: Numeric, b: Numeric) -> int:
+    return int(a) | int(b)
+
+
+def _op_xor(a: Numeric, b: Numeric) -> int:
+    return int(a) ^ int(b)
+
+
+def _op_lshift(a: Numeric, b: Numeric) -> int:
+    return int(a) << int(b)
+
+
+def _op_rshift(a: Numeric, b: Numeric) -> int:
+    return int(a) >> int(b)
+
+
+def _op_invert(a: Numeric) -> int:
+    return ~int(a)
 
 
 # =============================================================================
@@ -50,125 +86,125 @@ class Expression(ABC):
     # Arithmetic Operators -> Expression
     # =========================================================================
 
-    def __add__(self, other: Expression | Numeric) -> AddExpr:
-        return AddExpr(self, _wrap(other))
+    def __add__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.add, "+")
 
-    def __radd__(self, other: Numeric) -> AddExpr:
-        return AddExpr(_wrap(other), self)
+    def __radd__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.add, "+")
 
-    def __sub__(self, other: Expression | Numeric) -> SubExpr:
-        return SubExpr(self, _wrap(other))
+    def __sub__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.sub, "-")
 
-    def __rsub__(self, other: Numeric) -> SubExpr:
-        return SubExpr(_wrap(other), self)
+    def __rsub__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.sub, "-")
 
-    def __mul__(self, other: Expression | Numeric) -> MulExpr:
-        return MulExpr(self, _wrap(other))
+    def __mul__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.mul, "*")
 
-    def __rmul__(self, other: Numeric) -> MulExpr:
-        return MulExpr(_wrap(other), self)
+    def __rmul__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.mul, "*")
 
-    def __truediv__(self, other: Expression | Numeric) -> DivExpr:
-        return DivExpr(self, _wrap(other))
+    def __truediv__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_div, "/")
 
-    def __rtruediv__(self, other: Numeric) -> DivExpr:
-        return DivExpr(_wrap(other), self)
+    def __rtruediv__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_div, "/")
 
-    def __floordiv__(self, other: Expression | Numeric) -> FloorDivExpr:
-        return FloorDivExpr(self, _wrap(other))
+    def __floordiv__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.floordiv, "//")
 
-    def __rfloordiv__(self, other: Numeric) -> FloorDivExpr:
-        return FloorDivExpr(_wrap(other), self)
+    def __rfloordiv__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.floordiv, "//")
 
-    def __mod__(self, other: Expression | Numeric) -> ModExpr:
-        return ModExpr(self, _wrap(other))
+    def __mod__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.mod, "%")
 
-    def __rmod__(self, other: Numeric) -> ModExpr:
-        return ModExpr(_wrap(other), self)
+    def __rmod__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.mod, "%")
 
-    def __pow__(self, other: Expression | Numeric) -> PowExpr:
-        return PowExpr(self, _wrap(other))
+    def __pow__(self, other: Expression | Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), operator.pow, "**")
 
-    def __rpow__(self, other: Numeric) -> PowExpr:
-        return PowExpr(_wrap(other), self)
+    def __rpow__(self, other: Numeric) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), operator.pow, "**")
 
-    def __neg__(self) -> NegExpr:
-        return NegExpr(self)
+    def __neg__(self) -> UnaryExpr:
+        return UnaryExpr(_wrap(self), operator.neg, "-")
 
-    def __pos__(self) -> PosExpr:
-        return PosExpr(self)
+    def __pos__(self) -> UnaryExpr:
+        return UnaryExpr(_wrap(self), operator.pos, "+")
 
-    def __abs__(self) -> AbsExpr:
-        return AbsExpr(self)
+    def __abs__(self) -> UnaryExpr:
+        return UnaryExpr(_wrap(self), abs, "abs")
 
     # =========================================================================
     # Bitwise Operators -> Expression
     # =========================================================================
 
-    def __and__(self, other: Expression | int) -> AndExpr:
-        return AndExpr(self, _wrap(other))
+    def __and__(self, other: Expression | int) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_and, "&")
 
-    def __rand__(self, other: int) -> AndExpr:
-        return AndExpr(_wrap(other), self)
+    def __rand__(self, other: int) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_and, "&")
 
-    def __or__(self, other: Expression | int) -> OrExpr:
-        return OrExpr(self, _wrap(other))
+    def __or__(self, other: Expression | int) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_or, "|")
 
-    def __ror__(self, other: int) -> OrExpr:
-        return OrExpr(_wrap(other), self)
+    def __ror__(self, other: int) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_or, "|")
 
-    def __xor__(self, other: Expression | int) -> XorExpr:
-        return XorExpr(self, _wrap(other))
+    def __xor__(self, other: Expression | int) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_xor, "^")
 
-    def __rxor__(self, other: int) -> XorExpr:
-        return XorExpr(_wrap(other), self)
+    def __rxor__(self, other: int) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_xor, "^")
 
-    def __lshift__(self, other: Expression | int) -> LShiftExpr:
-        return LShiftExpr(self, _wrap(other))
+    def __lshift__(self, other: Expression | int) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_lshift, "<<")
 
-    def __rlshift__(self, other: int) -> LShiftExpr:
-        return LShiftExpr(_wrap(other), self)
+    def __rlshift__(self, other: int) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_lshift, "<<")
 
-    def __rshift__(self, other: Expression | int) -> RShiftExpr:
-        return RShiftExpr(self, _wrap(other))
+    def __rshift__(self, other: Expression | int) -> BinaryExpr:
+        return BinaryExpr(_wrap(self), _wrap(other), _op_rshift, ">>")
 
-    def __rrshift__(self, other: int) -> RShiftExpr:
-        return RShiftExpr(_wrap(other), self)
+    def __rrshift__(self, other: int) -> BinaryExpr:
+        return BinaryExpr(_wrap(other), _wrap(self), _op_rshift, ">>")
 
-    def __invert__(self) -> InvertExpr:
-        return InvertExpr(self)
+    def __invert__(self) -> UnaryExpr:
+        return UnaryExpr(_wrap(self), _op_invert, "~")
 
     # =========================================================================
     # Comparison Operators -> Condition
     # =========================================================================
 
-    def __eq__(self, other: object) -> ExprCompareEq:  # ty: ignore[invalid-method-override]
-        cond = ExprCompareEq(self, _wrap(other))
+    def __eq__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.eq, "==")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __ne__(self, other: object) -> ExprCompareNe:  # ty: ignore[invalid-method-override]
-        cond = ExprCompareNe(self, _wrap(other))
+    def __ne__(self, other: object) -> ExprCompare:  # ty: ignore[invalid-method-override]
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.ne, "!=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __lt__(self, other: Expression | Numeric) -> ExprCompareLt:
-        cond = ExprCompareLt(self, _wrap(other))
+    def __lt__(self, other: Expression | Numeric) -> ExprCompare:
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.lt, "<")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __le__(self, other: Expression | Numeric) -> ExprCompareLe:
-        cond = ExprCompareLe(self, _wrap(other))
+    def __le__(self, other: Expression | Numeric) -> ExprCompare:
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.le, "<=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __gt__(self, other: Expression | Numeric) -> ExprCompareGt:
-        cond = ExprCompareGt(self, _wrap(other))
+    def __gt__(self, other: Expression | Numeric) -> ExprCompare:
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.gt, ">")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
-    def __ge__(self, other: Expression | Numeric) -> ExprCompareGe:
-        cond = ExprCompareGe(self, _wrap(other))
+    def __ge__(self, other: Expression | Numeric) -> ExprCompare:
+        cond = ExprCompare(_wrap(self), _wrap(other), operator.ge, ">=")
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -230,317 +266,67 @@ class LiteralExpr(Expression):
 
 
 # =============================================================================
-# Binary Arithmetic Expressions
+# Binary Expression (replaces Add/Sub/Mul/Div/FloorDiv/Mod/Pow/And/Or/Xor/LShift/RShift)
 # =============================================================================
 
 
-class AddExpr(Expression):
-    """Addition expression: left + right."""
+class BinaryExpr(Expression):
+    """Binary operation: left <op> right."""
 
-    def __init__(self, left: Expression, right: Expression):
+    def __init__(self, left: Expression, right: Expression, op: Any, symbol: str):
         self.left = left
         self.right = right
+        self.op = op
+        self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) + self.right.evaluate(ctx)
+        return self.op(self.left.evaluate(ctx), self.right.evaluate(ctx))
 
     def __repr__(self) -> str:
-        return f"({self.left} + {self.right})"
-
-
-class SubExpr(Expression):
-    """Subtraction expression: left - right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) - self.right.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"({self.left} - {self.right})"
-
-
-class MulExpr(Expression):
-    """Multiplication expression: left * right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) * self.right.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"({self.left} * {self.right})"
-
-
-class DivExpr(Expression):
-    """Division expression: left / right (true division, returns float)."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        left_val = self.left.evaluate(ctx)
-        right_val = self.right.evaluate(ctx)
-        if right_val == 0:
-            # Return infinity like hardware typically does
-            return float("inf") if left_val >= 0 else float("-inf")
-        return left_val / right_val
-
-    def __repr__(self) -> str:
-        return f"({self.left} / {self.right})"
-
-
-class FloorDivExpr(Expression):
-    """Floor division expression: left // right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) // self.right.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"({self.left} // {self.right})"
-
-
-class ModExpr(Expression):
-    """Modulo expression: left % right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) % self.right.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"({self.left} % {self.right})"
-
-
-class PowExpr(Expression):
-    """Power expression: left ** right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return self.left.evaluate(ctx) ** self.right.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"({self.left} ** {self.right})"
+        return f"({self.left} {self.symbol} {self.right})"
 
 
 # =============================================================================
-# Unary Arithmetic Expressions
+# Unary Expression (replaces Neg/Pos/Abs/Invert)
 # =============================================================================
 
 
-class NegExpr(Expression):
-    """Negation expression: -operand."""
+class UnaryExpr(Expression):
+    """Unary operation: <op>(operand)."""
 
-    def __init__(self, operand: Expression):
+    def __init__(self, operand: Expression, op: Any, symbol: str):
         self.operand = operand
+        self.op = op
+        self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return -self.operand.evaluate(ctx)
+        return self.op(self.operand.evaluate(ctx))
 
     def __repr__(self) -> str:
-        return f"(-{self.operand})"
-
-
-class PosExpr(Expression):
-    """Positive expression: +operand (identity)."""
-
-    def __init__(self, operand: Expression):
-        self.operand = operand
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return +self.operand.evaluate(ctx)
-
-    def __repr__(self) -> str:
-        return f"(+{self.operand})"
-
-
-class AbsExpr(Expression):
-    """Absolute value expression: abs(operand)."""
-
-    def __init__(self, operand: Expression):
-        self.operand = operand
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> Numeric:
-        return abs(self.operand.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"abs({self.operand})"
+        if self.symbol == "abs":
+            return f"abs({self.operand})"
+        return f"({self.symbol}{self.operand})"
 
 
 # =============================================================================
-# Bitwise Expressions
-# =============================================================================
-
-
-class AndExpr(Expression):
-    """Bitwise AND: left & right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return int(self.left.evaluate(ctx)) & int(self.right.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"({self.left} & {self.right})"
-
-
-class OrExpr(Expression):
-    """Bitwise OR: left | right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return int(self.left.evaluate(ctx)) | int(self.right.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"({self.left} | {self.right})"
-
-
-class XorExpr(Expression):
-    """Bitwise XOR: left ^ right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return int(self.left.evaluate(ctx)) ^ int(self.right.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"({self.left} ^ {self.right})"
-
-
-class LShiftExpr(Expression):
-    """Left shift: left << right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return int(self.left.evaluate(ctx)) << int(self.right.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"({self.left} << {self.right})"
-
-
-class RShiftExpr(Expression):
-    """Right shift: left >> right."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return int(self.left.evaluate(ctx)) >> int(self.right.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"({self.left} >> {self.right})"
-
-
-class InvertExpr(Expression):
-    """Bitwise invert: ~operand."""
-
-    def __init__(self, operand: Expression):
-        self.operand = operand
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> int:
-        return ~int(self.operand.evaluate(ctx))
-
-    def __repr__(self) -> str:
-        return f"(~{self.operand})"
-
-
-# =============================================================================
-# Expression Comparison Conditions
+# Expression Comparison Condition (replaces ExprCompareEq/Ne/Lt/Le/Gt/Ge)
 # =============================================================================
 
 
 from pyrung.core.condition import Condition
 
 
-class ExprCompareEq(Condition):
-    """Equality comparison for expressions: expr == value."""
+class ExprCompare(Condition):
+    """Comparison condition for expressions: left <op> right."""
 
-    def __init__(self, left: Expression, right: Expression):
+    def __init__(self, left: Expression, right: Expression, op: Any, symbol: str):
         self.left = left
         self.right = right
+        self.op = op
+        self.symbol = symbol
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) == self.right.evaluate(ctx)
-
-
-class ExprCompareNe(Condition):
-    """Inequality comparison for expressions: expr != value."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) != self.right.evaluate(ctx)
-
-
-class ExprCompareLt(Condition):
-    """Less-than comparison for expressions: expr < value."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) < self.right.evaluate(ctx)
-
-
-class ExprCompareLe(Condition):
-    """Less-than-or-equal comparison for expressions: expr <= value."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) <= self.right.evaluate(ctx)
-
-
-class ExprCompareGt(Condition):
-    """Greater-than comparison for expressions: expr > value."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) > self.right.evaluate(ctx)
-
-
-class ExprCompareGe(Condition):
-    """Greater-than-or-equal comparison for expressions: expr >= value."""
-
-    def __init__(self, left: Expression, right: Expression):
-        self.left = left
-        self.right = right
-
-    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return self.left.evaluate(ctx) >= self.right.evaluate(ctx)
+        return self.op(self.left.evaluate(ctx), self.right.evaluate(ctx))
 
 
 # =============================================================================
@@ -701,47 +487,6 @@ class SumExpr(Expression):
 # Expression Formatting (DSL-friendly text)
 # =============================================================================
 
-_BINARY_EXPR_TYPES = (
-    AddExpr,
-    SubExpr,
-    MulExpr,
-    DivExpr,
-    FloorDivExpr,
-    ModExpr,
-    PowExpr,
-    AndExpr,
-    OrExpr,
-    XorExpr,
-    LShiftExpr,
-    RShiftExpr,
-)
-
-_BINARY_OP_SYMBOL: dict[type[Expression], str] = {
-    AddExpr: "+",
-    SubExpr: "-",
-    MulExpr: "*",
-    DivExpr: "/",
-    FloorDivExpr: "//",
-    ModExpr: "%",
-    PowExpr: "**",
-    AndExpr: "&",
-    OrExpr: "|",
-    XorExpr: "^",
-    LShiftExpr: "<<",
-    RShiftExpr: ">>",
-}
-
-_UNARY_PREFIX: dict[type, str] = {
-    NegExpr: "-",
-    PosExpr: "+",
-    InvertExpr: "~",
-}
-
-
-def _needs_parens(child: Expression) -> bool:
-    """Return True if a child expression needs parentheses inside a binary parent."""
-    return isinstance(child, _BINARY_EXPR_TYPES)
-
 
 def format_expr(expr: Expression) -> str:
     """Convert an Expression tree to DSL-friendly text.
@@ -749,8 +494,7 @@ def format_expr(expr: Expression) -> str:
     Examples:
         TagExpr(Tag("DS1")) → "DS1"
         LiteralExpr(42) → "42"
-        AddExpr(TagExpr(idx), LiteralExpr(1)) → "idx + 1"
-        MulExpr(AddExpr(...), LiteralExpr(2)) → "(A + B) * 2"
+        BinaryExpr(+) → "A + B"
         MathFuncExpr sqrt(X) → "sqrt(X)"
         ShiftFuncExpr lsh(A, 3) → "lsh(A, 3)"
     """
@@ -768,27 +512,22 @@ def format_expr(expr: Expression) -> str:
     # MathFuncExpr — single-argument math functions
     if isinstance(expr, MathFuncExpr):
         return f"{expr.name}({format_expr(expr.operand)})"
-    # abs()
-    if isinstance(expr, AbsExpr):
-        return f"abs({format_expr(expr.operand)})"
-    # Unary prefix operations (NegExpr, PosExpr, InvertExpr)
-    if isinstance(expr, (NegExpr, PosExpr, InvertExpr)):
-        prefix = _UNARY_PREFIX[type(expr)]
+    # Unary operations
+    if isinstance(expr, UnaryExpr):
         inner = format_expr(expr.operand)
-        if _needs_parens(expr.operand):
-            return f"{prefix}({inner})"
-        return f"{prefix}{inner}"
-    # Binary operations — dispatch via _BINARY_OP_SYMBOL
-    if isinstance(expr, _BINARY_EXPR_TYPES):
-        symbol = _BINARY_OP_SYMBOL[type(expr)]
-        left = expr.left
-        right = expr.right
-        left_str = format_expr(left)
-        right_str = format_expr(right)
-        if _needs_parens(left):
+        if expr.symbol == "abs":
+            return f"abs({inner})"
+        if isinstance(expr.operand, BinaryExpr):
+            return f"{expr.symbol}({inner})"
+        return f"{expr.symbol}{inner}"
+    # Binary operations
+    if isinstance(expr, BinaryExpr):
+        left_str = format_expr(expr.left)
+        right_str = format_expr(expr.right)
+        if isinstance(expr.left, BinaryExpr):
             left_str = f"({left_str})"
-        if _needs_parens(right):
+        if isinstance(expr.right, BinaryExpr):
             right_str = f"({right_str})"
-        return f"{left_str} {symbol} {right_str}"
+        return f"{left_str} {expr.symbol} {right_str}"
     # Unknown expression type — fallback
     return repr(expr)

@@ -54,33 +54,14 @@ from pyrung.core.condition import (
 )
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
-    AbsExpr,
-    AddExpr,
-    AndExpr,
-    DivExpr,
-    ExprCompareEq,
-    ExprCompareGe,
-    ExprCompareGt,
-    ExprCompareLe,
-    ExprCompareLt,
-    ExprCompareNe,
+    BinaryExpr,
+    ExprCompare,
     Expression,
-    FloorDivExpr,
-    InvertExpr,
     LiteralExpr,
-    LShiftExpr,
     MathFuncExpr,
-    ModExpr,
-    MulExpr,
-    NegExpr,
-    OrExpr,
-    PosExpr,
-    PowExpr,
-    RShiftExpr,
     ShiftFuncExpr,
-    SubExpr,
     TagExpr,
-    XorExpr,
+    UnaryExpr,
 )
 from pyrung.core.instruction import (
     BlockCopyInstruction,
@@ -182,20 +163,29 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
         return f"({_compile_indirect_value(cond.indirect_ref, ctx)} > {_compile_value(cond.value, ctx)})"
     if isinstance(cond, IndirectCompareGe):
         return f"({_compile_indirect_value(cond.indirect_ref, ctx)} >= {_compile_value(cond.value, ctx)})"
-    if isinstance(cond, ExprCompareEq):
-        return f"({compile_expression(cond.left, ctx)} == {compile_expression(cond.right, ctx)})"
-    if isinstance(cond, ExprCompareNe):
-        return f"({compile_expression(cond.left, ctx)} != {compile_expression(cond.right, ctx)})"
-    if isinstance(cond, ExprCompareLt):
-        return f"({compile_expression(cond.left, ctx)} < {compile_expression(cond.right, ctx)})"
-    if isinstance(cond, ExprCompareLe):
-        return f"({compile_expression(cond.left, ctx)} <= {compile_expression(cond.right, ctx)})"
-    if isinstance(cond, ExprCompareGt):
-        return f"({compile_expression(cond.left, ctx)} > {compile_expression(cond.right, ctx)})"
-    if isinstance(cond, ExprCompareGe):
-        return f"({compile_expression(cond.left, ctx)} >= {compile_expression(cond.right, ctx)})"
+    if isinstance(cond, ExprCompare):
+        return f"({compile_expression(cond.left, ctx)} {cond.symbol} {compile_expression(cond.right, ctx)})"
 
     raise NotImplementedError(f"Unsupported condition type: {type(cond).__name__}")
+
+
+_BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
+
+_ALLOWED_MATH_FUNCS = frozenset(
+    {
+        "sqrt",
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "radians",
+        "degrees",
+        "log10",
+        "log",
+    }
+)
 
 
 def compile_expression(expr: Expression, ctx: CodegenContext) -> str:
@@ -205,56 +195,23 @@ def compile_expression(expr: Expression, ctx: CodegenContext) -> str:
     if isinstance(expr, LiteralExpr):
         return repr(expr.value)
 
-    if isinstance(expr, AddExpr):
-        return f"({compile_expression(expr.left, ctx)} + {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, SubExpr):
-        return f"({compile_expression(expr.left, ctx)} - {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, MulExpr):
-        return f"({compile_expression(expr.left, ctx)} * {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, DivExpr):
-        return f"({compile_expression(expr.left, ctx)} / {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, FloorDivExpr):
-        return f"({compile_expression(expr.left, ctx)} // {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, ModExpr):
-        return f"({compile_expression(expr.left, ctx)} % {compile_expression(expr.right, ctx)})"
-    if isinstance(expr, PowExpr):
-        return f"({compile_expression(expr.left, ctx)} ** {compile_expression(expr.right, ctx)})"
+    if isinstance(expr, BinaryExpr):
+        left = compile_expression(expr.left, ctx)
+        right = compile_expression(expr.right, ctx)
+        if expr.symbol in _BITWISE_SYMBOLS:
+            return f"(int({left}) {expr.symbol} int({right}))"
+        return f"({left} {expr.symbol} {right})"
 
-    if isinstance(expr, NegExpr):
-        return f"(-({compile_expression(expr.operand, ctx)}))"
-    if isinstance(expr, PosExpr):
-        return f"(+({compile_expression(expr.operand, ctx)}))"
-    if isinstance(expr, AbsExpr):
-        return f"abs({compile_expression(expr.operand, ctx)})"
-
-    if isinstance(expr, AndExpr):
-        return f"(int({compile_expression(expr.left, ctx)}) & int({compile_expression(expr.right, ctx)}))"
-    if isinstance(expr, OrExpr):
-        return f"(int({compile_expression(expr.left, ctx)}) | int({compile_expression(expr.right, ctx)}))"
-    if isinstance(expr, XorExpr):
-        return f"(int({compile_expression(expr.left, ctx)}) ^ int({compile_expression(expr.right, ctx)}))"
-    if isinstance(expr, LShiftExpr):
-        return f"(int({compile_expression(expr.left, ctx)}) << int({compile_expression(expr.right, ctx)}))"
-    if isinstance(expr, RShiftExpr):
-        return f"(int({compile_expression(expr.left, ctx)}) >> int({compile_expression(expr.right, ctx)}))"
-    if isinstance(expr, InvertExpr):
-        return f"(~int({compile_expression(expr.operand, ctx)}))"
+    if isinstance(expr, UnaryExpr):
+        inner = compile_expression(expr.operand, ctx)
+        if expr.symbol == "abs":
+            return f"abs({inner})"
+        if expr.symbol == "~":
+            return f"(~int({inner}))"
+        return f"({expr.symbol}({inner}))"
 
     if isinstance(expr, MathFuncExpr):
-        allowed = {
-            "sqrt",
-            "sin",
-            "cos",
-            "tan",
-            "asin",
-            "acos",
-            "atan",
-            "radians",
-            "degrees",
-            "log10",
-            "log",
-        }
-        if expr.name not in allowed:
+        if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
         return f"math.{expr.name}({compile_expression(expr.operand, ctx)})"
 

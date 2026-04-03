@@ -70,7 +70,7 @@ class TestExpressionSource:
         facts = walk_program(prog)
         src = _first(facts, "instruction.source")
         assert src.value_kind == "expression"
-        assert "MulExpr" in src.summary or src.metadata.get("expr_type") == "MulExpr"
+        assert "BinaryExpr" in src.summary or src.metadata.get("expr_type") == "BinaryExpr"
 
     def test_expression_metadata_has_expr_type(self):
         with Program() as prog:
@@ -79,7 +79,7 @@ class TestExpressionSource:
 
         facts = walk_program(prog)
         src = _first(facts, "instruction.source")
-        assert src.metadata["expr_type"] == "MulExpr"
+        assert src.metadata["expr_type"] == "BinaryExpr"
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ class TestIndirectExprRef:
         src = _first(facts, "instruction.source")
         assert src.value_kind == "indirect_expr_ref"
         assert src.metadata["block_name"] == "DD"
-        assert src.metadata["expr_type"] == "AddExpr"
+        assert src.metadata["expr_type"] == "BinaryExpr"
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +151,12 @@ class TestExpressionCondition:
         # Top-level condition
         cond = _first(facts, "condition")
         assert cond.value_kind == "condition"
-        assert cond.metadata["condition_type"] == "ExprCompareGt"
+        assert cond.metadata["condition_type"] == "ExprCompare"
 
         # Left child is the (A + B) expression
         left = _first(facts, "condition.left")
         assert left.value_kind == "expression"
-        assert left.metadata["expr_type"] == "AddExpr"
+        assert left.metadata["expr_type"] == "BinaryExpr"
 
         # Right child is the literal 100
         right = _first(facts, "condition.right")

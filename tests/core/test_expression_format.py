@@ -1,24 +1,18 @@
 """Tests for format_expr() — DSL-friendly expression formatting."""
 
+import operator
+
 from pyrung.core.expression import (
-    AbsExpr,
-    AddExpr,
-    AndExpr,
-    DivExpr,
-    FloorDivExpr,
-    InvertExpr,
+    BinaryExpr,
     LiteralExpr,
-    LShiftExpr,
-    ModExpr,
-    MulExpr,
-    NegExpr,
-    OrExpr,
-    PosExpr,
-    PowExpr,
-    RShiftExpr,
-    SubExpr,
     TagExpr,
-    XorExpr,
+    UnaryExpr,
+    _op_and,
+    _op_div,
+    _op_lshift,
+    _op_or,
+    _op_rshift,
+    _op_xor,
     format_expr,
     lro,
     lsh,
@@ -50,98 +44,100 @@ class TestLeafNodes:
 
 class TestBinaryArithmetic:
     def test_add(self):
-        expr = AddExpr(TagExpr(_tag("A")), LiteralExpr(1))
+        expr = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(1), operator.add, "+")
         assert format_expr(expr) == "A + 1"
 
     def test_sub(self):
-        expr = SubExpr(TagExpr(_tag("A")), TagExpr(_tag("B")))
+        expr = BinaryExpr(TagExpr(_tag("A")), TagExpr(_tag("B")), operator.sub, "-")
         assert format_expr(expr) == "A - B"
 
     def test_mul(self):
-        expr = MulExpr(TagExpr(_tag("X")), LiteralExpr(2))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(2), operator.mul, "*")
         assert format_expr(expr) == "X * 2"
 
     def test_div(self):
-        expr = DivExpr(TagExpr(_tag("X")), LiteralExpr(3))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(3), _op_div, "/")
         assert format_expr(expr) == "X / 3"
 
     def test_floordiv(self):
-        expr = FloorDivExpr(TagExpr(_tag("X")), LiteralExpr(3))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(3), operator.floordiv, "//")
         assert format_expr(expr) == "X // 3"
 
     def test_mod(self):
-        expr = ModExpr(TagExpr(_tag("X")), LiteralExpr(5))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(5), operator.mod, "%")
         assert format_expr(expr) == "X % 5"
 
     def test_pow(self):
-        expr = PowExpr(TagExpr(_tag("X")), LiteralExpr(2))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(2), operator.pow, "**")
         assert format_expr(expr) == "X ** 2"
 
 
 class TestBinaryBitwise:
     def test_and(self):
-        expr = AndExpr(TagExpr(_tag("A")), LiteralExpr(0xFF))
+        expr = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(0xFF), _op_and, "&")
         assert format_expr(expr) == "A & 255"
 
     def test_or(self):
-        expr = OrExpr(TagExpr(_tag("A")), TagExpr(_tag("B")))
+        expr = BinaryExpr(TagExpr(_tag("A")), TagExpr(_tag("B")), _op_or, "|")
         assert format_expr(expr) == "A | B"
 
     def test_xor(self):
-        expr = XorExpr(TagExpr(_tag("A")), TagExpr(_tag("B")))
+        expr = BinaryExpr(TagExpr(_tag("A")), TagExpr(_tag("B")), _op_xor, "^")
         assert format_expr(expr) == "A ^ B"
 
     def test_lshift(self):
-        expr = LShiftExpr(TagExpr(_tag("A")), LiteralExpr(4))
+        expr = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(4), _op_lshift, "<<")
         assert format_expr(expr) == "A << 4"
 
     def test_rshift(self):
-        expr = RShiftExpr(TagExpr(_tag("A")), LiteralExpr(2))
+        expr = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(2), _op_rshift, ">>")
         assert format_expr(expr) == "A >> 2"
 
 
 class TestNestedParens:
     def test_mul_of_add(self):
-        inner = AddExpr(TagExpr(_tag("A")), TagExpr(_tag("B")))
-        expr = MulExpr(inner, LiteralExpr(2))
+        inner = BinaryExpr(TagExpr(_tag("A")), TagExpr(_tag("B")), operator.add, "+")
+        expr = BinaryExpr(inner, LiteralExpr(2), operator.mul, "*")
         assert format_expr(expr) == "(A + B) * 2"
 
     def test_add_of_mul(self):
-        inner = MulExpr(TagExpr(_tag("A")), LiteralExpr(2))
-        expr = AddExpr(inner, TagExpr(_tag("B")))
+        inner = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(2), operator.mul, "*")
+        expr = BinaryExpr(inner, TagExpr(_tag("B")), operator.add, "+")
         assert format_expr(expr) == "(A * 2) + B"
 
     def test_nested_both_sides(self):
-        left = AddExpr(TagExpr(_tag("A")), LiteralExpr(1))
-        right = SubExpr(TagExpr(_tag("B")), LiteralExpr(2))
-        expr = MulExpr(left, right)
+        left = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(1), operator.add, "+")
+        right = BinaryExpr(TagExpr(_tag("B")), LiteralExpr(2), operator.sub, "-")
+        expr = BinaryExpr(left, right, operator.mul, "*")
         assert format_expr(expr) == "(A + 1) * (B - 2)"
 
     def test_leaf_children_no_parens(self):
-        expr = AddExpr(TagExpr(_tag("X")), LiteralExpr(1))
+        expr = BinaryExpr(TagExpr(_tag("X")), LiteralExpr(1), operator.add, "+")
         assert format_expr(expr) == "X + 1"
 
 
 class TestUnary:
     def test_neg(self):
-        expr = NegExpr(TagExpr(_tag("X")))
+        expr = UnaryExpr(TagExpr(_tag("X")), operator.neg, "-")
         assert format_expr(expr) == "-X"
 
     def test_pos(self):
-        expr = PosExpr(TagExpr(_tag("X")))
+        expr = UnaryExpr(TagExpr(_tag("X")), operator.pos, "+")
         assert format_expr(expr) == "+X"
 
     def test_invert(self):
-        expr = InvertExpr(TagExpr(_tag("X")))
+        from pyrung.core.expression import _op_invert
+
+        expr = UnaryExpr(TagExpr(_tag("X")), _op_invert, "~")
         assert format_expr(expr) == "~X"
 
     def test_neg_of_binary(self):
-        inner = AddExpr(TagExpr(_tag("A")), TagExpr(_tag("B")))
-        expr = NegExpr(inner)
+        inner = BinaryExpr(TagExpr(_tag("A")), TagExpr(_tag("B")), operator.add, "+")
+        expr = UnaryExpr(inner, operator.neg, "-")
         assert format_expr(expr) == "-(A + B)"
 
     def test_abs(self):
-        expr = AbsExpr(TagExpr(_tag("X")))
+        expr = UnaryExpr(TagExpr(_tag("X")), abs, "abs")
         assert format_expr(expr) == "abs(X)"
 
 
@@ -151,7 +147,7 @@ class TestMathFunctions:
         assert format_expr(expr) == "sqrt(X)"
 
     def test_sqrt_of_expression(self):
-        inner = AddExpr(TagExpr(_tag("A")), LiteralExpr(1))
+        inner = BinaryExpr(TagExpr(_tag("A")), LiteralExpr(1), operator.add, "+")
         import math
 
         from pyrung.core.expression import MathFuncExpr

@@ -37,12 +37,7 @@ from pyrung.core.condition import (
 )
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
-    ExprCompareEq,
-    ExprCompareGe,
-    ExprCompareGt,
-    ExprCompareLe,
-    ExprCompareLt,
-    ExprCompareNe,
+    ExprCompare,
     Expression,
 )
 from pyrung.core.memory_block import (
@@ -396,10 +391,7 @@ def _condition_children(cond: Condition) -> list[tuple[str, Any]]:
     ):
         return [("indirect_ref", cond.indirect_ref), ("value", cond.value)]
 
-    if isinstance(
-        cond,
-        (ExprCompareEq, ExprCompareNe, ExprCompareLt, ExprCompareLe, ExprCompareGt, ExprCompareGe),
-    ):
+    if isinstance(cond, ExprCompare):
         return [("left", cond.left), ("right", cond.right)]
 
     if isinstance(

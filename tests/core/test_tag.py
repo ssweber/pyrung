@@ -355,9 +355,10 @@ class TestTagInvertOperator:
 
     def test_int_invert_stays_expression(self):
         from pyrung.core import Int
-        from pyrung.core.expression import InvertExpr
+        from pyrung.core.expression import UnaryExpr
 
         step = Int("Step")
         expr = ~step
 
-        assert isinstance(expr, InvertExpr)
+        assert isinstance(expr, UnaryExpr)
+        assert expr.symbol == "~"
