@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Mandatory for OIDC.
-      contents: read
+      contents: write # Upload release assets.
     steps:
       - name: Checkout (official GitHub action)
         uses: actions/checkout@v6
@@ -33,9 +33,25 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
-        
+
       - name: Build package
         run: uv build
 
       - name: Publish to PyPI (using uv)
         uses: pypa/gh-action-pypi-publish@release/v1
+
+      # --- Release assets ---
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build release assets (starter zip + VSIX)
+        run: uv run python devtools/build_release_assets.py --out-dir dist/assets
+
+      - name: Upload release assets
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/assets/* --clobber
