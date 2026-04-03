@@ -167,8 +167,8 @@ class _StructureDecl:
     stride: int | None
     fields: list[tuple[str, str, object]]  # (field_name, type_name, default)
     hw_block_var: str  # "ds", "c", etc. (primary, for named_array)
-    hw_start: int  # first hw address (for named_array)
-    hw_end: int  # last hw address (for named_array)
+    hw_start: int | None  # first hw address (for named_array)
+    hw_end: int | None  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
     always_number: bool = False

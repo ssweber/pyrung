@@ -329,6 +329,10 @@ class _NamedArrayRuntime(_StructRuntime):
             always_number=self.always_number,
         )
 
+    def hardware_span(self, hw_start: int) -> tuple[int, int]:
+        """Return (start, end) for an inclusive hardware select range."""
+        return (hw_start, hw_start + self.count * self.stride - 1)
+
     def map_to(self, target: BlockRange) -> list[MappingEntry]:
         """Map this named-array layout to a hardware range."""
         if not isinstance(target, BlockRange):
