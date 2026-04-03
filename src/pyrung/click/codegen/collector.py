@@ -255,8 +255,8 @@ def _enrich_with_ownership(
             base_type = _TAG_TYPE_MAP.get(runtime.type.name, runtime.type.name)
 
         hw_block_var = ""
-        hw_start = 0
-        hw_end = 0
+        hw_start: int | None = None
+        hw_end: int | None = None
 
         per_field_hw: dict[str, _FieldHw] = {}
         for fn in field_names:
@@ -278,16 +278,16 @@ def _enrich_with_ownership(
             hw_start = addr
             hw_block_var = _MEM_TO_BLOCK.get(mem_type, mem_type.lower())
 
-        # For count=1, stride padding is irrelevant (no next instance).
-        # Cap to field count so map_to range matches the actual fields.
         effective_stride = si.stride
-        if si.count == 1 and effective_stride is not None and effective_stride > len(fields):
-            effective_stride = len(fields)
 
-        # Compute hw_end: use stride to include gap slots for multi-instance,
-        # or fall back to last-field address.
-        if hw_start is not None and effective_stride is not None and si.count > 1:
-            hw_end = hw_start + si.count * effective_stride - 1
+        # Compute hw_end: use runtime.hardware_span when we have a mapped
+        # named_array, or fall back to last-field address lookup.
+        if (
+            hw_start is not None
+            and effective_stride is not None
+            and si.kind == "named_array"
+        ):
+            _, hw_end = runtime.hardware_span(hw_start)
         else:
             last_field_block = runtime._blocks[field_names[-1]]
             last_slot = last_field_block[si.count]
