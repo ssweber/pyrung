@@ -26,6 +26,7 @@ from pyrung import (
     all_of,
     any_of,
     branch,
+    comment,
     copy,
     count_up,
     latch,
@@ -129,7 +130,7 @@ mapping = TagMap(
 
 @program
 def logic():
-    # --- Start/stop/E-stop (process control inputs first) ---
+    comment("Start/stop/E-stop - process control inputs first")
     with Rung(Start, any_of(Auto, Manual)):
         latch(Running)
     with Rung(Stop):
@@ -137,21 +138,18 @@ def logic():
     with Rung(Estop):
         reset(Running)
 
-    # --- Motor output with E-stop safety gating ---
+    comment("Motor output with E-stop safety gating")
     with Rung(~Estop):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
-    # --- Sort state machine ---
-    # States: "i"dle, "d"etecting, "s"orting, "c"ounting
-
-    # IDLE -> DETECTING: box arrives
+    comment("Sort state machine - IDLE to DETECTING: box arrives")
     with Rung(State == "i", rise(EntrySensor)):
         copy("d", State)
 
-    # DETECTING: read size for 0.5 seconds
+    comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == "d"):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
     with Rung(State == "d", SizeReading > SizeThreshold):
@@ -159,18 +157,18 @@ def logic():
     with Rung(DetDone):
         copy("s", State)
 
-    # SORTING: hold diverter for 2 seconds
+    comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == "s"):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
     with Rung(HoldDone):
         copy("c", State)
 
-    # COUNTING: reset and return to idle
+    comment("COUNTING: reset and return to idle")
     with Rung(State == "c"):
         reset(IsLarge)
         copy("i", State)
 
-    # --- Diverter output (single out — auto sort OR manual button) ---
+    comment("Diverter output - auto sort OR manual button")
     with Rung(
         ~Estop,
         any_of(
@@ -180,7 +178,7 @@ def logic():
     ):
         out(DiverterCmd)
 
-    # --- Bin counters ---
+    comment("Bin counters")
     with Rung(rise(BinASensor)):
         count_up(BinADone, BinAAcc, preset=9999).reset(CountReset)
     with Rung(rise(BinBSensor)):

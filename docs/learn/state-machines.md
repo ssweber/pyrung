@@ -23,7 +23,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 
 ```python
 from pyrung import Bool, Int, Char, Program, Rung, PLCRunner, TimeMode, Tms
-from pyrung import on_delay, copy, latch, reset, out, rise
+from pyrung import comment, on_delay, copy, latch, reset, out, rise
 
 # State tag
 State = Char("State")  # "i"dle, "d"etecting, "s"orting, "c"ounting
@@ -44,11 +44,11 @@ HoldDone = Bool("HoldDone")
 HoldAcc  = Int("HoldAcc")
 
 with Program() as logic:
-    # IDLE -> DETECTING: box arrives
+    comment("IDLE to DETECTING: box arrives")
     with Rung(State == "i", rise(EntrySensor)):
         copy("d", State)
 
-    # DETECTING: read size for 0.5 seconds
+    comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == "d"):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
     with Rung(State == "d", SizeReading > SizeThreshold):
@@ -56,7 +56,7 @@ with Program() as logic:
     with Rung(DetDone):
         copy("s", State)
 
-    # SORTING: hold diverter open for 2 seconds
+    comment("SORTING: hold diverter open for 2 seconds")
     with Rung(State == "s"):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
     with Rung(State == "s", IsLarge):
@@ -64,7 +64,7 @@ with Program() as logic:
     with Rung(HoldDone):
         copy("c", State)
 
-    # COUNTING: done, reset for next box
+    comment("COUNTING: reset for next box")
     with Rung(State == "c"):
         reset(IsLarge)
         copy("i", State)

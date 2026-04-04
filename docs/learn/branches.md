@@ -14,7 +14,7 @@ elif manual_mode and diverter_button:
 Ladder logic has two ways to combine conditions. For OR-ing two Bool tags together, use `|`:
 
 ```python
-from pyrung import Bool, Int, Program, Rung, branch, out, latch, reset, any_of, all_of
+from pyrung import Bool, Int, Program, Rung, branch, comment, out, latch, reset, any_of, all_of
 
 Auto          = Bool("Auto")
 Manual        = Bool("Manual")
@@ -50,6 +50,7 @@ Here's the conveyor's control rung. E-stop gates everything. Below that, the mot
 Light = Bool("Light")
 
 with Program() as logic:
+    comment("Motor and diverter outputs - E-stop gates everything")
     with Rung(~Estop):
         with branch(Running):
             out(ConveyorMotor)
@@ -57,9 +58,9 @@ with Program() as logic:
             all_of(Auto, AutoDivert),
             all_of(Manual, DiverterBtn),
         )):
-            out(DiverterCmd)              # Auto or manual diverter control
+            out(DiverterCmd)
 
-    # Start/stop: works in either mode
+    comment("Start/stop - works in either mode")
     with Rung(Start, any_of(Auto, Manual)):
         latch(Running)
     with Rung(Stop):
