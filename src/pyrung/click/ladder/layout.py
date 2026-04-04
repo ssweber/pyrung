@@ -759,11 +759,6 @@ class _LayoutMixin:
                 branch_row.cursor = merge_col + 1
                 branch_row.accepts_terms = index == 0
 
-            branch_rows = self._compact_any_triplet(
-                branch_rows,
-                start_cursor=start_cursor,
-                merge_col=merge_col,
-            )
             active_rows.extend(branch_rows)
 
         if not active_rows:
@@ -806,59 +801,6 @@ class _LayoutMixin:
             target.accepts_terms = False
 
         return merged
-
-    @staticmethod
-    def _contact_count(row: _ConditionRow, *, start: int, end: int) -> int:
-        return sum(1 for col in range(start, end) if row.cells[col] not in {"", "-", "T", "|"})
-
-    def _compact_any_triplet(
-        self,
-        branch_rows: list[_ConditionRow],
-        *,
-        start_cursor: int,
-        merge_col: int,
-    ) -> list[_ConditionRow]:
-        if len(branch_rows) != 3:
-            return branch_rows
-
-        first, middle, last = branch_rows
-        if self._contact_count(first, start=start_cursor, end=merge_col) != 1:
-            return branch_rows
-        if self._contact_count(middle, start=start_cursor, end=merge_col) < 2:
-            return branch_rows
-        if self._contact_count(last, start=start_cursor, end=merge_col) != 1:
-            return branch_rows
-        if middle.cells[merge_col] != "|":
-            return branch_rows
-
-        last_token_col = next(
-            (
-                col
-                for col in range(start_cursor, merge_col)
-                if last.cells[col] not in {"", "-", "T", "|"}
-            ),
-            None,
-        )
-        if last_token_col is None:
-            return branch_rows
-
-        last_token = last.cells[last_token_col]
-        if merge_col > 0 and not last_token.startswith("T:"):
-            first.cells[merge_col] = f"T:{last_token}"
-        else:
-            first.cells[merge_col] = last_token
-        middle.cells[merge_col] = ""
-        middle.cursor = merge_col
-        middle.accepts_terms = False
-        first.accepts_terms = True
-        # After compaction the middle row is the last visible branch —
-        # strip any T: prefix that was applied before compaction.
-        for col in range(start_cursor, merge_col):
-            tok = middle.cells[col]
-            if tok.startswith("T:"):
-                middle.cells[col] = tok[2:]
-                break
-        return [first, middle]
 
     def _write_cell(
         self,

@@ -66,14 +66,13 @@ def _condition_tree(draw, *, n_ors_range=(1, 2), n_prefix_range=(0, 2), n_branch
 
 
 def single_or_tree():
-    """Condition tree with exactly one 2-branch any_of (stable round-trip).
+    """Condition tree with exactly one any_of block (stable round-trip).
 
     Requires at least one prefix contact (``start_cursor > 0``) so the
-    ``T:`` prefix is exercised.  ORs at position 0 and 3+ branch ORs
-    have separate codegen canonicalization paths that don't affect
-    ``T:`` placement.
+    ``T:`` prefix is exercised.  ORs at position 0 have a separate
+    codegen canonicalization path that doesn't affect ``T:`` placement.
     """
-    return _condition_tree(n_ors_range=(1, 1), n_prefix_range=(1, 2), n_branches_range=(2, 2))
+    return _condition_tree(n_ors_range=(1, 1), n_prefix_range=(1, 2))
 
 
 def multi_or_tree():
@@ -119,10 +118,9 @@ def single_or_tree_with_compare(draw):
         return leaves[0] if n == 1 else all_of(*leaves)
 
     # Require ≥1 prefix so T: is exercised (start_cursor > 0).
-    # Use exactly 2 branches to avoid triplet-compaction canonicalization.
     n_prefix = draw(st.integers(min_value=1, max_value=2))
     n_suffix = draw(st.integers(min_value=0, max_value=1))
-    n_branches = 2
+    n_branches = draw(st.integers(min_value=2, max_value=3))
 
     conditions = (
         [gen_leaf() for _ in range(n_prefix)]

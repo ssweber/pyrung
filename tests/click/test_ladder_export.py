@@ -1289,8 +1289,9 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T:X002", "-", "-", "T:X003"], "out(Y001)"),
-        _blank_row("", ["", "C1", "C2", "C3"]),
+        _row("R", ["X001", "T:X002", "-", "-", "T"], "out(Y001)"),
+        _blank_row("", ["", "T:C1", "C2", "C3", "|"]),
+        _blank_row("", ["", "X003", "-", "-"]),
     )
     _assert_native_pattern(pattern_id=6, bundle_rows=bundle.main_rows, expected_rows=expected)
 
