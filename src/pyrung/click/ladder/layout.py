@@ -735,7 +735,7 @@ class _LayoutMixin:
                         for col in range(start_cursor, branch_row.cursor)
                         if branch_row.cells[col] not in {"", "-", "T", "|"}
                     ]
-                    if len(contact_cols) == 1:
+                    if contact_cols:
                         contact_col = contact_cols[0]
                         tok = branch_row.cells[contact_col]
                         if tok and not tok.startswith("T:"):
@@ -851,6 +851,13 @@ class _LayoutMixin:
         middle.cursor = merge_col
         middle.accepts_terms = False
         first.accepts_terms = True
+        # After compaction the middle row is the last visible branch —
+        # strip any T: prefix that was applied before compaction.
+        for col in range(start_cursor, merge_col):
+            tok = middle.cells[col]
+            if tok.startswith("T:"):
+                middle.cells[col] = tok[2:]
+                break
         return [first, middle]
 
     def _write_cell(
