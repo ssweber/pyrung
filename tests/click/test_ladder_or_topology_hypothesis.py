@@ -20,7 +20,6 @@ from pyrung.core import Bool, Int, Program, Rung, all_of, any_of
 from pyrung.core.program import out
 from pyrung.core.tag import TagType
 
-
 # ---------------------------------------------------------------------------
 # Strategies
 # ---------------------------------------------------------------------------
@@ -66,18 +65,13 @@ def _condition_tree(draw, *, n_ors_range=(1, 2), n_prefix_range=(0, 2), n_branch
 
 
 def single_or_tree():
-    """Condition tree with exactly one any_of block (stable round-trip).
-
-    Requires at least one prefix contact (``start_cursor > 0``) so the
-    ``T:`` prefix is exercised.  ORs at position 0 have a separate
-    codegen canonicalization path that doesn't affect ``T:`` placement.
-    """
-    return _condition_tree(n_ors_range=(1, 1), n_prefix_range=(1, 2))
+    """Condition tree with exactly one any_of block including col-0 ORs."""
+    return _condition_tree(n_ors_range=(1, 1))
 
 
 def multi_or_tree():
-    """Condition tree with 1-2 any_of blocks (tests wider structural space)."""
-    return _condition_tree(n_ors_range=(1, 2))
+    """Condition tree with 1-3 any_of blocks (tests wider structural space)."""
+    return _condition_tree(n_ors_range=(1, 3))
 
 
 @st.composite
@@ -198,8 +192,7 @@ def _check_first_row_wired(data_rows):
     assert first[0] == "R", f"First data row marker is {first[0]!r}, expected 'R'"
     for col in range(1, _CONDITION_COLS + 1):
         assert first[col] != "", (
-            f"First data row has empty cell at column {col} "
-            f"(should be contact, T, |, or -)"
+            f"First data row has empty cell at column {col} (should be contact, T, |, or -)"
         )
 
 
@@ -232,9 +225,7 @@ def _check_last_row_no_tee_prefix(data_rows):
     last = data_rows[-1]
     for col in range(1, _CONDITION_COLS + 1):
         cell = last[col]
-        assert not cell.startswith("T:"), (
-            f"Last data row has T: prefix at column {col}: {cell!r}"
-        )
+        assert not cell.startswith("T:"), f"Last data row has T: prefix at column {col}: {cell!r}"
 
 
 def _check_round_trip(bundle):
@@ -270,9 +261,8 @@ def _format_rows(rows: tuple[tuple[str, ...], ...]) -> str:
 def test_or_topology_structural_invariants(tree):
     """Structural invariants hold for any generated OR/AND condition tree.
 
-    Covers single and series any_of blocks.  Does not assert round-trip
-    stability because the codegen parser canonicalizes series ORs into a
-    different (but equivalent) form.
+    Covers single and series any_of blocks with 1-3 OR groups,
+    0-2 prefix contacts, and 2-4 branches per OR.
     """
     conditions, tags = tree
     bundle, mapping = _export(conditions, tags)
@@ -287,11 +277,23 @@ def test_or_topology_structural_invariants(tree):
 @given(tree=single_or_tree())
 @settings(max_examples=500, deadline=None)
 def test_or_topology_round_trip(tree):
-    """Exported CSV survives parse → re-export for single-OR condition trees.
+    """Exported CSV survives parse → re-export for single-OR trees.
 
-    This is the strongest invariant: if a ``T:`` prefix is missing or
-    misplaced, the parser will misinterpret the OR structure and the
-    re-exported CSV will differ from the original.
+    Covers ORs at column 0 (no prefix) and mid-rung (with prefix).
+    """
+    conditions, tags = tree
+    bundle, _mapping = _export(conditions, tags)
+
+    _check_round_trip(bundle)
+
+
+@given(tree=multi_or_tree())
+@settings(max_examples=500, deadline=None)
+def test_or_topology_round_trip_multi(tree):
+    """Exported CSV survives parse → re-export for series OR trees.
+
+    Exercises 1-3 sequential any_of blocks with asymmetric branch
+    lengths — the case that triggered the frozen-row merge wire bug.
     """
     conditions, tags = tree
     bundle, _mapping = _export(conditions, tags)

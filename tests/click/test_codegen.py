@@ -974,15 +974,7 @@ class TestRoundTrip:
         )
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        # Native merged-continuation topology for series ORs decodes to a
-        # canonicalized equivalent form in codegen today. Keep this test as
-        # a round-trip guard for parser/exporter stability.
-        assert repro[0] == orig[0]
-        assert repro[-1] == orig[-1]
-        assert repro[1][-1] == "out(Y001)"
-        assert repro[1][1] == "X001"
-        assert repro[1][2] == "T"
-        assert repro[2][1] == "X002"
+        assert orig == repro
 
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs from same conditions."""

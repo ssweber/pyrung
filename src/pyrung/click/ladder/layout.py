@@ -433,13 +433,14 @@ class _LayoutMixin:
             return frozen_rows
 
         if frozen_rows:
-            return self._merge_any_frozen_rows(active_rows, frozen_rows)
+            return self._merge_any_frozen_rows(active_rows, frozen_rows, start_cursor)
         return active_rows
 
     def _merge_any_frozen_rows(
         self,
         active_rows: list[_ConditionRow],
         frozen_rows: list[_ConditionRow],
+        start_cursor: int,
     ) -> list[_ConditionRow]:
         merged = [row.clone() for row in active_rows]
         if not merged:
@@ -453,7 +454,10 @@ class _LayoutMixin:
                 continue
 
             target = merged[target_index]
-            for col in range(split_col):
+            # Only dedup inherited prefix cells (before this OR's branches).
+            # Cells at start_cursor and beyond belong to the current OR's
+            # branch content (e.g. wire fills) and must not be cleared.
+            for col in range(min(split_col, start_cursor)):
                 if target.cells[col] == merged[0].cells[col]:
                     target.cells[col] = ""
 
