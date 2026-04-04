@@ -34,7 +34,7 @@ def _get_version() -> str:
 
 
 def _build_starter_zip(out_dir: Path, version: str) -> Path:
-    """Generate the starter project zip from click_starter.py."""
+    """Generate the starter project zip from click_conveyor.py."""
     import os
     import tempfile
 
@@ -44,10 +44,10 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
     os.environ["PYRUNG_DAP_ACTIVE"] = "1"
 
     # Force-reload so the guard suppresses output
-    if "examples.click_starter" in sys.modules:
-        del sys.modules["examples.click_starter"]
+    if "examples.click_conveyor" in sys.modules:
+        del sys.modules["examples.click_conveyor"]
     sys.path.insert(0, str(ROOT))
-    from examples.click_starter import logic, mapping
+    from examples.click_conveyor import logic, mapping
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -69,7 +69,7 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
         # 3. Copy original source
         original_dir = tmp / "original"
         original_dir.mkdir()
-        shutil.copy2(ROOT / "examples" / "click_starter.py", original_dir)
+        shutil.copy2(ROOT / "examples" / "click_conveyor.py", original_dir)
 
         # 4. Zip everything
         zip_name = f"pyrung-starter-{version}.zip"

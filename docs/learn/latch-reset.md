@@ -4,22 +4,23 @@
 
 ```python
 if start_pressed:
-    motor_running = True
+    conveyor_running = True
 # But what turns it off?
 # And what if start_pressed goes False?
 ```
 
 ## The problem
 
-In the real world, you press a momentary "Start" button. Your finger comes off. The motor should keep running. `out` won't work here because it de-energizes the moment the rung goes false.
+In the real world, you press a momentary "Start" button. Your finger comes off. The conveyor should keep running. `out` won't work here because it de-energizes the moment the rung goes false.
 
 ## The ladder logic way
 
 ```python
-from pyrung import Bool, Program, Rung, latch, reset
+from pyrung import Bool, Program, Rung, PLCRunner, latch, reset
 
 Start   = Bool("Start")
 Stop    = Bool("Stop")
+Estop   = Bool("Estop")
 Running = Bool("Running")
 
 with Program() as logic:
@@ -27,6 +28,8 @@ with Program() as logic:
         latch(Running)       # SET: Running = True, stays True
     with Rung(Stop):
         reset(Running)       # RESET: Running = False
+    with Rung(Estop):
+        reset(Running)       # E-stop also resets
 ```
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
@@ -40,19 +43,23 @@ with runner.active():
     runner.step()
     assert Running.value is True
 
-    Start.value = False        # Finger off the button
+    Start.value = False          # Finger off the button
     runner.step()
-    assert Running.value is True   # Still running!
+    assert Running.value is True  # Still running!
 
     Stop.value = True
     runner.step()
-    assert Running.value is False  # Now it stops
+    assert Running.value is False
 ```
 
 ## A subtlety: rung order matters
 
-What if Start and Stop are both pressed at the same time? The answer: **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional. In industrial safety, stop always wins. Rung ordering is a design decision.
+What if Start and Stop are both pressed at the same time? The answer: **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional. In industrial safety, stop always wins. The E-stop rung is last for the same reason.
 
 ## Exercise
 
-Build a "toggle" pattern: one button press turns a light on, the next press turns it off. (Hint: you'll need `rise()` for edge detection, see the [Conditions reference](../instructions/conditions.md). Think about why you can't just use `Button` as the condition.)
+Build an E-stop test: start the conveyor, then press E-stop. Verify it stops. Then verify that pressing Start while E-stop is still active does NOT restart the conveyor. (Hint: you need E-stop to block the start, not just reset after it. Think about adding `~Estop` as a condition on the latch rung.)
+
+---
+
+The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `calc`.

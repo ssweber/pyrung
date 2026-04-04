@@ -8,7 +8,9 @@ pyrung won't let you cheat: if you try to write a `for` loop where a scan cycle 
 
 ---
 
-## How this guide works
+## What you're building
+
+Every lesson adds a feature to the same project: a **conveyor sorting station**. Boxes arrive on a belt, get measured, and a diverter gate routes them to the correct bin. By the end, you'll have a system with start/stop/e-stop, auto and manual modes, a state-driven sorting sequence, structured tags for the equipment, a full test suite, and a path to real hardware.
 
 Each lesson introduces one ladder logic concept, shows you the Python you'd instinctively reach for, then shows you the ladder logic way and *why* it works that way in a machine that controls physical things. Every lesson ends with an exercise you can run and test.
 
@@ -20,17 +22,17 @@ pip install pyrung
 
 ## Lessons
 
-1. [The Scan Cycle](scan-cycle.md) -- How PLCs execute: always running, every rung, every scan.
-2. [Tags](tags.md) -- Typed, sized, mapped to memory. Not just variables.
-3. [Latch and Reset](latch-reset.md) -- Sticky outputs for momentary inputs.
-4. [Assignment](assignment.md) -- Moving data with `copy` and `calc`.
-5. [Timers](timers.md) -- Non-blocking time accumulation across scans.
-6. [Counters](counters.md) -- Edge-triggered counting without loops.
-7. [State Machines](state-machines.md) -- Timer-driven transitions without `while` or `sleep`.
-8. [Branches and OR Logic](branches.md) -- Parallel paths and combined conditions.
-9. [Structured Tags and Blocks](structured-tags.md) -- UDTs, arrays, and contiguous memory.
-10. [Testing Like You Mean It](testing.md) -- pytest, forces, history, and the debugger.
-11. [From Simulation to Hardware](hardware.md) -- Modbus, Click PLC export, CircuitPython deployment.
+1. [The Scan Cycle](scan-cycle.md) -- A button runs the conveyor motor.
+2. [Tags](tags.md) -- Speed setpoint and an over-speed alarm.
+3. [Latch and Reset](latch-reset.md) -- Start, stop, and emergency stop.
+4. [Assignment](assignment.md) -- Record box sizes and keep a running total.
+5. [Timers](timers.md) -- Hold the diverter gate open for 2 seconds.
+6. [Counters](counters.md) -- Count boxes into each bin.
+7. [State Machines](state-machines.md) -- The full sorting sequence.
+8. [Branches and OR Logic](branches.md) -- Auto and manual modes.
+9. [Structured Tags and Blocks](structured-tags.md) -- A Bin UDT and a sort log.
+10. [Testing Like You Mean It](testing.md) -- A pytest suite for the whole system.
+11. [From Simulation to Hardware](hardware.md) -- Map to a Click PLC or P1AM-200.
 
 ---
 

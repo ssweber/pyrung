@@ -3,7 +3,7 @@
 ## The Python instinct
 
 ```python
-motor_running = False  # Create it, set it, done
+conveyor_speed = 0  # What type? How big? Who cares?
 ```
 
 ## The ladder logic way
@@ -11,9 +11,9 @@ motor_running = False  # Create it, set it, done
 ```python
 from pyrung import Bool, Int, Real
 
-MotorRunning = Bool("MotorRunning")   # 1 bit
-Speed        = Int("Speed")           # 16-bit signed integer
-Temperature  = Real("Temperature")    # 32-bit float
+ConveyorSpeed = Int("ConveyorSpeed")     # 16-bit signed integer, in mm/s
+SpeedLimit    = Int("SpeedLimit")        # Alarm threshold
+Temperature   = Real("Temperature")     # 32-bit float
 ```
 
 Tags are typed and sized. You can't put a float in a Bool or store a negative number in an unsigned Word. This reflects real PLC hardware where each tag maps to a specific region of memory with a fixed width.
@@ -25,28 +25,34 @@ The important distinction is **retentive** vs **non-retentive**. When a PLC goes
 The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI or a dataview window. In pyrung, that's the `runner.active()` block:
 
 ```python
-from pyrung import Bool, Real, Program, Rung, PLCRunner, out
+from pyrung import Bool, Int, Program, Rung, PLCRunner, out
 
-Alarm    = Bool("Alarm")
-Setpoint = Real("Setpoint")
+ConveyorSpeed = Int("ConveyorSpeed")
+SpeedLimit    = Int("SpeedLimit")
+OverSpeed     = Bool("OverSpeed")
 
 with Program() as logic:
-    with Rung(Setpoint > 100.0):
-        out(Alarm)
+    with Rung(ConveyorSpeed > SpeedLimit):
+        out(OverSpeed)
 
 runner = PLCRunner(logic)
 with runner.active():
-    Setpoint.value = 50.0          # Like typing into a dataview
+    SpeedLimit.value = 500             # Like typing into a dataview
+    ConveyorSpeed.value = 300
     runner.step()
-    assert Alarm.value is False
+    assert OverSpeed.value is False
 
-    Setpoint.value = 150.0         # Change the setpoint
+    ConveyorSpeed.value = 600          # Speed exceeds limit
     runner.step()
-    assert Alarm.value is True     # Program reacts on the next scan
+    assert OverSpeed.value is True     # Program reacts on the next scan
 ```
 
-`Setpoint.value = 150.0` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. This is the same relationship an operator has with a real PLC: they set inputs and parameters, the logic does the rest.
+`ConveyorSpeed.value = 600` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. This is the same relationship an operator has with a real PLC: they set inputs and parameters, the logic does the rest.
 
 ## Exercise
 
-Create an Int tag called `Count` and a Bool called `Alarm`. Write a rung that energizes the Alarm when Count is greater than 10. From outside the program, set Count to 5, step, and verify the Alarm is off. Then set it to 15, step, and verify the Alarm is on.
+Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold.
+
+---
+
+The motor turns on and off with the button, but in a real factory you press Start and walk away. The motor needs to stay running after you release the button. That's latch and reset.

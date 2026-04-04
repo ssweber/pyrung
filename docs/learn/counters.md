@@ -12,26 +12,62 @@ for item in items:
 
 ## The ladder logic way
 
-There's no `for` loop. There's no "list of items." There's a sensor that goes True every time a box passes by. You count the edges.
+There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in. You count the edges.
 
 ```python
-from pyrung import Bool, Dint, Program, Rung, count_up, rise
+from pyrung import Bool, Dint, Program, Rung, PLCRunner, count_up, rise
 
-Sensor    = Bool("Sensor")
-BatchDone = Bool("BatchDone")
-BatchAcc  = Dint("BatchAcc")
-BatchRst  = Bool("BatchReset")
+BinASensor = Bool("BinASensor")
+BinBSensor = Bool("BinBSensor")
+BinADone   = Bool("BinADone")
+BinAAcc    = Dint("BinAAcc")
+BinBDone   = Bool("BinBDone")
+BinBAcc    = Dint("BinBAcc")
+CountReset = Bool("CountReset")
 
 with Program() as logic:
-    with Rung(rise(Sensor)):
-        count_up(BatchDone, BatchAcc, preset=10) \
-            .reset(BatchRst)
+    with Rung(rise(BinASensor)):
+        count_up(BinADone, BinAAcc, preset=10) \
+            .reset(CountReset)
+    with Rung(rise(BinBSensor)):
+        count_up(BinBDone, BinBAcc, preset=10) \
+            .reset(CountReset)
 ```
 
-`rise(Sensor)` fires for exactly one scan when Sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
+`rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
 
-Notice `.reset(BatchRst)` on its own line below the counter. In Python, you'd pass all behavior into a single function call or handle reset in separate logic. In a ladder diagram, an instruction block like a counter is more like a chip with multiple input pins: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `BatchRst` goes true, the counter's accumulator and done bit clear regardless of what the rung is doing. Timers have the same pattern, and you'll see `.reset()` on retentive timers and bidirectional counters too.
+Notice `.reset(CountReset)` on its own line below the counter. In Python, you'd pass all behavior into a single function call or handle reset in separate logic. In a ladder diagram, an instruction block like a counter is more like a chip with multiple input pins: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the counter's accumulator and done bit clear regardless of what the rung is doing. Timers have the same pattern.
+
+## Try it
+
+```python
+runner = PLCRunner(logic)
+with runner.active():
+    # Simulate 3 boxes into Bin A
+    for _ in range(3):
+        BinASensor.value = True
+        runner.step()
+        BinASensor.value = False
+        runner.step()
+
+    assert BinAAcc.value == 3
+    assert BinADone.value is False
+
+    # Simulate 7 more
+    for _ in range(7):
+        BinASensor.value = True
+        runner.step()
+        BinASensor.value = False
+        runner.step()
+
+    assert BinAAcc.value == 10
+    assert BinADone.value is True   # Batch complete!
+```
 
 ## Exercise
 
-Count 5 button presses, then turn on a light. Add a reset button that clears the count and turns the light off. Test the full sequence: 4 presses (light still off), 5th press (light on), reset (light off, count zero).
+Add a total counter (`TotalAcc`) that counts every box regardless of which bin, triggered by an `EntrySensor`. Add a `TotalReset` button. Test that after 5 boxes (3 to Bin A, 2 to Bin B), the total is 5 and the individual counts are correct. Then reset and verify all three counters clear.
+
+---
+
+We have sensors, timers, counters, and a diverter. But nothing coordinates the sequence: detect a box, read its size, position the diverter, wait, count. That's a state machine.

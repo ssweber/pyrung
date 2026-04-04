@@ -4,8 +4,9 @@
 
 ```python
 import time
-time.sleep(3)  # Block for 3 seconds
-motor_running = True
+diverter_open = True
+time.sleep(2)  # Block for 2 seconds while the box passes
+diverter_open = False
 ```
 
 ## Why that's wrong here
@@ -16,45 +17,49 @@ A PLC can't sleep. It has to keep scanning because sensors are still reading, sa
 
 Timers **accumulate** across scans: every scan where the rung is true, the timer adds a little more time, and when the accumulator reaches the preset, it fires.
 
-```python
-from pyrung import Bool, Int, Program, Rung, Tms, on_delay, latch
+The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:
 
-Start     = Bool("Start")
-Running   = Bool("Running")
-DelayDone = Bool("DelayDone")
-DelayAcc  = Int("DelayAcc")
+```python
+from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms, on_delay, out
+
+EntrySensor = Bool("EntrySensor")
+DiverterCmd = Bool("DiverterCmd")
+HoldDone    = Bool("HoldDone")
+HoldAcc     = Int("HoldAcc")
 
 with Program() as logic:
-    with Rung(Start):
-        on_delay(DelayDone, DelayAcc, preset=3000, unit=Tms)  # 3 seconds
-    with Rung(DelayDone):
-        latch(Running)
+    with Rung(EntrySensor):
+        on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)  # 2 seconds
+    with Rung(EntrySensor, ~HoldDone):
+        out(DiverterCmd)         # Hold diverter open while timing
 ```
 
-This reads: "While Start is pressed, accumulate time. After 3000 ms, set DelayDone. When DelayDone is true, latch Running." If you release Start before 3 seconds, the accumulator resets (that's `on_delay` / TON behavior).
+This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldDone` goes true, `~HoldDone` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
 
 ## Test it deterministically
 
 ```python
-from pyrung import PLCRunner, TimeMode
-
 runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
 
 with runner.active():
-    Start.value = True
+    EntrySensor.value = True
 
-runner.run(cycles=299)                        # 2.99 seconds
+runner.run(cycles=199)                        # 1.99 seconds
 with runner.active():
-    assert Running.value is False             # Not yet
+    assert DiverterCmd.value is True          # Diverter still held open
 
-runner.step()                                 # 3.00 seconds
+runner.step()                                 # 2.00 seconds
 with runner.active():
-    assert Running.value is True              # Now!
+    assert DiverterCmd.value is False         # Released -- box has passed
 ```
 
 `FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. This is why pyrung exists. Try writing this test against real hardware.
 
 ## Exercise
 
-Build a "press and hold" button: the motor only starts if you hold the Start button for 2 full seconds. If you release early, nothing happens. Test both paths: the successful hold and the early release.
+Build a startup delay: after pressing Start, the conveyor waits 3 seconds before the motor turns on (safety: gives workers time to clear the area). Test both paths: the full 3-second wait, and releasing Start early (timer resets, motor never starts).
+
+---
+
+The diverter holds long enough for one box. But how many boxes have gone to each bin? We need to count sensor edges without looping.
