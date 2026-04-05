@@ -4,7 +4,7 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 
-from pyrung.click.codegen.constants import _CONDITION_COLS, _PIN_RE
+from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
@@ -43,6 +43,17 @@ def _cell_at(rows: list[list[str]], r: int, c: int) -> str:
     if 0 <= r < len(rows) and 0 <= c < _CONDITION_COLS:
         return rows[r][c + 1]  # +1 to skip marker column
     return ""
+
+
+def _cell_sides(cell: str) -> tuple[str, ...]:
+    """Return the exposed sides for a Click ladder cell token."""
+    if not cell:
+        return ()
+    if cell.startswith("T:"):
+        return ("left", "right", "down")
+    if cell in _ADJACENCY:
+        return _ADJACENCY[cell]
+    return ("left", "right")
 
 
 def _is_pin_row(row: list[str]) -> bool:
@@ -99,11 +110,7 @@ class _Edge:
 
 def _cell_has_down(cell: str) -> bool:
     """Does this cell have a down exit?"""
-    if not cell:
-        return False
-    if cell.startswith("T:"):
-        return True
-    return cell in ("T", "|")
+    return "down" in _cell_sides(cell)
 
 
 def _grid_to_graph(
@@ -211,7 +218,14 @@ def _grid_to_graph(
         if r in pin_row_set:
             continue
         for c in range(_CONDITION_COLS - 1):
-            if (r, c) in right_port and (r, c + 1) in left_port:
+            left_cell = _cell_at(rows, r, c)
+            right_cell = _cell_at(rows, r, c + 1)
+            if (
+                "right" in _cell_sides(left_cell)
+                and "left" in _cell_sides(right_cell)
+                and (r, c) in right_port
+                and (r, c + 1) in left_port
+            ):
                 uf.union(right_port[r, c], left_port[r, c + 1])
 
     # 4. Build edges from content cells

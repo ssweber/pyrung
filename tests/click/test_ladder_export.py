@@ -226,6 +226,155 @@ def test_parent_instruction_after_branch_stays_on_parent_path():
     )
 
 
+def test_branch_local_or_expands_with_click_topology():
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(A):
+            out(Y1)
+            with branch(any_of(B, C)):
+                out(Y2)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], Y1: y[1], Y2: y[2]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["", "T:X002", "T"], "out(Y002)"),
+        _blank_row("", ["", "X003"]),
+        _END_ROW,
+    )
+
+
+def test_branch_local_or_with_series_suffix_stays_mechanical():
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    D = Bool("D")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(A):
+            out(Y1)
+            with branch(any_of(B, C), D):
+                out(Y2)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
+        _blank_row("", ["", "X003"]),
+        _END_ROW,
+    )
+
+
+def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    D = Bool("D")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+    Y3 = Bool("Y3")
+
+    with Program() as logic:
+        with Rung(A):
+            out(Y1)
+            with branch(any_of(B, C), D):
+                out(Y2)
+            out(Y3)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2], Y3: y[3]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "T"], "out(Y001)"),
+        _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
+        _blank_row("", ["", "T:X003"]),
+        _row("", ["", "-", "-", "-"], "out(Y003)"),
+        _END_ROW,
+    )
+
+
+def test_branch_with_series_then_local_or_keeps_click_merge_topology():
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    D = Bool("D")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(A):
+            with branch(B, any_of(C, D)):
+                out(Y1)
+            out(Y2)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
+        _blank_row("", ["", "|", "X004"]),
+        _row("", ["", "-", "-", "-"], "out(Y002)"),
+        _END_ROW,
+    )
+
+
+def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_visible():
+    A = Bool("A")
+    B = Bool("B")
+    C = Bool("C")
+    D = Bool("D")
+    E = Bool("E")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(A):
+            with branch(B, any_of(C, D, E)):
+                out(Y1)
+            out(Y2)
+
+    mapping = TagMap(
+        {A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], Y1: y[1], Y2: y[2]},
+        include_system=False,
+    )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
+        _blank_row("", ["", "|", "T:X004", "|"]),
+        _blank_row("", ["", "|", "X005"]),
+        _row("", ["", "-", "-", "-"], "out(Y002)"),
+        _END_ROW,
+    )
+
+
 def test_multiple_instruction_rows_share_powered_path():
     A = Bool("A")
     B = Bool("B")
@@ -1920,33 +2069,68 @@ def test_receive_block_range_token():
     )
 
 
-# --- Nested branch export rejection ---
+# --- Nested branch export ---
 
 
-def test_nested_branch_export_raises_clear_error():
-    """Nested branches produce a clear LadderExportError, not a generic failure."""
+def test_nested_branch_export_pushes_later_siblings_down():
+    """Nested branches keep source order and push later siblings below the nested block."""
     A = Bool("A")
     B = Bool("B")
     C = Bool("C")
-    Light = Bool("Light")
+    D = Bool("D")
+    Y1 = Bool("Y1")
+    Y2 = Bool("Y2")
+    Y3 = Bool("Y3")
 
     with Program() as logic:
         with Rung(A):
             with branch(B):
+                out(Y1)
                 with branch(C):
-                    out(Light)
+                    out(Y2)
+            with branch(D):
+                out(Y3)
 
     mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Light: y[1]},
+        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2], Y3: y[3]},
         include_system=False,
     )
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert bundle.main_rows == (
+        _header(),
+        _row("R", ["X001", "X002", "T"], "out(Y001)"),
+        _row("", ["", "", "X003"], "out(Y002)"),
+        _blank_row("", ["", "T"]),
+        _row("", ["", "X004"], "out(Y003)"),
+        _END_ROW,
+    )
+
+
+def test_branch_rendered_height_over_32_rows_raises_clear_error():
+    A = Bool("A")
+    conditions = [Bool(f"C{i}") for i in range(1, 33)]
+    outputs = [Bool(f"O{i}") for i in range(1, 34)]
+
+    with Program(strict=False) as logic:
+        with Rung(A):
+            out(outputs[0])
+            for condition, out_tag in zip(conditions, outputs[1:], strict=True):
+                with branch(condition):
+                    out(out_tag)
+
+    mapping = {A: x[1]}
+    for idx, condition in enumerate(conditions, start=1):
+        mapping[condition] = c[idx]
+    for idx, out_tag in enumerate(outputs, start=100):
+        mapping[out_tag] = c[idx]
 
     with pytest.raises(LadderExportError) as exc_info:
-        pyrung_to_ladder(logic, mapping)
+        pyrung_to_ladder(logic, TagMap(mapping, include_system=False))
 
     issue = exc_info.value.issues[0]
-    assert "Nested branch" in str(issue["message"])
-    assert "branch" in str(issue["path"])
+    assert "32-row limit" in str(issue["message"])
+    assert issue["path"] == "main.rung[0]"
 
 
 # ---------------------------------------------------------------------------

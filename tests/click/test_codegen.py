@@ -1131,6 +1131,132 @@ class TestRoundTrip:
 
         assert orig == repro
 
+    def test_branch_local_or(self, tmp_path: Path):
+        """branch(any_of(...)) survives round-trip and stays branch-local."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(any_of(B, C)):
+                    out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "branch(X002 | X003)" in code
+        assert orig == repro
+
+    def test_branch_local_or_with_series_suffix_and_sibling_outputs(self, tmp_path: Path):
+        """Local branch OR with siblings before/after the branch stays row-identical."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+                with branch(any_of(B, C), D):
+                    out(Y2)
+                out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "branch(X002 | X003, X004)" in code
+        assert orig == repro
+
+    def test_branch_series_then_local_or_followed_by_sibling_output(self, tmp_path: Path):
+        """A branch block can end on a lower OR leg and still resume the parent rung correctly."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                with branch(B, any_of(C, D)):
+                    out(Y1)
+                out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "with Rung(X001):" in code
+        assert "with branch(X002, X003 | X004):" in code
+        assert orig == repro
+
+    def test_branch_series_then_three_way_local_or_followed_by_sibling_output(
+        self, tmp_path: Path
+    ):
+        """Three-way branch-local OR keeps the parent continuation visible on intermediate rows."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        E = Bool("E")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                with branch(B, any_of(C, D, E)):
+                    out(Y1)
+                out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "with Rung(X001):" in code
+        assert "with branch(X002, any_of(X003, X004, X005)):" in code
+        assert orig == repro
+
+    def test_nested_branch(self, tmp_path: Path):
+        """Nested branch blocks export/import as equivalent row-identical topology."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                with branch(B):
+                    out(Y1)
+                    with branch(C):
+                        out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert "branch(" in code
+        assert orig == repro
+
     def test_branch_2_deep(self, tmp_path: Path):
         """2-deep nesting emits flat branch(B, C)."""
         A = Bool("A")
@@ -2441,6 +2567,32 @@ class TestContinuedRoundTrip:
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
         assert ".continued()" in code
+        assert orig == repro
+
+    def test_continuation_with_branch_local_or(self, tmp_path: Path):
+        """continued() stays stable when the continued rung has branch-local OR."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+
+        with Program() as logic:
+            with Rung(A):
+                out(Y1)
+            with Rung(B).continued():
+                with branch(any_of(C, D)):
+                    out(Y2)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        assert ".continued()" in code
+        assert "X003 | X004" in code
         assert orig == repro
 
 

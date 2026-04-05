@@ -116,6 +116,7 @@ class _LadderExporter(
                 output_token="NOP",
                 first_marker=first_marker,
             )
+            self._assert_rung_height(rows=output_rows, path=path, source=rung)
             return comment_rows + output_rows
 
         if any(
@@ -132,24 +133,28 @@ class _LadderExporter(
                     source=rung,
                 )
             self._forloop_count += 1
-            return comment_rows + self._render_forloop_instruction(
+            output_rows = self._render_forloop_instruction(
                 instruction=rung._instructions[0],
                 conditions=rung._conditions,
                 path=f"{path}.instruction[0](ForLoopInstruction)",
             )
+            self._assert_rung_height(rows=output_rows, path=path, source=rung)
+            return comment_rows + output_rows
 
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
 
         if rung._branches:
             branch_rows = self._render_rung_with_branches(
                 rung,
-                condition_rows=condition_rows,
                 path=path,
                 first_marker=first_marker,
             )
+            pin_rows = self._branch_pin_rows(rung, path=path)
             if not branch_rows:
                 return []
-            return comment_rows + branch_rows
+            rows = branch_rows + pin_rows
+            self._assert_rung_height(rows=rows, path=path, source=rung)
+            return comment_rows + rows
 
         output_rows: list[tuple[str, ...]]
         pin_rows: list[tuple[str, ...]]
@@ -171,6 +176,7 @@ class _LadderExporter(
 
         rows = comment_rows + output_rows
         rows.extend(pin_rows)
+        self._assert_rung_height(rows=output_rows + pin_rows, path=path, source=rung)
         return rows
 
     def _ensure_subroutine_return_tail(
@@ -247,6 +253,21 @@ class _LadderExporter(
                 "source_file": source_file,
                 "source_line": source_line,
             }
+        )
+
+    def _assert_rung_height(
+        self,
+        *,
+        rows: list[tuple[str, ...]],
+        path: str,
+        source: Any,
+    ) -> None:
+        if len(rows) <= 32:
+            return
+        self._raise_issue(
+            path=path,
+            message="Rendered rung exceeds Click's 32-row limit.",
+            source=source,
         )
 
 
