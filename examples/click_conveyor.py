@@ -16,7 +16,6 @@ import os
 
 from pyrung import (
     Bool,
-    Char,
     Dint,
     Int,
     PLCRunner,
@@ -36,7 +35,7 @@ from pyrung import (
     reset,
     rise,
 )
-from pyrung.click import TagMap, c, ct, ctd, ds, t, td, txt, x, y
+from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
 
 # ---------------------------------------------------------------------------
 # Tags — inputs
@@ -65,7 +64,7 @@ Running = Bool("Running")  # C001 — motor run latch
 IsLarge = Bool("IsLarge")  # C002 — size classification result
 CountReset = Bool("CountReset")  # C003 — counter reset button
 
-State = Char("State")  # TXT001 — sort sequence state
+State = Int("State")  # DS003 — sort sequence state (0=idle, 1=detecting, 2=sorting, 3=counting)
 
 SizeReading = Int("SizeReading")  # DS001 — analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # DS002 — small/large cutoff
@@ -106,7 +105,7 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # Data
-        State.map_to(txt[1]),
+        State.map_to(ds[3]),
         SizeReading.map_to(ds[1]),
         SizeThreshold.map_to(ds[2]),
         # Timers
@@ -146,33 +145,33 @@ def logic():
             out(StatusLight)
 
     comment("Sort state machine - IDLE to DETECTING: box arrives")
-    with Rung(State == "i", rise(EntrySensor)):
-        copy("d", State)
+    with Rung(State == 0, rise(EntrySensor)):
+        copy(1, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == "d"):
+    with Rung(State == 1):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
-    with Rung(State == "d", SizeReading > SizeThreshold):
+    with Rung(State == 1, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetDone):
-        copy("s", State)
+        copy(2, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == "s"):
+    with Rung(State == 2):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
     with Rung(HoldDone):
-        copy("c", State)
+        copy(3, State)
 
     comment("COUNTING: reset and return to idle")
-    with Rung(State == "c"):
+    with Rung(State == 3):
         reset(IsLarge)
-        copy("i", State)
+        copy(0, State)
 
     comment("Diverter output - auto sort OR manual button")
     with Rung(
         ~Estop,
         any_of(
-            all_of(State == "s", IsLarge, Auto),
+            all_of(State == 2, IsLarge, Auto),
             all_of(Manual, DiverterBtn),
         ),
     ):
@@ -193,7 +192,7 @@ runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     with runner.active():
-        State.value = "i"
+        State.value = 0
         Auto.value = True
         SizeThreshold.value = 100
 

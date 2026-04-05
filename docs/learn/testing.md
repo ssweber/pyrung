@@ -11,7 +11,7 @@ def runner():
     r = PLCRunner(logic)
     r.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
     with r.active():
-        State.value = "i"         # Start idle
+        State.value = 0           # Start idle
         Auto.value = True         # Default to auto mode
     return r
 
@@ -58,7 +58,7 @@ def test_sorting_sequence(runner):
     runner.run(cycles=250)                   # Past hold period
     with runner.active():
         assert DiverterCmd.value is False    # Retracted after sort
-        assert State.value == "i"            # Back to idle
+        assert State.value == 0              # Back to idle
 ```
 
 ## History for inspection

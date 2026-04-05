@@ -73,7 +73,7 @@ def test_sort_large_box(click_conveyor: ModuleType) -> None:
     runner.add_force(click_conveyor.Auto, True)
 
     with runner.active():
-        click_conveyor.State.value = "i"
+        click_conveyor.State.value = 0
         click_conveyor.SizeThreshold.value = 100
         click_conveyor.Start.value = True
     runner.step()
@@ -85,13 +85,13 @@ def test_sort_large_box(click_conveyor: ModuleType) -> None:
     runner.step()
 
     with runner.active():
-        assert click_conveyor.State.value == "d"  # Detecting
+        assert click_conveyor.State.value == 1  # Detecting
 
     # Run through detection (0.5s = 50 scans)
     runner.run(cycles=50)
 
     with runner.active():
-        assert click_conveyor.State.value == "s"  # Sorting
+        assert click_conveyor.State.value == 2  # Sorting
         assert click_conveyor.DiverterCmd.value is True  # Extended
 
     runner.remove_force(click_conveyor.Auto)
@@ -104,7 +104,7 @@ def test_sort_small_box(click_conveyor: ModuleType) -> None:
     runner.add_force(click_conveyor.Auto, True)
 
     with runner.active():
-        click_conveyor.State.value = "i"
+        click_conveyor.State.value = 0
         click_conveyor.SizeThreshold.value = 100
         click_conveyor.Start.value = True
     runner.step()
@@ -119,7 +119,7 @@ def test_sort_small_box(click_conveyor: ModuleType) -> None:
     runner.run(cycles=50)
 
     with runner.active():
-        assert click_conveyor.State.value == "s"
+        assert click_conveyor.State.value == 2
         assert click_conveyor.DiverterCmd.value is False  # Retracted
 
     runner.remove_force(click_conveyor.Auto)
