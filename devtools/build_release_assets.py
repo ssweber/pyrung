@@ -11,6 +11,7 @@ Produces:
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EXTENSION_DIR = ROOT / "editors" / "vscode" / "pyrung-debug"
+
+
+def _mpy_cross_path() -> Path:
+    """Return the platform-appropriate mpy-cross binary."""
+    if platform.system() == "Windows":
+        return ROOT / "devtools" / "mpy-cross-windows-8.2.3.static.exe"
+    return ROOT / "devtools" / "mpy-cross-linux-amd64-8.2.3.static"
 
 
 def _get_version() -> str:
@@ -38,14 +46,16 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
     import os
     import tempfile
 
+    from pyrung.circuitpy import RunStopConfig, generate_circuitpy
     from pyrung.click import ladder_to_pyrung_project, pyrung_to_ladder
 
     # Suppress the example's simulation output on import.
     os.environ["PYRUNG_DAP_ACTIVE"] = "1"
 
     # Force-reload so the guard suppresses output
-    if "examples.click_conveyor" in sys.modules:
-        del sys.modules["examples.click_conveyor"]
+    for mod in list(sys.modules):
+        if mod.startswith("examples."):
+            del sys.modules[mod]
     sys.path.insert(0, str(ROOT))
     from examples.click_conveyor import logic, mapping
 
@@ -66,16 +76,54 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
             output_dir=project_dir,
         )
 
-        # 3. Copy original source
+        # 3. Generate CircuitPython output
+        from examples.circuitpy_conveyor import hw, logic as cpy_logic
+
+        cpy_result = generate_circuitpy(
+            cpy_logic,
+            hw,
+            target_scan_ms=10.0,
+            watchdog_ms=5000,
+            runstop=RunStopConfig(),
+            force_runtime=True,
+        )
+
+        circuitpy_dir = tmp / "circuitpy"
+        circuitpy_dir.mkdir()
+        (circuitpy_dir / "code.py").write_text(cpy_result.code, encoding="utf-8")
+        if cpy_result.runtime:
+            rt_py = circuitpy_dir / "pyrung_rt.py"
+            rt_py.write_text(cpy_result.runtime, encoding="utf-8")
+
+            # Compile pyrung_rt.py → lib/pyrung_rt.mpy (mirrors CIRCUITPY layout)
+            lib_dir = circuitpy_dir / "lib"
+            lib_dir.mkdir()
+            mpy_cross = _mpy_cross_path()
+            if mpy_cross.exists():
+                try:
+                    subprocess.run(
+                        [str(mpy_cross), str(rt_py), "-o", str(lib_dir / "pyrung_rt.mpy")],
+                        check=True,
+                    )
+                except (subprocess.CalledProcessError, OSError) as exc:
+                    print(f"WARNING: mpy-cross failed ({exc}) — .mpy omitted.", file=sys.stderr)
+            else:
+                print(
+                    f"WARNING: mpy-cross not found at {mpy_cross} — .mpy omitted.",
+                    file=sys.stderr,
+                )
+
+        # 4. Copy original sources
         original_dir = tmp / "original"
         original_dir.mkdir()
         shutil.copy2(ROOT / "examples" / "click_conveyor.py", original_dir)
+        shutil.copy2(ROOT / "examples" / "circuitpy_conveyor.py", original_dir)
 
-        # 4. Zip everything
+        # 5. Zip everything
         zip_name = f"pyrung-starter-{version}.zip"
         zip_path = out_dir / zip_name
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for subdir in (csv_dir, project_dir, original_dir):
+            for subdir in (csv_dir, project_dir, circuitpy_dir, original_dir):
                 prefix = subdir.name
                 for file in sorted(subdir.rglob("*")):
                     if file.is_file():
