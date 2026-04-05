@@ -12,8 +12,11 @@ producing invalid CSV that the Click editor would misinterpret.
 
 from __future__ import annotations
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+
+pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
 from pyrung.core import Bool, Int, Program, Rung, all_of, any_of

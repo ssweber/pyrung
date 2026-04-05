@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
+pytestmark = pytest.mark.hypothesis
+
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
