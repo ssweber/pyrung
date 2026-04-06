@@ -85,6 +85,7 @@ def _compile_expression_impl(expr: Expression, ctx: CodegenContext) -> str:
 
     raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
+
 _BITWISE_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 
 _ALLOWED_MATH_FUNCS = frozenset(
@@ -102,6 +103,7 @@ _ALLOWED_MATH_FUNCS = frozenset(
         "log",
     }
 )
+
 
 def _copy_converter_target_info(
     target: Tag | IndirectRef | IndirectExprRef,
@@ -162,6 +164,7 @@ def _copy_converter_target_info(
 
     raise TypeError(f"Unsupported copy modifier target type: {type(target).__name__}")
 
+
 def _copy_converter_write_lines(
     *,
     values_var: str,
@@ -190,6 +193,7 @@ def _copy_converter_write_lines(
         f"    for _copy_offset, _copy_value in enumerate({values_var}):",
         f"        {target_symbol}[{target_start_var} + _copy_offset] = _copy_value",
     ]
+
 
 def _compile_guarded_instruction(
     instr: Any,
@@ -241,6 +245,7 @@ def _compile_guarded_instruction(
         lines.extend(f"{' ' * (indent + 4)}{line}" for line in disabled_body)
     return lines
 
+
 def _compile_assignment_lines(
     target: Tag | IndirectRef | IndirectExprRef,
     value_expr: str,
@@ -250,6 +255,7 @@ def _compile_assignment_lines(
 ) -> list[str]:
     lvalue = _compile_lvalue(target, ctx)
     return [f"{' ' * indent}{lvalue} = {value_expr}"]
+
 
 def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
     if isinstance(target, Tag):
@@ -275,6 +281,7 @@ def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenCon
         expr = _compile_expression_impl(target.expr, ctx)
         return f"{block_symbol}[{helper}(int({expr}))]"
     raise TypeError(f"Unsupported assignment target: {type(target).__name__}")
+
 
 def _compile_range_setup(
     range_value: Any,
@@ -329,6 +336,7 @@ def _compile_range_setup(
         lines.extend([f"{indices_var}.reverse()", f"{addrs_var}.reverse()"])
     return lines, symbol, indices_var, addrs_var
 
+
 def _sequence_expr(values: list[int]) -> str:
     if not values:
         return "[]"
@@ -339,6 +347,7 @@ def _sequence_expr(values: list[int]) -> str:
     if step != 0 and all(values[i + 1] - values[i] == step for i in range(len(values) - 1)):
         return repr(range(values[0], values[-1] + step, step))
     return repr(values)
+
 
 def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str:
     if condition == "==":
@@ -355,6 +364,7 @@ def _search_compare_expr(condition: str, left_expr: str, right_expr: str) -> str
         return f"({left_expr} >= {right_expr})"
     raise ValueError(f"Unsupported search comparison: {condition!r}")
 
+
 def _pack_store_expr(value_expr: str, dest_type: str, ctx: CodegenContext) -> str:
     if dest_type == "REAL":
         ctx.mark_helper("_int_to_float_bits")
@@ -368,6 +378,7 @@ def _pack_store_expr(value_expr: str, dest_type: str, ctx: CodegenContext) -> st
     if dest_type == "WORD":
         return f"(int({value_expr}) & 0xFFFF)"
     raise TypeError(f"Unsupported pack destination type: {dest_type}")
+
 
 def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenContext) -> str:
     if mode == "hex":
@@ -388,6 +399,7 @@ def _calc_store_expr(value_expr: str, dest_type: str, mode: str, ctx: CodegenCon
         return f"_wrap_int(int({value_expr}), 32, True)"
     return value_expr
 
+
 def _timer_dt_to_units_expr(unit: TimeUnit, dt_expr: str, frac_expr: str) -> str:
     if unit == TimeUnit.Tms:
         return f"(({dt_expr} * 1000.0) + {frac_expr})"
@@ -400,6 +412,7 @@ def _timer_dt_to_units_expr(unit: TimeUnit, dt_expr: str, frac_expr: str) -> str
     if unit == TimeUnit.Td:
         return f"(({dt_expr} / 86400.0) + {frac_expr})"
     raise ValueError(f"Unsupported timer unit: {unit}")
+
 
 def _load_cast_expr(value_expr: str, tag_type: str) -> str:
     if tag_type == "BOOL":
@@ -416,11 +429,13 @@ def _load_cast_expr(value_expr: str, tag_type: str) -> str:
         return f"({value_expr} if isinstance({value_expr}, str) else '')"
     return value_expr
 
+
 def _compile_set_out_of_range_fault_body(ctx: CodegenContext) -> list[str]:
     fault_symbol = ctx.symbol_if_referenced(_FAULT_OUT_OF_RANGE_TAG)
     if fault_symbol is None:
         return ["pass"]
     return [f"{fault_symbol} = True"]
+
 
 def _compile_target_write_lines(
     target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
@@ -474,6 +489,7 @@ def _compile_target_write_lines(
     )
     return lines
 
+
 def _compile_address_expr(addr: int | Tag | Any, ctx: CodegenContext) -> str:
     if isinstance(addr, int):
         return repr(addr)
@@ -482,6 +498,7 @@ def _compile_address_expr(addr: int | Tag | Any, ctx: CodegenContext) -> str:
     if isinstance(addr, Expression):
         return _compile_expression_impl(addr, ctx)
     raise TypeError(f"Unsupported indirect address expression type: {type(addr).__name__}")
+
 
 def _compile_indirect_value(indirect_ref: IndirectRef, ctx: CodegenContext) -> str:
     block_id = id(indirect_ref.block)
@@ -492,6 +509,7 @@ def _compile_indirect_value(indirect_ref: IndirectRef, ctx: CodegenContext) -> s
     helper = ctx.use_indirect_block(binding.block_id)
     ptr = _compile_value(indirect_ref.pointer, ctx)
     return f"{block_symbol}[{helper}(int({ptr}))]"
+
 
 def _compile_value(value: Any, ctx: CodegenContext) -> str:
     if isinstance(value, Tag):

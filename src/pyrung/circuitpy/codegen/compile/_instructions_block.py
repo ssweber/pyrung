@@ -64,6 +64,7 @@ def _compile_blockcopy_instruction(
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
+
 def _compile_blockcopy_converter_instruction(
     instr: BlockCopyInstruction,
     enabled_expr: str,
@@ -115,6 +116,7 @@ def _compile_blockcopy_converter_instruction(
         enabled_body.extend(fault_body)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
+
 def _compile_fill_instruction(
     instr: FillInstruction,
     enabled_expr: str,
@@ -134,6 +136,7 @@ def _compile_fill_instruction(
         f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_search_instruction(
     instr: SearchInstruction,
@@ -290,6 +293,7 @@ def _compile_search_instruction(
         )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
+
 def _compile_shift_instruction(
     instr: ShiftInstruction,
     enabled_expr: str,
@@ -328,6 +332,7 @@ def _compile_shift_instruction(
     ]
     return [" " * indent + line for line in lines]
 
+
 def _compile_step_selector_lines(
     *,
     step_var: str,
@@ -340,6 +345,7 @@ def _compile_step_selector_lines(
         lines.append(f"{branch} {step_var} == {idx}:")
         lines.append(f"    {target_var} = {expr}")
     return lines
+
 
 def _compile_event_drum_instruction(
     instr: EventDrumInstruction,
@@ -497,6 +503,7 @@ def _compile_event_drum_instruction(
         lines.append(f"_mem[{jog_prev_key!r}] = _jog_curr")
 
     return [" " * indent + line for line in lines]
+
 
 def _compile_time_drum_instruction(
     instr: TimeDrumInstruction,

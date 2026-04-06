@@ -77,7 +77,8 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
         )
 
         # 3. Generate CircuitPython output
-        from examples.circuitpy_conveyor import hw, logic as cpy_logic
+        from examples.circuitpy_conveyor import hw
+        from examples.circuitpy_conveyor import logic as cpy_logic
 
         cpy_result = generate_circuitpy(
             cpy_logic,

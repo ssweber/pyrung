@@ -134,7 +134,9 @@ class _LayoutMixin:
         instruction_index_by_id: dict[int, int] = {}
         branch_index_by_id: dict[int, int] = {}
         if isinstance(source, Rung):
-            instruction_index_by_id = {id(item): idx for idx, item in enumerate(source._instructions)}
+            instruction_index_by_id = {
+                id(item): idx for idx, item in enumerate(source._instructions)
+            }
             branch_index_by_id = {id(item): idx for idx, item in enumerate(source._branches)}
 
         rendered_items: list[tuple[list[_RenderedExecutionRow], bool]] = []
@@ -238,7 +240,10 @@ class _LayoutMixin:
         path: str,
         base_col: int,
     ) -> list[_RenderedExecutionRow]:
-        if any(type(instruction).__name__ == "ForLoopInstruction" for instruction in branch._instructions):
+        if any(
+            type(instruction).__name__ == "ForLoopInstruction"
+            for instruction in branch._instructions
+        ):
             self._raise_issue(
                 path=f"{path}.instruction",
                 message="forloop() is not supported inside branch(...) in Click ladder v1 export.",

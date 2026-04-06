@@ -63,10 +63,9 @@ def _compile_reset_instruction(
 ) -> list[str]:
     default_expr = _coil_target_default(instr.target, ctx)
     lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(
-        _compile_target_write_lines(instr.target, default_expr, ctx, indent + 4)
-    )
+    lines.extend(_compile_target_write_lines(instr.target, default_expr, ctx, indent + 4))
     return lines
+
 
 def _compile_out_instruction(
     instr: OutInstruction,
@@ -109,6 +108,7 @@ def _compile_out_instruction(
     lines.extend(_compile_target_write_lines(instr.target, "False", ctx, indent + 4))
     return lines
 
+
 def _compile_call_instruction(
     instr: CallInstruction,
     enabled_expr: str,
@@ -124,6 +124,7 @@ def _compile_call_instruction(
         return [f"{sp}{fn}()"]
     return [f"{sp}if {enabled_expr}:", f"{sp}    {fn}()"]
 
+
 def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
     sp = " " * indent
     enabled_literal = _bool_literal(enabled_expr)
@@ -132,6 +133,7 @@ def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
     if enabled_literal is True:
         return [f"{sp}return"]
     return [f"{sp}if {enabled_expr}:", f"{sp}    return"]
+
 
 def _compile_on_delay_instruction(
     instr: OnDelayInstruction,
@@ -191,6 +193,7 @@ def _compile_on_delay_instruction(
         )
     return lines
 
+
 def _compile_off_delay_instruction(
     instr: OffDelayInstruction,
     enabled_expr: str,
@@ -223,6 +226,7 @@ def _compile_off_delay_instruction(
         f"{' ' * (indent + 4)}{done} = (_acc < _preset)",
         f"{' ' * (indent + 4)}{acc} = _acc",
     ]
+
 
 def _compile_count_up_instruction(
     instr: CountUpInstruction,
@@ -275,6 +279,7 @@ def _compile_count_up_instruction(
     )
     return lines
 
+
 def _compile_count_down_instruction(
     instr: CountDownInstruction,
     enabled_expr: str,
@@ -313,6 +318,7 @@ def _compile_count_down_instruction(
     )
     return lines
 
+
 def _compile_copy_instruction(
     instr: CopyInstruction,
     enabled_expr: str,
@@ -327,6 +333,7 @@ def _compile_copy_instruction(
     value_expr = f'_store_copy_value_to_type({source_expr}, "{target_type}")'
     enabled_body = _compile_assignment_lines(instr.target, value_expr, ctx, indent=0)
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_copy_converter_instruction(
     instr: CopyInstruction,

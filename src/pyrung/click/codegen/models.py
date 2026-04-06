@@ -38,7 +38,7 @@ class _PinInfo:
     conditions: list[str]  # condition tokens on this row
 
 
-from pyrung.click._topology import Leaf, Parallel, Series, SPNode
+from pyrung.click._topology import SPNode
 
 
 class RungRole(Enum):

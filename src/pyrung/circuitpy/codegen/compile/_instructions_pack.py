@@ -70,6 +70,7 @@ def _compile_pack_bits_instruction(
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
+
 def _compile_pack_words_instruction(
     instr: PackWordsInstruction,
     enabled_expr: str,
@@ -106,6 +107,7 @@ def _compile_pack_words_instruction(
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_pack_text_instruction(
     instr: PackTextInstruction,
@@ -161,6 +163,7 @@ def _compile_pack_text_instruction(
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
+
 def _compile_unpack_bits_instruction(
     instr: UnpackToBitsInstruction,
     enabled_expr: str,
@@ -205,6 +208,7 @@ def _compile_unpack_bits_instruction(
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_unpack_words_instruction(
     instr: UnpackToWordsInstruction,

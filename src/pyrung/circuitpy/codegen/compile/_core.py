@@ -87,6 +87,7 @@ def _contact_tag_name(tag: Tag | ImmediateRef) -> str:
         return tag.tag.name
     return tag.name
 
+
 def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     """Return a Python boolean expression string."""
     if isinstance(cond, BitCondition):
@@ -142,9 +143,11 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
 
     raise NotImplementedError(f"Unsupported condition type: {type(cond).__name__}")
 
+
 def compile_expression(expr: Expression, ctx: CodegenContext) -> str:
     """Return a Python expression string with explicit parentheses."""
     return _compile_expression_impl(expr, ctx)
+
 
 from ._instructions_basic import (
     _compile_call_instruction,
@@ -243,6 +246,7 @@ def compile_instruction(
     loc = _source_location(instr)
     raise NotImplementedError(f"Unsupported instruction type: {type(instr).__name__} at {loc}")
 
+
 def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int = 0) -> list[str]:
     """Compile one rung into Python source lines."""
     previous = ctx._current_function
@@ -264,6 +268,7 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
         return lines
     finally:
         ctx.set_current_function(previous)
+
 
 def _compile_rung_items(
     rung: LogicRung,
@@ -304,11 +309,13 @@ def _compile_rung_items(
         lines.extend(compile_instruction(item, enabled_expr, ctx, indent))
     return lines
 
+
 def _compile_condition_group(conditions: list[Condition], ctx: CodegenContext) -> str:
     if not conditions:
         return "True"
     parts = [compile_condition(cond, ctx) for cond in conditions]
     return " and ".join(parts)
+
 
 def _compile_calc_instruction(
     instr: CalcInstruction,
@@ -328,6 +335,7 @@ def _compile_calc_instruction(
         f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}",
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_function_call_instruction(
     instr: FunctionCallInstruction,
@@ -364,6 +372,7 @@ def _compile_function_call_instruction(
             value_expr = f'_store_copy_value_to_type({result_var}[{key!r}], "{target_type}")'
             enabled_body.extend(_compile_assignment_lines(target, value_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
+
 
 def _compile_enabled_function_call_instruction(
     instr: EnabledFunctionCallInstruction,
@@ -403,6 +412,7 @@ def _compile_enabled_function_call_instruction(
             lines.extend(_compile_assignment_lines(target, value_expr, ctx, indent=indent))
     return lines
 
+
 def _compile_for_loop_instruction(
     instr: ForLoopInstruction,
     enabled_expr: str,
@@ -427,6 +437,7 @@ def _compile_for_loop_instruction(
         body,
         disabled_body=disabled_children,
     )
+
 
 def _compile_instruction_list(
     instructions: list[Any],

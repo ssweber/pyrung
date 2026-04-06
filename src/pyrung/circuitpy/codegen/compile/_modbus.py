@@ -36,10 +36,12 @@ def _modbus_client_symbol_spec(tag: Tag, ctx: CodegenContext) -> ModbusClientSym
         tag_type=tag.type.name,
     )
 
+
 def _modbus_client_operand_tags(operand: Tag | BlockRange) -> tuple[Tag, ...]:
     if isinstance(operand, Tag):
         return (operand,)
     return tuple(operand.tags())
+
 
 def _modbus_client_spec_for_instruction(
     instr: ModbusSendInstruction | ModbusReceiveInstruction,
@@ -174,6 +176,7 @@ def _modbus_client_spec_for_instruction(
     ctx.modbus_client_specs.append(spec)
     return spec
 
+
 def _compile_modbus_send_instruction(
     instr: ModbusSendInstruction,
     enabled_expr: str,
@@ -184,6 +187,7 @@ def _compile_modbus_send_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, spec.var_name)
     return [f'{" " * indent}{spec.var_name}["enabled"] = bool({enabled_expr})']
+
 
 def _compile_modbus_receive_instruction(
     instr: ModbusReceiveInstruction,

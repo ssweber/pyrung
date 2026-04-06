@@ -204,7 +204,9 @@ class _LadderExporter(
                     break
                 stop += 1
 
-            normalized.add_branch(self._build_normalized_rung_from_trees(remaining_outputs[index:stop]))
+            normalized.add_branch(
+                self._build_normalized_rung_from_trees(remaining_outputs[index:stop])
+            )
             index = stop
 
         return normalized

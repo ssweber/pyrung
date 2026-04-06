@@ -1435,9 +1435,7 @@ class TestRoundTrip:
         assert "with branch(X002, X003 | X004):" in code
         assert orig == repro
 
-    def test_branch_series_then_three_way_local_or_followed_by_sibling_output(
-        self, tmp_path: Path
-    ):
+    def test_branch_series_then_three_way_local_or_followed_by_sibling_output(self, tmp_path: Path):
         """Three-way branch-local OR keeps the parent continuation visible on intermediate rows."""
         A = Bool("A")
         B = Bool("B")

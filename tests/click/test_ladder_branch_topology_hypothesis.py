@@ -27,7 +27,6 @@ from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
 from pyrung.core import Bool, Program, Rung, all_of, any_of
 from pyrung.core.program import branch, out
 
-
 # ---------------------------------------------------------------------------
 # Strategy helpers
 # ---------------------------------------------------------------------------
@@ -65,7 +64,9 @@ def _draw_parent_conditions(draw, make_cond, *, use_or_parent: bool) -> list:
 
     if use_or_parent:
         n_or_branches = draw(st.integers(min_value=2, max_value=3))
-        parent_conditions.append(any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_or_branches)]))
+        parent_conditions.append(
+            any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_or_branches)])
+        )
 
     n_suffix = draw(st.integers(min_value=0, max_value=1))
     parent_conditions.extend(make_cond() for _ in range(n_suffix))
@@ -95,7 +96,9 @@ def _branch_rung(draw, *, use_or_parent: bool = False, use_local_or: bool = Fals
 
     branch_specs: list[tuple[list, Bool]] = []
     n_branches = draw(st.integers(min_value=1, max_value=3))
-    local_or_index = draw(st.integers(min_value=0, max_value=n_branches - 1)) if use_local_or else -1
+    local_or_index = (
+        draw(st.integers(min_value=0, max_value=n_branches - 1)) if use_local_or else -1
+    )
 
     for branch_index in range(n_branches):
         branch_conditions: list = []
@@ -105,7 +108,9 @@ def _branch_rung(draw, *, use_or_parent: bool = False, use_local_or: bool = Fals
                 branch_conditions.append(make_cond())
 
             n_local_or = draw(st.integers(min_value=2, max_value=3))
-            branch_conditions.append(any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)]))
+            branch_conditions.append(
+                any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)])
+            )
 
             if draw(st.booleans()):
                 branch_conditions.append(make_cond())
@@ -159,14 +164,24 @@ def _nested_branch_rung(draw, *, use_inner_or: bool = False):
         if draw(st.booleans()):
             inner_conditions.append(make_cond())
         n_inner_or = draw(st.integers(min_value=2, max_value=3))
-        inner_conditions.append(any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_inner_or)]))
+        inner_conditions.append(
+            any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_inner_or)])
+        )
         if draw(st.booleans()):
             inner_conditions.append(make_cond())
     else:
         inner_conditions = [make_cond()]
 
     inner_output = make_out()
-    return parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags
+    return (
+        parent_conditions,
+        outer_conditions,
+        inner_conditions,
+        outer_output,
+        inner_output,
+        cond_tags,
+        out_tags,
+    )
 
 
 def nested_branch_rung():
@@ -242,7 +257,9 @@ def _make_tag_map(cond_tags, out_tags):
     return mapping
 
 
-def _export_branch(parent_conditions, before_outputs, branch_specs, after_outputs, cond_tags, out_tags):
+def _export_branch(
+    parent_conditions, before_outputs, branch_specs, after_outputs, cond_tags, out_tags
+):
     with Program(strict=False) as logic:
         with Rung(*parent_conditions):
             for output in before_outputs:
@@ -257,7 +274,15 @@ def _export_branch(parent_conditions, before_outputs, branch_specs, after_output
     return pyrung_to_ladder(logic, mapping), mapping
 
 
-def _export_nested(parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags):
+def _export_nested(
+    parent_conditions,
+    outer_conditions,
+    inner_conditions,
+    outer_output,
+    inner_output,
+    cond_tags,
+    out_tags,
+):
     with Program(strict=False) as logic:
         with Rung(*parent_conditions):
             with branch(*outer_conditions):
@@ -552,7 +577,15 @@ def test_parent_or_and_branch_local_or_round_trip(tree):
 @given(tree=nested_branch_rung())
 @settings(max_examples=100, deadline=None)
 def test_nested_branch_structural_invariants(tree):
-    parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags = tree
+    (
+        parent_conditions,
+        outer_conditions,
+        inner_conditions,
+        outer_output,
+        inner_output,
+        cond_tags,
+        out_tags,
+    ) = tree
     bundle, mapping = _export_nested(
         parent_conditions,
         outer_conditions,
@@ -573,7 +606,15 @@ def test_nested_branch_structural_invariants(tree):
 @given(tree=nested_branch_rung())
 @settings(max_examples=100, deadline=None)
 def test_nested_branch_round_trip(tree):
-    parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags = tree
+    (
+        parent_conditions,
+        outer_conditions,
+        inner_conditions,
+        outer_output,
+        inner_output,
+        cond_tags,
+        out_tags,
+    ) = tree
     bundle, _ = _export_nested(
         parent_conditions,
         outer_conditions,
@@ -589,7 +630,15 @@ def test_nested_branch_round_trip(tree):
 @given(tree=nested_branch_local_or_rung())
 @settings(max_examples=100, deadline=None)
 def test_nested_branch_local_or_structural_invariants(tree):
-    parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags = tree
+    (
+        parent_conditions,
+        outer_conditions,
+        inner_conditions,
+        outer_output,
+        inner_output,
+        cond_tags,
+        out_tags,
+    ) = tree
     bundle, mapping = _export_nested(
         parent_conditions,
         outer_conditions,
@@ -610,7 +659,15 @@ def test_nested_branch_local_or_structural_invariants(tree):
 @given(tree=nested_branch_local_or_rung())
 @settings(max_examples=100, deadline=None)
 def test_nested_branch_local_or_round_trip(tree):
-    parent_conditions, outer_conditions, inner_conditions, outer_output, inner_output, cond_tags, out_tags = tree
+    (
+        parent_conditions,
+        outer_conditions,
+        inner_conditions,
+        outer_output,
+        inner_output,
+        cond_tags,
+        out_tags,
+    ) = tree
     bundle, _ = _export_nested(
         parent_conditions,
         outer_conditions,

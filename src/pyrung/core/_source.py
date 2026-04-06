@@ -98,7 +98,9 @@ def _capture_with_call_arg_lines(
 
     best = min(
         candidates,
-        key=lambda candidate: 0 if context_name is None or candidate.context_name == context_name else 1,
+        key=lambda candidate: (
+            0 if context_name is None or candidate.context_name == context_name else 1
+        ),
     )
     return list(best.arg_lines)
 
@@ -159,7 +161,9 @@ def _build_source_ast_index(source_file: str) -> _SourceAstIndex | None:
                 with_end_by_line.setdefault(int(line), []).append(
                     _WithEndCandidate(
                         end_line=int(end_line),
-                        context_names=tuple(_context_expr_name(item.context_expr) for item in node.items),
+                        context_names=tuple(
+                            _context_expr_name(item.context_expr) for item in node.items
+                        ),
                     )
                 )
 
@@ -194,7 +198,9 @@ def _build_source_ast_index(source_file: str) -> _SourceAstIndex | None:
 
     return _SourceAstIndex(
         with_end_by_line={line: tuple(candidates) for line, candidates in with_end_by_line.items()},
-        with_args_by_line={line: tuple(candidates) for line, candidates in with_args_by_line.items()},
+        with_args_by_line={
+            line: tuple(candidates) for line, candidates in with_args_by_line.items()
+        },
         call_end_by_line={line: tuple(candidates) for line, candidates in call_end_by_line.items()},
     )
 
