@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from pyrung.click._topology import Leaf, Series, factor_outputs
+from pyrung.click._topology import Leaf, Series, SPNode, factor_outputs, make_compound
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
@@ -21,14 +21,11 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class _InstructionPath:
-    """One emitted instruction paired with its full condition path."""
+class _ConditionLeafKey:
+    """SP-tree leaf label that preserves the original condition for rebuilding."""
 
-    conditions: tuple[Condition, ...]
-    instruction: Any
-
-    def strip_prefix(self, count: int) -> _InstructionPath:
-        return _InstructionPath(self.conditions[count:], self.instruction)
+    condition: Condition = field(compare=False)
+    signature: str
 
 
 # ---- Public entrypoint ----
@@ -120,64 +117,94 @@ class _LadderExporter(
 
     def _normalize_branching_rung(self, rung: Rung) -> Rung:
         """Normalize a branching rung into an ordered shared-prefix tree."""
-        paths = self._collect_instruction_paths(rung)
-        if not paths:
+        outputs = self._collect_instruction_trees(rung)
+        if not outputs:
             return rung
-        normalized = self._build_normalized_rung(paths)
+        normalized = self._build_normalized_rung_from_trees(outputs)
         normalized._use_prior_snapshot = rung._use_prior_snapshot
         normalized.comment = rung.comment
         return normalized
 
-    def _collect_instruction_paths(
+    @staticmethod
+    def _series_tree(*nodes: SPNode | None) -> SPNode | None:
+        children = [node for node in nodes if node is not None]
+        if not children:
+            return None
+        return make_compound(children, Series)
+
+    def _local_condition_tree(self, rung: Rung) -> SPNode | None:
+        local_conditions = rung._conditions[rung._branch_condition_start :]
+        if not local_conditions:
+            return None
+        leaves = [
+            Leaf(
+                _ConditionLeafKey(
+                    condition=condition,
+                    signature=self._condition_signature(condition),
+                )
+            )
+            for condition in local_conditions
+        ]
+        return make_compound(leaves, Series)
+
+    def _collect_instruction_trees(
         self,
         rung: Rung,
         *,
-        prefix: tuple[Condition, ...] = (),
-    ) -> list[_InstructionPath]:
-        local_conditions = tuple(rung._conditions[rung._branch_condition_start :])
-        current_prefix = prefix + local_conditions
+        prefix_tree: SPNode | None = None,
+    ) -> list[tuple[SPNode | None, Any]]:
+        current_tree = self._series_tree(prefix_tree, self._local_condition_tree(rung))
 
-        paths: list[_InstructionPath] = []
+        outputs: list[tuple[SPNode | None, Any]] = []
         for item in rung._execution_items:
             if isinstance(item, Rung):
-                paths.extend(self._collect_instruction_paths(item, prefix=current_prefix))
+                outputs.extend(self._collect_instruction_trees(item, prefix_tree=current_tree))
             else:
-                paths.append(_InstructionPath(current_prefix, item))
-        return paths
+                outputs.append((current_tree, item))
+        return outputs
 
-    def _build_normalized_rung(self, paths: list[_InstructionPath]) -> Rung:
-        # Build SP trees from condition signatures for shared-prefix factoring.
-        sp_trees = []
-        for path in paths:
-            if not path.conditions:
-                sp_trees.append(None)
-            else:
-                children = [Leaf(self._condition_signature(c)) for c in path.conditions]
-                sp_trees.append(Series(children) if len(children) > 1 else children[0])
+    @staticmethod
+    def _leaf_condition(node: SPNode) -> Condition:
+        if not isinstance(node, Leaf) or not isinstance(node.label, _ConditionLeafKey):
+            raise TypeError(f"Expected condition leaf, got {node!r}")
+        return node.label.condition
 
-        common_prefix_len = len(factor_outputs(sp_trees).shared)
-        normalized = Rung(*paths[0].conditions[:common_prefix_len])
-        remaining = [path.strip_prefix(common_prefix_len) for path in paths]
+    def _build_normalized_rung_from_trees(
+        self,
+        outputs: list[tuple[SPNode | None, Any]],
+    ) -> Rung:
+        result = factor_outputs([tree for tree, _instruction in outputs])
+        normalized = Rung(*[self._leaf_condition(node) for node in result.shared])
+
+        remaining_outputs = [
+            (
+                self._series_tree(*result.branches[index]),
+                instruction,
+            )
+            for index, (_tree, instruction) in enumerate(outputs)
+        ]
 
         index = 0
-        while index < len(remaining):
-            current = remaining[index]
-            if not current.conditions:
-                normalized.add_instruction(current.instruction)
+        while index < len(remaining_outputs):
+            tree, instruction = remaining_outputs[index]
+            if tree is None:
+                normalized.add_instruction(instruction)
                 index += 1
                 continue
 
-            segment_key = self._condition_signature(current.conditions[0])
             stop = index + 1
-            while stop < len(remaining):
-                candidate = remaining[stop]
-                if not candidate.conditions:
+            while stop < len(remaining_outputs):
+                candidate_tree, _candidate_instruction = remaining_outputs[stop]
+                if candidate_tree is None:
                     break
-                if self._condition_signature(candidate.conditions[0]) != segment_key:
+                shared = factor_outputs(
+                    [candidate for candidate, _item in remaining_outputs[index : stop + 1]]
+                ).shared
+                if not shared:
                     break
                 stop += 1
 
-            normalized.add_branch(self._build_normalized_rung(remaining[index:stop]))
+            normalized.add_branch(self._build_normalized_rung_from_trees(remaining_outputs[index:stop]))
             index = stop
 
         return normalized

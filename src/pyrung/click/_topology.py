@@ -19,7 +19,7 @@ from typing import Any, NamedTuple
 class Leaf:
     """A single condition token in the SP tree."""
 
-    label: str
+    label: Any
     row: int = 0
     col: int = 0
 
