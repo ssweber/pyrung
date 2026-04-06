@@ -14,10 +14,12 @@ from pyrung.core.instruction.send_receive import (
     ModbusTcpTarget,
     RegisterType,
     WordOrder,
+)
+from pyrung.core.instruction.send_receive._core import _RequestResult
+from pyrung.core.instruction.send_receive.helpers import (
     _calculate_register_count,
     _pack_values_to_registers,
     _preview_operand_tag_types,
-    _RequestResult,
     _unpack_registers_to_values,
 )
 from pyrung.core.tag import Tag
@@ -306,7 +308,7 @@ _RTU_TARGET = ModbusRtuTarget("meter", "/dev/ttyUSB0", device_id=3)
 
 class TestDslConstruction:
     def test_raw_tcp_send(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         submissions: list[dict[str, object]] = []
 
@@ -347,7 +349,7 @@ class TestDslConstruction:
 
     def test_rtu_with_click_address_accepted(self):
         """RTU targets may use Click address strings (Click-to-Click serial)."""
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         Source = Int("Source")
         Enable = Bool("Enable")
@@ -372,7 +374,7 @@ class TestDslConstruction:
         assert len(logic.rungs) == 1
 
     def test_send_to_input_register_raises(self):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         Source = Int("Source")
         Enable = Bool("Enable")
@@ -395,7 +397,7 @@ class TestDslConstruction:
                     )
 
     def test_send_to_discrete_input_raises(self):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         Source = Int("Source")
         Enable = Bool("Enable")
@@ -418,7 +420,7 @@ class TestDslConstruction:
                     )
 
     def test_receive_from_input_register_ok(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         def fake_submit(**kw: object) -> Future[_RequestResult]:
             return Future()
@@ -450,7 +452,7 @@ class TestDslConstruction:
         assert runner.current_state.tags["Receiving"] is True
 
     def test_inert_mode_with_string_target(self):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         Dest = Int("Dest")
         Enable = Bool("Enable")
@@ -480,7 +482,7 @@ class TestDslConstruction:
 
     def test_dint_register_count(self, monkeypatch: pytest.MonkeyPatch):
         """DINT source should produce 2 registers in addresses tuple."""
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         submissions: list[dict[str, object]] = []
 
@@ -527,7 +529,7 @@ class TestDslConstruction:
 
 class TestRawExecuteStateMachine:
     def test_send_submit_busy_success_restart(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         submissions: list[tuple[dict, Future[_RequestResult]]] = []
 
@@ -581,7 +583,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["Sending"] is True
 
     def test_receive_submit_busy_values_success(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         future: Future[_RequestResult] = Future()
 
@@ -625,7 +627,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["Local2"] == 22
 
     def test_receive_dint_with_word_swap(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         future: Future[_RequestResult] = Future()
 
@@ -670,7 +672,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["Success"] is True
 
     def test_error_sets_exception_code(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         future: Future[_RequestResult] = Future()
 
@@ -712,7 +714,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["ExCode"] == 6
 
     def test_disabled_rung_clears_status(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         def fake_submit(**kwargs: object) -> Future[_RequestResult]:
             return Future()
@@ -751,7 +753,7 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["ExCode"] == 0
 
     def test_rtu_send_uses_raw_backend(self, monkeypatch: pytest.MonkeyPatch):
-        import pyrung.core.instruction.send_receive as mod
+        from pyrung.core.instruction.send_receive import _core as mod
 
         submissions: list[dict] = []
 

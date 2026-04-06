@@ -14,7 +14,7 @@ _TARGET_17 = ModbusTcpTarget("test17", "127.0.0.1", port=502, device_id=17)
 
 
 def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     submissions: list[tuple[dict[str, object], Future[click_send_receive._RequestResult]]] = []
 
@@ -75,7 +75,7 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
 def test_send_rung_false_discards_pending_result_and_clears_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     class _UncancellableFuture(Future[click_send_receive._RequestResult]):
         def cancel(self) -> bool:
@@ -134,7 +134,7 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
 
 
 def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     future: Future[click_send_receive._RequestResult] = Future()
 
@@ -181,7 +181,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
 
 
 def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     future: Future[click_send_receive._RequestResult] = Future()
 
@@ -225,7 +225,7 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_send_count_mismatch_raises():
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     Enable = Bool("Enable")
     Source = Int("Source")
@@ -250,7 +250,7 @@ def test_send_count_mismatch_raises():
 
 
 def test_receive_count_mismatch_raises():
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -275,7 +275,7 @@ def test_receive_count_mismatch_raises():
 
 
 def test_receive_validates_status_tag_types():
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -299,7 +299,7 @@ def test_receive_validates_status_tag_types():
 
 
 def test_receive_validates_exception_response_type():
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     Enable = Bool("Enable")
     Dest = Int("Dest")
@@ -323,7 +323,7 @@ def test_receive_validates_exception_response_type():
 
 
 def test_run_click_send_request_sparse_writes_are_split_by_gap(monkeypatch: pytest.MonkeyPatch):
-    import pyrung.core.instruction.send_receive as click_send_receive
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
 
     writes: list[tuple[str, object]] = []
 
