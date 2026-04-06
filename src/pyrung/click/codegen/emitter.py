@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
@@ -24,11 +25,7 @@ from pyrung.click.codegen.constants import (
     _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
-    Leaf,
-    Parallel,
     RungRole,
-    Series,
-    SPNode,
     _AnalyzedRung,
     _InstructionInfo,
     _OperandCollection,

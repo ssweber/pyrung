@@ -33,19 +33,17 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from pyrung.click._topology import (
+    Leaf,
+    Parallel,
+    Series,
     SPNode,
-    as_series_children,
     factor_outputs,
-    flatten,
     make_compound,
     trees_equal,
 )
 from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
 from pyrung.click.codegen.models import (
-    Leaf,
-    Parallel,
     RungRole,
-    Series,
     _AnalyzedRung,
     _InstructionInfo,
     _PinInfo,
@@ -741,4 +739,3 @@ def _analyze_single_rung(
         instructions=instructions,
         role=role,
     )
-

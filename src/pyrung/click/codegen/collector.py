@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyclickplc.addresses import format_address_display
 
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -16,11 +17,7 @@ from pyrung.click.codegen.constants import (
     _TIME_UNITS,
 )
 from pyrung.click.codegen.models import (
-    Leaf,
-    Parallel,
     RungRole,
-    Series,
-    SPNode,
     _AnalyzedRung,
     _BlockSlotDecl,
     _FieldHw,
