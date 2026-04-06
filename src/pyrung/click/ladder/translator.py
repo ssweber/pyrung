@@ -46,7 +46,8 @@ from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
-    from pyrung.click.tag_map import TagMap, _BlockEntry
+    from pyrung.click.tag_map import TagMap
+    from pyrung.click.tag_map._types import _BlockEntry
 
 # Pre-built Click bank names that can be used directly as hardware prefixes
 # in indirect addressing without an explicit TagMap block entry.
