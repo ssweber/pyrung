@@ -1,6 +1,34 @@
+"""Rung analysis: grid -> logical structure.
+
+Converts a ladder rung's cell grid into a Series/Parallel condition tree
+via three stages.
+
+Example rung grid (two parallel contacts A/B, then C in series):
+
+    R, A, T, C, AF
+     , B,  ,  ,
+
+    1. Wiring:    Assign ports to each cell, merge wire cells with
+                  union-find, and emit a labeled edge for each contact.
+                  The result is a multigraph from source (power rail)
+                  to sink (AF output).
+
+    2. Reduction: Repeatedly apply two rules until one edge remains:
+                  - Parallel: edges sharing the same endpoints merge
+                    into "A or B".
+                  - Series: a node with exactly one in-edge and one
+                    out-edge collapses into "A then B".
+                  Result: Series(Parallel(A, B), C)
+
+    3. Grouping:  When a rung has multiple AF outputs, factor out
+                  shared condition prefixes into a single tree with
+                  per-output branches.
+"""
+
 from __future__ import annotations
 
 import warnings
+from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -8,6 +36,7 @@ from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
+    RungRole,
     Series,
     SPNode,
     _AnalyzedRung,
@@ -17,7 +46,7 @@ from pyrung.click.codegen.models import (
 )
 
 # ---------------------------------------------------------------------------
-# Phase 2: Analyze Topology → Logical Structure
+# Rung Analysis
 # ---------------------------------------------------------------------------
 
 
@@ -91,7 +120,7 @@ class _UF:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: Grid → Multigraph
+# Wiring: Grid -> Multigraph
 # ---------------------------------------------------------------------------
 
 _WIRE_CELLS = {"-", "T", "|"}
@@ -294,63 +323,60 @@ def _grid_to_graph(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: SP Reduction
+# SP Reduction
 # ---------------------------------------------------------------------------
 
 
-def _min_row(tree: SPNode) -> int:
-    """Minimum row position in an SP tree (for sort stability)."""
+def _min_attr(tree: SPNode, attr: str) -> int:
+    """Minimum leaf attribute in an SP tree (for sort stability)."""
     if isinstance(tree, Leaf):
-        return tree.row
-    return min(_min_row(c) for c in tree.children) if tree.children else 0
+        return int(getattr(tree, attr))
+    return min((_min_attr(c, attr) for c in tree.children), default=0)
 
 
-def _min_col(tree: SPNode) -> int:
-    """Minimum column position in an SP tree (for sort stability)."""
-    if isinstance(tree, Leaf):
-        return tree.col
-    return min(_min_col(c) for c in tree.children) if tree.children else 0
-
-
-def _flatten_series(node: SPNode) -> list[SPNode]:
-    """Flatten nested Series into a single list."""
-    if isinstance(node, Series):
+def _flatten(
+    node: SPNode,
+    kind: type[Series] | type[Parallel],
+) -> list[SPNode]:
+    """Flatten nested Series/Parallel nodes into a single list."""
+    if isinstance(node, kind):
         result: list[SPNode] = []
         for child in node.children:
-            result.extend(_flatten_series(child))
+            result.extend(_flatten(child, kind))
         return result
     return [node]
 
 
-def _flatten_parallel(node: SPNode) -> list[SPNode]:
-    """Flatten nested Parallel into a single list."""
-    if isinstance(node, Parallel):
-        result: list[SPNode] = []
-        for child in node.children:
-            result.extend(_flatten_parallel(child))
-        return result
-    return [node]
-
-
-def _make_series(children: list[SPNode]) -> SPNode:
-    """Create a Series, flattening nested Series nodes."""
+def _make_compound(
+    children: list[SPNode],
+    kind: type[Series] | type[Parallel],
+) -> SPNode:
+    """Create a flattened Series/Parallel node."""
     flat: list[SPNode] = []
-    for c in children:
-        flat.extend(_flatten_series(c))
+    for child in children:
+        flat.extend(_flatten(child, kind))
     if len(flat) == 1:
         return flat[0]
-    return Series(flat)
+    if kind is Parallel:
+        flat.sort(key=lambda tree: _min_attr(tree, "row"))
+    return kind(flat)
 
 
-def _make_parallel(children: list[SPNode]) -> SPNode:
-    """Create a Parallel, flattening nested Parallel nodes."""
-    flat: list[SPNode] = []
-    for c in children:
-        flat.extend(_flatten_parallel(c))
-    if len(flat) == 1:
-        return flat[0]
-    flat.sort(key=_min_row)
-    return Parallel(flat)
+def _reachable(start: int, edges: list[_Edge], *, reverse: bool = False) -> set[int]:
+    """Return nodes reachable from *start* in the requested edge direction."""
+    adj: dict[int, list[int]] = defaultdict(list)
+    for edge in edges:
+        src, dst = (edge.dst, edge.src) if reverse else (edge.src, edge.dst)
+        adj[src].append(dst)
+    visited: set[int] = set()
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        if node in visited:
+            continue
+        visited.add(node)
+        stack.extend(adj[node])
+    return visited
 
 
 def _pick_shannon_edge(source: int, sink: int, edges: list[_Edge]) -> _Edge:
@@ -394,37 +420,9 @@ def _sp_reduce(
     if source == sink:
         return None
 
-    # Extract reachable subgraph: forward from source AND backward from sink
-    def _reachable_forward(start: int, edges: list[_Edge]) -> set[int]:
-        adj: dict[int, list[int]] = defaultdict(list)
-        for e in edges:
-            adj[e.src].append(e.dst)
-        visited: set[int] = set()
-        stack = [start]
-        while stack:
-            n = stack.pop()
-            if n in visited:
-                continue
-            visited.add(n)
-            stack.extend(adj[n])
-        return visited
-
-    def _reachable_backward(start: int, edges: list[_Edge]) -> set[int]:
-        adj: dict[int, list[int]] = defaultdict(list)
-        for e in edges:
-            adj[e.dst].append(e.src)
-        visited: set[int] = set()
-        stack = [start]
-        while stack:
-            n = stack.pop()
-            if n in visited:
-                continue
-            visited.add(n)
-            stack.extend(adj[n])
-        return visited
-
-    fwd = _reachable_forward(source, all_edges)
-    bwd = _reachable_backward(sink, all_edges)
+    # Extract reachable subgraph: forward from source and backward from sink.
+    fwd = _reachable(source, all_edges)
+    bwd = _reachable(sink, all_edges, reverse=True)
     reachable = fwd & bwd
 
     edges = [e for e in all_edges if e.src in reachable and e.dst in reachable]
@@ -449,8 +447,8 @@ def _sp_reduce(
                 changed = True
                 consumed.update(indices)
                 children = [edges[i].tree for i in indices]
-                children.sort(key=_min_row)
-                merged = _make_parallel(children)
+                children.sort(key=lambda tree: _min_attr(tree, "row"))
+                merged = _make_compound(children, Parallel)
                 mr = min(edges[i].min_row for i in indices)
                 mc = min(edges[i].min_col for i in indices)
                 new_edges.append(_Edge(key[0], key[1], merged, mr, mc))
@@ -481,7 +479,7 @@ def _sp_reduce(
             e_in = edges[in_idx]
             e_out = edges[out_idx]
             children = [e_in.tree, e_out.tree]
-            merged = _make_series(children)
+            merged = _make_compound(children, Series)
             mr = min(e_in.min_row, e_out.min_row)
             mc = min(e_in.min_col, e_out.min_col)
             new_edge = _Edge(e_in.src, e_out.dst, merged, mr, mc)
@@ -518,14 +516,15 @@ def _sp_reduce(
         false_tree = _sp_reduce(source, sink, false_edges)
 
         if true_tree is not None and false_tree is not None:
-            return _make_parallel(
+            return _make_compound(
                 [
-                    _make_series([e.tree, true_tree]),
+                    _make_compound([e.tree, true_tree], Series),
                     false_tree,
-                ]
+                ],
+                Parallel,
             )
         if true_tree is not None:
-            return _make_series([e.tree, true_tree])
+            return _make_compound([e.tree, true_tree], Series)
         if false_tree is not None:
             return false_tree
         return e.tree
@@ -534,7 +533,7 @@ def _sp_reduce(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Multi-Output Grouping
+# Output Grouping
 # ---------------------------------------------------------------------------
 
 
@@ -596,14 +595,14 @@ def _group_outputs(
 
         if shared_count > 0:
             shared_children = child_lists[0][:shared_count]
-            cond_tree = _make_series(shared_children)
+            cond_tree = _make_compound(shared_children, Series)
 
             instructions: list[_InstructionInfo] = []
             af_rows: list[int] = []
             for idx, (_tree, af, af_row) in enumerate(trees):
                 remaining = child_lists[idx][shared_count:]
                 if remaining:
-                    branch_tree = _make_series(remaining)
+                    branch_tree = _make_compound(remaining, Series)
                 else:
                     branch_tree = None
                 instructions.append(_InstructionInfo(af, branch_tree, []))
@@ -619,7 +618,7 @@ def _group_outputs(
     return None, instructions, af_rows
 
 
-# --- Top-level Phase 2 entry points -----------------------------------------
+# --- Analyzer entry points --------------------------------------------------
 
 
 def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
@@ -715,17 +714,17 @@ def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
 
         if af0.startswith("for("):
             # for/next block
-            analyzed.append(_analyze_single_rung(rung, is_forloop_start=True))
+            analyzed.append(_analyze_single_rung(rung, role=RungRole.FORLOOP_START))
             i += 1
             # Collect body rungs until next()
             while i < len(raw_rungs):
                 body_rung = raw_rungs[i]
                 body_af = body_rung.rows[0][-1] if body_rung.rows else ""
                 if body_af == "next()":
-                    analyzed.append(_analyze_single_rung(body_rung, is_forloop_next=True))
+                    analyzed.append(_analyze_single_rung(body_rung, role=RungRole.FORLOOP_NEXT))
                     i += 1
                     break
-                analyzed.append(_analyze_single_rung(body_rung, is_forloop_body=True))
+                analyzed.append(_analyze_single_rung(body_rung, role=RungRole.FORLOOP_BODY))
                 i += 1
         else:
             analyzed.extend(_split_continued(_analyze_single_rung(rung)))
@@ -737,9 +736,7 @@ def _analyze_rungs(raw_rungs: list[_RawRung]) -> list[_AnalyzedRung]:
 def _analyze_single_rung(
     rung: _RawRung,
     *,
-    is_forloop_start: bool = False,
-    is_forloop_body: bool = False,
-    is_forloop_next: bool = False,
+    role: RungRole = RungRole.NORMAL,
 ) -> _AnalyzedRung:
     """Analyze a single rung's topology via SP graph reduction."""
     # Strip trailing empty comment lines (Click IDE visual padding).
@@ -754,12 +751,13 @@ def _analyze_single_rung(
             comment=comment,
             condition_tree=None,
             instructions=[],
+            role=role,
         )
 
     # Separate pin rows from content rows
     pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
 
-    # Phase 1: Grid → Graph
+    # Wiring: Grid -> Multigraph
     source, sinks, edges = _grid_to_graph(rows, pin_row_set)
 
     if source is None or not sinks:
@@ -767,27 +765,22 @@ def _analyze_single_rung(
             comment=comment,
             condition_tree=None,
             instructions=[],
-            is_forloop_start=is_forloop_start,
-            is_forloop_body=is_forloop_body,
-            is_forloop_next=is_forloop_next,
+            role=role,
         )
 
-    # Phase 2: SP Reduction (per output)
+    # SP Reduction (per output)
     output_trees: list[tuple[SPNode | None, str, int]] = []
     for sink_node, af_token, af_row in sinks:
         tree = _sp_reduce(source, sink_node, edges)
         output_trees.append((tree, af_token, af_row))
 
-    # Phase 3: Multi-Output Grouping
+    # Output Grouping
     condition_tree, instructions, af_rows = _group_outputs(output_trees)
 
     # Attach pin rows to their nearest preceding instruction (by row index)
     if pin_row_set and instructions:
         for pin_idx in sorted(pin_row_set):
-            best = -1
-            for i, ar in enumerate(af_rows):
-                if ar <= pin_idx:
-                    best = i
+            best = bisect_right(af_rows, pin_idx) - 1
             if best >= 0:
                 pin_row = rows[pin_idx]
                 af = pin_row[-1]
@@ -806,8 +799,6 @@ def _analyze_single_rung(
         comment=comment,
         condition_tree=condition_tree,
         instructions=instructions,
-        is_forloop_start=is_forloop_start,
-        is_forloop_body=is_forloop_body,
-        is_forloop_next=is_forloop_next,
+        role=role,
     )
 

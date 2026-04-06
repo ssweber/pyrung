@@ -18,6 +18,7 @@ from pyrung.click.codegen.constants import (
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
+    RungRole,
     Series,
     SPNode,
     _AnalyzedRung,
@@ -145,7 +146,7 @@ def _collect_operands(
 
         if rung.comment:
             collection.has_comment = True
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             collection.has_forloop = True
 
         # Scan conditions from tree
@@ -726,7 +727,7 @@ def _scan_file_refs(
             refs.has_all_of = True
         if rung.comment:
             refs.has_comment = True
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             refs.has_forloop = True
 
         for cond in _walk_tree_labels(rung.condition_tree):

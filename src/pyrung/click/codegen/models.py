@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 # ---------------------------------------------------------------------------
 # Phase 1: Parse CSV → Raw Rungs
@@ -63,6 +64,15 @@ class Parallel:
 SPNode = Leaf | Series | Parallel
 
 
+class RungRole(Enum):
+    """Role of a rung within a for/next block."""
+
+    NORMAL = auto()
+    FORLOOP_START = auto()
+    FORLOOP_BODY = auto()
+    FORLOOP_NEXT = auto()
+
+
 @dataclass
 class _InstructionInfo:
     """One instruction (AF token) with optional branch tree and pins."""
@@ -79,9 +89,7 @@ class _AnalyzedRung:
     comment: str | None
     condition_tree: SPNode | None  # shared conditions (SP tree)
     instructions: list[_InstructionInfo]
-    is_forloop_start: bool = False
-    is_forloop_body: bool = False
-    is_forloop_next: bool = False
+    role: RungRole = RungRole.NORMAL
     is_continued: bool = False
 
 

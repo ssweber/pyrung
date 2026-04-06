@@ -26,6 +26,7 @@ from pyrung.click.codegen.constants import (
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
+    RungRole,
     Series,
     SPNode,
     _AnalyzedRung,
@@ -458,7 +459,7 @@ def _emit_rung_sequence(
     while i < len(rungs):
         rung = rungs[i]
 
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             if not first:
                 lines.append("")
             first = False
@@ -474,12 +475,12 @@ def _emit_rung_sequence(
             )
             # Skip to after next()
             i += 1
-            while i < len(rungs) and not rungs[i].is_forloop_next:
+            while i < len(rungs) and rungs[i].role is not RungRole.FORLOOP_NEXT:
                 i += 1
             i += 1  # skip the next() rung
             continue
 
-        if rung.is_forloop_next:
+        if rung.role is RungRole.FORLOOP_NEXT:
             # Should have been consumed by forloop handler
             i += 1
             continue
@@ -543,7 +544,7 @@ def _emit_forloop(
     body_pad = "    " * (indent + 2)
     body_count = 0
     for j in range(start_idx + 1, len(rungs)):
-        if rungs[j].is_forloop_next:
+        if rungs[j].role is RungRole.FORLOOP_NEXT:
             break
         body_rung = rungs[j]
         for instr in body_rung.instructions:
