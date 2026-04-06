@@ -347,7 +347,7 @@ def _generate_subroutine_file(
     lines.append("")
 
     # @subroutine("name") decorator + function
-    lines.append(f'@subroutine("{sub.name}")')
+    lines.append(f'@subroutine("{sub.name}", strict=False)')
     lines.append(f"def {func_name}():")
     if sub_rungs:
         _emit_rung_sequence(
@@ -407,7 +407,7 @@ def _generate_main_file(
     lines.append("")
 
     # Program body (main rungs only, no subroutine definitions)
-    lines.append("with Program() as logic:")
+    lines.append("with Program(strict=False) as logic:")
     if rungs:
         _emit_rung_sequence(
             lines,

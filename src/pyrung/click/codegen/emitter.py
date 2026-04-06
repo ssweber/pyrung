@@ -401,7 +401,7 @@ def _emit_program(
     call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit the program body."""
-    lines.append("with Program() as logic:")
+    lines.append("with Program(strict=False) as logic:")
 
     if not rungs and not subroutines:
         lines.append("    pass")
@@ -424,7 +424,7 @@ def _emit_program(
             if sub_rungs and _is_trailing_return(sub_rungs[-1]):
                 sub_rungs = sub_rungs[:-1]
             lines.append("")
-            lines.append(f'    with subroutine("{sub.name}"):')
+            lines.append(f'    with subroutine("{sub.name}", strict=False):')
             if sub_rungs:
                 _emit_rung_sequence(
                     lines,

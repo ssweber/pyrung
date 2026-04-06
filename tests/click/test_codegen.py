@@ -2376,7 +2376,7 @@ class TestRoundTrip:
         code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
         assert orig == repro
-        assert 'subroutine("init")' in code
+        assert 'subroutine("init", strict=False)' in code
         assert 'call("init")' in code
 
     def test_subroutine_with_conditions(self, tmp_path: Path):
