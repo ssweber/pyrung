@@ -559,6 +559,22 @@ class TestGraphWalkEdgeCases:
         assert len(result.instructions) == 1
         assert result.instructions[0].af_token == "out(Y001)"
 
+    def test_af_only_rows_share_an_implicit_source(self):
+        """AF-only rows stay on the graph path and preserve all outputs."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        rows = [
+            _make_row("R", {}, af="out(Y001)"),
+            _make_row("", {}, af="out(Y002)"),
+        ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        result = _analyze_single_rung(rung)
+        assert result.condition_tree is None
+        assert [instr.af_token for instr in result.instructions] == ["out(Y001)", "out(Y002)"]
+        assert all(instr.branch_tree is None for instr in result.instructions)
+
     def test_or_with_three_trailing_and(self):
         """OR alternatives followed by multiple shared trailing AND conditions.
 
@@ -716,6 +732,33 @@ class TestGraphWalkEdgeCases:
         afs = [i.af_token for i in result.instructions]
         assert "out(Y001)" in afs
         assert "out(Y002)" in afs
+
+    def test_bridge_reduction_is_stable_across_edge_order(self):
+        """Bridge-topology fallback should choose the same expansion edge each time."""
+        import warnings
+
+        from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
+        from pyrung.click.codegen.models import Leaf, Parallel
+
+        s, u, v, t = 0, 1, 2, 3
+        edges = [
+            _Edge(s, u, Leaf("A"), 0, 0),
+            _Edge(s, v, Leaf("B"), 1, 0),
+            _Edge(u, t, Leaf("C"), 0, 1),
+            _Edge(v, t, Leaf("D"), 1, 1),
+            _Edge(u, v, Leaf("E"), 0, 2),
+        ]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree_a = _sp_reduce(s, t, edges)
+            tree_b = _sp_reduce(s, t, [edges[4], *edges[:4]])
+
+        assert tree_a is not None
+        assert tree_b is not None
+        assert _trees_equal(tree_a, tree_b)
+        assert isinstance(tree_a, Parallel)
+        assert {label for label in _leaf_labels(tree_a)} == {"A", "B", "C", "D", "E"}
 
 
 # ---------------------------------------------------------------------------

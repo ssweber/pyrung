@@ -259,8 +259,17 @@ def _grid_to_graph(
             if source is not None:
                 break
 
-    # Sinks = right-port of the last occupied condition column on each AF row
+    # AF-only rows are unconditional: they sink directly to the source/rail node.
     sinks: list[tuple[int, str, int]] = []
+    if source is None:
+        for r in range(n_rows):
+            if r in pin_row_set:
+                continue
+            af = rows[r][-1]
+            if af and not af.startswith("."):
+                source = uf.make()
+                break
+
     for r in range(n_rows):
         if r in pin_row_set:
             continue
@@ -275,7 +284,11 @@ def _grid_to_graph(
                 break
         if last_c >= 0:
             sink_node = uf.find(right_port[r, last_c])
-            sinks.append((sink_node, af, r))
+        elif source is not None:
+            sink_node = source
+        else:
+            continue
+        sinks.append((sink_node, af, r))
 
     return source, sinks, edges
 
@@ -340,6 +353,38 @@ def _make_parallel(children: list[SPNode]) -> SPNode:
     return Parallel(flat)
 
 
+def _pick_shannon_edge(source: int, sink: int, edges: list[_Edge]) -> _Edge:
+    """Pick a stable expansion edge for a non-SP subgraph.
+
+    Prefer an internal edge from a split node into a join node: that is the
+    characteristic "bridge" edge in the minimal non-SP shape, and expanding it
+    tends to keep both recursive branches simple and order-independent.
+    """
+    in_degree: dict[int, int] = defaultdict(int)
+    out_degree: dict[int, int] = defaultdict(int)
+    for edge in edges:
+        out_degree[edge.src] += 1
+        in_degree[edge.dst] += 1
+
+    def _priority(edge: _Edge) -> tuple[int, int, int, int, int, int, int, int, int]:
+        src_is_split = out_degree[edge.src] > 1
+        dst_is_join = in_degree[edge.dst] > 1
+        is_internal = edge.src != source and edge.dst != sink
+        return (
+            0 if is_internal and src_is_split and dst_is_join else 1,
+            0 if is_internal else 1,
+            0 if src_is_split else 1,
+            0 if dst_is_join else 1,
+            -(out_degree[edge.src] + in_degree[edge.dst]),
+            edge.min_col,
+            edge.min_row,
+            edge.src,
+            edge.dst,
+        )
+
+    return min(edges, key=_priority)
+
+
 def _sp_reduce(
     source: int,
     sink: int,
@@ -386,8 +431,10 @@ def _sp_reduce(
     if not edges:
         return None
 
-    # Reduction loop
-    for _ in range(len(edges) * len(edges) + 10):
+    # Reduction loop. Genuine SP reductions always shrink the edge set, so a
+    # progress check is more reliable than a guessed iteration budget.
+    while True:
+        start_count = len(edges)
         changed = False
 
         # Rule A: Parallel — merge edges between same (src, dst)
@@ -441,11 +488,7 @@ def _sp_reduce(
             drop = {in_idx, out_idx}
             edges = [e for i, e in enumerate(edges) if i not in drop] + [new_edge]
 
-        # Check termination
-        if len(edges) == 1 and edges[0].src == source and edges[0].dst == sink:
-            return edges[0].tree
-
-        if not changed:
+        if not changed or len(edges) >= start_count:
             break
 
     # Check if we're done after the loop
@@ -458,11 +501,12 @@ def _sp_reduce(
             "Rung contains bridge topology; resolved via Shannon expansion",
             stacklevel=2,
         )
-        e = edges[0]
+        e = _pick_shannon_edge(source, sink, edges)
+        remaining_edges = [ed for ed in edges if ed is not e]
 
         # True branch: short-circuit edge (merge src and dst)
         true_edges: list[_Edge] = []
-        for ed in edges[1:]:
+        for ed in remaining_edges:
             s = e.src if ed.src == e.dst else ed.src
             d = e.src if ed.dst == e.dst else ed.dst
             true_edges.append(_Edge(s, d, ed.tree, ed.min_row, ed.min_col))
@@ -470,7 +514,7 @@ def _sp_reduce(
         true_tree = _sp_reduce(source, true_sink, true_edges)
 
         # False branch: delete edge
-        false_edges = list(edges[1:])
+        false_edges = list(remaining_edges)
         false_tree = _sp_reduce(source, sink, false_edges)
 
         if true_tree is not None and false_tree is not None:
@@ -719,24 +763,13 @@ def _analyze_single_rung(
     source, sinks, edges = _grid_to_graph(rows, pin_row_set)
 
     if source is None or not sinks:
-        # No graph built — handle rows with only an AF and no conditions
-        for i, row in enumerate(rows):
-            if i not in pin_row_set:
-                af = row[-1]
-                if af and not af.startswith("."):
-                    pins = _collect_pins([rows[j] for j in sorted(pin_row_set)])
-                    return _AnalyzedRung(
-                        comment=comment,
-                        condition_tree=None,
-                        instructions=[_InstructionInfo(af_token=af, branch_tree=None, pins=pins)],
-                        is_forloop_start=is_forloop_start,
-                        is_forloop_body=is_forloop_body,
-                        is_forloop_next=is_forloop_next,
-                    )
         return _AnalyzedRung(
             comment=comment,
             condition_tree=None,
             instructions=[],
+            is_forloop_start=is_forloop_start,
+            is_forloop_body=is_forloop_body,
+            is_forloop_next=is_forloop_next,
         )
 
     # Phase 2: SP Reduction (per output)
@@ -778,20 +811,3 @@ def _analyze_single_rung(
         is_forloop_next=is_forloop_next,
     )
 
-
-def _collect_pins(pin_rows: list[list[str]]) -> list[_PinInfo]:
-    """Extract pin info from pin rows."""
-    pins: list[_PinInfo] = []
-    for row in pin_rows:
-        af = row[-1]
-        match = _PIN_RE.match(af)
-        if match:
-            conditions = _extract_conditions(row, 0, _CONDITION_COLS)
-            pins.append(
-                _PinInfo(
-                    name=match.group(1),
-                    arg=match.group(2),
-                    conditions=conditions,
-                )
-            )
-    return pins
