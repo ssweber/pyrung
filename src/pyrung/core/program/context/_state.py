@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 _rung_stack: list[Rung] = []
 
-_forloop_active = False
+_forloop_active: bool = False
 
 
 def _current_rung() -> Rung | None:

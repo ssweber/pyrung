@@ -6,7 +6,7 @@ from ladder CSV) and the ladder exporter (export to ladder CSV).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -60,7 +60,7 @@ def flatten(
 
 
 def make_compound(
-    children: list[SPNode],
+    children: Sequence[SPNode],
     kind: type[Series] | type[Parallel],
     *,
     sort_key: Callable[[SPNode], Any] | None = None,

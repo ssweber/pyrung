@@ -32,7 +32,20 @@ from pyrung.click import (
     x,
     y,
 )
-from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, all_of, any_of, immediate
+from pyrung.core import (
+    Block,
+    BlockRange,
+    Bool,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Tag,
+    TagType,
+    all_of,
+    any_of,
+    immediate,
+)
 from pyrung.core.program import (
     blockcopy,
     branch,
@@ -2118,7 +2131,7 @@ def test_branch_rendered_height_over_32_rows_raises_clear_error():
                 with branch(condition):
                     out(out_tag)
 
-    mapping = {A: x[1]}
+    mapping: dict[Tag | Block, Tag | BlockRange] = {A: x[1]}
     for idx, condition in enumerate(conditions, start=1):
         mapping[condition] = c[idx]
     for idx, out_tag in enumerate(outputs, start=100):

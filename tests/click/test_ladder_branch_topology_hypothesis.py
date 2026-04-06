@@ -323,12 +323,12 @@ def _describe_first_difference(rows1, rows2) -> str:
     if len(rows1) != len(rows2):
         return f"row count differs: {len(rows1)} != {len(rows2)}"
 
-    for row_index, (row1, row2) in enumerate(zip(rows1, rows2)):
+    for row_index, (row1, row2) in enumerate(zip(rows1, rows2, strict=True)):
         if row1 == row2:
             continue
         if len(row1) != len(row2):
             return f"row {row_index} width differs: {len(row1)} != {len(row2)}"
-        for col_index, (cell1, cell2) in enumerate(zip(row1, row2)):
+        for col_index, (cell1, cell2) in enumerate(zip(row1, row2, strict=True)):
             if cell1 != cell2:
                 return (
                     f"first differing cell at row {row_index}, col {col_index}: "

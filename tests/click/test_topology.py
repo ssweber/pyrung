@@ -138,7 +138,7 @@ class TestAsSeriesChildren:
         assert as_series_children(p) == [p]
 
     def test_series(self):
-        children = [Leaf("A"), Leaf("B")]
+        children: list[Leaf | Series | Parallel] = [Leaf("A"), Leaf("B")]
         s = Series(children)
         result = as_series_children(s)
         assert result == children
