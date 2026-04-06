@@ -2099,9 +2099,8 @@ def test_nested_branch_export_pushes_later_siblings_down():
 
     assert bundle.main_rows == (
         _header(),
-        _row("R", ["X001", "X002", "T"], "out(Y001)"),
-        _row("", ["", "", "X003"], "out(Y002)"),
-        _blank_row("", ["", "T"]),
+        _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
+        _row("", ["", "|", "X003"], "out(Y002)"),
         _row("", ["", "X004"], "out(Y003)"),
         _END_ROW,
     )

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
 from .instructions import _InstructionMixin
@@ -15,6 +17,17 @@ from .validator import _ValidationMixin
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
+
+
+@dataclass(frozen=True)
+class _InstructionPath:
+    """One emitted instruction paired with its full condition path."""
+
+    conditions: tuple[Condition, ...]
+    instruction: Any
+
+    def strip_prefix(self, count: int) -> _InstructionPath:
+        return _InstructionPath(self.conditions[count:], self.instruction)
 
 
 # ---- Public entrypoint ----
@@ -104,6 +117,85 @@ class _LadderExporter(
             return []
         return [("#", line) for line in rung.comment.splitlines()]
 
+    def _normalize_branching_rung(self, rung: Rung) -> Rung:
+        """Normalize a branching rung into an ordered shared-prefix tree."""
+        paths = self._collect_instruction_paths(rung)
+        if not paths:
+            return rung
+        normalized = self._build_normalized_rung(paths)
+        normalized._use_prior_snapshot = rung._use_prior_snapshot
+        normalized.comment = rung.comment
+        return normalized
+
+    def _collect_instruction_paths(
+        self,
+        rung: Rung,
+        *,
+        prefix: tuple[Condition, ...] = (),
+    ) -> list[_InstructionPath]:
+        local_conditions = tuple(rung._conditions[rung._branch_condition_start :])
+        current_prefix = prefix + local_conditions
+
+        paths: list[_InstructionPath] = []
+        for item in rung._execution_items:
+            if isinstance(item, Rung):
+                paths.extend(self._collect_instruction_paths(item, prefix=current_prefix))
+            else:
+                paths.append(_InstructionPath(current_prefix, item))
+        return paths
+
+    def _build_normalized_rung(self, paths: list[_InstructionPath]) -> Rung:
+        common_prefix_len = self._common_prefix_len(paths)
+        normalized = Rung(*paths[0].conditions[:common_prefix_len])
+        remaining = [path.strip_prefix(common_prefix_len) for path in paths]
+
+        index = 0
+        while index < len(remaining):
+            current = remaining[index]
+            if not current.conditions:
+                normalized.add_instruction(current.instruction)
+                index += 1
+                continue
+
+            segment_key = self._condition_signature(current.conditions[0])
+            stop = index + 1
+            while stop < len(remaining):
+                candidate = remaining[stop]
+                if not candidate.conditions:
+                    break
+                if self._condition_signature(candidate.conditions[0]) != segment_key:
+                    break
+                stop += 1
+
+            normalized.add_branch(self._build_normalized_rung(remaining[index:stop]))
+            index = stop
+
+        return normalized
+
+    def _common_prefix_len(self, paths: list[_InstructionPath]) -> int:
+        if not paths:
+            return 0
+
+        max_len = min(len(path.conditions) for path in paths)
+        prefix_len = 0
+        for index in range(max_len):
+            first = self._condition_signature(paths[0].conditions[index])
+            if any(
+                self._condition_signature(path.conditions[index]) != first for path in paths[1:]
+            ):
+                break
+            prefix_len += 1
+        return prefix_len
+
+    def _condition_signature(self, condition: Condition) -> str:
+        if isinstance(condition, AllCondition):
+            parts = ",".join(self._condition_signature(child) for child in condition.conditions)
+            return f"AND({parts})"
+        if isinstance(condition, AnyCondition):
+            parts = ",".join(self._condition_signature(child) for child in condition.conditions)
+            return f"OR({parts})"
+        return self._condition_leaf_token(condition, path="normalize.condition")
+
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         comment_rows = self._comment_rows(rung)
         first_marker = "" if rung._use_prior_snapshot else "R"
@@ -144,12 +236,13 @@ class _LadderExporter(
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
 
         if rung._branches:
+            normalized_rung = self._normalize_branching_rung(rung)
             branch_rows = self._render_rung_with_branches(
-                rung,
+                normalized_rung,
                 path=path,
                 first_marker=first_marker,
             )
-            pin_rows = self._branch_pin_rows(rung, path=path)
+            pin_rows = self._branch_pin_rows(normalized_rung, path=path)
             if not branch_rows:
                 return []
             rows = branch_rows + pin_rows

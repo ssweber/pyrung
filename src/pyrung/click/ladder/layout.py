@@ -26,6 +26,19 @@ class _RenderedExecutionRow:
     af: str = ""
 
 
+@dataclass
+class _ExecutionBand:
+    """One contiguous occupied row band for a rendered execution item."""
+
+    start_row: int
+    rows: list[_RenderedExecutionRow]
+    needs_parent_fill: bool
+
+    @property
+    def stop_row(self) -> int:
+        return self.start_row + len(self.rows) - 1
+
+
 # ---- Row-layout mixin ----
 class _LayoutMixin:
     """Build 31-column condition matrices and branch wiring rows."""
@@ -166,21 +179,17 @@ class _LayoutMixin:
         if not rendered_items:
             return []
 
-        placements: list[tuple[int, list[_RenderedExecutionRow], bool, int]] = []
+        bands: list[_ExecutionBand] = []
         next_row = 0
-        for item_index, (block, needs_parent_fill) in enumerate(rendered_items):
-            connector_row = next_row + len(block) - 1
-            if (
-                item_index < len(rendered_items) - 1
-                and self._needs_connector_row_for_continuation(
-                    block,
-                    split_col,
+        for block, needs_parent_fill in rendered_items:
+            bands.append(
+                _ExecutionBand(
+                    start_row=next_row,
+                    rows=block,
                     needs_parent_fill=needs_parent_fill,
                 )
-            ):
-                connector_row += 1
-            placements.append((next_row, block, needs_parent_fill, connector_row))
-            next_row = connector_row + 1
+            )
+            next_row += len(block)
 
         total_rows = max(len(condition_rows), next_row)
         rows: list[_RenderedExecutionRow] = []
@@ -192,17 +201,17 @@ class _LayoutMixin:
             )
             rows.append(_RenderedExecutionRow(cells=cells))
 
-        for start_row, block, _, _ in placements:
+        for band in bands:
             self._overlay_block_rows(
                 target_rows=rows,
-                start_row=start_row,
-                block_rows=block,
+                start_row=band.start_row,
+                block_rows=band.rows,
                 path=path,
                 source=source,
             )
 
-        for start_row, _, _, continuation_row in placements[:-1]:
-            for row_index in range(start_row, continuation_row + 1):
+        for band in bands[:-1]:
+            for row_index in range(band.start_row, band.stop_row + 1):
                 self._mark_downward_continuation(
                     rows[row_index].cells,
                     split_col,
@@ -210,10 +219,10 @@ class _LayoutMixin:
                     source=source,
                 )
 
-        for start_row, _, needs_parent_fill, _ in placements:
-            if not needs_parent_fill:
+        for band in bands:
+            if not band.needs_parent_fill:
                 continue
-            row = rows[start_row]
+            row = rows[band.start_row]
             if row.cells[split_col] == "":
                 row.cells[split_col] = "-"
             for col in range(split_col + 1, _CONDITION_COLS):
@@ -333,21 +342,6 @@ class _LayoutMixin:
         if existing in {"T", "|"} or existing.startswith("T:"):
             return
         cells[col] = f"T:{existing}"
-
-    @staticmethod
-    def _needs_connector_row_for_continuation(
-        block_rows: list[_RenderedExecutionRow],
-        split_col: int,
-        *,
-        needs_parent_fill: bool,
-    ) -> bool:
-        """Return True when continuing below the block needs a dedicated blank row."""
-        if needs_parent_fill:
-            return False
-        last_row = block_rows[-1]
-        if last_row.cells[split_col] != "":
-            return False
-        return last_row.af != ""
 
     def _render_slots_on_condition_rows(
         self,
