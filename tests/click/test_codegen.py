@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import csv
+import warnings
+from itertools import product
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from pyrung.click import (
     TagMap,
@@ -105,6 +109,11 @@ def _round_trip(
     reproduced_rows = list(bundle2.main_rows)
 
     return code, original_rows, reproduced_rows
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WHEATSTONE_FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "wheatstone_bridge.csv"
+_WHEATSTONE_CONTACTS = ("X001", "X002", "X003", "X004", "X005")
 
 
 # ---------------------------------------------------------------------------
@@ -399,20 +408,119 @@ def _find_parallel(node):
     return None
 
 
-def _leaf_labels(node) -> list[str]:
-    """Collect all leaf labels from an SP tree in order."""
+def _collect_leaves(node) -> list:
+    """Collect all ``Leaf`` nodes from an SP tree in order."""
     from pyrung.click.codegen.models import Leaf, Parallel, Series
 
     if node is None:
         return []
     if isinstance(node, Leaf):
-        return [node.label]
+        return [node]
     if isinstance(node, (Series, Parallel)):
-        labels: list[str] = []
+        leaves: list = []
         for child in node.children:
-            labels.extend(_leaf_labels(child))
-        return labels
+            leaves.extend(_collect_leaves(child))
+        return leaves
     return []
+
+
+def _leaf_labels(node) -> list[str]:
+    """Collect all leaf labels from an SP tree in order."""
+    return [leaf.label for leaf in _collect_leaves(node)]
+
+
+def _eval_tree(node, values: dict[str, bool]) -> bool:
+    """Evaluate an SP tree against a contact-value mapping."""
+    from pyrung.click.codegen.models import Leaf, Parallel, Series
+
+    if node is None:
+        return True
+    if isinstance(node, Leaf):
+        return values[node.label]
+    if isinstance(node, Series):
+        return all(_eval_tree(child, values) for child in node.children)
+    if isinstance(node, Parallel):
+        return any(_eval_tree(child, values) for child in node.children)
+    raise TypeError(f"Unsupported SP node: {type(node)!r}")
+
+
+def _is_reachable(start: str, sink: str, edges: list[tuple[str, str]]) -> bool:
+    """Return whether *sink* is reachable through closed-contact conductivity."""
+    stack = [start]
+    seen: set[str] = set()
+    adjacency: dict[str, list[str]] = {}
+    for src, dst in edges:
+        adjacency.setdefault(src, []).append(dst)
+        adjacency.setdefault(dst, []).append(src)
+
+    while stack:
+        node = stack.pop()
+        if node == sink:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(adjacency.get(node, ()))
+
+    return False
+
+
+def _wheatstone_expected(contacts: tuple[str, str, str, str, str], values: dict[str, bool]) -> bool:
+    """Brute-force reachability for the canonical 5-edge bridge shape."""
+    contact_edges = [
+        ("source", "M1", contacts[0]),
+        ("source", "M2", contacts[1]),
+        ("M1", "sink", contacts[2]),
+        ("M2", "sink", contacts[3]),
+        ("M1", "M2", contacts[4]),
+    ]
+    active_edges = [(src, dst) for src, dst, label in contact_edges if values[label]]
+    return _is_reachable("source", "sink", active_edges)
+
+
+def _make_wheatstone_rows(
+    contacts: tuple[str, str, str, str, str],
+    *,
+    offset: int = 0,
+    af_token: str = "out(Y001)",
+) -> list[list[str]]:
+    """Build a Wheatstone bridge rung, optionally shifted right by *offset* columns."""
+    if not 0 <= offset <= 27:
+        raise ValueError(f"offset must keep the 4-column bridge in bounds, got {offset}")
+
+    x001, x002, x003, x004, x005 = contacts
+
+    top = {offset: x001, offset + 1: "T", offset + 2: x003, offset + 3: "T"}
+    _fill_dashes(top, 0, offset)
+    _fill_dashes(top, offset + 4, 31)
+
+    middle = {offset + 1: x005, offset + 2: "|", offset + 3: "|"}
+
+    bottom = {offset: x002, offset + 1: "-", offset + 2: x004}
+    _fill_dashes(bottom, 0, offset)
+
+    return [
+        _make_row("R", top, af=af_token),
+        _make_row("", middle),
+        _make_row("", bottom),
+    ]
+
+
+@st.composite
+def _wheatstone_grid(draw):
+    """Generate renamed and shifted Wheatstone bridge grids."""
+    contacts = tuple(
+        draw(
+            st.lists(
+                st.integers(min_value=1, max_value=999).map(lambda n: f"X{n:03d}"),
+                min_size=5,
+                max_size=5,
+                unique=True,
+            )
+        )
+    )
+    offset = draw(st.integers(min_value=0, max_value=27))
+    return _make_wheatstone_rows(contacts, offset=offset), contacts, offset
 
 
 class TestGraphWalkEdgeCases:
@@ -735,8 +843,6 @@ class TestGraphWalkEdgeCases:
 
     def test_bridge_reduction_is_stable_across_edge_order(self):
         """Bridge-topology fallback should choose the same expansion edge each time."""
-        import warnings
-
         from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
         from pyrung.click.codegen.models import Leaf, Parallel
 
@@ -759,6 +865,87 @@ class TestGraphWalkEdgeCases:
         assert _trees_equal(tree_a, tree_b)
         assert isinstance(tree_a, Parallel)
         assert {label for label in _leaf_labels(tree_a)} == {"A", "B", "C", "D", "E"}
+
+
+class TestShannonBridgeCoverage:
+    def test_wheatstone_bridge_csv(self):
+        """The real Wheatstone fixture triggers Shannon expansion and preserves all contacts."""
+        raw_rungs = _parse_csv(_WHEATSTONE_FIXTURE)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            analyzed = _analyze_rungs(raw_rungs)
+
+        assert len(analyzed) == 1
+        assert any("Shannon expansion" in str(item.message) for item in caught)
+
+        result = analyzed[0]
+        assert len(result.instructions) == 1
+        assert result.instructions[0].af_token == "out(Y001)"
+
+        tree = result.condition_tree
+        assert tree is not None
+        assert {leaf.label for leaf in _collect_leaves(tree)} == set(_WHEATSTONE_CONTACTS)
+
+    def test_wheatstone_bridge_truth_table(self):
+        """The Shannon-expanded tree matches brute-force reachability for all 2^5 inputs."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = _analyze_rungs(_parse_csv(_WHEATSTONE_FIXTURE))[0].condition_tree
+
+        assert tree is not None
+
+        for bits in product([False, True], repeat=5):
+            values = dict(zip(_WHEATSTONE_CONTACTS, bits, strict=True))
+            expected = _wheatstone_expected(_WHEATSTONE_CONTACTS, values)
+            actual = _eval_tree(tree, values)
+            assert actual == expected, f"Mismatch for {values}"
+
+    @pytest.mark.hypothesis
+    @settings(max_examples=40, deadline=None)
+    @given(_wheatstone_grid())
+    def test_wheatstone_bridge_variants_round_trip(self, grid):
+        """Renamed and shifted bridge variants still trigger Shannon and stay stable."""
+        from pyrung.click.codegen.analyzer import (
+            _analyze_single_rung,
+            _grid_to_graph,
+            _sp_reduce,
+            _trees_equal,
+        )
+        from pyrung.click.codegen.models import _RawRung
+
+        rows, contacts, offset = grid
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = _analyze_single_rung(rung)
+
+        assert any("Shannon expansion" in str(item.message) for item in caught)
+
+        tree = result.condition_tree
+        assert tree is not None
+        assert {leaf.label for leaf in _collect_leaves(tree)} == set(contacts)
+
+        for bits in product([False, True], repeat=5):
+            values = dict(zip(contacts, bits, strict=True))
+            expected = _wheatstone_expected(contacts, values)
+            actual = _eval_tree(tree, values)
+            assert actual == expected, f"offset={offset}, values={values}"
+
+        source, sinks, edges = _grid_to_graph(rows, set())
+        assert source is not None
+        assert len(sinks) == 1
+        sink, _, _ = sinks[0]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree_a = _sp_reduce(source, sink, edges)
+            tree_b = _sp_reduce(source, sink, list(reversed(edges)))
+
+        assert tree_a is not None
+        assert tree_b is not None
+        assert _trees_equal(tree_a, tree_b)
 
 
 # ---------------------------------------------------------------------------
