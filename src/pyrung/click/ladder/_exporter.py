@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from pyrung.click._topology import Leaf, Series, factor_outputs
 from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
@@ -145,7 +146,16 @@ class _LadderExporter(
         return paths
 
     def _build_normalized_rung(self, paths: list[_InstructionPath]) -> Rung:
-        common_prefix_len = self._common_prefix_len(paths)
+        # Build SP trees from condition signatures for shared-prefix factoring.
+        sp_trees = []
+        for path in paths:
+            if not path.conditions:
+                sp_trees.append(None)
+            else:
+                children = [Leaf(self._condition_signature(c)) for c in path.conditions]
+                sp_trees.append(Series(children) if len(children) > 1 else children[0])
+
+        common_prefix_len = len(factor_outputs(sp_trees).shared)
         normalized = Rung(*paths[0].conditions[:common_prefix_len])
         remaining = [path.strip_prefix(common_prefix_len) for path in paths]
 
@@ -171,21 +181,6 @@ class _LadderExporter(
             index = stop
 
         return normalized
-
-    def _common_prefix_len(self, paths: list[_InstructionPath]) -> int:
-        if not paths:
-            return 0
-
-        max_len = min(len(path.conditions) for path in paths)
-        prefix_len = 0
-        for index in range(max_len):
-            first = self._condition_signature(paths[0].conditions[index])
-            if any(
-                self._condition_signature(path.conditions[index]) != first for path in paths[1:]
-            ):
-                break
-            prefix_len += 1
-        return prefix_len
 
     def _condition_signature(self, condition: Condition) -> str:
         if isinstance(condition, AllCondition):

@@ -32,13 +32,20 @@ from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 
+from pyrung.click._topology import (
+    SPNode,
+    as_series_children,
+    factor_outputs,
+    flatten,
+    make_compound,
+    trees_equal,
+)
 from pyrung.click.codegen.constants import _ADJACENCY, _CONDITION_COLS, _PIN_RE
 from pyrung.click.codegen.models import (
     Leaf,
     Parallel,
     RungRole,
     Series,
-    SPNode,
     _AnalyzedRung,
     _InstructionInfo,
     _PinInfo,
@@ -334,32 +341,9 @@ def _min_attr(tree: SPNode, attr: str) -> int:
     return min((_min_attr(c, attr) for c in tree.children), default=0)
 
 
-def _flatten(
-    node: SPNode,
-    kind: type[Series] | type[Parallel],
-) -> list[SPNode]:
-    """Flatten nested Series/Parallel nodes into a single list."""
-    if isinstance(node, kind):
-        result: list[SPNode] = []
-        for child in node.children:
-            result.extend(_flatten(child, kind))
-        return result
-    return [node]
-
-
-def _make_compound(
-    children: list[SPNode],
-    kind: type[Series] | type[Parallel],
-) -> SPNode:
-    """Create a flattened Series/Parallel node."""
-    flat: list[SPNode] = []
-    for child in children:
-        flat.extend(_flatten(child, kind))
-    if len(flat) == 1:
-        return flat[0]
-    if kind is Parallel:
-        flat.sort(key=lambda tree: _min_attr(tree, "row"))
-    return kind(flat)
+def _parallel_sort_key(tree: SPNode) -> int:
+    """Sort key for Parallel children: minimum row index."""
+    return _min_attr(tree, "row")
 
 
 def _reachable(start: int, edges: list[_Edge], *, reverse: bool = False) -> set[int]:
@@ -447,8 +431,7 @@ def _sp_reduce(
                 changed = True
                 consumed.update(indices)
                 children = [edges[i].tree for i in indices]
-                children.sort(key=lambda tree: _min_attr(tree, "row"))
-                merged = _make_compound(children, Parallel)
+                merged = make_compound(children, Parallel, sort_key=_parallel_sort_key)
                 mr = min(edges[i].min_row for i in indices)
                 mc = min(edges[i].min_col for i in indices)
                 new_edges.append(_Edge(key[0], key[1], merged, mr, mc))
@@ -479,7 +462,7 @@ def _sp_reduce(
             e_in = edges[in_idx]
             e_out = edges[out_idx]
             children = [e_in.tree, e_out.tree]
-            merged = _make_compound(children, Series)
+            merged = make_compound(children, Series)
             mr = min(e_in.min_row, e_out.min_row)
             mc = min(e_in.min_col, e_out.min_col)
             new_edge = _Edge(e_in.src, e_out.dst, merged, mr, mc)
@@ -516,15 +499,16 @@ def _sp_reduce(
         false_tree = _sp_reduce(source, sink, false_edges)
 
         if true_tree is not None and false_tree is not None:
-            return _make_compound(
+            return make_compound(
                 [
-                    _make_compound([e.tree, true_tree], Series),
+                    make_compound([e.tree, true_tree], Series),
                     false_tree,
                 ],
                 Parallel,
+                sort_key=_parallel_sort_key,
             )
         if true_tree is not None:
-            return _make_compound([e.tree, true_tree], Series)
+            return make_compound([e.tree, true_tree], Series)
         if false_tree is not None:
             return false_tree
         return e.tree
@@ -537,21 +521,8 @@ def _sp_reduce(
 # ---------------------------------------------------------------------------
 
 
-def _trees_equal(a: SPNode | None, b: SPNode | None) -> bool:
-    """Structural equality of two SP trees (labels only, ignoring row/col)."""
-    if a is None and b is None:
-        return True
-    if a is None or b is None:
-        return False
-    if type(a) is not type(b):
-        return False
-    if isinstance(a, Leaf) and isinstance(b, Leaf):
-        return a.label == b.label
-    if isinstance(a, (Series, Parallel)) and isinstance(b, (Series, Parallel)):
-        if len(a.children) != len(b.children):
-            return False
-        return all(_trees_equal(ac, bc) for ac, bc in zip(a.children, b.children, strict=True))
-    return False
+# Re-export for backward compatibility (tests import from here).
+_trees_equal = trees_equal
 
 
 def _group_outputs(
@@ -565,51 +536,20 @@ def _group_outputs(
         tree, af, af_row = trees[0]
         return tree, [_InstructionInfo(af, None, [])], [af_row]
 
-    # Check if all outputs have identical trees
-    all_same = all(_trees_equal(trees[0][0], t[0]) for t in trees[1:])
-    if all_same:
-        cond_tree = trees[0][0]
-        instructions = [_InstructionInfo(af, None, []) for _, af, _ in trees]
-        af_rows = [af_row for _, _, af_row in trees]
+    result = factor_outputs([t[0] for t in trees])
+
+    if result.shared:
+        cond_tree = make_compound(result.shared, Series)
+        instructions: list[_InstructionInfo] = []
+        af_rows: list[int] = []
+        for idx, (_tree, af, af_row) in enumerate(trees):
+            remaining = result.branches[idx]
+            branch_tree = make_compound(remaining, Series) if remaining else None
+            instructions.append(_InstructionInfo(af, branch_tree, []))
+            af_rows.append(af_row)
         return cond_tree, instructions, af_rows
 
-    # Normalize all trees to Series for lockstep prefix comparison.
-    # Leaf → Series([Leaf]), Parallel → Series([Parallel]), Series stays.
-    def _as_series_children(t: SPNode | None) -> list[SPNode]:
-        if t is None:
-            return []
-        if isinstance(t, Series):
-            return list(t.children)
-        return [t]
-
-    child_lists = [_as_series_children(t[0]) for t in trees]
-    if all(child_lists):
-        min_len = min(len(cl) for cl in child_lists)
-        shared_count = 0
-        for i in range(min_len):
-            ref = child_lists[0][i]
-            if all(_trees_equal(ref, cl[i]) for cl in child_lists):
-                shared_count += 1
-            else:
-                break
-
-        if shared_count > 0:
-            shared_children = child_lists[0][:shared_count]
-            cond_tree = _make_compound(shared_children, Series)
-
-            instructions: list[_InstructionInfo] = []
-            af_rows: list[int] = []
-            for idx, (_tree, af, af_row) in enumerate(trees):
-                remaining = child_lists[idx][shared_count:]
-                if remaining:
-                    branch_tree = _make_compound(remaining, Series)
-                else:
-                    branch_tree = None
-                instructions.append(_InstructionInfo(af, branch_tree, []))
-                af_rows.append(af_row)
-            return cond_tree, instructions, af_rows
-
-    # No shared structure
+    # No shared prefix — each output gets its full tree as branch_tree.
     instructions = []
     af_rows = []
     for tree, af, af_row in trees:

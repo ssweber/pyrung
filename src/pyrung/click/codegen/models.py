@@ -38,30 +38,7 @@ class _PinInfo:
     conditions: list[str]  # condition tokens on this row
 
 
-@dataclass
-class Leaf:
-    """A single condition token in the SP tree."""
-
-    label: str
-    row: int = 0
-    col: int = 0
-
-
-@dataclass
-class Series:
-    """AND: children evaluated left-to-right."""
-
-    children: list[Leaf | Series | Parallel]
-
-
-@dataclass
-class Parallel:
-    """OR: children evaluated top-to-bottom."""
-
-    children: list[Leaf | Series | Parallel]
-
-
-SPNode = Leaf | Series | Parallel
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 
 
 class RungRole(Enum):
