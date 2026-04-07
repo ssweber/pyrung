@@ -46,16 +46,11 @@ from pyrung.core.program import (
     calc,
     comment,
     copy,
-    event_drum,
     fill,
     latch,
     on_delay,
     out,
     reset,
-    search,
-    shift,
-    time_drum,
-    unpack_to_bits,
 )
 from tests.click.helpers import build_program, normalize_pyrung, strip_pyrung_boilerplate
 
@@ -1428,77 +1423,63 @@ class TestRoundTrip:
             """,
         )
 
-    def test_branch_2_deep(self, tmp_path: Path):
+    def test_branch_2_deep(self):
         """2-deep nesting emits flat branch(B, C)."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B, C):
-                    out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2, C1):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002, C1):
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "branch(" in code
-        assert orig == repro
-
-    def test_branch_3_deep(self, tmp_path: Path):
+    def test_branch_3_deep(self):
         """3-deep nesting emits flat branch(B, C, D)."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B, C, D):
-                    out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], D: c[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2, C1, C2):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002, C1, C2):
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "branch(" in code
-        assert orig == repro
-
-    def test_branch_interleaved_across_depths(self, tmp_path: Path):
+    def test_branch_interleaved_across_depths(self):
         """Multiple branches at same level with different depths."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B):
-                    out(Y2)
-                with branch(C):
-                    out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2):
+                        out(Y2)
+                    with branch(C1):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002):
+                    out(Y002)
+                with branch(C1):
+                    out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
 
     def test_forloop(self):
         """For/next loop."""
@@ -1544,24 +1525,19 @@ class TestRoundTrip:
             """,
         )
 
-    def test_calc(self, tmp_path: Path):
+    def test_calc(self):
         """Calc instruction."""
-        Enable = Bool("Enable")
-        A = Int("A")
-        B = Int("B")
-        Result = Int("Result")
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(A + B, Result)
-
-        mapping = TagMap(
-            {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    calc(DS1 + DS2, DS3)
+            """,
+            """
+            with Rung(X001):
+                calc(DS1 + DS2, DS3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
 
     def test_calc_decimal_operators(self, tmp_path: Path):
         """Calc with power, modulo, and math functions (decimal-mode) round-trips."""
@@ -1714,184 +1690,117 @@ class TestRoundTrip:
         ns: dict = {}
         exec(code, ns)
 
-    def test_calc_sum_round_trip(self, tmp_path: Path):
+    def test_calc_sum_round_trip(self):
         """Calc with SUM(range) round-trips through colon-range syntax."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        DH = Block("DH", TagType.WORD, 1, 10)
-        Dest = Block("Dest", TagType.WORD, 1, 1)
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(DH.select(1, 5).sum(), Dest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    calc(dh.select(1, 5).sum(), dh[100])
+            """,
+            """
+            with Rung(X001):
+                calc(dh.select(1, 5).sum(), DH100)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "SUM" in code or ".sum()" in code
-        assert orig == repro
-
-    def test_fill(self, tmp_path: Path):
+    def test_fill(self):
         """Fill instruction."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Dest = Block("Dest", TagType.INT, 1, 10)
-
-        with Program() as logic:
-            with Rung(Enable):
-                fill(0, Dest.select(1, 10))
-
-        mapping = TagMap(
-            {Enable: x[1], Dest: ds.select(1, 10)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    fill(0, ds.select(1, 10))
+            """,
+            """
+            with Rung(X001):
+                fill(0, ds.select(1, 10))
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_unpack_to_bits(self, tmp_path: Path):
+    def test_unpack_to_bits(self):
         """Unpack instruction with range."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Bits = Block("Bits", TagType.BOOL, 1, 16)
-
-        with Program() as logic:
-            with Rung(Enable):
-                unpack_to_bits(Source, Bits.select(1, 16))
-
-        mapping = TagMap(
-            {Enable: x[1], Source: ds[1], Bits: c.select(1, 16)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    unpack_to_bits(DS1, c.select(1, 16))
+            """,
+            """
+            with Rung(X001):
+                unpack_to_bits(DS1, c.select(1, 16))
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_shift(self, tmp_path: Path):
+    def test_shift(self):
         """Shift register with .clock() and .reset() pins."""
-        from pyrung.core import Block, TagType
-
-        Data = Bool("Data")
-        Clock = Bool("Clock")
-        ResetCond = Bool("ResetCond")
-        Bits = Block("Bits", TagType.BOOL, 1, 8)
-
-        with Program() as logic:
-            with Rung(Data):
-                shift(Bits.select(1, 8)).clock(Clock).reset(ResetCond)
-
-        mapping = TagMap(
-            {Data: x[1], Clock: x[2], ResetCond: x[3], Bits: c.select(1, 8)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    shift(c.select(1, 8)).clock(X2).reset(X3)
+            """,
+            """
+            with Rung(X001):
+                shift(c.select(1, 8)).clock(X002).reset(X003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_search(self, tmp_path: Path):
+    def test_search(self):
         """Search instruction."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Target = Int("Target")
-        Data = Block("Data", TagType.INT, 1, 4)
-        Result = Int("Result")
-        Found = Bool("Found")
-
-        with Program() as logic:
-            with Rung(Enable):
-                search(Data.select(1, 4) == Target, result=Result, found=Found)
-
-        mapping = TagMap(
-            {Enable: x[1], Target: ds[5], Data: ds.select(1, 4), Result: ds[6], Found: c[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    search(ds.select(1, 4) == DS5, result=DS6, found=C1)
+            """,
+            """
+            with Rung(X001):
+                search(ds.select(1, 4) == DS5, result=DS6, found=C1)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_event_drum(self, tmp_path: Path):
+    def test_event_drum(self):
         """Event drum with reset pin."""
-        Enable = Bool("Enable")
-        ResetCond = Bool("ResetCond")
-        Out1 = Bool("Out1")
-        Out2 = Bool("Out2")
-        Event1 = Bool("Event1")
-        Event2 = Bool("Event2")
-        Step = Int("Step")
-        Done = Bool("Done")
-
-        with Program() as logic:
-            with Rung(Enable):
-                event_drum(
-                    outputs=[Out1, Out2],
-                    events=[Event1, Event2],
-                    pattern=[[1, 0], [0, 1]],
-                    current_step=Step,
-                    completion_flag=Done,
-                ).reset(ResetCond)
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                ResetCond: x[2],
-                Event1: x[3],
-                Event2: x[4],
-                Out1: y[1],
-                Out2: y[2],
-                Step: ds[1],
-                Done: c[1],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    event_drum(
+                        outputs=[Y1, Y2],
+                        events=[X3, X4],
+                        pattern=[[1, 0], [0, 1]],
+                        current_step=DS1,
+                        completion_flag=C1,
+                    ).reset(X2)
+            """,
+            """
+            with Rung(X001):
+                event_drum(outputs=[Y001, Y002], events=[X003, X004], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C1).reset(X002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_time_drum(self, tmp_path: Path):
+    def test_time_drum(self):
         """Time drum with reset pin."""
-        Enable = Bool("Enable")
-        ResetCond = Bool("ResetCond")
-        Out1 = Bool("Out1")
-        Out2 = Bool("Out2")
-        Step = Int("Step")
-        Acc = Int("Acc")
-        Done = Bool("Done")
-
-        with Program() as logic:
-            with Rung(Enable):
-                time_drum(
-                    outputs=[Out1, Out2],
-                    presets=[100, 200],
-                    unit=Tms,
-                    pattern=[[1, 0], [0, 1]],
-                    current_step=Step,
-                    accumulator=Acc,
-                    completion_flag=Done,
-                ).reset(ResetCond)
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                ResetCond: x[2],
-                Out1: y[1],
-                Out2: y[2],
-                Step: ds[1],
-                Acc: td[1],
-                Done: c[1],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    time_drum(
+                        outputs=[Y1, Y2],
+                        presets=[100, 200],
+                        unit=Tms,
+                        pattern=[[1, 0], [0, 1]],
+                        current_step=DS1,
+                        accumulator=TD1,
+                        completion_flag=C1,
+                    ).reset(X2)
+            """,
+            """
+            with Rung(X001):
+                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit=Tms, pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
 
     def test_send(self, tmp_path: Path):
         """Send instruction with ModbusTcpTarget."""
@@ -2666,148 +2575,114 @@ class TestCodeGeneration:
 class TestContinuedRoundTrip:
     """Round-trip tests for .continued() rungs."""
 
-    def test_simple_continuation(self, tmp_path: Path):
+    def test_simple_continuation(self):
         """Two independent wires: primary rung + continued rung."""
-        A = Bool("A")
-        B = Bool("B")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert ".continued()" in code
-        assert orig == repro
-
-    def test_continued_chain(self, tmp_path: Path):
-        """Three consecutive continued rungs share the same snapshot."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-            with Rung(C).continued():
-                out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert code.count(".continued()") == 2
-        assert orig == repro
-
-    def test_continuation_with_branch(self, tmp_path: Path):
-        """Continued rung with a branch inside it."""
-        A = Bool("A")
-        B = Bool("B")
-        Mode = Bool("Mode")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-                with branch(Mode):
-                    out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Mode: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert ".continued()" in code
-        assert orig == repro
-
-    def test_continuation_with_branch_local_or(self, tmp_path: Path):
-        """continued() stays stable when the continued rung has branch-local OR."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                with branch(any_of(C, D)):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
                     out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert ".continued()" in code
-        assert "X003 | X004" in code
-        assert orig == repro
-
-    def test_nested_branch_outputs_preserve_inner_shared_prefix(self, tmp_path: Path):
-        """Nested shared prefixes should come back as nested branch() blocks."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        E = Bool("E")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program(strict=False) as logic:
-            with Rung(A):
-                with branch(B):
-                    with branch(C):
-                        out(Y1)
-                    with branch(D):
-                        out(Y2)
-                with branch(E):
-                    out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        expected = """
-    with Rung(X001):
-        with branch(X002):
-            with branch(X003):
+            """,
+            """
+            with Rung(X001):
                 out(Y001)
-            with branch(X004):
+            with Rung(X002).continued():
                 out(Y002)
-        with branch(X005):
-            out(Y003)
-"""
-        assert expected in code
-        assert "with branch(X002, X003)" not in code
-        assert orig == repro
+            """,
+        )
 
-    def test_greedy_group_prefix_shrinks_but_stays_nonempty(self, tmp_path: Path):
+    def test_continued_chain(self):
+        """Three consecutive continued rungs share the same snapshot."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+                with Rung(C1).continued():
+                    out(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002).continued():
+                out(Y002)
+            with Rung(C1).continued():
+                out(Y003)
+            """,
+        )
+
+    def test_continuation_with_branch(self):
+        """Continued rung with a branch inside it."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+                    with branch(X3):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002).continued():
+                out(Y002)
+                with branch(X003):
+                    out(Y003)
+            """,
+        )
+
+    def test_continuation_with_branch_local_or(self):
+        """continued() stays stable when the continued rung has branch-local OR."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    with branch(any_of(X3, X4)):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002, X003 | X004).continued():
+                out(Y002)
+            """,
+        )
+
+    def test_nested_branch_outputs_preserve_inner_shared_prefix(self):
+        """Nested shared prefixes should come back as nested branch() blocks."""
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2):
+                        with branch(X3):
+                            out(Y1)
+                        with branch(X4):
+                            out(Y2)
+                    with branch(X5):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002):
+                    with branch(X003):
+                        out(Y001)
+                    with branch(X004):
+                        out(Y002)
+                with branch(X005):
+                    out(Y003)
+            """,
+        )
+
+    def test_greedy_group_prefix_shrinks_but_stays_nonempty(self):
         """Growing a group shrinks the shared prefix; recursion recovers deeper nesting.
 
         Outputs: B·C·G, B·C·H, B·E under rung A.
@@ -2816,235 +2691,122 @@ class TestContinuedRoundTrip:
         condition.  The emitter's greedy loop then finds C shared between
         the first two outputs and nests them.
         """
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        E = Bool("E")
-        G = Bool("G")
-        H = Bool("H")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program(strict=False) as logic:
-            with Rung(A):
-                with branch(B, C, G):
-                    out(Y1)
-                with branch(B, C, H):
-                    out(Y2)
-                with branch(B, E):
-                    out(Y3)
-
-        mapping = TagMap(
-            {
-                A: x[1],
-                B: x[2],
-                C: x[3],
-                E: x[4],
-                G: x[5],
-                H: x[6],
-                Y1: y[1],
-                Y2: y[2],
-                Y3: y[3],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3, X5):
+                        out(Y1)
+                    with branch(X2, X3, X6):
+                        out(Y2)
+                    with branch(X2, X4):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001, X002):
+                with branch(X003):
+                    with branch(X005):
+                        out(Y001)
+                    with branch(X006):
+                        out(Y002)
+                with branch(X004):
+                    out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        # B is absorbed into the rung condition by _group_outputs.
-        # The emitter then factors C from outputs 1 & 2.
-        expected = """
-    with Rung(X001, X002):
-        with branch(X003):
-            with branch(X005):
-                out(Y001)
-            with branch(X006):
-                out(Y002)
-        with branch(X004):
-            out(Y003)
-"""
-        assert expected in code
-        # Must not flatten into a single branch — the inner shared
-        # prefix C should be factored out.
-        assert "with branch(X003, X005)" not in code
-        assert orig == repro
-
-    def test_greedy_group_disjoint_consecutive_groups(self, tmp_path: Path):
+    def test_greedy_group_disjoint_consecutive_groups(self):
         """Consecutive outputs with disjoint prefixes form separate groups.
 
         Outputs: B·C (standalone), D·E, D·F under rung A.
         {1,2} share nothing, so output 1 is emitted alone.  Then {2,3}
         share D and are grouped.
         """
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        E = Bool("E")
-        F = Bool("F")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program(strict=False) as logic:
-            with Rung(A):
-                with branch(B, C):
-                    out(Y1)
-                with branch(D, E):
-                    out(Y2)
-                with branch(D, F):
-                    out(Y3)
-
-        mapping = TagMap(
-            {
-                A: x[1],
-                B: x[2],
-                C: x[3],
-                D: x[4],
-                E: x[5],
-                F: x[6],
-                Y1: y[1],
-                Y2: y[2],
-                Y3: y[3],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X4, X5):
+                        out(Y2)
+                    with branch(X4, X6):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002, X003):
+                    out(Y001)
+                with branch(X004):
+                    with branch(X005):
+                        out(Y002)
+                    with branch(X006):
+                        out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        expected = """
-    with Rung(X001):
-        with branch(X002, X003):
-            out(Y001)
-        with branch(X004):
-            with branch(X005):
-                out(Y002)
-            with branch(X006):
-                out(Y003)
-"""
-        assert expected in code
-        # Output 1 must not be grouped with outputs 2/3 — no shared prefix.
-        assert "with branch(X002, X003, X004)" not in code
-        assert orig == repro
-
-    def test_greedy_group_all_share_single_prefix(self, tmp_path: Path):
+    def test_greedy_group_all_share_single_prefix(self):
         """All outputs share the same single-level prefix — one group.
 
         Outputs: B·C, B·D, B·E under rung A.
         All three share [B]; ``_group_outputs`` absorbs B into the rung
         condition, leaving C, D, E as flat sibling branches.
         """
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        E = Bool("E")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program(strict=False) as logic:
-            with Rung(A):
-                with branch(B, C):
-                    out(Y1)
-                with branch(B, D):
-                    out(Y2)
-                with branch(B, E):
-                    out(Y3)
-
-        mapping = TagMap(
-            {
-                A: x[1],
-                B: x[2],
-                C: x[3],
-                D: x[4],
-                E: x[5],
-                Y1: y[1],
-                Y2: y[2],
-                Y3: y[3],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X2, X4):
+                        out(Y2)
+                    with branch(X2, X5):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001, X002):
+                with branch(X003):
+                    out(Y001)
+                with branch(X004):
+                    out(Y002)
+                with branch(X005):
+                    out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        # B is absorbed into the rung condition; remainders are flat branches.
-        expected = """
-    with Rung(X001, X002):
-        with branch(X003):
-            out(Y001)
-        with branch(X004):
-            out(Y002)
-        with branch(X005):
-            out(Y003)
-"""
-        assert expected in code
-        # B should be factored into the Rung, not duplicated per branch.
-        assert "with branch(X002, X003)" not in code
-        assert "with branch(X002, X004)" not in code
-        assert orig == repro
-
-    def test_greedy_group_four_outputs_two_disjoint_pairs(self, tmp_path: Path):
+    def test_greedy_group_four_outputs_two_disjoint_pairs(self):
         """Four outputs forming two independent pairs with different prefixes.
 
         Outputs: B·C, B·D, E·F, E·G under rung A.
         {1,2} share B; {3,4} share E; {2,3} share nothing.
         Should emit two separate grouped branches.
         """
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        E = Bool("E")
-        F = Bool("F")
-        G = Bool("G")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-        Y4 = Bool("Y4")
-
-        with Program(strict=False) as logic:
-            with Rung(A):
-                with branch(B, C):
-                    out(Y1)
-                with branch(B, D):
-                    out(Y2)
-                with branch(E, F):
-                    out(Y3)
-                with branch(E, G):
-                    out(Y4)
-
-        mapping = TagMap(
-            {
-                A: x[1],
-                B: x[2],
-                C: x[3],
-                D: x[4],
-                E: x[5],
-                F: x[6],
-                G: x[7],
-                Y1: y[1],
-                Y2: y[2],
-                Y3: y[3],
-                Y4: y[4],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X2, X4):
+                        out(Y2)
+                    with branch(X5, X6):
+                        out(Y3)
+                    with branch(X5, X7):
+                        out(Y4)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002):
+                    with branch(X003):
+                        out(Y001)
+                    with branch(X004):
+                        out(Y002)
+                with branch(X005):
+                    with branch(X006):
+                        out(Y003)
+                    with branch(X007):
+                        out(Y004)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        expected = """
-    with Rung(X001):
-        with branch(X002):
-            with branch(X003):
-                out(Y001)
-            with branch(X004):
-                out(Y002)
-        with branch(X005):
-            with branch(X006):
-                out(Y003)
-            with branch(X007):
-                out(Y004)
-"""
-        assert expected in code
-        assert orig == repro
 
 
 class TestStructuredCodegen:
