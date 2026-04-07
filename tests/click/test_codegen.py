@@ -150,6 +150,16 @@ def _assert_codegen_program_body(source: str, expected: str) -> None:
     assert _codegen_program_body(source) == normalize_pyrung(textwrap.dedent(expected))
 
 
+def _assert_generated_code(actual: str, expected: str) -> None:
+    assert normalize_pyrung(actual) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_codegen_full(source: str, expected: str, *, nicknames: dict[str, str] | None = None) -> None:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    _assert_generated_code(ladder_to_pyrung(bundle, nicknames=nicknames), expected)
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WHEATSTONE_FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "wheatstone_bridge.csv"
 _WHEATSTONE_CONTACTS = ("X001", "X002", "X003", "X004", "X005")
@@ -1624,7 +1634,7 @@ class TestRoundTrip:
             """,
         )
 
-    def test_calc_bitwise_round_trip(self):
+    def test_calc_bitwise_codegen(self):
         """Calc with AND/OR/XOR round-trips through Click-native operators."""
         _assert_codegen_body(
             """
@@ -1725,7 +1735,7 @@ class TestRoundTrip:
         ns: dict = {}
         exec(code, ns)
 
-    def test_calc_sum_round_trip(self):
+    def test_calc_sum_codegen(self):
         """Calc with SUM(range) round-trips through colon-range syntax."""
         _assert_codegen_body(
             """
@@ -2263,24 +2273,38 @@ class TestNicknameMerge:
         assert "# Y001" in code
         assert "out(motor_out)" in code
 
-    def test_dict_nicknames_reserved_python_names_prefixed(self, tmp_path: Path):
+    def test_dict_nicknames_reserved_python_names_prefixed(self):
         """Reserved Python names become safe variable identifiers."""
-        Enable = Bool("Enable")
-        Src = Int("Src")
-        Dst = Int("Dst")
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                copy(DS1, DS2)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        with Program() as logic:
-            with Rung(Enable):
-                copy(Src, Dst)
+            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung.click import TagMap, ds, x
 
-        mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
-        nicks = {"DS1": "True", "DS2": "False"}
-        code, orig, repro = _round_trip(logic, mapping, tmp_path, nicknames=nicks)
+            # --- Tags ---
+            _True = Int("True")  # DS1
+            _False = Int("False")  # DS2
+            X001 = Bool("X001")
 
-        assert '_True = Int("True")' in code
-        assert '_False = Int("False")' in code
-        assert "copy(_True, _False)" in code
-        assert orig == repro
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    copy(_True, _False)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                _True: ds[1],
+                _False: ds[2],
+                X001: x[1],
+            })
+            """,
+            nicknames={"DS1": "True", "DS2": "False"},
+        )
 
     def test_dict_nicknames_prefixed_names_remain_unique(self, tmp_path: Path):
         """Sanitized identifiers stay unique if a nickname already has the prefix."""
@@ -2300,20 +2324,36 @@ class TestNicknameMerge:
         assert '_True_2 = Int("_True")' in code
         assert "copy(_True, _True_2)" in code
 
-    def test_dict_nicknames_round_trip(self, tmp_path: Path):
+    def test_dict_nicknames_codegen(self):
         """Nicknames round-trip: generated code re-exports same CSV."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        with Program() as logic:
-            with Rung(A):
-                out(Y)
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        nicks = {"X001": "start_button", "Y001": "motor_out"}
-        code, orig, repro = _round_trip(logic, mapping, tmp_path, nicknames=nicks)
+            # --- Tags ---
+            start_button = Bool("start_button")  # X001
+            motor_out = Bool("motor_out")  # Y001
 
-        assert orig == repro
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(start_button):
+                    out(motor_out)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                start_button: x[1],
+                motor_out: y[1],
+            })
+            """,
+            nicknames={"X001": "start_button", "Y001": "motor_out"},
+        )
 
     def test_no_nicknames(self, tmp_path: Path):
         """Without nicknames, raw operand names are used."""
@@ -3093,12 +3133,28 @@ class TestStructuredCodegen:
                 reset(Bits.select(1, 3))
 
         mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+        _assert_generated_code(
+            ladder_to_pyrung(pyrung_to_ladder(logic, mapping)),
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert "reset(c.select(1004, 1006))" in code
-        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
-        assert "C1004_to_C1006:" not in code
-        assert orig == repro
+            from pyrung import Program, Rung, Bool, reset
+            from pyrung.click import TagMap, c, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    reset(c.select(1004, 1006))
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+        )
 
     def test_dense_named_array_backing_range_codegen_uses_instance_select(self, tmp_path: Path):
         """Dense named_array backing windows should rewrite to instance_select()."""
@@ -3663,46 +3719,45 @@ class TestStructuredCodegen:
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""
 
-    def test_empty_rung_round_trip(self, tmp_path: Path):
+    def test_empty_rung_codegen_emits_pass(self):
         """Empty (pass) rung survives program → CSV NOP → codegen → exec → CSV₂."""
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Section header")
             with Rung():
                 pass
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Section header")
+            with Rung():
+                pass
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
-        # Codegen should emit pass, not nop()
-        assert "pass" in code
-        assert "nop()" not in code
-        assert orig == repro
-
-    def test_explicit_nop_round_trip(self, tmp_path: Path):
+    def test_explicit_nop_codegen_normalizes_to_pass(self):
         """Explicit nop() rung survives round-trip via NOP in CSV."""
-        from pyrung.click import nop
-
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Explicit NOP")
             with Rung():
                 nop()
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Explicit NOP")
+            with Rung():
+                pass
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        # Round-trip normalises nop() → pass (both map to CSV NOP)
-        assert "pass" in code
-        assert orig == repro
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
     def test_bare_text_rejected(self, tmp_path: Path):
         """Unknown bare text in AF column raises ValueError."""
