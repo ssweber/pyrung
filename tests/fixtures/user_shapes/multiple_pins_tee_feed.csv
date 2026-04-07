@@ -1,0 +1,9 @@
+marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
+#,with Rung(C1):
+#,"    count_up(CT1, CTD1, preset=1).reset(C2)"
+#,with Rung(C2).continued():
+#,"    on_delay(T1, TD1, preset=1, unit=Tms).reset(C4)"
+R,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"count_up(CT1,CTD1,preset=1)"
+,C2,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T1,TD1,preset=1,unit=Tms)"
+,C4,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
