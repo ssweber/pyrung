@@ -856,8 +856,8 @@ class TestGraphWalkEdgeCases:
 
     def test_bridge_reduction_is_stable_across_edge_order(self):
         """Bridge-topology fallback should choose the same expansion edge each time."""
-        from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
         from pyrung.click._topology import Leaf, Parallel
+        from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
 
         s, u, v, t = 0, 1, 2, 3
         edges = [
@@ -2907,8 +2907,15 @@ class TestContinuedRoundTrip:
 
         mapping = TagMap(
             {
-                A: x[1], B: x[2], C: x[3], E: x[4], G: x[5], H: x[6],
-                Y1: y[1], Y2: y[2], Y3: y[3],
+                A: x[1],
+                B: x[2],
+                C: x[3],
+                E: x[4],
+                G: x[5],
+                H: x[6],
+                Y1: y[1],
+                Y2: y[2],
+                Y3: y[3],
             },
             include_system=False,
         )
@@ -2960,8 +2967,15 @@ class TestContinuedRoundTrip:
 
         mapping = TagMap(
             {
-                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], F: x[6],
-                Y1: y[1], Y2: y[2], Y3: y[3],
+                A: x[1],
+                B: x[2],
+                C: x[3],
+                D: x[4],
+                E: x[5],
+                F: x[6],
+                Y1: y[1],
+                Y2: y[2],
+                Y3: y[3],
             },
             include_system=False,
         )
@@ -3009,8 +3023,14 @@ class TestContinuedRoundTrip:
 
         mapping = TagMap(
             {
-                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5],
-                Y1: y[1], Y2: y[2], Y3: y[3],
+                A: x[1],
+                B: x[2],
+                C: x[3],
+                D: x[4],
+                E: x[5],
+                Y1: y[1],
+                Y2: y[2],
+                Y3: y[3],
             },
             include_system=False,
         )
@@ -3064,8 +3084,17 @@ class TestContinuedRoundTrip:
 
         mapping = TagMap(
             {
-                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], F: x[6], G: x[7],
-                Y1: y[1], Y2: y[2], Y3: y[3], Y4: y[4],
+                A: x[1],
+                B: x[2],
+                C: x[3],
+                D: x[4],
+                E: x[5],
+                F: x[6],
+                G: x[7],
+                Y1: y[1],
+                Y2: y[2],
+                Y3: y[3],
+                Y4: y[4],
             },
             include_system=False,
         )
