@@ -45,6 +45,24 @@
 - Improved CircuitPython codegen readability — section separators, bank-name comments on Modbus reverse-mapping tables, and descriptive comments on client `build_request` functions.
 - New example: `circuitpy_traffic_light_modbus.py` — P1AM-200 intersection controller with relay outputs, Modbus TCP server for SCADA/HMI, and client reading a walk request from a remote pedestrian panel.
 - New example: `circuitpy_retentive_runstop.py` — demonstrates retentive tags, RUN/STOP switch, and SD persistence on P1AM-200.
+- **Starter project release assets** — `pyrung_to_ladder` and `generate_circuitpy` can produce ready-to-import starter bundles: Click ladder CSV project files and CircuitPython output with pre-compiled `.mpy` via mpy-cross.
+- **"Know Python? Learn Ladder Logic" tutorial** — new multi-lesson tutorial series in `docs/` walking through core concepts with a conveyor sorting station example.
+
+### Bug fixes
+
+- **OR topology corrections** — four fixes for ladder CSV export that could silently corrupt OR branch wiring: branch-local OR preservation, wire fill merging in series ORs, removal of `_compact_any_triplet` (which silently changed OR to AND), and correct `T:` prefix on multi-contact OR branches.
+- **T junction propagation** — bridge topology and pin-row wiring now propagate correctly through T junctions into sibling output conditions in codegen.
+- **Named array stride** — corrected stride handling for `count=1` named arrays in the Click collector.
+- **Analyzer graph reduction** — simplified graph reduction to fix edge cases in the Click rung analyzer.
+
+### Performance
+
+- Faster round-trip program construction in codegen.
+
+### Internal
+
+- Expression class hierarchy replaced with data-driven `BinaryExpr`/`UnaryExpr`/`ExprCompare`.
+- Module splits for maintainability: `tag_map`, `context`, `send_receive`, and `codegen` each split into packages.
 
 ### Migration
 

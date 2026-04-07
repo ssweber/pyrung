@@ -153,11 +153,15 @@ def _generate_readme() -> str:
 
 # Loading into Click Programming Software
 
-1. Install [ClickNick](https://github.com/ssweber/clicknick):
+1. Re-export the project to Click ladder CSV (picks up any edits you've made):
+
+       uv run python project_to_csv.py
+
+2. Install [ClickNick](https://github.com/ssweber/clicknick):
 
        uv tool install clicknick
 
-2. In Click Programming Software, go to **Ladder → Open in Guided Paste...**
+3. In Click Programming Software, go to **Ladder → Open in Guided Paste...**
    and point it at the `click_csv` folder.
 
    ClickNick walks you through pasting each rung and subroutine into Click
