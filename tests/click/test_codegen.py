@@ -15,7 +15,6 @@ from hypothesis import strategies as st
 from pyrung.click import (
     TagMap,
     c,
-    dh,
     ds,
     ladder_to_pyrung,
     pyrung_to_ladder,
@@ -38,12 +37,9 @@ from pyrung.core import (
     TagType,
     Tms,
     any_of,
-    fall,
-    rise,
 )
 from pyrung.core.program import (
     branch,
-    calc,
     comment,
     copy,
     fill,
@@ -154,7 +150,9 @@ def _assert_generated_code(actual: str, expected: str) -> None:
     assert normalize_pyrung(actual) == normalize_pyrung(textwrap.dedent(expected))
 
 
-def _assert_codegen_full(source: str, expected: str, *, nicknames: dict[str, str] | None = None) -> None:
+def _assert_codegen_full(
+    source: str, expected: str, *, nicknames: dict[str, str] | None = None
+) -> None:
     logic, mapping = build_program(source)
     bundle = pyrung_to_ladder(logic, mapping)
     _assert_generated_code(ladder_to_pyrung(bundle, nicknames=nicknames), expected)
@@ -188,7 +186,7 @@ class TestCsvParsing:
         raw_rungs = _parse_csv(csv_path)
         assert len(raw_rungs) == 1
         assert raw_rungs[0].comment_lines == []
-        assert raw_rungs[0].rows[0][-1] == "out(Y001)"
+        assert raw_rungs[0].rows == [rows[1]]
 
     def test_comment_rows(self, tmp_path: Path):
         csv_path = tmp_path / "test.csv"
@@ -254,11 +252,8 @@ class TestTopologyAnalysis:
         assert len(analyzed) == 1
         r = analyzed[0]
         assert _find_parallel(r.condition_tree) is None
-        labels = _leaf_labels(r.condition_tree)
-        assert "X001" in labels
-        assert "X002" in labels
-        assert len(r.instructions) == 1
-        assert r.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(r.condition_tree) == ["X001", "X002"]
+        assert [instruction.af_token for instruction in r.instructions] == ["out(Y001)"]
 
     def test_or_expansion(self, tmp_path: Path):
         """OR: any_of(A, B) → out(Y)."""
@@ -302,8 +297,8 @@ class TestTopologyAnalysis:
         par = _find_parallel(r.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        # Trailing AND should be in condition_tree labels
-        assert "C1" in _leaf_labels(r.condition_tree)
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert set(_leaf_labels(r.condition_tree)) == {"X001", "X002", "C1"}
 
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs: same conditions, different instructions."""
@@ -323,9 +318,11 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert len(r.instructions) == 2
-        assert r.instructions[0].af_token == "out(Y001)"
-        assert r.instructions[1].af_token == "latch(Y002)"
+        assert _leaf_labels(r.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in r.instructions] == [
+            "out(Y001)",
+            "latch(Y002)",
+        ]
 
     def test_pin_rows(self, tmp_path: Path):
         """Timer with .reset() pin."""
@@ -592,11 +589,8 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        labels = [_leaf_labels(c) for c in par.children]
-        assert ["X001"] in labels
-        assert ["X002"] in labels
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_up_right_diagonal(self):
         """Cell connects UP-RIGHT to a T when the bridge cell is blank (gap).
@@ -615,9 +609,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
-        assert "X001" in _leaf_labels(result.condition_tree)
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_bridge_connects_branch(self):
         """T forces bidirectional down to a '-' bridge, connecting a second AF.
@@ -635,10 +628,11 @@ class TestGraphWalkEdgeCases:
         r1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(Y002)")
         result = _analyze_single_rung(_RawRung(comment_lines=[], rows=[r0, r1]))
 
-        assert len(result.instructions) == 2
-        assert result.instructions[0].af_token == "out(Y001)"
-        assert result.instructions[1].af_token == "out(Y002)"
-        assert "X001" in _leaf_labels(result.condition_tree)
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+        ]
 
     def test_three_way_or(self):
         """Three OR alternatives: X001, X002, X003 all reach the same AF.
@@ -659,10 +653,11 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 3
-        labels = [_leaf_labels(c) for c in par.children]
-        assert ["X001"] in labels
-        assert ["X002"] in labels
-        assert ["X003"] in labels
+        assert sorted(_leaf_labels(child) for child in par.children) == [
+            ["X001"],
+            ["X002"],
+            ["X003"],
+        ]
 
     def test_nested_t_cascade(self):
         """Nested T cascade: T at (0,1) forks, T at (1,1) forks again.
@@ -683,19 +678,17 @@ class TestGraphWalkEdgeCases:
 
         result = _analyze_single_rung(rung)
         assert _find_parallel(result.condition_tree) is None
-        assert "btn" in _leaf_labels(result.condition_tree)
-        assert len(result.instructions) == 3
-
-        # Instruction AF tokens present
-        afs = [i.af_token for i in result.instructions]
-        assert "out(L1)" in afs
-        assert "out(L2)" in afs
-        assert "out(L3)" in afs
+        assert _leaf_labels(result.condition_tree) == ["btn"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(L1)",
+            "out(L2)",
+            "out(L3)",
+        ]
 
         # The instruction for L2 has a branch-local condition containing "auto"
         l2_instr = next(i for i in result.instructions if i.af_token == "out(L2)")
         assert l2_instr.branch_tree is not None
-        assert "auto" in _leaf_labels(l2_instr.branch_tree)
+        assert _leaf_labels(l2_instr.branch_tree) == ["auto"]
 
         # L1 and L3 have no branch-local conditions
         l1_instr = next(i for i in result.instructions if i.af_token == "out(L1)")
@@ -713,8 +706,7 @@ class TestGraphWalkEdgeCases:
 
         result = _analyze_single_rung(rung)
         assert result.condition_tree is None
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_af_only_rows_share_an_implicit_source(self):
         """AF-only rows stay on the graph path and preserve all outputs."""
@@ -751,10 +743,8 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        # Trailing AND conditions should be in condition_tree
-        labels = _leaf_labels(result.condition_tree)
-        assert "C1" in labels
-        assert "C2" in labels
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert set(_leaf_labels(result.condition_tree)) == {"X001", "X002", "C1", "C2"}
 
     def test_pin_attached_to_correct_instruction(self):
         """Pin row attaches to its nearest preceding instruction.
@@ -775,10 +765,12 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        assert len(result.instructions) == 2
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "on_delay(T1)",
+        ]
         assert result.instructions[0].pins == []
-        assert result.instructions[1].af_token == "on_delay(T1)"
         assert len(result.instructions[1].pins) == 1
         assert result.instructions[1].pins[0].name == "reset"
         assert result.instructions[1].pins[0].conditions == ["X002"]
@@ -810,8 +802,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in _leaf_labels(result.condition_tree)
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_adjacency_table_content_default(self):
         """Content tokens (contacts, comparisons) default to left/right exits.
@@ -825,9 +817,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        labels = _leaf_labels(result.condition_tree)
-        assert "X001" in labels
-        assert "DS1==5" in labels
+        assert _leaf_labels(result.condition_tree) == ["X001", "DS1==5"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_another_case_t_fork_down_through_contact(self):
         """T fork down through contact reaches second AF without reverse leakage."""
@@ -842,15 +833,15 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        assert len(result.instructions) == 2
-        afs = {i.af_token for i in result.instructions}
-        assert "out(Y001)" in afs
-        assert "out(Y002)" in afs
-        # X001 should be in the shared condition or a branch
-        all_labels = _leaf_labels(result.condition_tree)
-        for instr in result.instructions:
-            all_labels.extend(_leaf_labels(instr.branch_tree))
-        assert "X001" in all_labels
+        assert result.condition_tree is None
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+        ]
+        assert [_leaf_labels(instruction.branch_tree) for instruction in result.instructions] == [
+            ["X001"],
+            ["X001", "X003", "X002"],
+        ]
 
     def test_or_with_all_offs_t_prefix_rows_above_output(self):
         """T:-prefixed stacked OR rows above output row remain reachable."""
@@ -865,18 +856,16 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
-        # All condition labels should be present
-        labels = _leaf_labels(result.condition_tree)
-        assert "X001" in labels
-        assert "X002" in labels
-        assert "X003" in labels
-        assert "X006" in labels
-        assert "X007" in labels
-        assert "X004" in labels
-        assert "X005" in labels
-        # Should have a Parallel node (OR structure)
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
+        assert set(_leaf_labels(result.condition_tree)) == {
+            "X001",
+            "X002",
+            "X003",
+            "X004",
+            "X005",
+            "X006",
+            "X007",
+        }
         par = _find_parallel(result.condition_tree)
         assert par is not None
 
@@ -898,10 +887,13 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        # Should have instructions for both Y001 and Y002
-        afs = [i.af_token for i in result.instructions]
-        assert "out(Y001)" in afs
-        assert "out(Y002)" in afs
+        assert result.condition_tree is None
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+            "out(Y002)",
+            "out(Y002)",
+        ]
 
     def test_bridge_reduction_is_stable_across_edge_order(self):
         """Bridge-topology fallback should choose the same expansion edge each time."""
@@ -939,11 +931,12 @@ class TestShannonBridgeCoverage:
             analyzed = _analyze_rungs(raw_rungs)
 
         assert len(analyzed) == 1
-        assert any("Shannon expansion" in str(item.message) for item in caught)
+        assert [str(item.message) for item in caught] == [
+            "Rung contains bridge topology; resolved via Shannon expansion"
+        ]
 
         result = analyzed[0]
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
         tree = result.condition_tree
         assert tree is not None
@@ -983,7 +976,9 @@ class TestShannonBridgeCoverage:
             warnings.simplefilter("always")
             result = _analyze_single_rung(rung)
 
-        assert any("Shannon expansion" in str(item.message) for item in caught)
+        assert [str(item.message) for item in caught] == [
+            "Rung contains bridge topology; resolved via Shannon expansion"
+        ]
 
         tree = result.condition_tree
         assert tree is not None
@@ -1675,10 +1670,17 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        assert "0x0000" in code
-        assert "0xFFFF" in code
-        assert "0000h" not in code
-        assert "FFFFh" not in code
+        assert _strip_codegen_program_body(code) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                with Rung(DH001 == 0x0000):
+                    out(C001)
+
+                with Rung(DH001 == 0xFFFF):
+                    out(C002)
+                """
+            )
+        )
 
         # Generated code must be valid Python
         ns: dict = {}
@@ -1702,10 +1704,17 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        assert "0x00FF" in code
-        assert "0xFFFF" in code
-        assert "00FFh" not in code
-        assert "FFFFh" not in code
+        assert _strip_codegen_program_body(code) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                with Rung():
+                    calc(DH001 & 0x00FF, DH002)
+
+                with Rung():
+                    calc(DH001 & 0xFFFF, DH003)
+                """
+            )
+        )
 
         ns: dict = {}
         exec(code, ns)
@@ -1727,10 +1736,30 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        # Should use lowercase block variable
-        assert "dh[" in code
-        # Should not have raw uppercase prefix
-        assert "DH[" not in code
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Int, Word, copy
+            from pyrung.click import TagMap, dh, ds
+
+            # --- Tags ---
+            DS134 = Int("DS134")
+            DH051 = Word("DH051")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung():
+                    copy(dh[DS134], DH051)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                DS134: ds[134],
+                DH051: dh[51],
+            })
+            """,
+        )
         # Must be valid Python
         ns: dict = {}
         exec(code, ns)
@@ -2266,12 +2295,30 @@ class TestNicknameMerge:
 
         nicks = {"X001": "start_button", "Y001": "motor_out"}
         code = ladder_to_pyrung(csv_path, nicknames=nicks)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert 'start_button = Bool("start_button")' in code
-        assert 'motor_out = Bool("motor_out")' in code
-        assert "# X001" in code
-        assert "# Y001" in code
-        assert "out(motor_out)" in code
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
+
+            # --- Tags ---
+            start_button = Bool("start_button")  # X001
+            motor_out = Bool("motor_out")  # Y001
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(start_button):
+                    out(motor_out)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                start_button: x[1],
+                motor_out: y[1],
+            })
+            """,
+        )
 
     def test_dict_nicknames_reserved_python_names_prefixed(self):
         """Reserved Python names become safe variable identifiers."""
@@ -2319,10 +2366,32 @@ class TestNicknameMerge:
         mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
         nicks = {"DS1": "True", "DS2": "_True"}
         code = ladder_to_pyrung(_export_csv(logic, mapping, tmp_path), nicknames=nicks)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert '_True = Int("True")' in code
-        assert '_True_2 = Int("_True")' in code
-        assert "copy(_True, _True_2)" in code
+            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung.click import TagMap, ds, x
+
+            # --- Tags ---
+            _True = Int("True")  # DS1
+            _True_2 = Int("_True")  # DS2
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    copy(_True, _True_2)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                _True: ds[1],
+                _True_2: ds[2],
+                X001: x[1],
+            })
+            """,
+        )
 
     def test_dict_nicknames_codegen(self):
         """Nicknames round-trip: generated code re-exports same CSV."""
@@ -2367,10 +2436,30 @@ class TestNicknameMerge:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert 'X001 = Bool("X001")' in code
-        assert 'Y001 = Bool("Y001")' in code
-        assert "out(Y001)" in code
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            Y001 = Bool("Y001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    out(Y001)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                Y001: y[1],
+            })
+            """,
+        )
 
     def test_both_raises(self, tmp_path: Path):
         """Providing both nickname_csv and nicknames raises ValueError."""
@@ -2399,14 +2488,15 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-
-        assert "from pyrung import" in code
-        assert "Program" in code
-        assert "Rung" in code
-        assert "Bool" in code
-        assert "out" in code
-        assert "from pyrung.click import" in code
-        assert "TagMap" in code
+        import_lines = "\n".join(line for line in code.splitlines() if line.startswith("from "))
+        assert normalize_pyrung(import_lines) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                from pyrung import Program, Rung, Bool, out
+                from pyrung.click import TagMap, x, y
+                """
+            )
+        )
 
     def test_output_file(self, tmp_path: Path):
         """output_path writes the generated file."""
@@ -2438,10 +2528,17 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-
-        assert "mapping = TagMap({" in code
-        assert "x[1]" in code
-        assert "y[1]" in code
+        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1]
+        assert normalize_pyrung(mapping_block) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                mapping = TagMap({
+                    X001: x[1],
+                    Y001: y[1],
+                })
+                """
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -3767,3 +3864,73 @@ class TestNop:
         collection = _OperandCollection()
         with pytest.raises(ValueError, match="Unrecognised AF token"):
             _render_af_token("BOGUS", collection, None)
+
+    def test_blank_raw_rung_preserved_as_pass(self):
+        """A raw blank rung should survive import as an explicit pass rung."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        bundle = LadderBundle(
+            main_rows=(
+                header,
+                tuple(_make_row("R", {})),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+            ),
+            subroutine_rows=(),
+        )
+
+        body = _strip_codegen_program_body(ladder_to_pyrung(bundle))
+        assert body == normalize_pyrung(
+            textwrap.dedent(
+                """
+            with Rung():
+                pass
+
+            with Rung(X001):
+                out(Y001)
+            """
+            )
+        )
+
+    def test_partial_rung_without_output_fails_loudly(self):
+        """A rung with conditions but no completed output object should be rejected."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        bundle = LadderBundle(
+            main_rows=(
+                header,
+                tuple(_make_row("R", {0: "X001"})),
+            ),
+            subroutine_rows=(),
+        )
+
+        with pytest.raises(ValueError, match="complete output object"):
+            ladder_to_pyrung(bundle)
+
+    def test_render_pin_rejects_lossy_flat_conditions(self):
+        """Pins must not truncate multi-token conditions down to the first token."""
+        from pyrung.click.codegen.emitter import _render_pin
+        from pyrung.click.codegen.models import _OperandCollection, _PinInfo
+
+        pin = _PinInfo(
+            name="reset",
+            arg="",
+            conditions=["X001", "X002"],
+            condition_tree=None,
+        )
+
+        with pytest.raises(ValueError, match="cannot be rendered losslessly"):
+            _render_pin(pin, _OperandCollection(), None)

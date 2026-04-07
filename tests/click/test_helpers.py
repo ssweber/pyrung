@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pyrung.click import pyrung_to_ladder
 from pyrung.core import Program
 from tests.click.helpers import (
@@ -73,6 +75,45 @@ class TestBuildProgram:
         """)
         bundle = pyrung_to_ladder(logic, mapping)
         assert len(bundle.main_rows) > 2  # header + at least 2 data rows + end
+
+    def test_supports_raw_block_range(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(X1):
+                    reset(C10..C17)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert tokens == ["reset(C10..C17)", "end()"]
+
+    def test_raw_block_range_skips_quoted_strings(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(X1):
+                    send(
+                        target=ModbusTcpTarget("plc2", "192.168.1.2"),
+                        remote_start="DS1",
+                        source=DS1..DS3,
+                        sending=C1,
+                        success=C2,
+                        error=C3,
+                        exception_response=DS4,
+                    )
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert tokens == [
+            'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start="DS1",source=DS1..DS3,sending=C1,success=C2,error=C3,exception_response=DS4)',
+            "end()",
+        ]
+
+    def test_rejects_cross_family_raw_range(self):
+        with pytest.raises(ValueError, match="within one operand family"):
+            build_program("""
+                with Program() as p:
+                    with Rung(X1):
+                        reset(DS1..DH3)
+            """)
 
 
 class TestNormalizeCsv:
@@ -146,8 +187,6 @@ class TestStripPyrungBoilerplate:
         assert result == "with Rung(C1):\n    out(C1)"
 
     def test_raises_on_missing_program(self):
-        import pytest
-
         code = "# just a comment\nfrom pyrung import Bool\n"
         with pytest.raises(ValueError, match="with Program"):
             strip_pyrung_boilerplate(code)

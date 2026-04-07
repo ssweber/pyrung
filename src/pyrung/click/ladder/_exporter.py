@@ -13,7 +13,7 @@ from .instructions import _InstructionMixin
 from .layout import _HEADER, _LayoutMixin
 from .translator import _TranslatorMixin
 from .types import ExportSummary, LadderBundle, LadderExportError, _RenderError
-from .validator import _ValidationMixin
+from .validator import _RoundTripValidationMixin, _ValidationMixin
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -36,6 +36,7 @@ def build_ladder_bundle(tag_map: TagMap, program: Program) -> LadderBundle:
 
 # ---- Orchestrator ----
 class _LadderExporter(
+    _RoundTripValidationMixin,
     _ValidationMixin,
     _LayoutMixin,
     _InstructionMixin,
@@ -62,23 +63,37 @@ class _LadderExporter(
             self._run_precheck()
 
             # Main scope always ends with an explicit end() rung.
-            main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
-            main_rows.extend(
-                self._render_scope(self._program.rungs, scope="main", subroutine_name=None)
+            rendered_main_rows = self._render_scope(
+                self._program.rungs, scope="main", subroutine_name=None
             )
+            self._validate_scope_roundtrip(
+                source_rungs=self._program.rungs,
+                rendered_rows=rendered_main_rows,
+                scope="main",
+                subroutine_name=None,
+            )
+
+            main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
+            main_rows.extend(rendered_main_rows)
             main_rows.extend(self._end_rung())
 
             # Each subroutine matrix gets a deterministic return() tail.
             subroutine_rows: list[tuple[str, tuple[tuple[str, ...], ...]]] = []
             for subroutine_name in sorted(self._program.subroutines):
-                rows: list[tuple[str, ...]] = [tuple(_HEADER)]
-                rows.extend(
-                    self._render_scope(
-                        self._program.subroutines[subroutine_name],
-                        scope="subroutine",
-                        subroutine_name=subroutine_name,
-                    )
+                rendered_sub_rows = self._render_scope(
+                    self._program.subroutines[subroutine_name],
+                    scope="subroutine",
+                    subroutine_name=subroutine_name,
                 )
+                self._validate_scope_roundtrip(
+                    source_rungs=self._program.subroutines[subroutine_name],
+                    rendered_rows=rendered_sub_rows,
+                    scope="subroutine",
+                    subroutine_name=subroutine_name,
+                )
+
+                rows: list[tuple[str, ...]] = [tuple(_HEADER)]
+                rows.extend(rendered_sub_rows)
                 rows = self._ensure_subroutine_return_tail(rows, subroutine_name=subroutine_name)
                 subroutine_rows.append((subroutine_name, tuple(rows)))
 
@@ -125,8 +140,7 @@ class _LadderExporter(
         normalized.comment = rung.comment
         return normalized
 
-    @staticmethod
-    def _series_tree(*nodes: SPNode | None) -> SPNode | None:
+    def _series_tree(self, *nodes: SPNode | None) -> SPNode | None:
         children = [node for node in nodes if node is not None]
         if not children:
             return None

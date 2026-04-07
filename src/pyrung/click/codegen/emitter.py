@@ -720,7 +720,7 @@ def _render_sp_node(
             return parts[0]
         return f"any_of({', '.join(parts)})"
 
-    return ""
+    raise ValueError(f"Unsupported topology node for codegen: {type(node).__name__}")
 
 
 def _build_conditions_str(
@@ -915,6 +915,11 @@ def _render_pin(
     if pin.condition_tree is not None:
         cond = _render_sp_node(pin.condition_tree, collection, nicknames, structured_map)
     elif pin.conditions:
+        if len(pin.conditions) != 1:
+            raise ValueError(
+                f"Pin .{pin.name}() cannot be rendered losslessly without a full condition tree; "
+                f"got {len(pin.conditions)} flat condition tokens."
+            )
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
     if cond:
         if pin.arg:

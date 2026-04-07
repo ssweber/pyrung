@@ -46,7 +46,7 @@ def main() -> None:
         sys.exit(1)
 
     out_dir = src.parent
-    for name, rung_rows in zip(names, rungs):
+    for name, rung_rows in zip(names, rungs, strict=True):
         out_path = out_dir / f"{name}.csv"
         with out_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)

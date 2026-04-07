@@ -95,6 +95,19 @@ def _is_pin_row(row: list[str]) -> bool:
     return bool(af and af.startswith("."))
 
 
+def _rows_are_blank(rows: list[list[str]]) -> bool:
+    """Return True when every condition and AF cell in the rung is blank."""
+    for row in rows:
+        if any(cell for cell in row[1:]):
+            return False
+    return True
+
+
+def _rows_have_content(rows: list[list[str]]) -> bool:
+    """Return True when the rung contains any nonblank condition/AF content."""
+    return not _rows_are_blank(rows)
+
+
 # ---------------------------------------------------------------------------
 # Union-Find
 # ---------------------------------------------------------------------------
@@ -710,6 +723,17 @@ def _analyze_single_rung(
     source, sinks, edges, pin_sinks = _grid_to_graph(rows, pin_row_set)
 
     if source is None or not sinks:
+        if _rows_are_blank(rows):
+            return _AnalyzedRung(
+                comment=comment,
+                condition_tree=None,
+                instructions=[_InstructionInfo("NOP", None, [])],
+                role=role,
+            )
+        if _rows_have_content(rows):
+            raise ValueError(
+                "Rung contains condition/output content that did not resolve to a complete output object."
+            )
         return _AnalyzedRung(
             comment=comment,
             condition_tree=None,

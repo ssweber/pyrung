@@ -5,9 +5,10 @@ These live next to the test files, not in production code.
 
 from __future__ import annotations
 
+import re
 import textwrap
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 from pyrung.click import (
     ModbusAddress,
@@ -92,8 +93,26 @@ _TAG_TYPES: dict[str, type] = {
     "Char": Char,
 }
 
+_TYPE_NAME_TO_TAG_TYPE: dict[str, TagType] = {
+    "Bool": TagType.BOOL,
+    "Int": TagType.INT,
+    "Dint": TagType.DINT,
+    "Word": TagType.WORD,
+    "Real": TagType.REAL,
+    "Char": TagType.CHAR,
+}
+
+_RAW_RANGE_RE = re.compile(r"\b([A-Z]+)(\d+)\.\.([A-Z]+)(\d+)\b")
+
+
+class _AddressableBlock(Protocol):
+    def __getitem__(self, key: int) -> Any: ...
+
+    def select(self, start: int, end: int) -> Any: ...
+
+
 # block_var string → imported Click block object
-_CLICK_BLOCKS: dict[str, object] = {
+_CLICK_BLOCKS: dict[str, _AddressableBlock] = {
     "x": x,
     "y": y,
     "c": c,
@@ -170,6 +189,15 @@ _EXEC_NAMESPACE: dict[str, object] = {
 }
 
 
+class _RangeSpec(NamedTuple):
+    name: str
+    prefix: str
+    type_name: str
+    block_var: str
+    start: int
+    end: int
+
+
 # ---------------------------------------------------------------------------
 # 1. build_program
 # ---------------------------------------------------------------------------
@@ -199,18 +227,102 @@ def _ensure_program_wrapper(source: str) -> str:
     return "\n".join([*prelude, wrapped])
 
 
+def _range_var_name(prefix: str, start: int, end: int) -> str:
+    return f"_{prefix}_{start}_{end}"
+
+
+def _replace_ranges_in_chunk(chunk: str, specs: dict[str, _RangeSpec]) -> str:
+    def repl(match: re.Match[str]) -> str:
+        prefix, start_str, end_prefix, end_str = match.groups()
+        if prefix != end_prefix:
+            raise ValueError(f"Raw range must stay within one operand family: {match.group()}")
+
+        start = int(start_str)
+        end = int(end_str)
+        if start > end:
+            raise ValueError(f"Raw range start must be <= end: {match.group()}")
+
+        parsed = _parse_operand_prefix(f"{prefix}{start}")
+        if parsed is None:
+            raise ValueError(f"Unsupported raw range prefix: {match.group()}")
+
+        _, type_name, block_var, _ = parsed
+        name = _range_var_name(prefix, start, end)
+        specs.setdefault(name, _RangeSpec(name, prefix, type_name, block_var, start, end))
+        return f"{name}.select({start}, {end})"
+
+    return _RAW_RANGE_RE.sub(repl, chunk)
+
+
+def _rewrite_raw_ranges(source: str) -> tuple[str, dict[str, _RangeSpec]]:
+    """Rewrite raw Click ranges like ``DS1..DS3`` to synthetic Block selects.
+
+    Rewrites only outside quoted strings so literals like ``"DS1"`` stay untouched.
+    Returns the rewritten source plus the synthetic block declarations/mappings needed.
+    """
+
+    specs: dict[str, _RangeSpec] = {}
+    parts: list[str] = []
+    start = 0
+    i = 0
+
+    while i < len(source):
+        triple = None
+        if source.startswith("'''", i):
+            triple = "'''"
+        elif source.startswith('"""', i):
+            triple = '"""'
+
+        if triple is not None:
+            parts.append(_replace_ranges_in_chunk(source[start:i], specs))
+            end = source.find(triple, i + 3)
+            if end == -1:
+                parts.append(source[i:])
+                return "".join(parts), specs
+            end += 3
+            parts.append(source[i:end])
+            i = end
+            start = i
+            continue
+
+        if source[i] in {"'", '"'}:
+            quote = source[i]
+            parts.append(_replace_ranges_in_chunk(source[start:i], specs))
+            end = i + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end += 2
+                    continue
+                if source[end] == quote:
+                    end += 1
+                    break
+                end += 1
+            parts.append(source[i:end])
+            i = end
+            start = i
+            continue
+
+        i += 1
+
+    parts.append(_replace_ranges_in_chunk(source[start:], specs))
+    return "".join(parts), specs
+
+
 def build_program(source: str) -> tuple[Program, TagMap]:
     """Build a Program + TagMap from a pyrung snippet using raw Click addresses.
 
     Scans *source* for Click address patterns (C1, DS1, T1, …), auto-declares
-    each as the type its prefix implies, creates a TagMap mapping each to its
-    native Click block address, execs the source, and returns ``(logic, mapping)``.
-    Bare rung bodies are auto-wrapped in ``with Program() as p:``.
+    each as the type its prefix implies, rewrites raw ranges like ``DS1..DS3``
+    to synthetic ``Block.select(...)`` expressions, creates a TagMap mapping each
+    tag/block to its native Click address, execs the source, and returns
+    ``(logic, mapping)``. Bare rung bodies are auto-wrapped in ``with Program() as p:``.
     """
     cleaned = _ensure_program_wrapper(source)
+    cleaned, range_specs = _rewrite_raw_ranges(cleaned)
 
     # Find all address tokens (avoiding string literals)
     stripped = _strip_quoted_strings(cleaned)
+    stripped = _RAW_RANGE_RE.sub("", stripped)
     seen: dict[str, tuple[str, str, int]] = {}  # operand → (type_name, block_var, index)
     for match in _OPERAND_RE.finditer(stripped):
         operand = match.group()
@@ -225,6 +337,12 @@ def build_program(source: str) -> tuple[Program, TagMap]:
     decl_lines = []
     for operand, (type_name, _, _) in sorted(seen.items()):
         decl_lines.append(f'{operand} = {type_name}("{operand}")')
+    for spec in sorted(range_specs.values(), key=lambda spec: (spec.prefix, spec.start, spec.end)):
+        tag_type = _TYPE_NAME_TO_TAG_TYPE[spec.type_name].name
+        decl_lines.append(
+            f'{spec.name} = Block("{spec.prefix}{spec.start}_to_{spec.prefix}{spec.end}", '
+            f"TagType.{tag_type}, {spec.start}, {spec.end})"
+        )
 
     # Ensure strict=False so exec'd snippets don't warn about missing AST
     cleaned = cleaned.replace("Program()", "Program(strict=False)")
@@ -236,18 +354,21 @@ def build_program(source: str) -> tuple[Program, TagMap]:
 
     # Extract the program
     logic = ns.get("p") or ns.get("logic")
-    if logic is None:
+    if not isinstance(logic, Program):
         raise ValueError(
             "Source must either contain `with Program() as p:` / `as logic:` "
             "or provide a bare body that can be auto-wrapped."
         )
 
     # Build the TagMap
-    mapping_dict = {}
+    mapping_dict: dict[Any, Any] = {}
     for operand, (_, block_var, index) in seen.items():
         tag_obj = ns[operand]
         block_obj = _CLICK_BLOCKS[block_var]
         mapping_dict[tag_obj] = block_obj[index]
+    for spec in range_specs.values():
+        block_obj = _CLICK_BLOCKS[spec.block_var]
+        mapping_dict[ns[spec.name]] = block_obj.select(spec.start, spec.end)
 
     return logic, TagMap(mapping_dict, include_system=False)
 
