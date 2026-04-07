@@ -108,8 +108,46 @@ def _codegen_body(source: str) -> str:
     return strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
 
 
+def _strip_codegen_program_body(code: str) -> str:
+    """Extract the generated Program body while preserving rung comments."""
+    lines = code.splitlines()
+
+    prog_start = None
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("with Program"):
+            prog_start = i
+            break
+
+    if prog_start is None:
+        raise ValueError(f"Expected 'with Program' in generated code, got:\n{code[:200]}")
+
+    base_indent = len(lines[prog_start]) - len(lines[prog_start].lstrip())
+    body_lines: list[str] = []
+    for line in lines[prog_start + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            body_lines.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        body_lines.append(line[base_indent + 4 :])
+
+    return normalize_pyrung("\n".join(body_lines))
+
+
+def _codegen_program_body(source: str) -> str:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    return _strip_codegen_program_body(ladder_to_pyrung(bundle))
+
+
 def _assert_codegen_body(source: str, expected: str) -> None:
     assert _codegen_body(source) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_codegen_program_body(source: str, expected: str) -> None:
+    assert _codegen_program_body(source) == normalize_pyrung(textwrap.dedent(expected))
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1211,50 +1249,54 @@ class TestRoundTrip:
             """,
         )
 
-    def test_comment(self, tmp_path: Path):
+    def test_comment(self):
         """Rung with single-line comment."""
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Start motor")
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Start motor")
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_multiline_comment(self, tmp_path: Path):
+    def test_multiline_comment(self):
         """Rung with multi-line comment."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_program_body(
+            """
+            comment("Line 1\\nLine 2")
+            with Rung(X1):
+                out(Y1)
+            """,
+            '''
+            comment("""\\
+                Line 1
+                Line 2""")
+            with Rung(X001):
+                out(Y001)
+            ''',
+        )
 
-        with Program() as logic:
-            comment("Line 1\nLine 2")
-            with Rung(A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_multiline_comment_with_triple_quotes(self, tmp_path: Path):
+    def test_multiline_comment_with_triple_quotes(self):
         """Multi-line comment containing triple-double-quotes must not break syntax."""
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            comment('Has """triple""" quotes\nin comment text')
-            with Rung(A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
+        _assert_codegen_program_body(
+            '''
+            comment('Has """triple""" quotes\\nin comment text')
+            with Rung(X1):
+                out(Y1)
+            ''',
+            '''
+            comment("""\\
+                Has \\\"\\\"\\\"triple\\\"\\\"\\\" quotes
+                in comment text""")
+            with Rung(X001):
+                out(Y001)
+            ''',
+        )
 
     def test_comparison_condition(self):
         """Comparison: DS1 == 5 → out(Y001)."""
@@ -1539,78 +1581,71 @@ class TestRoundTrip:
             """,
         )
 
-    def test_calc_decimal_operators(self, tmp_path: Path):
+    def test_calc_decimal_operators(self):
         """Calc with power, modulo, and math functions (decimal-mode) round-trips."""
-        from pyrung.core.expression import sqrt
+        _assert_codegen_body(
+            """
+            from pyrung.core.expression import sqrt
+            with Rung(X1):
+                calc(DS1**2, DS3)
+            with Rung(X1):
+                calc(DS1 % DS2, DS3)
+            with Rung(X1):
+                calc(sqrt(DS1), DS3)
+            """,
+            """
+            with Rung(X001):
+                calc(DS1**2, DS3)
 
-        Enable = Bool("Enable")
-        A = Int("A")
-        B = Int("B")
-        Result = Int("Result")
+            with Rung(X001):
+                calc(DS1 % DS2, DS3)
 
-        with Program() as logic:
-            with Rung(Enable):
-                calc(A**2, Result)
-            with Rung(Enable):
-                calc(A % B, Result)
-            with Rung(Enable):
-                calc(sqrt(A), Result)
-
-        mapping = TagMap(
-            {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(sqrt(DS1), DS3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_calc_hex_shift_operators(self, tmp_path: Path):
+    def test_calc_hex_shift_operators(self):
         """Calc with LSH/RSH (hex-mode) round-trips."""
-        from pyrung.core import Block, TagType
-        from pyrung.core.expression import lsh
+        _assert_codegen_body(
+            """
+            from pyrung.core.expression import lsh
+            with Rung(X1):
+                calc(DH1 << 3, DH3)
+            with Rung(X1):
+                calc(lsh(DH1, 4), DH3)
+            """,
+            """
+            with Rung(X001):
+                calc(lsh(DH1, 3), DH3)
 
-        Enable = Bool("Enable")
-        H = Block("H", TagType.WORD, 1, 1)
-        HDest = Block("HDest", TagType.WORD, 1, 1)
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(H[1] << 3, HDest[1])
-            with Rung(Enable):
-                calc(lsh(H[1], 4), HDest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], H[1]: dh[1], HDest[1]: dh[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(lsh(DH1, 4), DH3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_calc_bitwise_round_trip(self, tmp_path: Path):
+    def test_calc_bitwise_round_trip(self):
         """Calc with AND/OR/XOR round-trips through Click-native operators."""
-        from pyrung.core import Block, TagType
+        _assert_codegen_body(
+            """
+            with Rung(X1):
+                calc(DH1 & DH2, DH3)
+            with Rung(X1):
+                calc(DH1 | DH2, DH3)
+            with Rung(X1):
+                calc(DH1 ^ DH2, DH3)
+            """,
+            """
+            with Rung(X001):
+                calc(DH1 & DH2, DH3)
 
-        Enable = Bool("Enable")
-        H1 = Block("H1", TagType.WORD, 1, 1)
-        H2 = Block("H2", TagType.WORD, 1, 1)
-        HDest = Block("HDest", TagType.WORD, 1, 1)
+            with Rung(X001):
+                calc(DH1 | DH2, DH3)
 
-        with Program() as logic:
-            with Rung(Enable):
-                calc(H1[1] & H2[1], HDest[1])
-            with Rung(Enable):
-                calc(H1[1] | H2[1], HDest[1])
-            with Rung(Enable):
-                calc(H1[1] ^ H2[1], HDest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], H1[1]: dh[1], H2[1]: dh[2], HDest[1]: dh[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(DH1 ^ DH2, DH3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
 
     def test_click_hex_literal_in_comparison(self, tmp_path: Path):
         """Click hex literal ``0000h`` in a condition becomes ``0x0000`` in Python."""
@@ -1802,470 +1837,269 @@ class TestRoundTrip:
             """,
         )
 
-    def test_send(self, tmp_path: Path):
+    def test_send(self):
         """Send instruction with ModbusTcpTarget."""
-        from pyrung.click import ModbusTcpTarget, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive(self, tmp_path: Path):
+    def test_receive(self):
         """Receive instruction with ModbusTcpTarget."""
-        from pyrung.click import ModbusTcpTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_rtu(self, tmp_path: Path):
+    def test_send_rtu(self):
         """Send instruction with ModbusRtuTarget."""
-        from pyrung.click import ModbusRtuTarget, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2"),
                     remote_start="DS1",
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusRtuTarget(name="vfd1", com_port="cpu2", device_id=5), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_rtu(self, tmp_path: Path):
+    def test_receive_rtu(self):
         """Receive instruction with ModbusRtuTarget."""
-        from pyrung.click import ModbusRtuTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1"),
                     remote_start="DS1",
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusRtuTarget(name="vfd1", com_port="slot0_1", device_id=5), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_modbus_address(self, tmp_path: Path):
+    def test_send_modbus_address(self):
         """Send instruction with ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_modbus_address(self, tmp_path: Path):
+    def test_receive_modbus_address(self):
         """Receive instruction with ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_rtu_modbus_address(self, tmp_path: Path):
+    def test_send_rtu_modbus_address(self):
         """Send with ModbusRtuTarget and ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_rtu_modbus_address(self, tmp_path: Path):
+    def test_receive_rtu_modbus_address(self):
         """Receive with ModbusRtuTarget and ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_block_range(self, tmp_path: Path):
+    def test_send_block_range(self):
         """Send with BlockRange source round-trips through DS1..DS3."""
-        from pyrung.click import ModbusTcpTarget, send
-
-        Enable = Bool("Enable")
-        Source = Block("Source", TagType.INT, 1, 3)
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    source=Source.select(1, 3),
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=ds.select(1, 3),
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds.select(1, 3),
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[4],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=ds.select(1, 3), sending=C1, success=C2, error=C3, exception_response=DS4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_block_range(self, tmp_path: Path):
+    def test_receive_block_range(self):
         """Receive with BlockRange dest round-trips through DS1..DS3."""
-        from pyrung.click import ModbusTcpTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Block("Dest", TagType.INT, 1, 3)
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    dest=Dest.select(1, 3),
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=ds.select(1, 3),
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds.select(1, 3),
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[4],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=ds.select(1, 3), receiving=C1, success=C2, error=C3, exception_response=DS4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_subroutine(self, tmp_path: Path):
+    def test_subroutine(self):
         """Subroutine with call() and return."""
-        from pyrung.core.program import call, subroutine
-
-        Button = Bool("Button")
-        Light = Bool("Light")
-        SubLight = Bool("SubLight")
-
-        with Program() as logic:
-            with Rung(Button):
-                out(Light)
+        _assert_codegen_body(
+            """
+            with Rung(X1):
+                out(Y1)
                 call("init")
 
             with subroutine("init"):
                 with Rung():
-                    out(SubLight)
+                    out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                call("init")
 
-        mapping = TagMap(
-            {Button: x[1], Light: y[1], SubLight: y[2]},
-            include_system=False,
+            with subroutine("init", strict=False):
+                with Rung():
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-        assert 'subroutine("init", strict=False)' in code
-        assert 'call("init")' in code
-
-    def test_subroutine_with_conditions(self, tmp_path: Path):
+    def test_subroutine_with_conditions(self):
         """Subroutine rungs with conditions."""
-        from pyrung.core.program import call, subroutine
-
-        Enable = Bool("Enable")
-        Cond = Bool("Cond")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(Cond):
+                with Rung(X2):
                     out(Y1)
                 with Rung():
                     out(Y2)
+            """,
+            """
+            with Rung(X001):
+                call("worker")
 
-        mapping = TagMap(
-            {Enable: x[1], Cond: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+            with subroutine("worker", strict=False):
+                with Rung(X002):
+                    out(Y001)
+
+                with Rung():
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_rise_fall_or_with_three_outputs(self, tmp_path: Path):
+    def test_rise_fall_or_with_three_outputs(self):
         """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
-        from pyrung.core.program import call, subroutine
-
-        C1 = Bool("C1")
-        C2 = Bool("C2")
-        C4 = Bool("C4")
-        DS1 = Int("DS1")
-
-        with Program() as logic:
+        _assert_codegen_body(
+            """
             with Rung(any_of(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
@@ -2274,15 +2108,18 @@ class TestRoundTrip:
             with subroutine("SubName"):
                 with Rung():
                     out(C4)
+            """,
+            """
+            with Rung(rise(C1) | fall(C2)):
+                copy(1, DS1)
+                copy(C2, C4)
+                call("SubName")
 
-        mapping = TagMap(
-            {C1: c[1], C2: c[2], C4: c[4], DS1: ds[1]},
-            include_system=False,
+            with subroutine("SubName", strict=False):
+                with Rung():
+                    out(C4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert "with Rung(rise(C1) | fall(C2)):" in code
-        assert orig == repro
 
 
 # ---------------------------------------------------------------------------

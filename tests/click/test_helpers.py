@@ -56,6 +56,15 @@ class TestBuildProgram:
         """)
         assert isinstance(logic, Program)
 
+    def test_wraps_bare_program_body(self):
+        logic, mapping = build_program("""
+            with Rung(C1):
+                out(Y1)
+        """)
+        assert isinstance(logic, Program)
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert any(row[-1] == "out(Y001)" for row in bundle.main_rows)
+
     def test_or_condition(self):
         logic, mapping = build_program("""
             with Program() as p:

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import functools
+import io
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -101,13 +103,17 @@ def _blank_row(marker: str, prefix: list[str], af: str = "") -> tuple[str, ...]:
 _END_ROW = _row("R", [], "end()")
 
 
-def _export_rows(source: str) -> list[tuple[str, ...]]:
+def _literal_csv_rows(csv_text: str) -> list[tuple[str, ...]]:
+    rows = tuple(
+        tuple(row) for row in csv.reader(io.StringIO(textwrap.dedent(csv_text).strip()), strict=True)
+    )
+    return normalize_csv(rows)
+
+
+def _assert_export_main_rows(source: str, expected_csv: str) -> None:
     logic, mapping = build_program(source)
-    return normalize_csv(pyrung_to_ladder(logic, mapping).main_rows)
-
-
-def _normalized_rows(*rows: tuple[str, ...]) -> list[tuple[str, ...]]:
-    return normalize_csv((_header(), *rows, _END_ROW))
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert normalize_csv(bundle.main_rows) == _literal_csv_rows(expected_csv)
 
 
 def test_header_and_width_invariants():
@@ -126,36 +132,45 @@ def test_header_and_width_invariants():
 
 
 def test_and_example_golden():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1, X2):
                 out(Y1)
-    """) == _normalized_rows(
-        _row("R", ["X001", "X002"], "out(Y001)"),
+        """,
+        """
+        R,X001,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_or_expansion_with_trailing_and_golden():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(any_of(X1, X2), C1):
                 out(Y1)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002"]),
+        """,
+        """
+        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
     )
 
 
 def test_branch_row_is_continuation_after_parent_conditions():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
                 with branch(X2):
                     out(Y2)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "X002"], "out(Y002)"),
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
     )
 
 
@@ -190,118 +205,142 @@ def test_multiple_branches_stack_vertical_markers():
 
 
 def test_parent_instruction_after_branch_stays_on_parent_path():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
                 with branch(X2):
                     out(Y2)
                 out(Y3)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T:X002"], "out(Y002)"),
-        _row("", ["", "-"], "out(Y003)"),
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
     )
 
 
 def test_branch_local_or_expands_with_click_topology():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
                 with branch(any_of(X2, X3)):
                     out(Y2)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T:X002", "T"], "out(Y002)"),
-        _blank_row("", ["", "X003"]),
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
     )
 
 
 def test_branch_local_or_with_series_suffix_stays_mechanical():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
                 with branch(any_of(X2, X3), X4):
                     out(Y2)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
-        _blank_row("", ["", "X003"]),
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
     )
 
 
 def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
                 with branch(any_of(X2, X3), X4):
                     out(Y2)
                 out(Y3)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
-        _blank_row("", ["", "T:X003"]),
-        _row("", ["", "-", "-", "-"], "out(Y003)"),
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
     )
 
 
 def test_branch_with_series_then_local_or_keeps_click_merge_topology():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 with branch(X2, any_of(X3, X4)):
                     out(Y1)
                 out(Y2)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
-        _blank_row("", ["", "|", "X004"]),
-        _row("", ["", "-", "-", "-"], "out(Y002)"),
+        """,
+        """
+        R,X001,T:X002,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,X004,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
     )
 
 
 def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_visible():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 with branch(X2, any_of(X3, X4, X5)):
                     out(Y1)
                 out(Y2)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
-        _blank_row("", ["", "|", "T:X004", "|"]),
-        _blank_row("", ["", "|", "X005"]),
-        _row("", ["", "-", "-", "-"], "out(Y002)"),
+        """,
+        """
+        R,X001,T:X002,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,T:X004,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,|,X005,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
     )
 
 
 def test_multiple_instruction_rows_share_powered_path():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1, X2):
                 out(Y1)
                 latch(Y2)
                 reset(Y3)
-    """) == _normalized_rows(
-        _row("R", ["X001", "X002", "T"], "out(Y001)"),
-        _row("", ["", "", "T"], "latch(Y002)"),
-        _row("", ["", "", "-"], "reset(Y003)"),
+        """,
+        """
+        R,X001,X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(Y002)
+        ,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(Y003)
+        """,
     )
 
 
 def test_immediate_contact_and_coils_render_canonical_tokens():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(immediate(X1)):
                 out(immediate(Y1))
                 latch(immediate(Y2))
                 reset(immediate(Y3))
-    """) == _normalized_rows(
-        _row("R", ["immediate(X001)", "T"], "out(immediate(Y001))"),
-        _row("", ["", "T"], "latch(immediate(Y002))"),
-        _row("", ["", "-"], "reset(immediate(Y003))"),
+        """,
+        """
+        R,immediate(X001),T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(immediate(Y001))
+        ,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(immediate(Y002))
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(immediate(Y003))
+        """,
     )
 
 
@@ -1007,37 +1046,46 @@ def test_nested_subroutine_call_issue_includes_source_location():
 
 
 def test_comment_single_line():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             comment("Turn on B when A is true.")
             with Rung(X1):
                 out(Y1)
-    """) == _normalized_rows(
-        ("#", "Turn on B when A is true."),
-        _row("R", ["X001"], "out(Y001)"),
+        """,
+        """
+        #,Turn on B when A is true.
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_comment_multi_line():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             comment("Line one.\\nLine two.")
             with Rung(X1):
                 out(Y1)
-    """) == _normalized_rows(
-        ("#", "Line one."),
-        ("#", "Line two."),
-        _row("R", ["X001"], "out(Y001)"),
+        """,
+        """
+        #,Line one.
+        #,Line two.
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_no_comment_no_extra_rows():
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 out(Y1)
-    """) == _normalized_rows(
-        _row("R", ["X001"], "out(Y001)"),
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
@@ -1064,13 +1112,16 @@ def test_comment_with_branches():
 
 
 def test_comment_not_emitted_for_empty_branches():
-    assert _export_rows("""
+    logic, mapping = build_program("""
         with Program() as p:
             comment("No rows should be emitted.")
             with Rung(X1):
                 with branch(C1):
                     pass
-    """) == []
+    """)
+    bundle = pyrung_to_ladder(logic, mapping)
+
+    assert normalize_csv(bundle.main_rows) == []
 
 
 # --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
@@ -1908,7 +1959,8 @@ def test_receive_block_range_token():
 
 def test_nested_branch_export_pushes_later_siblings_down():
     """Nested branches keep source order and push later siblings below the nested block."""
-    assert _export_rows("""
+    _assert_export_main_rows(
+        """
         with Program() as p:
             with Rung(X1):
                 with branch(X2):
@@ -1917,10 +1969,12 @@ def test_nested_branch_export_pushes_later_siblings_down():
                         out(Y2)
                 with branch(X4):
                     out(Y3)
-    """) == _normalized_rows(
-        _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
-        _row("", ["", "|", "X003"], "out(Y002)"),
-        _row("", ["", "X004"], "out(Y003)"),
+        """,
+        """
+        R,X001,T:X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
     )
 
 
@@ -1960,20 +2014,24 @@ class TestContinuedExport:
 
     def test_continued_rung_blank_marker(self):
         """Continued rung rows use blank marker instead of R."""
-        assert _export_rows("""
+        _assert_export_main_rows(
+            """
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
                 with Rung(X2).continued():
                     out(Y2)
-        """) == _normalized_rows(
-            _row("R", ["X001"], "out(Y001)"),
-            _row("", ["X002"], "out(Y002)"),
+            """,
+            """
+            R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            """,
         )
 
     def test_continued_after_branch(self):
         """Continuation after a rung with branches."""
-        assert _export_rows("""
+        _assert_export_main_rows(
+            """
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
@@ -1981,21 +2039,26 @@ class TestContinuedExport:
                         out(Y2)
                 with Rung(X2).continued():
                     out(Y3)
-        """) == _normalized_rows(
-            _row("R", ["X001", "T"], "out(Y001)"),
-            _row("", ["", "X003"], "out(Y002)"),
-            _row("", ["X002"], "out(Y003)"),
+            """,
+            """
+            R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+            """,
         )
 
     def test_continued_with_own_conditions(self):
         """Continued rung with its own conditions exports correctly."""
-        assert _export_rows("""
+        _assert_export_main_rows(
+            """
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
                 with Rung(X2, C1).continued():
                     out(Y2)
-        """) == _normalized_rows(
-            _row("R", ["X001"], "out(Y001)"),
-            _row("", ["X002", "C1"], "out(Y002)"),
+            """,
+            """
+            R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            """,
         )

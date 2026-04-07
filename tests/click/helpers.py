@@ -175,16 +175,39 @@ _EXEC_NAMESPACE: dict[str, object] = {
 # ---------------------------------------------------------------------------
 
 
+def _ensure_program_wrapper(source: str) -> str:
+    """Wrap a bare test body in ``with Program() as p:`` if needed."""
+    cleaned = textwrap.dedent(source).strip()
+    if "with Program" in cleaned:
+        return cleaned
+
+    lines = cleaned.splitlines()
+    prelude: list[str] = []
+    body_start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("import ") or stripped.startswith("from "):
+            prelude.append(line)
+            body_start = i + 1
+            continue
+        break
+
+    body = "\n".join(lines[body_start:])
+    wrapped = "with Program() as p:\n" + textwrap.indent(body or "pass", "    ")
+    if not prelude:
+        return wrapped
+    return "\n".join([*prelude, wrapped])
+
+
 def build_program(source: str) -> tuple[Program, TagMap]:
     """Build a Program + TagMap from a pyrung snippet using raw Click addresses.
 
     Scans *source* for Click address patterns (C1, DS1, T1, …), auto-declares
     each as the type its prefix implies, creates a TagMap mapping each to its
     native Click block address, execs the source, and returns ``(logic, mapping)``.
-
-    The source should contain a ``with Program() as p:`` (or ``as logic:``) block.
+    Bare rung bodies are auto-wrapped in ``with Program() as p:``.
     """
-    cleaned = textwrap.dedent(source).strip()
+    cleaned = _ensure_program_wrapper(source)
 
     # Find all address tokens (avoiding string literals)
     stripped = _strip_quoted_strings(cleaned)
@@ -215,8 +238,8 @@ def build_program(source: str) -> tuple[Program, TagMap]:
     logic = ns.get("p") or ns.get("logic")
     if logic is None:
         raise ValueError(
-            "Source must assign to 'p' or 'logic' via `with Program() as p:` "
-            "or `with Program() as logic:`"
+            "Source must either contain `with Program() as p:` / `as logic:` "
+            "or provide a bare body that can be auto-wrapped."
         )
 
     # Build the TagMap
