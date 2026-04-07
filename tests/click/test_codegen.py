@@ -985,7 +985,7 @@ class TestShannonBridgeCoverage:
             actual = _eval_tree(tree, values)
             assert actual == expected, f"offset={offset}, values={values}"
 
-        source, sinks, edges = _grid_to_graph(rows, set())
+        source, sinks, edges, _ = _grid_to_graph(rows, set())
         assert source is not None
         assert len(sinks) == 1
         sink, _, _ = sinks[0]
