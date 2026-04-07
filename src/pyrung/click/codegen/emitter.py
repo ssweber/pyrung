@@ -482,7 +482,7 @@ def _emit_rung_sequence(
             i += 1
             continue
 
-        if not first:
+        if not first and not rung.is_continued:
             lines.append("")
         first = False
         _emit_rung(

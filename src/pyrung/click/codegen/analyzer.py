@@ -165,9 +165,9 @@ def _grid_to_graph(
     down_port: dict[tuple[int, int], int] = {}
 
     # 1. Assign ports
+    # Pin rows participate in wiring (their T junctions may connect down to
+    # non-pin rows) but never produce sinks.
     for r in range(n_rows):
-        if r in pin_row_set:
-            continue
         for c in range(_CONDITION_COLS):
             cell = _cell_at(rows, r, c)
             if not cell:
@@ -200,8 +200,6 @@ def _grid_to_graph(
     left_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
     right_claimed: dict[tuple[int, int], tuple[int, int]] = {}  # target → claimant
     for r in range(n_rows):
-        if r in pin_row_set:
-            continue
         for c in range(_CONDITION_COLS):
             cell = _cell_at(rows, r, c)
             if not _cell_has_down(cell):
@@ -238,8 +236,6 @@ def _grid_to_graph(
     # 2b. Left power rail: all column-0 cells share the same left-port
     rail_port: int | None = None
     for r in range(n_rows):
-        if r in pin_row_set:
-            continue
         if (r, 0) in left_port:
             if rail_port is None:
                 rail_port = left_port[r, 0]
@@ -248,8 +244,6 @@ def _grid_to_graph(
 
     # 3. Merge horizontal adjacency
     for r in range(n_rows):
-        if r in pin_row_set:
-            continue
         for c in range(_CONDITION_COLS - 1):
             left_cell = _cell_at(rows, r, c)
             right_cell = _cell_at(rows, r, c + 1)
@@ -264,8 +258,6 @@ def _grid_to_graph(
     # 4. Build edges from content cells
     edges: list[_Edge] = []
     for r in range(n_rows):
-        if r in pin_row_set:
-            continue
         for c in range(_CONDITION_COLS):
             cell = _cell_at(rows, r, c)
             if not cell or cell in _WIRE_CELLS:
