@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from pyrung.click._topology import Leaf, Parallel, Series, SPNode
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
 from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
@@ -596,41 +596,96 @@ def _emit_rung(
         return
 
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
+    _emit_rung_header(lines, rung, conditions_str, indent)
 
-    # Check if we need branch() blocks
-    has_branches = any(instr.branch_tree is not None for instr in real_instructions)
-    multi_output = len(real_instructions) > 1
+    if len(real_instructions) == 1:
+        _emit_instruction(
+            lines,
+            real_instructions[0],
+            collection,
+            nicknames,
+            indent + 1,
+            structured_map,
+            call_func_map,
+        )
+        return
 
-    if has_branches and multi_output:
-        _emit_rung_header(lines, rung, conditions_str, indent)
+    _emit_grouped_instructions(
+        lines,
+        [(instr.branch_tree, instr) for instr in real_instructions],
+        collection,
+        nicknames,
+        indent + 1,
+        structured_map,
+        call_func_map,
+    )
 
-        for instr in real_instructions:
-            if instr.branch_tree is not None:
-                branch_cond = _render_sp_node(
-                    instr.branch_tree, collection, nicknames, structured_map
-                )
-                lines.append(f"{pad}    with branch({branch_cond}):")
-                _emit_instruction(
-                    lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
-                )
-            else:
-                _emit_instruction(
-                    lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
-                )
-    elif multi_output and not has_branches:
-        _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in real_instructions:
+def _emit_grouped_instructions(
+    lines: list[str],
+    outputs: list[tuple[SPNode | None, _InstructionInfo]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    indent: int,
+    structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
+) -> None:
+    """Emit instructions with recursive shared-prefix factoring for nested branches."""
+    pad = "    " * indent
+    index = 0
+
+    while index < len(outputs):
+        tree, instr = outputs[index]
+        if tree is None:
             _emit_instruction(
-                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+                lines,
+                instr,
+                collection,
+                nicknames,
+                indent,
+                structured_map,
+                call_func_map,
             )
-    else:
-        _emit_rung_header(lines, rung, conditions_str, indent)
+            index += 1
+            continue
 
-        for instr in real_instructions:
-            _emit_instruction(
-                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+        stop = index + 1
+        while stop < len(outputs):
+            candidate_tree, _candidate_instr = outputs[stop]
+            if candidate_tree is None:
+                break
+            shared = factor_outputs(
+                [candidate for candidate, _item in outputs[index : stop + 1]]
+            ).shared
+            if not shared:
+                break
+            stop += 1
+
+        group = outputs[index:stop]
+        result = factor_outputs([candidate for candidate, _item in group])
+        branch_tree = make_compound(result.shared, Series)
+        branch_cond = _render_sp_node(branch_tree, collection, nicknames, structured_map)
+        lines.append(f"{pad}with branch({branch_cond}):")
+
+        remaining_outputs = [
+            (
+                make_compound(result.branches[group_index], Series)
+                if result.branches[group_index]
+                else None,
+                group_instr,
             )
+            for group_index, (_group_tree, group_instr) in enumerate(group)
+        ]
+        _emit_grouped_instructions(
+            lines,
+            remaining_outputs,
+            collection,
+            nicknames,
+            indent + 1,
+            structured_map,
+            call_func_map,
+        )
+        index = stop
 
 
 def _render_sp_node(

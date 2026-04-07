@@ -28,7 +28,6 @@ Example rung grid (two parallel contacts A/B, then C in series):
 from __future__ import annotations
 
 import warnings
-from bisect import bisect_right
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -398,7 +397,13 @@ def _sp_reduce(
     sink: int,
     all_edges: list[_Edge],
 ) -> SPNode | None:
-    """Reduce subgraph between *source* and *sink* to an SP tree."""
+    """Reduce subgraph between *source* and *sink* to an SP tree.
+
+    Non-SP bridge topologies fall back to Shannon expansion. That preserves
+    rung semantics but not the original bridge drawing, so the first import
+    may re-export as an equivalent pure SP tree. Once that normalized form is
+    written back out, later CSV -> SP -> CSV passes stay stable.
+    """
     if source == sink:
         return None
 
@@ -414,7 +419,6 @@ def _sp_reduce(
     # Reduction loop. Genuine SP reductions always shrink the edge set, so a
     # progress check is more reliable than a guessed iteration budget.
     while True:
-        start_count = len(edges)
         changed = False
 
         # Rule A: Parallel — merge edges between same (src, dst)
@@ -467,7 +471,7 @@ def _sp_reduce(
             drop = {in_idx, out_idx}
             edges = [e for i, e in enumerate(edges) if i not in drop] + [new_edge]
 
-        if not changed or len(edges) >= start_count:
+        if not changed:
             break
 
     # Check if we're done after the loop
@@ -526,7 +530,7 @@ _trees_equal = trees_equal
 def _group_outputs(
     trees: list[tuple[SPNode | None, str, int]],
 ) -> tuple[SPNode | None, list[_InstructionInfo], list[int]]:
-    """Group per-output SP trees into condition_tree + instructions."""
+    """Group per-output SP trees into top-level condition_tree + instructions."""
     if not trees:
         return None, [], []
 
@@ -560,14 +564,19 @@ def _group_outputs(
 
 
 def _split_continued(rung: _AnalyzedRung) -> list[_AnalyzedRung]:
-    """Split a rung with independent wires into primary + continued rungs.
+    """Split a rung with continued-style wires into primary + continued rungs.
 
-    When ``condition_tree`` is None and every instruction carries its own
-    ``branch_tree``, the outputs are independent wires — not branches of a
-    shared condition.  The first instruction becomes the primary rung;
-    remaining instructions are re-grouped (they may share a prefix among
-    themselves, producing a continued rung with branches) and marked
-    ``is_continued=True``.
+    The motivating Click-only shape is a shared wire that feeds a terminal
+    instruction pin and also drives a sibling output. In pyrung, counters and
+    RTON-style ``on_delay(...).reset(...)`` are terminal in-flow, and their
+    reset conditions render inside the call rather than as peer rows, so that
+    layout cannot live in one DSL rung. Splitting off the sibling as
+    ``.continued()`` preserves the shared snapshot and stays expressible.
+
+    The current trigger is still a structural proxy: no shared
+    ``condition_tree`` and every instruction carries its own ``branch_tree``.
+    That matches exporter-produced continued rows and the terminal-pin case,
+    but hand-authored CSV can still over- or under-trigger it.
     """
     if rung.condition_tree is not None:
         return [rung]
@@ -715,23 +724,39 @@ def _analyze_single_rung(
     # Output Grouping
     condition_tree, instructions, af_rows = _group_outputs(output_trees)
 
-    # Attach pin rows to their nearest preceding instruction (by row index)
+    # Exporter pins immediately follow their owning AF row. Walk the raw rows
+    # in order so malformed layouts fail loudly instead of silently attaching
+    # to the wrong instruction.
     if pin_row_set and instructions:
-        for pin_idx in sorted(pin_row_set):
-            best = bisect_right(af_rows, pin_idx) - 1
-            if best >= 0:
-                pin_row = rows[pin_idx]
-                af = pin_row[-1]
+        instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
+        current_instruction: int | None = None
+
+        for row_index, row in enumerate(rows):
+            af = row[-1]
+
+            if row_index in pin_row_set:
+                if current_instruction is None:
+                    raise ValueError(
+                        f"Pin row {row_index} must immediately follow its owning instruction row."
+                    )
+
                 match = _PIN_RE.match(af)
                 if match:
-                    pin_conds = _extract_conditions(pin_row, 0, _CONDITION_COLS)
-                    instructions[best].pins.append(
+                    pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
+                    instructions[current_instruction].pins.append(
                         _PinInfo(
                             name=match.group(1),
                             arg=match.group(2),
                             conditions=pin_conds,
                         )
                     )
+                continue
+
+            if af and not af.startswith("."):
+                current_instruction = instruction_by_row.get(row_index)
+                continue
+
+            current_instruction = None
 
     return _AnalyzedRung(
         comment=comment,

@@ -394,7 +394,7 @@ def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
 
 def _find_parallel(node):
     """Return the first ``Parallel`` node found in the tree, or ``None``."""
-    from pyrung.click.codegen.models import Parallel, Series
+    from pyrung.click._topology import Parallel, Series
 
     if node is None:
         return None
@@ -410,7 +410,7 @@ def _find_parallel(node):
 
 def _collect_leaves(node) -> list:
     """Collect all ``Leaf`` nodes from an SP tree in order."""
-    from pyrung.click.codegen.models import Leaf, Parallel, Series
+    from pyrung.click._topology import Leaf, Parallel, Series
 
     if node is None:
         return []
@@ -431,7 +431,7 @@ def _leaf_labels(node) -> list[str]:
 
 def _eval_tree(node, values: dict[str, bool]) -> bool:
     """Evaluate an SP tree against a contact-value mapping."""
-    from pyrung.click.codegen.models import Leaf, Parallel, Series
+    from pyrung.click._topology import Leaf, Parallel, Series
 
     if node is None:
         return True
@@ -734,6 +734,19 @@ class TestGraphWalkEdgeCases:
         assert result.instructions[1].pins[0].name == "reset"
         assert result.instructions[1].pins[0].conditions == ["X002"]
 
+    def test_pin_row_requires_immediate_preceding_instruction(self):
+        """A separated pin row should fail instead of attaching heuristically."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001"}, 1, 31), af="on_delay(T1)")
+        row1 = _make_row("", {})
+        row2 = _make_row("", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
+
+        with pytest.raises(ValueError, match="must immediately follow"):
+            _analyze_single_rung(rung)
+
     def test_noncanonical_left_edge_not_col0(self):
         """Non-canonical grid: first content starts at column 1, not column 0.
 
@@ -844,7 +857,7 @@ class TestGraphWalkEdgeCases:
     def test_bridge_reduction_is_stable_across_edge_order(self):
         """Bridge-topology fallback should choose the same expansion edge each time."""
         from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
-        from pyrung.click.codegen.models import Leaf, Parallel
+        from pyrung.click._topology import Leaf, Parallel
 
         s, u, v, t = 0, 1, 2, 3
         edges = [
@@ -2821,6 +2834,257 @@ class TestContinuedRoundTrip:
 
         assert ".continued()" in code
         assert "X003 | X004" in code
+        assert orig == repro
+
+    def test_nested_branch_outputs_preserve_inner_shared_prefix(self, tmp_path: Path):
+        """Nested shared prefixes should come back as nested branch() blocks."""
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        E = Bool("E")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program(strict=False) as logic:
+            with Rung(A):
+                with branch(B):
+                    with branch(C):
+                        out(Y1)
+                    with branch(D):
+                        out(Y2)
+                with branch(E):
+                    out(Y3)
+
+        mapping = TagMap(
+            {A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], Y1: y[1], Y2: y[2], Y3: y[3]},
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        expected = """
+    with Rung(X001):
+        with branch(X002):
+            with branch(X003):
+                out(Y001)
+            with branch(X004):
+                out(Y002)
+        with branch(X005):
+            out(Y003)
+"""
+        assert expected in code
+        assert "with branch(X002, X003)" not in code
+        assert orig == repro
+
+    def test_greedy_group_prefix_shrinks_but_stays_nonempty(self, tmp_path: Path):
+        """Growing a group shrinks the shared prefix; recursion recovers deeper nesting.
+
+        Outputs: B·C·G, B·C·H, B·E under rung A.
+        Pair {1,2} shares [B,C]; triple {1,2,3} shares only [B].
+        ``_group_outputs`` absorbs the globally-shared B into the rung
+        condition.  The emitter's greedy loop then finds C shared between
+        the first two outputs and nests them.
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        E = Bool("E")
+        G = Bool("G")
+        H = Bool("H")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program(strict=False) as logic:
+            with Rung(A):
+                with branch(B, C, G):
+                    out(Y1)
+                with branch(B, C, H):
+                    out(Y2)
+                with branch(B, E):
+                    out(Y3)
+
+        mapping = TagMap(
+            {
+                A: x[1], B: x[2], C: x[3], E: x[4], G: x[5], H: x[6],
+                Y1: y[1], Y2: y[2], Y3: y[3],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # B is absorbed into the rung condition by _group_outputs.
+        # The emitter then factors C from outputs 1 & 2.
+        expected = """
+    with Rung(X001, X002):
+        with branch(X003):
+            with branch(X005):
+                out(Y001)
+            with branch(X006):
+                out(Y002)
+        with branch(X004):
+            out(Y003)
+"""
+        assert expected in code
+        # Must not flatten into a single branch — the inner shared
+        # prefix C should be factored out.
+        assert "with branch(X003, X005)" not in code
+        assert orig == repro
+
+    def test_greedy_group_disjoint_consecutive_groups(self, tmp_path: Path):
+        """Consecutive outputs with disjoint prefixes form separate groups.
+
+        Outputs: B·C (standalone), D·E, D·F under rung A.
+        {1,2} share nothing, so output 1 is emitted alone.  Then {2,3}
+        share D and are grouped.
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        E = Bool("E")
+        F = Bool("F")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program(strict=False) as logic:
+            with Rung(A):
+                with branch(B, C):
+                    out(Y1)
+                with branch(D, E):
+                    out(Y2)
+                with branch(D, F):
+                    out(Y3)
+
+        mapping = TagMap(
+            {
+                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], F: x[6],
+                Y1: y[1], Y2: y[2], Y3: y[3],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        expected = """
+    with Rung(X001):
+        with branch(X002, X003):
+            out(Y001)
+        with branch(X004):
+            with branch(X005):
+                out(Y002)
+            with branch(X006):
+                out(Y003)
+"""
+        assert expected in code
+        # Output 1 must not be grouped with outputs 2/3 — no shared prefix.
+        assert "with branch(X002, X003, X004)" not in code
+        assert orig == repro
+
+    def test_greedy_group_all_share_single_prefix(self, tmp_path: Path):
+        """All outputs share the same single-level prefix — one group.
+
+        Outputs: B·C, B·D, B·E under rung A.
+        All three share [B]; ``_group_outputs`` absorbs B into the rung
+        condition, leaving C, D, E as flat sibling branches.
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        E = Bool("E")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+
+        with Program(strict=False) as logic:
+            with Rung(A):
+                with branch(B, C):
+                    out(Y1)
+                with branch(B, D):
+                    out(Y2)
+                with branch(B, E):
+                    out(Y3)
+
+        mapping = TagMap(
+            {
+                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5],
+                Y1: y[1], Y2: y[2], Y3: y[3],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        # B is absorbed into the rung condition; remainders are flat branches.
+        expected = """
+    with Rung(X001, X002):
+        with branch(X003):
+            out(Y001)
+        with branch(X004):
+            out(Y002)
+        with branch(X005):
+            out(Y003)
+"""
+        assert expected in code
+        # B should be factored into the Rung, not duplicated per branch.
+        assert "with branch(X002, X003)" not in code
+        assert "with branch(X002, X004)" not in code
+        assert orig == repro
+
+    def test_greedy_group_four_outputs_two_disjoint_pairs(self, tmp_path: Path):
+        """Four outputs forming two independent pairs with different prefixes.
+
+        Outputs: B·C, B·D, E·F, E·G under rung A.
+        {1,2} share B; {3,4} share E; {2,3} share nothing.
+        Should emit two separate grouped branches.
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+        E = Bool("E")
+        F = Bool("F")
+        G = Bool("G")
+        Y1 = Bool("Y1")
+        Y2 = Bool("Y2")
+        Y3 = Bool("Y3")
+        Y4 = Bool("Y4")
+
+        with Program(strict=False) as logic:
+            with Rung(A):
+                with branch(B, C):
+                    out(Y1)
+                with branch(B, D):
+                    out(Y2)
+                with branch(E, F):
+                    out(Y3)
+                with branch(E, G):
+                    out(Y4)
+
+        mapping = TagMap(
+            {
+                A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], F: x[6], G: x[7],
+                Y1: y[1], Y2: y[2], Y3: y[3], Y4: y[4],
+            },
+            include_system=False,
+        )
+        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+
+        expected = """
+    with Rung(X001):
+        with branch(X002):
+            with branch(X003):
+                out(Y001)
+            with branch(X004):
+                out(Y002)
+        with branch(X005):
+            with branch(X006):
+                out(Y003)
+            with branch(X007):
+                out(Y004)
+"""
+        assert expected in code
         assert orig == repro
 
 
