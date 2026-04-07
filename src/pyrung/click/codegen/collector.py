@@ -288,11 +288,7 @@ def _enrich_with_ownership(
 
         # Compute hw_end: use runtime.hardware_span when we have a mapped
         # named_array, or fall back to last-field address lookup.
-        if (
-            hw_start is not None
-            and effective_stride is not None
-            and si.kind == "named_array"
-        ):
+        if hw_start is not None and effective_stride is not None and si.kind == "named_array":
             _, hw_end = runtime.hardware_span(hw_start)
         else:
             last_field_block = runtime._blocks[field_names[-1]]
