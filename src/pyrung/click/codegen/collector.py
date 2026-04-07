@@ -162,8 +162,16 @@ def _collect_operands(
             if instr.branch_tree is not None:
                 collection.has_branch = True
             for pin in instr.pins:
-                for cond in pin.conditions:
-                    _scan_token_for_operands(cond, collection, nicknames)
+                if pin.condition_tree is not None:
+                    for cond in _walk_tree_labels(pin.condition_tree):
+                        _scan_token_for_operands(cond, collection, nicknames)
+                    if _tree_uses_any_of(pin.condition_tree, collection):
+                        collection.has_any_of = True
+                    if _tree_has_all_of(pin.condition_tree):
+                        collection.has_all_of = True
+                else:
+                    for cond in pin.conditions:
+                        _scan_token_for_operands(cond, collection, nicknames)
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
@@ -741,8 +749,16 @@ def _scan_file_refs(
             if instr.branch_tree is not None:
                 refs.has_branch = True
             for pin in instr.pins:
-                for cond in pin.conditions:
-                    _ref_token(cond, collection, refs)
+                if pin.condition_tree is not None:
+                    for cond in _walk_tree_labels(pin.condition_tree):
+                        _ref_token(cond, collection, refs)
+                    if _tree_uses_any_of(pin.condition_tree, collection):
+                        refs.has_any_of = True
+                    if _tree_has_all_of(pin.condition_tree):
+                        refs.has_all_of = True
+                else:
+                    for cond in pin.conditions:
+                        _ref_token(cond, collection, refs)
                 if pin.arg:
                     _ref_token(pin.arg, collection, refs)
 

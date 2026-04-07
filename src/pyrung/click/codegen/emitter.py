@@ -911,8 +911,12 @@ def _render_pin(
     structured_map: TagMap | None = None,
 ) -> str:
     """Render a pin as a chained method call."""
-    if pin.conditions:
+    cond: str | None = None
+    if pin.condition_tree is not None:
+        cond = _render_sp_node(pin.condition_tree, collection, nicknames, structured_map)
+    elif pin.conditions:
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
+    if cond:
         if pin.arg:
             arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
             return f".{pin.name}({cond}, {arg})"

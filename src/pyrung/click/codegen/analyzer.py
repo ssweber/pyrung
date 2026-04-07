@@ -149,11 +149,12 @@ def _cell_has_down(cell: str) -> bool:
 def _grid_to_graph(
     rows: list[list[str]],
     pin_row_set: set[int],
-) -> tuple[int | None, list[tuple[int, str, int]], list[_Edge]]:
+) -> tuple[int | None, list[tuple[int, str, int]], list[_Edge], dict[int, int]]:
     """Convert grid to multigraph.
 
-    Returns ``(source_node, sinks, edges)`` where sinks is a list of
-    ``(node_id, af_token, af_row)`` tuples.
+    Returns ``(source_node, sinks, edges, pin_sinks)`` where sinks is a list
+    of ``(node_id, af_token, af_row)`` tuples and pin_sinks maps pin row
+    index to its rightmost sink node.
     """
     uf = _UF()
     n_rows = len(rows)
@@ -207,8 +208,6 @@ def _grid_to_graph(
             # Try target at (r+1, c), fallback (r+1, c-1)
             for tc in (c, c - 1):
                 target = (r + 1, tc)
-                if target[0] in pin_row_set:
-                    continue
                 if target not in left_port:
                     continue
                 is_diagonal = tc != c
@@ -315,7 +314,18 @@ def _grid_to_graph(
             continue
         sinks.append((sink_node, af, r))
 
-    return source, sinks, edges
+    # 6. Pin sinks — rightmost occupied right_port per pin row.
+    pin_sinks: dict[int, int] = {}
+    for r in pin_row_set:
+        last_c = -1
+        for c in range(_CONDITION_COLS - 1, -1, -1):
+            if (r, c) in right_port:
+                last_c = c
+                break
+        if last_c >= 0:
+            pin_sinks[r] = uf.find(right_port[r, last_c])
+
+    return source, sinks, edges, pin_sinks
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +707,7 @@ def _analyze_single_rung(
     pin_row_set = {i for i, row in enumerate(rows) if _is_pin_row(row)}
 
     # Wiring: Grid -> Multigraph
-    source, sinks, edges = _grid_to_graph(rows, pin_row_set)
+    source, sinks, edges, pin_sinks = _grid_to_graph(rows, pin_row_set)
 
     if source is None or not sinks:
         return _AnalyzedRung(
@@ -719,6 +729,12 @@ def _analyze_single_rung(
     # Exporter pins immediately follow their owning AF row. Walk the raw rows
     # in order so malformed layouts fail loudly instead of silently attaching
     # to the wrong instruction.
+    # Compute SP trees for pin row conditions.
+    pin_trees: dict[int, SPNode | None] = {}
+    if pin_sinks and source is not None:
+        for pr, ps in pin_sinks.items():
+            pin_trees[pr] = _sp_reduce(source, ps, edges)
+
     if pin_row_set and instructions:
         instruction_by_row = {af_row: index for index, af_row in enumerate(af_rows)}
         current_instruction: int | None = None
@@ -735,11 +751,13 @@ def _analyze_single_rung(
                 match = _PIN_RE.match(af)
                 if match:
                     pin_conds = _extract_conditions(row, 0, _CONDITION_COLS)
+                    pin_tree = pin_trees.get(row_index)
                     instructions[current_instruction].pins.append(
                         _PinInfo(
                             name=match.group(1),
                             arg=match.group(2),
                             conditions=pin_conds,
+                            condition_tree=pin_tree,
                         )
                     )
                 continue

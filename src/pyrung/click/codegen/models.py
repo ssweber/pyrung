@@ -36,6 +36,7 @@ class _PinInfo:
     name: str  # "reset", "down", "clock", "jump", "jog"
     arg: str  # "" or the argument inside parens
     conditions: list[str]  # condition tokens on this row
+    condition_tree: SPNode | None = None  # SP tree (overrides flat conditions)
 
 
 from pyrung.click._topology import SPNode
