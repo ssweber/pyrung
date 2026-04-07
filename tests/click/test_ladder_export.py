@@ -58,14 +58,12 @@ from pyrung.core.program import (
     event_drum,
     fill,
     forloop,
-    latch,
     off_delay,
     on_delay,
     out,
     pack_bits,
     pack_text,
     pack_words,
-    reset,
     return_early,
     search,
     shift,
@@ -74,6 +72,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
+from tests.click.helpers import build_program, normalize_csv
 
 
 def _header() -> tuple[str, ...]:
@@ -102,6 +101,15 @@ def _blank_row(marker: str, prefix: list[str], af: str = "") -> tuple[str, ...]:
 _END_ROW = _row("R", [], "end()")
 
 
+def _export_rows(source: str) -> list[tuple[str, ...]]:
+    logic, mapping = build_program(source)
+    return normalize_csv(pyrung_to_ladder(logic, mapping).main_rows)
+
+
+def _normalized_rows(*rows: tuple[str, ...]) -> list[tuple[str, ...]]:
+    return normalize_csv((_header(), *rows, _END_ROW))
+
+
 def test_header_and_width_invariants():
     A = Bool("A")
     B = Bool("B")
@@ -118,65 +126,36 @@ def test_header_and_width_invariants():
 
 
 def test_and_example_golden():
-    A = Bool("A")
-    B = Bool("B")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(A, B):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1, X2):
+                out(Y1)
+    """) == _normalized_rows(
         _row("R", ["X001", "X002"], "out(Y001)"),
-        _END_ROW,
     )
 
 
 def test_or_expansion_with_trailing_and_golden():
-    A = Bool("A")
-    B = Bool("B")
-    Ready = Bool("Ready")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(any_of(A, B), Ready):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(any_of(X1, X2), C1):
+                out(Y1)
+    """) == _normalized_rows(
         _row("R", ["X001", "T", "C1"], "out(Y001)"),
         _blank_row("", ["X002"]),
-        _END_ROW,
     )
 
 
 def test_branch_row_is_continuation_after_parent_conditions():
-    A = Bool("A")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
-
-    mapping = TagMap({A: x[1], Mode: x[2], Y1: y[1], Y2: y[2]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(X2):
+                    out(Y2)
+    """) == _normalized_rows(
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "X002"], "out(Y002)"),
-        _END_ROW,
     )
 
 
@@ -211,246 +190,118 @@ def test_multiple_branches_stack_vertical_markers():
 
 
 def test_parent_instruction_after_branch_stays_on_parent_path():
-    A = Bool("A")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
-            out(Y3)
-
-    mapping = TagMap(
-        {A: x[1], Mode: x[2], Y1: y[1], Y2: y[2], Y3: y[3]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(X2):
+                    out(Y2)
+                out(Y3)
+    """) == _normalized_rows(
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "T:X002"], "out(Y002)"),
         _row("", ["", "-"], "out(Y003)"),
-        _END_ROW,
     )
 
 
 def test_branch_local_or_expands_with_click_topology():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(any_of(B, C)):
-                out(Y2)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Y1: y[1], Y2: y[2]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3)):
+                    out(Y2)
+    """) == _normalized_rows(
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "T:X002", "T"], "out(Y002)"),
         _blank_row("", ["", "X003"]),
-        _END_ROW,
     )
 
 
 def test_branch_local_or_with_series_suffix_stays_mechanical():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(any_of(B, C), D):
-                out(Y2)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3), X4):
+                    out(Y2)
+    """) == _normalized_rows(
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
         _blank_row("", ["", "X003"]),
-        _END_ROW,
     )
 
 
 def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(any_of(B, C), D):
-                out(Y2)
-            out(Y3)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2], Y3: y[3]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3), X4):
+                    out(Y2)
+                out(Y3)
+    """) == _normalized_rows(
         _row("R", ["X001", "T"], "out(Y001)"),
         _row("", ["", "T:X002", "T", "X004"], "out(Y002)"),
         _blank_row("", ["", "T:X003"]),
         _row("", ["", "-", "-", "-"], "out(Y003)"),
-        _END_ROW,
     )
 
 
 def test_branch_with_series_then_local_or_keeps_click_merge_topology():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            with branch(B, any_of(C, D)):
-                out(Y1)
-            out(Y2)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2, any_of(X3, X4)):
+                    out(Y1)
+                out(Y2)
+    """) == _normalized_rows(
         _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
         _blank_row("", ["", "|", "X004"]),
         _row("", ["", "-", "-", "-"], "out(Y002)"),
-        _END_ROW,
     )
 
 
 def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_visible():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    E = Bool("E")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            with branch(B, any_of(C, D, E)):
-                out(Y1)
-            out(Y2)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], D: x[4], E: x[5], Y1: y[1], Y2: y[2]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2, any_of(X3, X4, X5)):
+                    out(Y1)
+                out(Y2)
+    """) == _normalized_rows(
         _row("R", ["X001", "T:X002", "T:X003", "T"], "out(Y001)"),
         _blank_row("", ["", "|", "T:X004", "|"]),
         _blank_row("", ["", "|", "X005"]),
         _row("", ["", "-", "-", "-"], "out(Y002)"),
-        _END_ROW,
     )
 
 
 def test_multiple_instruction_rows_share_powered_path():
-    A = Bool("A")
-    B = Bool("B")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A, B):
-            out(Y1)
-            latch(Y2)
-            reset(Y3)
-
-    mapping = TagMap(
-        {
-            A: x[1],
-            B: x[2],
-            Y1: y[1],
-            Y2: y[2],
-            Y3: y[3],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1, X2):
+                out(Y1)
+                latch(Y2)
+                reset(Y3)
+    """) == _normalized_rows(
         _row("R", ["X001", "X002", "T"], "out(Y001)"),
         _row("", ["", "", "T"], "latch(Y002)"),
         _row("", ["", "", "-"], "reset(Y003)"),
-        _END_ROW,
     )
 
 
 def test_immediate_contact_and_coils_render_canonical_tokens():
-    Start = Bool("Start")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(immediate(Start)):
-            out(immediate(Y1))
-            latch(immediate(Y2))
-            reset(immediate(Y3))
-
-    mapping = TagMap(
-        {
-            Start: x[1],
-            Y1: y[1],
-            Y2: y[2],
-            Y3: y[3],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(immediate(X1)):
+                out(immediate(Y1))
+                latch(immediate(Y2))
+                reset(immediate(Y3))
+    """) == _normalized_rows(
         _row("R", ["immediate(X001)", "T"], "out(immediate(Y001))"),
         _row("", ["", "T"], "latch(immediate(Y002))"),
         _row("", ["", "-"], "reset(immediate(Y003))"),
-        _END_ROW,
     )
 
 
@@ -1156,61 +1007,37 @@ def test_nested_subroutine_call_issue_includes_source_location():
 
 
 def test_comment_single_line():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        comment("Turn on B when A is true.")
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            comment("Turn on B when A is true.")
+            with Rung(X1):
+                out(Y1)
+    """) == _normalized_rows(
         ("#", "Turn on B when A is true."),
         _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
     )
 
 
 def test_comment_multi_line():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        comment("Line one.\nLine two.")
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            comment("Line one.\\nLine two.")
+            with Rung(X1):
+                out(Y1)
+    """) == _normalized_rows(
         ("#", "Line one."),
         ("#", "Line two."),
         _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
     )
 
 
 def test_no_comment_no_extra_rows():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+    """) == _normalized_rows(
         _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
     )
 
 
@@ -1237,19 +1064,13 @@ def test_comment_with_branches():
 
 
 def test_comment_not_emitted_for_empty_branches():
-    A = Bool("A")
-    Mode = Bool("Mode")
-
-    with Program() as logic:
-        comment("No rows should be emitted.")
-        with Rung(A):
-            with branch(Mode):
-                pass
-
-    mapping = TagMap({A: x[1], Mode: c[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (_header(), _END_ROW)
+    assert _export_rows("""
+        with Program() as p:
+            comment("No rows should be emitted.")
+            with Rung(X1):
+                with branch(C1):
+                    pass
+    """) == []
 
 
 # --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
@@ -2087,35 +1908,19 @@ def test_receive_block_range_token():
 
 def test_nested_branch_export_pushes_later_siblings_down():
     """Nested branches keep source order and push later siblings below the nested block."""
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    D = Bool("D")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A):
-            with branch(B):
-                out(Y1)
-                with branch(C):
-                    out(Y2)
-            with branch(D):
-                out(Y3)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], D: x[4], Y1: y[1], Y2: y[2], Y3: y[3]},
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
+    assert _export_rows("""
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2):
+                    out(Y1)
+                    with branch(X3):
+                        out(Y2)
+                with branch(X4):
+                    out(Y3)
+    """) == _normalized_rows(
         _row("R", ["X001", "T:X002", "T"], "out(Y001)"),
         _row("", ["", "|", "X003"], "out(Y002)"),
         _row("", ["", "X004"], "out(Y003)"),
-        _END_ROW,
     )
 
 
