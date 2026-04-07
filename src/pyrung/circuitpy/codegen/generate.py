@@ -57,6 +57,7 @@ def generate_circuitpy(
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
     mapped_tag_scope: MappedTagScope = "referenced_only",
+    force_runtime: bool = False,
 ) -> CircuitPyOutput:
     if not isinstance(program, Program):
         raise TypeError(f"program must be Program, got {type(program).__name__}")
@@ -152,9 +153,10 @@ def generate_circuitpy(
     ctx.assign_symbols()
 
     # Predict has_runtime from config — modbus requires a runtime module.
+    # force_runtime=True emits the runtime unconditionally (e.g. for starter bundles).
     # Render code first so compile_rung populates ctx.used_helpers and
     # ctx.modbus_client_specs; _render_runtime needs those.
-    has_runtime = ctx.modbus_server is not None or ctx.modbus_client is not None
+    has_runtime = force_runtime or ctx.modbus_server is not None or ctx.modbus_client is not None
     source = _render_code(ctx, has_runtime=has_runtime)
     runtime_source = _render_runtime(ctx) if has_runtime else ""
 
@@ -182,6 +184,7 @@ def write_circuitpy(
     modbus_client: ModbusClientConfig | None = None,
     tag_map: TagMap | None = None,
     mapped_tag_scope: MappedTagScope = "referenced_only",
+    force_runtime: bool = False,
 ) -> Path:
     """Generate and write ``code.py`` (and ``pyrung_rt.py`` when needed) to *output_dir*.
 
@@ -198,6 +201,7 @@ def write_circuitpy(
         modbus_client=modbus_client,
         tag_map=tag_map,
         mapped_tag_scope=mapped_tag_scope,
+        force_runtime=force_runtime,
     )
     out = Path(output_dir)
     code_path = out / "code.py"

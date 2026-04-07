@@ -15,6 +15,19 @@ theme:
 
 nav:
   - Home: index.md
+  - Learn:
+      - learn/index.md
+      - The Scan Cycle: learn/scan-cycle.md
+      - Tags: learn/tags.md
+      - Latch and Reset: learn/latch-reset.md
+      - Assignment: learn/assignment.md
+      - Timers: learn/timers.md
+      - Counters: learn/counters.md
+      - State Machines: learn/state-machines.md
+      - Branches and OR Logic: learn/branches.md
+      - Structured Tags and Blocks: learn/structured-tags.md
+      - Testing: learn/testing.md
+      - From Simulation to Hardware: learn/hardware.md
   - Getting Started:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
@@ -74,6 +87,8 @@ plugins:
       sections:
         Overview:
           - index.md
+        Learn:
+          - learn/*.md
         Getting Started:
           - getting-started/*.md
         Instruction Reference:

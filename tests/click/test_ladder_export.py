@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import csv
 import functools
+import io
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
 
 from pyrung.click import (
     LadderExportError,
-    ModbusAddress,
-    ModbusRtuTarget,
     ModbusTcpTarget,
-    RegisterType,
     TagMap,
     c,
     ct,
@@ -32,7 +31,20 @@ from pyrung.click import (
     x,
     y,
 )
-from pyrung.core import Block, Bool, Dint, Int, Program, Rung, TagType, all_of, any_of, immediate
+from pyrung.core import (
+    Block,
+    BlockRange,
+    Bool,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Tag,
+    TagType,
+    all_of,
+    any_of,
+    immediate,
+)
 from pyrung.core.program import (
     blockcopy,
     branch,
@@ -41,18 +53,15 @@ from pyrung.core.program import (
     comment,
     copy,
     count_down,
-    count_up,
     event_drum,
     fill,
     forloop,
-    latch,
     off_delay,
     on_delay,
     out,
     pack_bits,
     pack_text,
     pack_words,
-    reset,
     return_early,
     search,
     shift,
@@ -61,6 +70,7 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
+from tests.click.helpers import build_program, normalize_csv
 
 
 def _header() -> tuple[str, ...]:
@@ -89,6 +99,22 @@ def _blank_row(marker: str, prefix: list[str], af: str = "") -> tuple[str, ...]:
 _END_ROW = _row("R", [], "end()")
 
 
+def _literal_csv_rows(csv_text: str) -> list[tuple[str, ...]]:
+    parsed_rows: list[tuple[str, ...]] = []
+    for row in csv.reader(io.StringIO(textwrap.dedent(csv_text).strip()), strict=True):
+        if row and row[0] != "#" and len(row) > 33:
+            row = [*row[:32], ",".join(row[32:])]
+        parsed_rows.append(tuple(row))
+    rows = tuple(parsed_rows)
+    return normalize_csv(rows)
+
+
+def _assert_export_main_rows(source: str, expected_csv: str) -> None:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    assert normalize_csv(bundle.main_rows) == _literal_csv_rows(expected_csv)
+
+
 def test_header_and_width_invariants():
     A = Bool("A")
     B = Bool("B")
@@ -104,191 +130,229 @@ def test_header_and_width_invariants():
     assert all(len(row) == 33 for row in bundle.main_rows)
 
 
+def test_export_roundtrip_guard_rejects_missing_pin_row():
+    from pyrung.click.ladder._exporter import _LadderExporter
+    from pyrung.click.ladder.types import _RenderError
+
+    logic, mapping = build_program(
+        """
+        with Rung(X1):
+            on_delay(T1, TD1, preset=100, unit=Tms).reset(X2)
+        """
+    )
+
+    exporter = _LadderExporter(tag_map=mapping, program=logic)
+    rendered_rows = exporter._render_scope(logic.rungs, scope="main", subroutine_name=None)
+    mutated_rows = [row for row in rendered_rows if row[-1] != ".reset()"]
+
+    with pytest.raises(_RenderError, match="pin count mismatch"):
+        exporter._validate_scope_roundtrip(
+            source_rungs=logic.rungs,
+            rendered_rows=mutated_rows,
+            scope="main",
+            subroutine_name=None,
+        )
+
+
 def test_and_example_golden():
-    A = Bool("A")
-    B = Bool("B")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(A, B):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "X002"], "out(Y001)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1, X2):
+                out(Y1)
+        """,
+        """
+        R,X001,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_or_expansion_with_trailing_and_golden():
-    A = Bool("A")
-    B = Bool("B")
-    Ready = Bool("Ready")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(any_of(A, B), Ready):
-            out(Y)
-
-    mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T", "C1"], "out(Y001)"),
-        _blank_row("", ["X002"]),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(any_of(X1, X2), C1):
+                out(Y1)
+        """,
+        """
+        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
     )
 
 
 def test_branch_row_is_continuation_after_parent_conditions():
-    A = Bool("A")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
-
-    mapping = TagMap({A: x[1], Mode: x[2], Y1: y[1], Y2: y[2]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "X002"], "out(Y002)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(X2):
+                    out(Y2)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
     )
 
 
 def test_multiple_branches_stack_vertical_markers():
-    A = Bool("A")
-    Mode1 = Bool("Mode1")
-    Mode2 = Bool("Mode2")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(Mode1):
-                out(Y2)
-            with branch(Mode2):
-                out(Y3)
-
-    mapping = TagMap(
-        {A: x[1], Mode1: x[2], Mode2: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
-        include_system=False,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(X2):
+                    out(Y2)
+                with branch(X3):
+                    out(Y3)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "T:X002"
-    assert bundle.main_rows[3][2] == "X003"
-    assert bundle.main_rows[1][-1] == "out(Y001)"
-    assert bundle.main_rows[2][-1] == "out(Y002)"
-    assert bundle.main_rows[3][-1] == "out(Y003)"
 
 
 def test_parent_instruction_after_branch_stays_on_parent_path():
-    A = Bool("A")
-    Mode = Bool("Mode")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A):
-            out(Y1)
-            with branch(Mode):
-                out(Y2)
-            out(Y3)
-
-    mapping = TagMap(
-        {A: x[1], Mode: x[2], Y1: y[1], Y2: y[2], Y3: y[3]},
-        include_system=False,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(X2):
+                    out(Y2)
+                out(Y3)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
 
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "T"], "out(Y001)"),
-        _row("", ["", "T:X002"], "out(Y002)"),
-        _row("", ["", "-"], "out(Y003)"),
-        _END_ROW,
+
+def test_branch_local_or_expands_with_click_topology():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3)):
+                    out(Y2)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
+    )
+
+
+def test_branch_local_or_with_series_suffix_stays_mechanical():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3), X4):
+                    out(Y2)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        """,
+    )
+
+
+def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+                with branch(any_of(X2, X3), X4):
+                    out(Y2)
+                out(Y3)
+        """,
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,T:X002,T,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,T:X003,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
+    )
+
+
+def test_branch_with_series_then_local_or_keeps_click_merge_topology():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2, any_of(X3, X4)):
+                    out(Y1)
+                out(Y2)
+        """,
+        """
+        R,X001,T:X002,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,X004,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
+    )
+
+
+def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_visible():
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2, any_of(X3, X4, X5)):
+                    out(Y1)
+                out(Y2)
+        """,
+        """
+        R,X001,T:X002,T:X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,T:X004,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,|,X005,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        """,
     )
 
 
 def test_multiple_instruction_rows_share_powered_path():
-    A = Bool("A")
-    B = Bool("B")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(A, B):
-            out(Y1)
-            latch(Y2)
-            reset(Y3)
-
-    mapping = TagMap(
-        {
-            A: x[1],
-            B: x[2],
-            Y1: y[1],
-            Y2: y[2],
-            Y3: y[3],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001", "X002", "T"], "out(Y001)"),
-        _row("", ["", "", "T"], "latch(Y002)"),
-        _row("", ["", "", "-"], "reset(Y003)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1, X2):
+                out(Y1)
+                latch(Y2)
+                reset(Y3)
+        """,
+        """
+        R,X001,X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(Y002)
+        ,,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(Y003)
+        """,
     )
 
 
 def test_immediate_contact_and_coils_render_canonical_tokens():
-    Start = Bool("Start")
-    Y1 = Bool("Y1")
-    Y2 = Bool("Y2")
-    Y3 = Bool("Y3")
-
-    with Program() as logic:
-        with Rung(immediate(Start)):
-            out(immediate(Y1))
-            latch(immediate(Y2))
-            reset(immediate(Y3))
-
-    mapping = TagMap(
-        {
-            Start: x[1],
-            Y1: y[1],
-            Y2: y[2],
-            Y3: y[3],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["immediate(X001)", "T"], "out(immediate(Y001))"),
-        _row("", ["", "T"], "latch(immediate(Y002))"),
-        _row("", ["", "-"], "reset(immediate(Y003))"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(immediate(X1)):
+                out(immediate(Y1))
+                latch(immediate(Y2))
+                reset(immediate(Y3))
+        """,
+        """
+        R,immediate(X001),T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(immediate(Y001))
+        ,,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,latch(immediate(Y002))
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,reset(immediate(Y003))
+        """,
     )
 
 
@@ -309,83 +373,57 @@ def test_immediate_contiguous_range_renders_compact_token():
     )
     bundle = pyrung_to_ladder(logic, mapping)
 
-    assert bundle.main_rows[1][-1] == "out(immediate(Y001..Y004))"
+    assert normalize_csv(tuple(bundle.main_rows)) == _literal_csv_rows(
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(immediate(Y001..Y004))
+        """
+    )
 
 
 def test_vertical_wire_stack_for_three_or_branches():
-    A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Ready = Bool("Ready")
-    Y = Bool("Y")
-
-    with Program() as logic:
-        with Rung(any_of(A, B, C), Ready):
-            out(Y)
-
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Ready: c[1], Y: y[1]},
-        include_system=False,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(any_of(X1, X2, X3), C1):
+                out(Y1)
+        """,
+        """
+        R,X001,T,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,X002,|
+        ,X003
+        """,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows[1][2] == "T"
-    assert bundle.main_rows[2][2] == "|"
-    assert bundle.main_rows[3][2] == ""
-    assert bundle.main_rows[2][3] == ""
-    assert bundle.main_rows[3][3] == ""
-    assert bundle.main_rows[1][-1] == "out(Y001)"
-    assert bundle.main_rows[2][-1] == ""
-    assert bundle.main_rows[3][-1] == ""
 
 
 def test_builder_pin_rows_are_independent_continuations():
-    Enable = Bool("Enable")
-    Down = Bool("Down")
-    ResetCond = Bool("ResetCond")
-    Done = Bool("Done")
-    Acc = Dint("Acc")
-
-    with Program() as logic:
-        with Rung(Enable):
-            count_up(Done, Acc, preset=5).down(Down).reset(ResetCond)
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Down: x[2],
-            ResetCond: x[3],
-            Done: ct[1],
-            Acc: ctd[1],
-        },
-        include_system=False,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                count_up(CT1, CTD1, preset=5).down(X2).reset(X3)
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,count_up(CT1,CTD1,preset=5)
+        ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.down()
+        ,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()
+        """,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows[1][-1] == "count_up(CT1,CTD1,preset=5)"
-    assert bundle.main_rows[2][-1] == ".down()"
-    assert bundle.main_rows[3][-1] == ".reset()"
-    assert bundle.main_rows[2][1] == "X002"
-    assert bundle.main_rows[3][1] == "X003"
 
 
 def test_forloop_lowers_to_for_body_and_next_rows():
-    Enable = Bool("Enable")
-    Light = Bool("Light")
-
-    with Program() as logic:
-        with Rung(Enable):
-            with forloop(3, oneshot=True):
-                out(Light)
-
-    mapping = TagMap({Enable: x[1], Light: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows[1][-1] == "for(3,oneshot=1)"
-    assert bundle.main_rows[2][0] == "R"
-    assert bundle.main_rows[2][-1] == "out(Y001)"
-    assert bundle.main_rows[3][0] == "R"
-    assert bundle.main_rows[3][-1] == "next()"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                with forloop(3, oneshot=True):
+                    out(Y1)
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,for(3,oneshot=1)
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,next()
+        """,
+    )
 
 
 def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
@@ -407,14 +445,26 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
 
     mapping = TagMap({Start: x[1], SubOut: y[1]}, include_system=False)
     bundle = pyrung_to_ladder(logic, mapping)
-    main_tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-
     assert [name for name, _ in bundle.subroutine_rows] == ["alpha", "beta-two"]
-    assert main_tokens == ['call("beta-two")', 'call("alpha")', "end()"]
+    assert normalize_csv(tuple(bundle.main_rows)) == _literal_csv_rows(
+        """
+        R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,call("beta-two")
+        ,,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,call("alpha")
+        """
+    )
     alpha_rows = dict(bundle.subroutine_rows)["alpha"]
     beta_rows = dict(bundle.subroutine_rows)["beta-two"]
-    assert alpha_rows[-1][-1] == "return()"
-    assert sum(1 for row in beta_rows if row[-1] == "return()") == 1
+    assert normalize_csv(alpha_rows) == _literal_csv_rows(
+        """
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        """
+    )
+    assert normalize_csv(beta_rows) == _literal_csv_rows(
+        """
+        R,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,return()
+        """
+    )
 
     out_dir = tmp_path / "ladder"
     bundle.write(out_dir)
@@ -447,9 +497,11 @@ def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)' in tokens
-    assert 'search(TXT1..TXT4 == "normal",result=DS1,found=C1)' in tokens
-    assert all('\\"' not in token for token in tokens)
+    assert tokens == [
+        'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)',
+        'search(TXT1..TXT4 == "normal",result=DS1,found=C1)',
+        "end()",
+    ]
 
 
 def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_path: Path):
@@ -473,7 +525,12 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
     )
     bundle = pyrung_to_ladder(logic, mapping)
     expected = 'search(TXT1..TXT4 == "sub""name",result=DS1,found=C1)'
-    assert bundle.main_rows[1][-1] == expected
+    expected_rows = _literal_csv_rows(
+        f"""
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,{expected}
+        """
+    )
+    assert normalize_csv(tuple(bundle.main_rows)) == expected_rows
 
     out_dir = tmp_path / "ladder"
     bundle.write(out_dir)
@@ -483,6 +540,8 @@ def test_string_token_csv_roundtrip_requires_only_doubled_quote_unescape(tmp_pat
 
     with (out_dir / "main.csv").open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.reader(handle))
+
+    assert normalize_csv(tuple(tuple(row) for row in rows)) == expected_rows
 
     af_token = rows[1][-1]
     assert af_token == expected
@@ -534,38 +593,27 @@ def test_tokens_include_explicit_defaults_and_oneshot():
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert "out(Y001)" in tokens
-    assert any(token.startswith("copy(") and "oneshot" not in token for token in tokens)
-    assert any(",mode=decimal)" in token for token in tokens if token.startswith("math("))
-    assert any(token.startswith("search(") and "continuous" not in token for token in tokens)
-    assert any(
-        token.startswith("pack_text(") and "allow_whitespace" not in token for token in tokens
-    )
+    assert tokens == [
+        "out(Y001)",
+        "copy(5,DS1)",
+        "math(DS1 + 1,DS2,mode=decimal)",
+        "search(DS10..DS11 == 1,result=DS3,found=C1)",
+        "pack_text(TXT1..TXT2,DS4)",
+        "end()",
+    ]
 
 
 def test_calc_hex_token_uses_inferred_hex_mode():
-    Enable = Bool("Enable")
-    H1 = Block("H1", TagType.WORD, 1, 1)
-    H2 = Block("H2", TagType.WORD, 1, 1)
-    Dest = Block("Dest", TagType.WORD, 1, 1)
-
-    with Program() as logic:
-        with Rung(Enable):
-            calc(H1[1] | H2[1], Dest[1])
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            H1[1]: dh[1],
-            H2[1]: dh[2],
-            Dest[1]: dh[3],
-        },
-        include_system=False,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                calc(DH1 | DH2, DH3)
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,math(DH1 OR DH2,DH3,mode=hex)
+        """,
     )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-
-    assert any(",mode=hex)" in token for token in tokens if token.startswith("math("))
 
 
 def test_calc_token_uses_click_native_operators():
@@ -621,17 +669,20 @@ def test_calc_token_uses_click_native_operators():
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
 
-    assert "math(DS1 ^ 2,DS3,mode=decimal)" in tokens
-    assert "math(DS1 MOD DS2,DS3,mode=decimal)" in tokens
-    assert "math(DS1 + DS2,DS3,mode=decimal)" in tokens
-    assert "math(SQRT(DS1),DS3,mode=decimal)" in tokens
-    assert "math(LSH(DH1,3),DH3,mode=hex)" in tokens
-    assert "math(RSH(DH1,1),DH3,mode=hex)" in tokens
-    assert "math(LSH(DH1,4),DH3,mode=hex)" in tokens
-    assert "math(RSH(DH1,2),DH3,mode=hex)" in tokens
-    assert "math(DH1 AND DH2,DH3,mode=hex)" in tokens
-    assert "math(DH1 OR DH2,DH3,mode=hex)" in tokens
-    assert "math(DH1 XOR DH2,DH3,mode=hex)" in tokens
+    assert tokens == [
+        "math(DS1 ^ 2,DS3,mode=decimal)",
+        "math(DS1 MOD DS2,DS3,mode=decimal)",
+        "math(DS1 + DS2,DS3,mode=decimal)",
+        "math(SQRT(DS1),DS3,mode=decimal)",
+        "math(LSH(DH1,3),DH3,mode=hex)",
+        "math(RSH(DH1,1),DH3,mode=hex)",
+        "math(LSH(DH1,4),DH3,mode=hex)",
+        "math(RSH(DH1,2),DH3,mode=hex)",
+        "math(DH1 AND DH2,DH3,mode=hex)",
+        "math(DH1 OR DH2,DH3,mode=hex)",
+        "math(DH1 XOR DH2,DH3,mode=hex)",
+        "end()",
+    ]
 
 
 def test_calc_math_func_names_use_click_convention():
@@ -682,8 +733,7 @@ def test_calc_math_func_names_use_click_convention():
         )
         bundle = pyrung_to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-        expected_prefix = f"math({click_name}(DF1),"
-        assert any(token.startswith(expected_prefix) for token in tokens), (
+        assert tokens == [f"math({click_name}(DF1),DF2,mode=decimal)", "end()"], (
             f"{func.__name__} should export as {click_name}, tokens={tokens}"
         )
 
@@ -711,7 +761,18 @@ def test_mixed_family_calc_fails_precheck_with_calc_mode_mixed_code():
     with pytest.raises(LadderExportError) as exc_info:
         pyrung_to_ladder(logic, mapping)
 
-    assert any("CLK_CALC_MODE_MIXED" in str(issue["message"]) for issue in exc_info.value.issues)
+    assert list(exc_info.value.issues) == [
+        {
+            "path": "main.rung[0].instruction[0](CalcInstruction).instruction.expression",
+            "message": (
+                "CLK_CALC_MODE_MIXED: calc() mixes WORD (hex-family) and non-WORD "
+                "(decimal-family) operands at "
+                "main.rung[0].instruction[0](CalcInstruction).instruction.expression."
+            ),
+            "source_file": None,
+            "source_line": None,
+        }
+    ]
 
 
 def test_tokens_cover_remaining_instruction_families_and_pin_rows():
@@ -889,10 +950,6 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         "end()",
     ]
 
-    assert ".clock()" in tokens
-    assert ".jump(DS10)" in tokens
-    assert ".jog()" in tokens
-
 
 def test_precheck_and_issue_payload():
     A = Int("A")
@@ -907,9 +964,17 @@ def test_precheck_and_issue_payload():
     with pytest.raises(LadderExportError) as exc_info:
         pyrung_to_ladder(logic, mapping)
 
-    issue = exc_info.value.issues[0]
-    assert "main.rung[0]" in str(issue["path"])
-    assert issue["source_file"] is None
+    assert list(exc_info.value.issues) == [
+        {
+            "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
+            "message": (
+                "CLK_EXPR_ONLY_IN_CALC: Expression used outside calc instruction at "
+                "main.rung[0].instruction[0](CopyInstruction).instruction.source."
+            ),
+            "source_file": None,
+            "source_line": None,
+        }
+    ]
 
 
 def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
@@ -934,8 +999,18 @@ def test_immediate_non_contiguous_range_fails_with_explicit_diagnostic():
     with pytest.raises(LadderExportError) as exc_info:
         pyrung_to_ladder(logic, mapping)
 
-    issue = exc_info.value.issues[0]
-    assert "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS" in str(issue["message"])
+    assert list(exc_info.value.issues) == [
+        {
+            "path": "main.rung[0].instruction[0](OutInstruction).instruction.target",
+            "message": (
+                "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS: Immediate coil range must map to "
+                "contiguous addresses at "
+                "main.rung[0].instruction[0](OutInstruction).instruction.target."
+            ),
+            "source_file": None,
+            "source_line": None,
+        }
+    ]
 
 
 def test_immediate_in_copy_fails_with_context_diagnostic():
@@ -959,8 +1034,15 @@ def test_immediate_in_copy_fails_with_context_diagnostic():
     with pytest.raises(LadderExportError) as exc_info:
         pyrung_to_ladder(logic, mapping)
 
-    issue = exc_info.value.issues[0]
-    assert "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED" in str(issue["message"])
+    assert exc_info.value.issues[0] == {
+        "path": "main.rung[0].instruction[0](CopyInstruction).instruction.source",
+        "message": (
+            "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED: Immediate wrapper is not allowed at "
+            "main.rung[0].instruction[0](CopyInstruction).instruction.source."
+        ),
+        "source_file": None,
+        "source_line": None,
+    }
 
 
 def test_nested_subroutine_call_issue_includes_source_location():
@@ -985,70 +1067,57 @@ def test_nested_subroutine_call_issue_includes_source_location():
         pyrung_to_ladder(logic, mapping)
 
     issue = exc_info.value.issues[0]
-    assert "subroutine[outer]" in str(issue["path"])
-    assert issue["source_file"] is not None
-    assert issue["source_line"] is not None
+    assert issue["path"] == "subroutine[outer].rung[0].instruction[0](CallInstruction)"
+    assert issue["message"] == "Nested subroutine calls are not supported for Click export."
+    assert isinstance(issue["source_file"], str)
+    assert Path(issue["source_file"]).samefile(__file__)
+    assert isinstance(issue["source_line"], int)
 
 
 # --- Rung comment rows ---
 
 
 def test_comment_single_line():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        comment("Turn on B when A is true.")
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        ("#", "Turn on B when A is true."),
-        _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            comment("Turn on B when A is true.")
+            with Rung(X1):
+                out(Y1)
+        """,
+        """
+        #,Turn on B when A is true.
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_comment_multi_line():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        comment("Line one.\nLine two.")
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        ("#", "Line one."),
-        ("#", "Line two."),
-        _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            comment("Line one.\\nLine two.")
+            with Rung(X1):
+                out(Y1)
+        """,
+        """
+        #,Line one.
+        #,Line two.
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
 def test_no_comment_no_extra_rows():
-    A = Bool("A")
-    B = Bool("B")
-
-    with Program() as logic:
-        with Rung(A):
-            out(B)
-
-    mapping = TagMap({A: x[1], B: y[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (
-        _header(),
-        _row("R", ["X001"], "out(Y001)"),
-        _END_ROW,
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                out(Y1)
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        """,
     )
 
 
@@ -1074,20 +1143,24 @@ def test_comment_with_branches():
     assert bundle.main_rows[2][0] == "R"
 
 
-def test_comment_not_emitted_for_empty_branches():
-    A = Bool("A")
-    Mode = Bool("Mode")
+def test_empty_branch_comment_fails_round_trip_validation():
+    logic, mapping = build_program("""
+        with Program() as p:
+            comment("No rows should be emitted.")
+            with Rung(X1):
+                with branch(C1):
+                    pass
+    """)
 
-    with Program() as logic:
-        comment("No rows should be emitted.")
-        with Rung(A):
-            with branch(Mode):
-                pass
+    with pytest.raises(LadderExportError) as exc_info:
+        pyrung_to_ladder(logic, mapping)
 
-    mapping = TagMap({A: x[1], Mode: c[1]}, include_system=False)
-    bundle = pyrung_to_ladder(logic, mapping)
-
-    assert bundle.main_rows == (_header(), _END_ROW)
+    issue = exc_info.value.issues[0]
+    assert issue["path"] == "main"
+    assert issue["message"] == (
+        "CSV round-trip validation failed: comment sequence mismatch: "
+        "expected ['No rows should be emitted.'], got []"
+    )
 
 
 # --- Native topology golden suite (source: tests/fixtures/click_or_topology.csv) ---
@@ -1289,8 +1362,9 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     expected = (
-        _row("R", ["X001", "T:X002", "-", "-", "T:X003"], "out(Y001)"),
-        _blank_row("", ["", "C1", "C2", "C3"]),
+        _row("R", ["X001", "T:X002", "-", "-", "T"], "out(Y001)"),
+        _blank_row("", ["", "T:C1", "C2", "C3", "|"]),
+        _blank_row("", ["", "X003", "-", "-"]),
     )
     _assert_native_pattern(pattern_id=6, bundle_rows=bundle.main_rows, expected_rows=expected)
 
@@ -1368,7 +1442,7 @@ def test_calc_sum_expr_renders_colon_range():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert any("SUM ( DH1 : DH5 )" in token for token in tokens), f"tokens={tokens}"
+    assert tokens == ["math(SUM ( DH1 : DH5 ),DH100,mode=hex)", "end()"]
 
 
 def test_calc_sum_expr_hex_mode():
@@ -1387,7 +1461,7 @@ def test_calc_sum_expr_hex_mode():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert any("mode=hex" in token for token in tokens), f"tokens={tokens}"
+    assert tokens == ["math(SUM ( DH1 : DH3 ),DH100,mode=hex)", "end()"]
 
 
 def test_calc_sum_expr_decimal_mode():
@@ -1406,7 +1480,7 @@ def test_calc_sum_expr_decimal_mode():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert any("mode=decimal" in token for token in tokens), f"tokens={tokens}"
+    assert tokens == ["math(SUM ( DS1 : DS5 ),DS100,mode=decimal)", "end()"]
 
 
 # ---- ExportSummary tests ----
@@ -1429,9 +1503,9 @@ def test_summary_includes_calc_rename():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
-    assert ("calc", "math") in s.renames
+    assert s.renames == (("calc", "math"),)
     assert s.added_end is True
-    assert "calc \u2192 math" in s.summary()
+    assert s.summary() == "Renamed: calc \u2192 math\nAdded:   end() on main"
 
 
 def test_summary_omits_calc_rename_when_unused():
@@ -1449,8 +1523,8 @@ def test_summary_omits_calc_rename_when_unused():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
-    assert ("calc", "math") not in s.renames
-    assert "calc" not in s.summary()
+    assert s.renames == ()
+    assert s.summary() == "Added:   end() on main"
 
 
 def test_summary_counts_forloop_next():
@@ -1473,8 +1547,11 @@ def test_summary_counts_forloop_next():
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
     assert s.added_next == 2
-    assert ("forloop", "for") in s.renames
-    assert "next() closing 2 for-loops" in s.summary()
+    assert s.renames == (("forloop", "for"),)
+    assert (
+        s.summary()
+        == "Renamed: forloop \u2192 for\nAdded:   next() closing 2 for-loops, end() on main"
+    )
 
 
 def test_summary_counts_subroutine_return():
@@ -1496,7 +1573,7 @@ def test_summary_counts_subroutine_return():
     bundle = pyrung_to_ladder(logic, mapping)
     s = bundle.export_summary
     assert s.added_return == 1
-    assert "return() on 1 subroutine" in s.summary()
+    assert s.summary() == "Added:   return() on 1 subroutine, end() on main"
 
 
 def test_summary_return_not_counted_when_explicit():
@@ -1537,7 +1614,7 @@ def test_summary_end_always_present():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     assert bundle.export_summary.added_end is True
-    assert "end() on main" in bundle.export_summary.summary()
+    assert bundle.export_summary.summary() == "Added:   end() on main"
 
 
 def test_summary_str_format():
@@ -1564,388 +1641,231 @@ def test_summary_str_format():
         include_system=False,
     )
     bundle = pyrung_to_ladder(logic, mapping)
-    text = str(bundle.export_summary)
-    lines = text.split("\n")
-    assert len(lines) == 2
-    assert lines[0].startswith("Renamed:")
-    assert lines[1].startswith("Added:")
+    assert str(bundle.export_summary) == (
+        "Renamed: calc \u2192 math, forloop \u2192 for\n"
+        "Added:   next() closing 1 for-loop, return() on 1 subroutine, end() on main"
+    )
 
 
 def test_send_rtu_target_token():
-    """Send with ModbusRtuTarget renders com_port and device_id."""
-    Enable = Bool("Enable")
-    Source = Int("Source")
-    Sending = Bool("Sending")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1")
-
-    with Program() as logic:
-        with Rung(Enable):
-            send(
-                target=target,
-                remote_start="DS1",
-                source=Source,
-                sending=Sending,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Source: ds[1],
-            Sending: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'send(target=ModbusRtuTarget(name="vfd1",com_port="slot0_1",device_id=5),'
-        'remote_start="DS1",source=DS1,sending=C1,success=C2,error=C3,'
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                send(
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1"),
+                    remote_start="DS1",
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,send(target=ModbusRtuTarget(name="vfd1",com_port="slot0_1",device_id=5),remote_start="DS1",source=DS1,sending=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_receive_rtu_target_token():
-    """Receive with ModbusRtuTarget renders com_port and device_id."""
-    Enable = Bool("Enable")
-    Dest = Int("Dest")
-    Receiving = Bool("Receiving")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=3, com_port="cpu2")
-
-    with Program() as logic:
-        with Rung(Enable):
-            receive(
-                target=target,
-                remote_start="DS1",
-                dest=Dest,
-                receiving=Receiving,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Dest: ds[1],
-            Receiving: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'receive(target=ModbusRtuTarget(name="vfd1",com_port="cpu2",device_id=3),'
-        'remote_start="DS1",dest=DS1,receiving=C1,success=C2,error=C3,'
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=3, com_port="cpu2"),
+                    remote_start="DS1",
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusRtuTarget(name="vfd1",com_port="cpu2",device_id=3),remote_start="DS1",dest=DS1,receiving=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_send_modbus_address_token():
-    """Send with ModbusAddress remote_start renders address and register_type."""
-    Enable = Bool("Enable")
-    Source = Int("Source")
-    Sending = Bool("Sending")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusTcpTarget("plc2", "192.168.1.2", device_id=1)
-
-    with Program() as logic:
-        with Rung(Enable):
-            send(
-                target=target,
-                remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                source=Source,
-                sending=Sending,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Source: ds[1],
-            Sending: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        "remote_start=ModbusAddress(address=400001),"
-        "source=DS1,sending=C1,success=C2,error=C3,"
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                send(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
+                    remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start=ModbusAddress(address=400001),source=DS1,sending=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_receive_modbus_address_token():
-    """Receive with ModbusAddress remote_start renders address and register_type."""
-    Enable = Bool("Enable")
-    Dest = Int("Dest")
-    Receiving = Bool("Receiving")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusTcpTarget("plc2", "192.168.1.2", device_id=1)
-
-    with Program() as logic:
-        with Rung(Enable):
-            receive(
-                target=target,
-                remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                dest=Dest,
-                receiving=Receiving,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Dest: ds[1],
-            Receiving: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        "remote_start=ModbusAddress(address=400001),"
-        "dest=DS1,receiving=C1,success=C2,error=C3,"
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2", device_id=1),
+                    remote_start=ModbusAddress(0, RegisterType.HOLDING),
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start=ModbusAddress(address=400001),dest=DS1,receiving=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_send_rtu_modbus_address_token():
-    """Send with ModbusRtuTarget and ModbusAddress remote_start."""
-    Enable = Bool("Enable")
-    Source = Int("Source")
-    Sending = Bool("Sending")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-    with Program() as logic:
-        with Rung(Enable):
-            send(
-                target=target,
-                remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                source=Source,
-                sending=Sending,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Source: ds[1],
-            Sending: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'send(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
-        "remote_start=ModbusAddress(address=400101),"
-        "source=DS1,sending=C1,success=C2,error=C3,"
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                send(
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
+                    remote_start=ModbusAddress(100, RegisterType.HOLDING),
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,send(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),remote_start=ModbusAddress(address=400101),source=DS1,sending=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_receive_rtu_modbus_address_token():
-    """Receive with ModbusRtuTarget and ModbusAddress remote_start."""
-    Enable = Bool("Enable")
-    Dest = Int("Dest")
-    Receiving = Bool("Receiving")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-    with Program() as logic:
-        with Rung(Enable):
-            receive(
-                target=target,
-                remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                dest=Dest,
-                receiving=Receiving,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Dest: ds[1],
-            Receiving: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[2],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'receive(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),'
-        "remote_start=ModbusAddress(address=400101),"
-        "dest=DS1,receiving=C1,success=C2,error=C3,"
-        "exception_response=DS2)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
+                    remote_start=ModbusAddress(100, RegisterType.HOLDING),
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusRtuTarget(name="vfd1",com_port="slot1_2",device_id=2),remote_start=ModbusAddress(address=400101),dest=DS1,receiving=C1,success=C2,error=C3,exception_response=DS2)
+        """,
     )
 
 
 def test_send_block_range_token():
-    """Send with BlockRange source renders compact DS1..DS3 range."""
-    Enable = Bool("Enable")
-    Source = Block("Source", TagType.INT, 1, 3)
-    Sending = Bool("Sending")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-    with Program() as logic:
-        with Rung(Enable):
-            send(
-                target=target,
-                remote_start="DS1",
-                source=Source.select(1, 3),
-                sending=Sending,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Source: ds.select(1, 3),
-            Sending: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[4],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        'remote_start="DS1",source=DS1..DS3,sending=C1,success=C2,error=C3,'
-        "exception_response=DS4)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                send(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
+                    remote_start="DS1",
+                    source=DS1..DS3,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start="DS1",source=DS1..DS3,sending=C1,success=C2,error=C3,exception_response=DS4)
+        """,
     )
 
 
 def test_receive_block_range_token():
-    """Receive with BlockRange dest renders compact DS1..DS3 range."""
-    Enable = Bool("Enable")
-    Dest = Block("Dest", TagType.INT, 1, 3)
-    Receiving = Bool("Receiving")
-    Success = Bool("Success")
-    Error = Bool("Error")
-    ExCode = Int("ExCode")
-
-    target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-    with Program() as logic:
-        with Rung(Enable):
-            receive(
-                target=target,
-                remote_start="DS1",
-                dest=Dest.select(1, 3),
-                receiving=Receiving,
-                success=Success,
-                error=Error,
-                exception_response=ExCode,
-            )
-
-    mapping = TagMap(
-        {
-            Enable: x[1],
-            Dest: ds.select(1, 3),
-            Receiving: c[1],
-            Success: c[2],
-            Error: c[3],
-            ExCode: ds[4],
-        },
-        include_system=False,
-    )
-    bundle = pyrung_to_ladder(logic, mapping)
-    tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1] != ""]
-    assert tokens[0] == (
-        'receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),'
-        'remote_start="DS1",dest=DS1..DS3,receiving=C1,success=C2,error=C3,'
-        "exception_response=DS4)"
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                receive(
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
+                    remote_start="DS1",
+                    dest=DS1..DS3,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
+                )
+        """,
+        """
+        R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,receive(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start="DS1",dest=DS1..DS3,receiving=C1,success=C2,error=C3,exception_response=DS4)
+        """,
     )
 
 
-# --- Nested branch export rejection ---
+# --- Nested branch export ---
 
 
-def test_nested_branch_export_raises_clear_error():
-    """Nested branches produce a clear LadderExportError, not a generic failure."""
+def test_nested_branch_export_pushes_later_siblings_down():
+    """Nested branches keep source order and push later siblings below the nested block."""
+    _assert_export_main_rows(
+        """
+        with Program() as p:
+            with Rung(X1):
+                with branch(X2):
+                    out(Y1)
+                    with branch(X3):
+                        out(Y2)
+                with branch(X4):
+                    out(Y3)
+        """,
+        """
+        R,X001,T:X002,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+        ,,|,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+        ,,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+        """,
+    )
+
+
+def test_branch_rendered_height_over_32_rows_raises_clear_error():
     A = Bool("A")
-    B = Bool("B")
-    C = Bool("C")
-    Light = Bool("Light")
+    conditions = [Bool(f"C{i}") for i in range(1, 33)]
+    outputs = [Bool(f"O{i}") for i in range(1, 34)]
 
-    with Program() as logic:
+    with Program(strict=False) as logic:
         with Rung(A):
-            with branch(B):
-                with branch(C):
-                    out(Light)
+            out(outputs[0])
+            for condition, out_tag in zip(conditions, outputs[1:], strict=True):
+                with branch(condition):
+                    out(out_tag)
 
-    mapping = TagMap(
-        {A: x[1], B: x[2], C: x[3], Light: y[1]},
-        include_system=False,
-    )
+    mapping: dict[Tag | Block, Tag | BlockRange] = {A: x[1]}
+    for idx, condition in enumerate(conditions, start=1):
+        mapping[condition] = c[idx]
+    for idx, out_tag in enumerate(outputs, start=100):
+        mapping[out_tag] = c[idx]
 
     with pytest.raises(LadderExportError) as exc_info:
-        pyrung_to_ladder(logic, mapping)
+        pyrung_to_ladder(logic, TagMap(mapping, include_system=False))
 
     issue = exc_info.value.issues[0]
-    assert "Nested branch" in str(issue["message"])
-    assert "branch" in str(issue["path"])
+    assert issue["path"] == "main.rung[0]"
+    assert issue["message"] == "Rendered rung exceeds Click's 32-row limit."
+    assert isinstance(issue["source_file"], str)
+    assert Path(issue["source_file"]).samefile(__file__)
+    assert isinstance(issue["source_line"], int)
 
 
 # ---------------------------------------------------------------------------
@@ -1958,94 +1878,51 @@ class TestContinuedExport:
 
     def test_continued_rung_blank_marker(self):
         """Continued rung rows use blank marker instead of R."""
-        A = Bool("A")
-        B = Bool("B")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_export_main_rows(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+            """,
+            """
+            R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            """,
         )
-        bundle = pyrung_to_ladder(logic, mapping)
-
-        # Find data rows (skip header)
-        data_rows = bundle.main_rows[1:]
-
-        # First rung starts with "R"
-        r_markers = [row[0] for row in data_rows]
-
-        # Should have exactly one "R" (for the primary rung) before the end() rung
-        # and blank markers for continued rows.
-        # The end() rung also has "R".
-        assert r_markers.count("R") == 2  # primary rung + end()
-
-        # The continued rung's row should have blank marker
-        # Find the row with out(Y002) — it should NOT have "R" marker
-        y2_rows = [row for row in data_rows if row[-1] == "out(Y002)"]
-        assert len(y2_rows) == 1
-        assert y2_rows[0][0] == ""  # blank marker
 
     def test_continued_after_branch(self):
         """Continuation after a rung with branches."""
-        A = Bool("A")
-        B = Bool("B")
-        Mode = Bool("Mode")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(Mode):
-                    out(Y2)
-            with Rung(B).continued():
-                out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Mode: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
+        _assert_export_main_rows(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X3):
+                        out(Y2)
+                with Rung(X2).continued():
+                    out(Y3)
+            """,
+            """
+            R,X001,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,,X003,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            ,X002,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y003)
+            """,
         )
-        bundle = pyrung_to_ladder(logic, mapping)
-
-        # The continued rung's row should have blank marker
-        data_rows = bundle.main_rows[1:]
-        y3_rows = [row for row in data_rows if row[-1] == "out(Y003)"]
-        assert len(y3_rows) == 1
-        assert y3_rows[0][0] == ""
 
     def test_continued_with_own_conditions(self):
         """Continued rung with its own conditions exports correctly."""
-        A = Bool("A")
-        B = Bool("B")
-        Ready = Bool("Ready")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B, Ready).continued():
-                out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Ready: c[1], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_export_main_rows(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2, C1).continued():
+                    out(Y2)
+            """,
+            """
+            R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
+            ,X002,C1,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y002)
+            """,
         )
-        bundle = pyrung_to_ladder(logic, mapping)
-
-        data_rows = bundle.main_rows[1:]
-        y2_rows = [row for row in data_rows if row[-1] == "out(Y002)"]
-        assert len(y2_rows) == 1
-        assert y2_rows[0][0] == ""  # blank marker
-        # Conditions (B=X002, Ready=C001) should appear in the row
-        row_cells = y2_rows[0][1:-1]
-        assert "X002" in row_cells
-        assert "C1" in row_cells

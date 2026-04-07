@@ -164,6 +164,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "integration: networked or multi-process integration test",
+    "hypothesis: property-based tests (slower, run separately)",
 ]
 testpaths = [
     "src",

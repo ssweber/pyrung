@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 # ---------------------------------------------------------------------------
 # Phase 1: Parse CSV → Raw Rungs
@@ -35,32 +36,19 @@ class _PinInfo:
     name: str  # "reset", "down", "clock", "jump", "jog"
     arg: str  # "" or the argument inside parens
     conditions: list[str]  # condition tokens on this row
+    condition_tree: SPNode | None = None  # SP tree (overrides flat conditions)
 
 
-@dataclass
-class Leaf:
-    """A single condition token in the SP tree."""
-
-    label: str
-    row: int = 0
-    col: int = 0
+from pyrung.click._topology import SPNode
 
 
-@dataclass
-class Series:
-    """AND: children evaluated left-to-right."""
+class RungRole(Enum):
+    """Role of a rung within a for/next block."""
 
-    children: list[Leaf | Series | Parallel]
-
-
-@dataclass
-class Parallel:
-    """OR: children evaluated top-to-bottom."""
-
-    children: list[Leaf | Series | Parallel]
-
-
-SPNode = Leaf | Series | Parallel
+    NORMAL = auto()
+    FORLOOP_START = auto()
+    FORLOOP_BODY = auto()
+    FORLOOP_NEXT = auto()
 
 
 @dataclass
@@ -79,9 +67,7 @@ class _AnalyzedRung:
     comment: str | None
     condition_tree: SPNode | None  # shared conditions (SP tree)
     instructions: list[_InstructionInfo]
-    is_forloop_start: bool = False
-    is_forloop_body: bool = False
-    is_forloop_next: bool = False
+    role: RungRole = RungRole.NORMAL
     is_continued: bool = False
 
 

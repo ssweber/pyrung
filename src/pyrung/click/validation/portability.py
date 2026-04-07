@@ -5,27 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.expression import (
-    AbsExpr,
-    AddExpr,
-    AndExpr,
-    DivExpr,
+    BinaryExpr,
     Expression,
-    FloorDivExpr,
-    InvertExpr,
     LiteralExpr,
-    LShiftExpr,
     MathFuncExpr,
-    ModExpr,
-    MulExpr,
-    NegExpr,
-    OrExpr,
-    PosExpr,
-    PowExpr,
-    RShiftExpr,
     ShiftFuncExpr,
-    SubExpr,
     TagExpr,
-    XorExpr,
+    UnaryExpr,
 )
 from pyrung.core.instruction.calc import CalcMode, infer_calc_mode
 from pyrung.core.memory_block import BlockRange
@@ -398,8 +384,8 @@ def _evaluate_immediate_usage(
 
 
 def _expr_contains_floor_div(expr: Any) -> bool:
-    """Return True if the expression tree contains a FloorDivExpr node."""
-    if isinstance(expr, FloorDivExpr):
+    """Return True if the expression tree contains a floor-division node."""
+    if isinstance(expr, BinaryExpr) and expr.symbol == "//":
         return True
     if isinstance(expr, Expression):
         return any(_expr_contains_floor_div(v) for v in vars(expr).values())
@@ -412,21 +398,6 @@ def _expr_contains_floor_div(expr: Any) -> bool:
 # The translator wraps binary sub-expressions of binary/unary-prefix nodes in
 # explicit parens, and function calls (SQRT, LSH, abs, …) each add one paren
 # level.  This mirrors the rendered Click formula string.
-
-_BINARY_EXPR_TYPES: tuple[type[Expression], ...] = (
-    AddExpr,
-    SubExpr,
-    MulExpr,
-    DivExpr,
-    FloorDivExpr,
-    ModExpr,
-    PowExpr,
-    AndExpr,
-    OrExpr,
-    XorExpr,
-)
-
-_UNARY_PREFIX_TYPES: tuple[type[Expression], ...] = (NegExpr, PosExpr, InvertExpr)
 
 # Maximum parenthetical nesting the Click formula pad accepts.
 _CLICK_MAX_PAREN_DEPTH = 8
@@ -441,32 +412,35 @@ def _expr_paren_depth(expr: Any) -> int:
     if isinstance(expr, (TagExpr, LiteralExpr)):
         return 0
 
-    # Function calls: FUNC(args) — one paren level
-    if isinstance(expr, (ShiftFuncExpr, LShiftExpr, RShiftExpr)):
-        if isinstance(expr, ShiftFuncExpr):
-            return max(_expr_paren_depth(expr.value), _expr_paren_depth(expr.count)) + 1
-        return max(_expr_paren_depth(expr.left), _expr_paren_depth(expr.right)) + 1
+    # ShiftFuncExpr: FUNC(val, cnt) — one paren level
+    if isinstance(expr, ShiftFuncExpr):
+        return max(_expr_paren_depth(expr.value), _expr_paren_depth(expr.count)) + 1
 
+    # MathFuncExpr: FUNC(operand) — one paren level
     if isinstance(expr, MathFuncExpr):
         return _expr_paren_depth(expr.operand) + 1
 
-    if isinstance(expr, AbsExpr):
-        return _expr_paren_depth(expr.operand) + 1
-
-    # Unary prefix: parens added only when operand is a binary expression
-    if isinstance(expr, _UNARY_PREFIX_TYPES):
+    # Unary expressions
+    if isinstance(expr, UnaryExpr):
         child_depth = _expr_paren_depth(expr.operand)
-        if isinstance(expr.operand, _BINARY_EXPR_TYPES):
+        # abs is a function call — always adds a paren level
+        if expr.symbol == "abs":
+            return child_depth + 1
+        # Prefix unary: parens added only when operand is binary
+        if isinstance(expr.operand, BinaryExpr):
             return child_depth + 1
         return child_depth
 
-    # Binary operators: parens added around each child that is itself binary
-    if isinstance(expr, _BINARY_EXPR_TYPES):
+    # Binary operators (including << >> which render as Click shift functions)
+    if isinstance(expr, BinaryExpr):
+        # << and >> render as LSH/RSH function calls — one paren level
+        if expr.symbol in ("<<", ">>"):
+            return max(_expr_paren_depth(expr.left), _expr_paren_depth(expr.right)) + 1
         left_depth = _expr_paren_depth(expr.left)
-        if isinstance(expr.left, _BINARY_EXPR_TYPES):
+        if isinstance(expr.left, BinaryExpr):
             left_depth += 1
         right_depth = _expr_paren_depth(expr.right)
-        if isinstance(expr.right, _BINARY_EXPR_TYPES):
+        if isinstance(expr.right, BinaryExpr):
             right_depth += 1
         return max(left_depth, right_depth)
 
@@ -477,28 +451,22 @@ def _expr_paren_depth(expr: Any) -> int:
 #   decimal: +, -, *, /, MOD, ^, SUM, SIN, ASIN, COS, ACOS, TAN, ATAN, SQRT, LOG, LN, RAD, DEG, PI
 #   hex:     +, -, *, /, MOD, SUM, AND, OR, XOR, LSH, RSH, LRO, RRO
 
-_DECIMAL_ONLY_EXPR_TYPES: tuple[type[Expression], ...] = (PowExpr,)
+_DECIMAL_ONLY_SYMBOLS = frozenset({"**"})
 _DECIMAL_ONLY_MATH_FUNCS = frozenset(
     {"sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "radians", "degrees", "log10", "log"}
 )
 
-_HEX_ONLY_EXPR_TYPES: tuple[type[Expression], ...] = (
-    AndExpr,
-    OrExpr,
-    XorExpr,
-    LShiftExpr,
-    RShiftExpr,
-)
+_HEX_ONLY_SYMBOLS = frozenset({"&", "|", "^", "<<", ">>"})
 _HEX_ONLY_SHIFT_FUNCS = frozenset({"lsh", "rsh", "lro", "rro"})
 
 # Click name for human-readable messages
-_CLICK_OP_NAME: dict[type[Expression], str] = {
-    PowExpr: "^ (power)",
-    AndExpr: "AND",
-    OrExpr: "OR",
-    XorExpr: "XOR",
-    LShiftExpr: "LSH",
-    RShiftExpr: "RSH",
+_CLICK_OP_NAME: dict[str, str] = {
+    "**": "^ (power)",
+    "&": "AND",
+    "|": "OR",
+    "^": "XOR",
+    "<<": "LSH",
+    ">>": "RSH",
 }
 
 
@@ -520,15 +488,16 @@ def _walk_mode_violations(
     if not isinstance(expr, Expression):
         return
 
-    if calc_mode == "decimal":
-        if isinstance(expr, _HEX_ONLY_EXPR_TYPES):
-            violations.append(_CLICK_OP_NAME.get(type(expr), type(expr).__name__))
-        if isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
+    if isinstance(expr, BinaryExpr):
+        if calc_mode == "decimal" and expr.symbol in _HEX_ONLY_SYMBOLS:
+            violations.append(_CLICK_OP_NAME.get(expr.symbol, expr.symbol))
+        elif calc_mode == "hex" and expr.symbol in _DECIMAL_ONLY_SYMBOLS:
+            violations.append(_CLICK_OP_NAME.get(expr.symbol, expr.symbol))
+    if isinstance(expr, ShiftFuncExpr) and expr.name in _HEX_ONLY_SHIFT_FUNCS:
+        if calc_mode == "decimal":
             violations.append(expr.name.upper())
-    elif calc_mode == "hex":
-        if isinstance(expr, _DECIMAL_ONLY_EXPR_TYPES):
-            violations.append(_CLICK_OP_NAME.get(type(expr), type(expr).__name__))
-        if isinstance(expr, MathFuncExpr) and expr.name in _DECIMAL_ONLY_MATH_FUNCS:
+    if isinstance(expr, MathFuncExpr) and expr.name in _DECIMAL_ONLY_MATH_FUNCS:
+        if calc_mode == "hex":
             from pyrung.click.ladder.translator import _MATH_FUNC_CLICK_NAME
 
             violations.append(_MATH_FUNC_CLICK_NAME.get(expr.name, expr.name.upper()))

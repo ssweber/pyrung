@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check
+.PHONY: default install lint test test-hypothesis test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check
 
 default: install verify
 
@@ -15,12 +15,15 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration"
+	uv run pytest -m "not integration and not hypothesis"
+
+test-hypothesis:
+	uv run pytest -m hypothesis
 
 test-integration:
 	uv run pytest -m integration
 
-verify: lint test docs-check
+verify: lint test test-hypothesis docs-check
 
 upgrade:
 	uv lock --upgrade

@@ -1,9 +1,9 @@
 # pyrung
 
-**Write ladder logic in Python. Simulate it. Test it. Deploy it.**
+**Ladder logic in Python that reads like ladder, scans like a PLC, and deploys to real hardware.**
 
 ```python
-from pyrung import Bool, PLCRunner, Program, Rung, TimeMode, out
+from pyrung import Bool, PLCRunner, Program, Rung, out
 
 Button = Bool("Button")
 Light  = Bool("Light")
@@ -13,12 +13,14 @@ with Program() as logic:
         out(Light)
 
 runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-runner.patch({"Button": True})
-runner.step()
-
-print(runner.current_state.tags["Light"])  # True
+with runner.active():
+    Button.value = True
+    runner.step()
+    assert Light.value is True
 ```
+
+- LLM docs index: https://ssweber.github.io/pyrung/llms.txt
+- New to ladder logic? [Know Python? Learn Ladder Logic.](learn/index.md)
 
 ## What it does
 
@@ -26,7 +28,9 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **For controls engineers:** Write and simulate Click PLC logic without hardware or proprietary software. Use plain tag names from day one. Add hardware addresses when you're ready. A validator checks your program against Click constraints and tells you exactly what to fix.
 
-**For developers:** VS Code becomes your PLC programming environment — step through scans, set breakpoints on rungs, watch tags update inline, and force overrides from the debug console. For the adventurous: the same program can generate a deployable CircuitPython `while True` scan loop for a P1AM-200 microcontroller.
+**For developers:** VS Code becomes your PLC programming environment — step through scans, set breakpoints on rungs, watch tags update inline, and force overrides from the debug console.
+
+**For makers and P1AM-200 users:** The same program can generate a deployable CircuitPython scan loop with built-in ladder instructions, Modbus TCP, and SD card persistence — no plumbing required.
 
 ## How it works
 

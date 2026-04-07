@@ -294,12 +294,32 @@ For UDTs (mixed-type structures) and advanced options like stride, cloning, and 
 
 ## Common patterns
 
-### First-order filter (exponential smoothing)
+### EMA filter (exponential moving average)
+
+Formula:
+
+```python
+Avg = Avg + (Raw - Avg) * (FilterFactor / 10)
+```
+
+In pyrung:
 
 ```python
 with Rung(rise(system.sys.clock_500ms)):
-    calc((RawValue - Filtered) * (FilterFactor / 10) + Filtered, Filtered)
+    calc(Avg + (Raw - Avg) * (FilterFactor / 10), Avg)
 ```
+
+`FilterFactor` range: `1-9`
+
+- Low (`1-3`): heavy smoothing, slow response, best for noisy signals
+- Mid (`4-6`): balanced smoothing and response
+- High (`7-9`): light smoothing, fast response, best for clean signals
+
+Adjust `FilterFactor` based on:
+
+- Sensor noise level
+- Required response time
+- Process stability needs
 
 ### Oneshot on first scan
 

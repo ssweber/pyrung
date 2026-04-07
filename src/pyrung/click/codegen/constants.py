@@ -106,7 +106,9 @@ _COPY_CONVERTERS = {"to_value", "to_ascii", "to_text", "to_binary"}
 
 _ADJACENCY: dict[str, tuple[str, ...]] = {
     "-": ("left", "right"),
-    "|": ("up", "down"),
+    # Click's "|" column accepts power from the left into the vertical bus,
+    # but it must not pass through to the right.
+    "|": ("left", "up", "down"),
     "T": ("left", "right", "down"),
 }
 

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
+pytestmark = pytest.mark.hypothesis
+
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import TagMap, ds, ladder_to_pyrung, pyrung_to_ladder, x
-from pyrung.core import Bool, Int, Program, Rung, TagType
+from pyrung.core import Bool, Program, Rung, TagType
 from pyrung.core.program import copy
 from pyrung.core.structure import _FieldSpec, _NamedArrayRuntime
 
@@ -97,8 +101,7 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
     # Assertion 2: map_to range has exactly count * stride addresses
     select_match = re.search(r"Arr\.map_to\(ds\.select\((\d+),\s*(\d+)\)\)", code)
     assert select_match is not None, (
-        f"Expected Arr.map_to(ds.select(...)) in generated code.\n"
-        f"Generated code:\n{code}"
+        f"Expected Arr.map_to(ds.select(...)) in generated code.\nGenerated code:\n{code}"
     )
     sel_start, sel_end = int(select_match.group(1)), int(select_match.group(2))
     actual_span = sel_end - sel_start + 1

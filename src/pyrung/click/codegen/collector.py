@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pyclickplc.addresses import format_address_display
 
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode
 from pyrung.click.codegen.constants import (
     _COMPARE_RE,
     _CONDITION_WRAPPERS,
@@ -16,10 +17,7 @@ from pyrung.click.codegen.constants import (
     _TIME_UNITS,
 )
 from pyrung.click.codegen.models import (
-    Leaf,
-    Parallel,
-    Series,
-    SPNode,
+    RungRole,
     _AnalyzedRung,
     _BlockSlotDecl,
     _FieldHw,
@@ -145,7 +143,7 @@ def _collect_operands(
 
         if rung.comment:
             collection.has_comment = True
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             collection.has_forloop = True
 
         # Scan conditions from tree
@@ -164,8 +162,16 @@ def _collect_operands(
             if instr.branch_tree is not None:
                 collection.has_branch = True
             for pin in instr.pins:
-                for cond in pin.conditions:
-                    _scan_token_for_operands(cond, collection, nicknames)
+                if pin.condition_tree is not None:
+                    for cond in _walk_tree_labels(pin.condition_tree):
+                        _scan_token_for_operands(cond, collection, nicknames)
+                    if _tree_uses_any_of(pin.condition_tree, collection):
+                        collection.has_any_of = True
+                    if _tree_has_all_of(pin.condition_tree):
+                        collection.has_all_of = True
+                else:
+                    for cond in pin.conditions:
+                        _scan_token_for_operands(cond, collection, nicknames)
                 if pin.arg:
                     _scan_token_for_operands(pin.arg, collection, nicknames)
 
@@ -282,11 +288,7 @@ def _enrich_with_ownership(
 
         # Compute hw_end: use runtime.hardware_span when we have a mapped
         # named_array, or fall back to last-field address lookup.
-        if (
-            hw_start is not None
-            and effective_stride is not None
-            and si.kind == "named_array"
-        ):
+        if hw_start is not None and effective_stride is not None and si.kind == "named_array":
             _, hw_end = runtime.hardware_span(hw_start)
         else:
             last_field_block = runtime._blocks[field_names[-1]]
@@ -730,7 +732,7 @@ def _scan_file_refs(
             refs.has_all_of = True
         if rung.comment:
             refs.has_comment = True
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             refs.has_forloop = True
 
         for cond in _walk_tree_labels(rung.condition_tree):
@@ -747,8 +749,16 @@ def _scan_file_refs(
             if instr.branch_tree is not None:
                 refs.has_branch = True
             for pin in instr.pins:
-                for cond in pin.conditions:
-                    _ref_token(cond, collection, refs)
+                if pin.condition_tree is not None:
+                    for cond in _walk_tree_labels(pin.condition_tree):
+                        _ref_token(cond, collection, refs)
+                    if _tree_uses_any_of(pin.condition_tree, collection):
+                        refs.has_any_of = True
+                    if _tree_has_all_of(pin.condition_tree):
+                        refs.has_all_of = True
+                else:
+                    for cond in pin.conditions:
+                        _ref_token(cond, collection, refs)
                 if pin.arg:
                     _ref_token(pin.arg, collection, refs)
 

@@ -31,58 +31,41 @@ from pyrung.core.condition import (
 )
 from pyrung.core.copy_converters import CopyConverter
 from pyrung.core.expression import (
-    AbsExpr,
-    AddExpr,
-    AndExpr,
-    DivExpr,
-    ExprCompareEq,
-    ExprCompareGe,
-    ExprCompareGt,
-    ExprCompareLe,
-    ExprCompareLt,
-    ExprCompareNe,
+    BinaryExpr,
+    ExprCompare,
     Expression,
-    FloorDivExpr,
-    InvertExpr,
     LiteralExpr,
-    LShiftExpr,
     MathFuncExpr,
-    ModExpr,
-    MulExpr,
-    NegExpr,
-    OrExpr,
-    PosExpr,
-    PowExpr,
-    RShiftExpr,
     ShiftFuncExpr,
-    SubExpr,
     SumExpr,
     TagExpr,
-    XorExpr,
+    UnaryExpr,
 )
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 if TYPE_CHECKING:
-    from pyrung.click.tag_map import TagMap, _BlockEntry
+    from pyrung.click.tag_map import TagMap
+    from pyrung.click.tag_map._types import _BlockEntry
 
 # Pre-built Click bank names that can be used directly as hardware prefixes
 # in indirect addressing without an explicit TagMap block entry.
 _CLICK_BANK_NAMES: frozenset[str] = frozenset(BANKS)
 
 # ---- Expression/condition operator maps ----
-_BINARY_OP_SYMBOL: dict[type[Expression], str] = {
-    AddExpr: " + ",
-    SubExpr: " - ",
-    MulExpr: " * ",
-    DivExpr: " / ",
-    FloorDivExpr: "//",
-    ModExpr: " MOD ",
-    PowExpr: " ^ ",
-    AndExpr: " AND ",
-    OrExpr: " OR ",
-    XorExpr: " XOR ",
+# Maps Python operator symbol → Click formula-pad symbol for binary expressions
+_BINARY_OP_CLICK: dict[str, str] = {
+    "+": " + ",
+    "-": " - ",
+    "*": " * ",
+    "/": " / ",
+    "//": "//",
+    "%": " MOD ",
+    "**": " ^ ",
+    "&": " AND ",
+    "|": " OR ",
+    "^": " XOR ",
 }
 
 # Python math-function name → Click formula-pad name
@@ -100,14 +83,6 @@ _MATH_FUNC_CLICK_NAME: dict[str, str] = {
     "log": "LN",
 }
 
-_UNARY_PREFIX: dict[type[Expression], str] = {
-    NegExpr: "-",
-    PosExpr: "+",
-    InvertExpr: "~",
-}
-
-_BINARY_EXPR_TYPES: tuple[type[Expression], ...] = tuple(_BINARY_OP_SYMBOL)
-
 _COMPARE_OPS: dict[type[Condition], str] = {
     CompareEq: "==",
     CompareNe: "!=",
@@ -121,12 +96,6 @@ _COMPARE_OPS: dict[type[Condition], str] = {
     IndirectCompareLe: "<=",
     IndirectCompareGt: ">",
     IndirectCompareGe: ">=",
-    ExprCompareEq: "==",
-    ExprCompareNe: "!=",
-    ExprCompareLt: "<",
-    ExprCompareLe: "<=",
-    ExprCompareGt: ">",
-    ExprCompareGe: ">=",
 }
 
 
@@ -173,6 +142,15 @@ class _TranslatorMixin:
             left = self._resolve_tag(condition.tag, path=f"{path}.tag", source=condition)
             return f"{left}!=0"
 
+        if isinstance(condition, ExprCompare):
+            left = self._render_expression(condition.left, path=f"{path}.left", source=condition)
+            right = self._render_expression(
+                condition.right,
+                path=f"{path}.right",
+                source=condition,
+            )
+            return f"{left}{condition.symbol}{right}"
+
         compare_op = _COMPARE_OPS.get(type(condition))
         if compare_op is not None:
             if isinstance(
@@ -212,27 +190,6 @@ class _TranslatorMixin:
                 )
                 right = self._render_condition_value(
                     condition.value,
-                    path=f"{path}.right",
-                    source=condition,
-                )
-                return f"{left}{compare_op}{right}"
-
-            if isinstance(
-                condition,
-                (
-                    ExprCompareEq,
-                    ExprCompareNe,
-                    ExprCompareLt,
-                    ExprCompareLe,
-                    ExprCompareGt,
-                    ExprCompareGe,
-                ),
-            ):
-                left = self._render_expression(
-                    condition.left, path=f"{path}.left", source=condition
-                )
-                right = self._render_expression(
-                    condition.right,
                     path=f"{path}.right",
                     source=condition,
                 )
@@ -454,15 +411,10 @@ class _TranslatorMixin:
             if isinstance(expression.value, bool):
                 return _bool_bit(expression.value)
             return repr(expression.value)
-        if isinstance(expression, (ShiftFuncExpr, LShiftExpr, RShiftExpr)):
-            if isinstance(expression, ShiftFuncExpr):
-                click_name = expression.name.upper()
-                val = self._render_expression(expression.value, path=f"{path}.value", source=source)
-                cnt = self._render_expression(expression.count, path=f"{path}.count", source=source)
-            else:
-                click_name = "LSH" if isinstance(expression, LShiftExpr) else "RSH"
-                val = self._render_expression(expression.left, path=f"{path}.left", source=source)
-                cnt = self._render_expression(expression.right, path=f"{path}.right", source=source)
+        if isinstance(expression, ShiftFuncExpr):
+            click_name = expression.name.upper()
+            val = self._render_expression(expression.value, path=f"{path}.value", source=source)
+            cnt = self._render_expression(expression.count, path=f"{path}.count", source=source)
             return self._fn(click_name, val, cnt)
         if isinstance(expression, MathFuncExpr):
             click_name = _MATH_FUNC_CLICK_NAME.get(expression.name, expression.name.upper())
@@ -470,41 +422,28 @@ class _TranslatorMixin:
                 click_name,
                 self._render_expression(expression.operand, path=f"{path}.operand", source=source),
             )
-        if isinstance(expression, AbsExpr):
-            return self._fn(
-                "abs",
-                self._render_expression(expression.operand, path=f"{path}.operand", source=source),
-            )
-        if isinstance(expression, (NegExpr, PosExpr, InvertExpr)):
-            prefix = _UNARY_PREFIX[type(expression)]
+        if isinstance(expression, UnaryExpr):
             inner = self._render_expression(
                 expression.operand, path=f"{path}.operand", source=source
             )
-            if isinstance(expression.operand, _BINARY_EXPR_TYPES):
-                return f"{prefix}({inner})"
-            return f"{prefix}{inner}"
-        if isinstance(
-            expression,
-            (
-                AddExpr,
-                SubExpr,
-                MulExpr,
-                DivExpr,
-                FloorDivExpr,
-                ModExpr,
-                PowExpr,
-                AndExpr,
-                OrExpr,
-                XorExpr,
-            ),
-        ):
-            symbol = _BINARY_OP_SYMBOL[type(expression)]
+            if expression.symbol == "abs":
+                return self._fn("abs", inner)
+            if isinstance(expression.operand, BinaryExpr):
+                return f"{expression.symbol}({inner})"
+            return f"{expression.symbol}{inner}"
+        if isinstance(expression, BinaryExpr):
+            # << and >> map to Click shift functions
+            if expression.symbol in ("<<", ">>"):
+                click_name = "LSH" if expression.symbol == "<<" else "RSH"
+                val = self._render_expression(expression.left, path=f"{path}.left", source=source)
+                cnt = self._render_expression(expression.right, path=f"{path}.right", source=source)
+                return self._fn(click_name, val, cnt)
+            symbol = _BINARY_OP_CLICK[expression.symbol]
             left = self._render_expression(expression.left, path=f"{path}.left", source=source)
             right = self._render_expression(expression.right, path=f"{path}.right", source=source)
-            # Parenthesize nested binary terms so token rendering is unambiguous.
-            if isinstance(expression.left, _BINARY_EXPR_TYPES):
+            if isinstance(expression.left, BinaryExpr):
                 left = f"({left})"
-            if isinstance(expression.right, _BINARY_EXPR_TYPES):
+            if isinstance(expression.right, BinaryExpr):
                 right = f"({right})"
             return f"{left}{symbol}{right}"
         if isinstance(expression, SumExpr):
@@ -711,10 +650,9 @@ def _parse_display_address(value: str) -> tuple[str, int] | None:
 
 
 __all__ = [
-    "_BINARY_OP_SYMBOL",
+    "_BINARY_OP_CLICK",
     "_COMPARE_OPS",
     "_TranslatorMixin",
-    "_UNARY_PREFIX",
     "_bool_bit",
     "_compact_contiguous_range",
     "_parse_display_address",

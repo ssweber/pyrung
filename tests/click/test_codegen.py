@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import csv
+import textwrap
+import warnings
+from itertools import product
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from pyrung.click import (
     TagMap,
     c,
-    ct,
-    ctd,
-    dh,
     ds,
     ladder_to_pyrung,
     pyrung_to_ladder,
@@ -29,35 +31,24 @@ from pyrung.click.codegen.utils import _parse_af_args
 from pyrung.core import (
     Block,
     Bool,
-    Dint,
     Int,
     Program,
     Rung,
     TagType,
     Tms,
     any_of,
-    fall,
-    immediate,
-    rise,
 )
 from pyrung.core.program import (
     branch,
-    calc,
     comment,
     copy,
-    count_up,
-    event_drum,
     fill,
-    forloop,
     latch,
     on_delay,
     out,
     reset,
-    search,
-    shift,
-    time_drum,
-    unpack_to_bits,
 )
+from tests.click.helpers import build_program, normalize_pyrung, strip_pyrung_boilerplate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,6 +98,71 @@ def _round_trip(
     return code, original_rows, reproduced_rows
 
 
+def _codegen_body(source: str) -> str:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    return strip_pyrung_boilerplate(ladder_to_pyrung(bundle))
+
+
+def _strip_codegen_program_body(code: str) -> str:
+    """Extract the generated Program body while preserving rung comments."""
+    lines = code.splitlines()
+
+    prog_start = None
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("with Program"):
+            prog_start = i
+            break
+
+    if prog_start is None:
+        raise ValueError(f"Expected 'with Program' in generated code, got:\n{code[:200]}")
+
+    base_indent = len(lines[prog_start]) - len(lines[prog_start].lstrip())
+    body_lines: list[str] = []
+    for line in lines[prog_start + 1 :]:
+        stripped = line.strip()
+        if not stripped:
+            body_lines.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        body_lines.append(line[base_indent + 4 :])
+
+    return normalize_pyrung("\n".join(body_lines))
+
+
+def _codegen_program_body(source: str) -> str:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    return _strip_codegen_program_body(ladder_to_pyrung(bundle))
+
+
+def _assert_codegen_body(source: str, expected: str) -> None:
+    assert _codegen_body(source) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_codegen_program_body(source: str, expected: str) -> None:
+    assert _codegen_program_body(source) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_generated_code(actual: str, expected: str) -> None:
+    assert normalize_pyrung(actual) == normalize_pyrung(textwrap.dedent(expected))
+
+
+def _assert_codegen_full(
+    source: str, expected: str, *, nicknames: dict[str, str] | None = None
+) -> None:
+    logic, mapping = build_program(source)
+    bundle = pyrung_to_ladder(logic, mapping)
+    _assert_generated_code(ladder_to_pyrung(bundle, nicknames=nicknames), expected)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WHEATSTONE_FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "wheatstone_bridge.csv"
+_WHEATSTONE_CONTACTS = ("X001", "X002", "X003", "X004", "X005")
+
+
 # ---------------------------------------------------------------------------
 # Phase 1: CSV parsing tests
 # ---------------------------------------------------------------------------
@@ -130,7 +186,7 @@ class TestCsvParsing:
         raw_rungs = _parse_csv(csv_path)
         assert len(raw_rungs) == 1
         assert raw_rungs[0].comment_lines == []
-        assert raw_rungs[0].rows[0][-1] == "out(Y001)"
+        assert raw_rungs[0].rows == [rows[1]]
 
     def test_comment_rows(self, tmp_path: Path):
         csv_path = tmp_path / "test.csv"
@@ -196,11 +252,8 @@ class TestTopologyAnalysis:
         assert len(analyzed) == 1
         r = analyzed[0]
         assert _find_parallel(r.condition_tree) is None
-        labels = _leaf_labels(r.condition_tree)
-        assert "X001" in labels
-        assert "X002" in labels
-        assert len(r.instructions) == 1
-        assert r.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(r.condition_tree) == ["X001", "X002"]
+        assert [instruction.af_token for instruction in r.instructions] == ["out(Y001)"]
 
     def test_or_expansion(self, tmp_path: Path):
         """OR: any_of(A, B) → out(Y)."""
@@ -244,8 +297,8 @@ class TestTopologyAnalysis:
         par = _find_parallel(r.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        # Trailing AND should be in condition_tree labels
-        assert "C1" in _leaf_labels(r.condition_tree)
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert set(_leaf_labels(r.condition_tree)) == {"X001", "X002", "C1"}
 
     def test_multiple_outputs(self, tmp_path: Path):
         """Multiple outputs: same conditions, different instructions."""
@@ -265,9 +318,11 @@ class TestTopologyAnalysis:
         analyzed = _analyze_rungs(raw_rungs)
         assert len(analyzed) == 1
         r = analyzed[0]
-        assert len(r.instructions) == 2
-        assert r.instructions[0].af_token == "out(Y001)"
-        assert r.instructions[1].af_token == "latch(Y002)"
+        assert _leaf_labels(r.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in r.instructions] == [
+            "out(Y001)",
+            "latch(Y002)",
+        ]
 
     def test_pin_rows(self, tmp_path: Path):
         """Timer with .reset() pin."""
@@ -385,7 +440,7 @@ def _fill_dashes(cells: dict[int, str], start: int, end: int) -> dict[int, str]:
 
 def _find_parallel(node):
     """Return the first ``Parallel`` node found in the tree, or ``None``."""
-    from pyrung.click.codegen.models import Parallel, Series
+    from pyrung.click._topology import Parallel, Series
 
     if node is None:
         return None
@@ -399,20 +454,119 @@ def _find_parallel(node):
     return None
 
 
-def _leaf_labels(node) -> list[str]:
-    """Collect all leaf labels from an SP tree in order."""
-    from pyrung.click.codegen.models import Leaf, Parallel, Series
+def _collect_leaves(node) -> list:
+    """Collect all ``Leaf`` nodes from an SP tree in order."""
+    from pyrung.click._topology import Leaf, Parallel, Series
 
     if node is None:
         return []
     if isinstance(node, Leaf):
-        return [node.label]
+        return [node]
     if isinstance(node, (Series, Parallel)):
-        labels: list[str] = []
+        leaves: list = []
         for child in node.children:
-            labels.extend(_leaf_labels(child))
-        return labels
+            leaves.extend(_collect_leaves(child))
+        return leaves
     return []
+
+
+def _leaf_labels(node) -> list[str]:
+    """Collect all leaf labels from an SP tree in order."""
+    return [leaf.label for leaf in _collect_leaves(node)]
+
+
+def _eval_tree(node, values: dict[str, bool]) -> bool:
+    """Evaluate an SP tree against a contact-value mapping."""
+    from pyrung.click._topology import Leaf, Parallel, Series
+
+    if node is None:
+        return True
+    if isinstance(node, Leaf):
+        return values[node.label]
+    if isinstance(node, Series):
+        return all(_eval_tree(child, values) for child in node.children)
+    if isinstance(node, Parallel):
+        return any(_eval_tree(child, values) for child in node.children)
+    raise TypeError(f"Unsupported SP node: {type(node)!r}")
+
+
+def _is_reachable(start: str, sink: str, edges: list[tuple[str, str]]) -> bool:
+    """Return whether *sink* is reachable through closed-contact conductivity."""
+    stack = [start]
+    seen: set[str] = set()
+    adjacency: dict[str, list[str]] = {}
+    for src, dst in edges:
+        adjacency.setdefault(src, []).append(dst)
+        adjacency.setdefault(dst, []).append(src)
+
+    while stack:
+        node = stack.pop()
+        if node == sink:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack.extend(adjacency.get(node, ()))
+
+    return False
+
+
+def _wheatstone_expected(contacts: tuple[str, str, str, str, str], values: dict[str, bool]) -> bool:
+    """Brute-force reachability for the canonical 5-edge bridge shape."""
+    contact_edges = [
+        ("source", "M1", contacts[0]),
+        ("source", "M2", contacts[1]),
+        ("M1", "sink", contacts[2]),
+        ("M2", "sink", contacts[3]),
+        ("M1", "M2", contacts[4]),
+    ]
+    active_edges = [(src, dst) for src, dst, label in contact_edges if values[label]]
+    return _is_reachable("source", "sink", active_edges)
+
+
+def _make_wheatstone_rows(
+    contacts: tuple[str, str, str, str, str],
+    *,
+    offset: int = 0,
+    af_token: str = "out(Y001)",
+) -> list[list[str]]:
+    """Build a Wheatstone bridge rung, optionally shifted right by *offset* columns."""
+    if not 0 <= offset <= 27:
+        raise ValueError(f"offset must keep the 4-column bridge in bounds, got {offset}")
+
+    x001, x002, x003, x004, x005 = contacts
+
+    top = {offset: x001, offset + 1: "T", offset + 2: x003, offset + 3: "T"}
+    _fill_dashes(top, 0, offset)
+    _fill_dashes(top, offset + 4, 31)
+
+    middle = {offset + 1: x005, offset + 2: "|", offset + 3: "|"}
+
+    bottom = {offset: x002, offset + 1: "-", offset + 2: x004}
+    _fill_dashes(bottom, 0, offset)
+
+    return [
+        _make_row("R", top, af=af_token),
+        _make_row("", middle),
+        _make_row("", bottom),
+    ]
+
+
+@st.composite
+def _wheatstone_grid(draw):
+    """Generate renamed and shifted Wheatstone bridge grids."""
+    contacts = tuple(
+        draw(
+            st.lists(
+                st.integers(min_value=1, max_value=999).map(lambda n: f"X{n:03d}"),
+                min_size=5,
+                max_size=5,
+                unique=True,
+            )
+        )
+    )
+    offset = draw(st.integers(min_value=0, max_value=27))
+    return _make_wheatstone_rows(contacts, offset=offset), contacts, offset
 
 
 class TestGraphWalkEdgeCases:
@@ -435,11 +589,8 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        labels = [_leaf_labels(c) for c in par.children]
-        assert ["X001"] in labels
-        assert ["X002"] in labels
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_up_right_diagonal(self):
         """Cell connects UP-RIGHT to a T when the bridge cell is blank (gap).
@@ -458,9 +609,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1])
 
         result = _analyze_single_rung(rung)
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
-        assert "X001" in _leaf_labels(result.condition_tree)
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_bridge_connects_branch(self):
         """T forces bidirectional down to a '-' bridge, connecting a second AF.
@@ -478,10 +628,11 @@ class TestGraphWalkEdgeCases:
         r1 = _make_row("", _fill_dashes({1: "-"}, 2, 31), af="out(Y002)")
         result = _analyze_single_rung(_RawRung(comment_lines=[], rows=[r0, r1]))
 
-        assert len(result.instructions) == 2
-        assert result.instructions[0].af_token == "out(Y001)"
-        assert result.instructions[1].af_token == "out(Y002)"
-        assert "X001" in _leaf_labels(result.condition_tree)
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+        ]
 
     def test_three_way_or(self):
         """Three OR alternatives: X001, X002, X003 all reach the same AF.
@@ -502,10 +653,11 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 3
-        labels = [_leaf_labels(c) for c in par.children]
-        assert ["X001"] in labels
-        assert ["X002"] in labels
-        assert ["X003"] in labels
+        assert sorted(_leaf_labels(child) for child in par.children) == [
+            ["X001"],
+            ["X002"],
+            ["X003"],
+        ]
 
     def test_nested_t_cascade(self):
         """Nested T cascade: T at (0,1) forks, T at (1,1) forks again.
@@ -526,19 +678,17 @@ class TestGraphWalkEdgeCases:
 
         result = _analyze_single_rung(rung)
         assert _find_parallel(result.condition_tree) is None
-        assert "btn" in _leaf_labels(result.condition_tree)
-        assert len(result.instructions) == 3
-
-        # Instruction AF tokens present
-        afs = [i.af_token for i in result.instructions]
-        assert "out(L1)" in afs
-        assert "out(L2)" in afs
-        assert "out(L3)" in afs
+        assert _leaf_labels(result.condition_tree) == ["btn"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(L1)",
+            "out(L2)",
+            "out(L3)",
+        ]
 
         # The instruction for L2 has a branch-local condition containing "auto"
         l2_instr = next(i for i in result.instructions if i.af_token == "out(L2)")
         assert l2_instr.branch_tree is not None
-        assert "auto" in _leaf_labels(l2_instr.branch_tree)
+        assert _leaf_labels(l2_instr.branch_tree) == ["auto"]
 
         # L1 and L3 have no branch-local conditions
         l1_instr = next(i for i in result.instructions if i.af_token == "out(L1)")
@@ -556,8 +706,23 @@ class TestGraphWalkEdgeCases:
 
         result = _analyze_single_rung(rung)
         assert result.condition_tree is None
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
+
+    def test_af_only_rows_share_an_implicit_source(self):
+        """AF-only rows stay on the graph path and preserve all outputs."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        rows = [
+            _make_row("R", {}, af="out(Y001)"),
+            _make_row("", {}, af="out(Y002)"),
+        ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        result = _analyze_single_rung(rung)
+        assert result.condition_tree is None
+        assert [instr.af_token for instr in result.instructions] == ["out(Y001)", "out(Y002)"]
+        assert all(instr.branch_tree is None for instr in result.instructions)
 
     def test_or_with_three_trailing_and(self):
         """OR alternatives followed by multiple shared trailing AND conditions.
@@ -578,10 +743,8 @@ class TestGraphWalkEdgeCases:
         par = _find_parallel(result.condition_tree)
         assert par is not None
         assert len(par.children) == 2
-        # Trailing AND conditions should be in condition_tree
-        labels = _leaf_labels(result.condition_tree)
-        assert "C1" in labels
-        assert "C2" in labels
+        assert sorted(_leaf_labels(child) for child in par.children) == [["X001"], ["X002"]]
+        assert set(_leaf_labels(result.condition_tree)) == {"X001", "X002", "C1", "C2"}
 
     def test_pin_attached_to_correct_instruction(self):
         """Pin row attaches to its nearest preceding instruction.
@@ -602,13 +765,28 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
 
         result = _analyze_single_rung(rung)
-        assert len(result.instructions) == 2
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "on_delay(T1)",
+        ]
         assert result.instructions[0].pins == []
-        assert result.instructions[1].af_token == "on_delay(T1)"
         assert len(result.instructions[1].pins) == 1
         assert result.instructions[1].pins[0].name == "reset"
         assert result.instructions[1].pins[0].conditions == ["X002"]
+
+    def test_pin_row_requires_immediate_preceding_instruction(self):
+        """A separated pin row should fail instead of attaching heuristically."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        row0 = _make_row("R", _fill_dashes({0: "X001"}, 1, 31), af="on_delay(T1)")
+        row1 = _make_row("", {})
+        row2 = _make_row("", _fill_dashes({0: "X002"}, 1, 31), af=".reset()")
+        rung = _RawRung(comment_lines=[], rows=[row0, row1, row2])
+
+        with pytest.raises(ValueError, match="must immediately follow"):
+            _analyze_single_rung(rung)
 
     def test_noncanonical_left_edge_not_col0(self):
         """Non-canonical grid: first content starts at column 1, not column 0.
@@ -624,8 +802,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        assert "X001" in _leaf_labels(result.condition_tree)
-        assert result.instructions[0].af_token == "out(Y001)"
+        assert _leaf_labels(result.condition_tree) == ["X001"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_adjacency_table_content_default(self):
         """Content tokens (contacts, comparisons) default to left/right exits.
@@ -639,9 +817,8 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=[row])
 
         result = _analyze_single_rung(rung)
-        labels = _leaf_labels(result.condition_tree)
-        assert "X001" in labels
-        assert "DS1==5" in labels
+        assert _leaf_labels(result.condition_tree) == ["X001", "DS1==5"]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
     def test_another_case_t_fork_down_through_contact(self):
         """T fork down through contact reaches second AF without reverse leakage."""
@@ -656,15 +833,15 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        assert len(result.instructions) == 2
-        afs = {i.af_token for i in result.instructions}
-        assert "out(Y001)" in afs
-        assert "out(Y002)" in afs
-        # X001 should be in the shared condition or a branch
-        all_labels = _leaf_labels(result.condition_tree)
-        for instr in result.instructions:
-            all_labels.extend(_leaf_labels(instr.branch_tree))
-        assert "X001" in all_labels
+        assert result.condition_tree is None
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+        ]
+        assert [_leaf_labels(instruction.branch_tree) for instruction in result.instructions] == [
+            ["X001"],
+            ["X001", "X003", "X002"],
+        ]
 
     def test_or_with_all_offs_t_prefix_rows_above_output(self):
         """T:-prefixed stacked OR rows above output row remain reachable."""
@@ -679,18 +856,16 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        assert len(result.instructions) == 1
-        assert result.instructions[0].af_token == "out(Y001)"
-        # All condition labels should be present
-        labels = _leaf_labels(result.condition_tree)
-        assert "X001" in labels
-        assert "X002" in labels
-        assert "X003" in labels
-        assert "X006" in labels
-        assert "X007" in labels
-        assert "X004" in labels
-        assert "X005" in labels
-        # Should have a Parallel node (OR structure)
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
+        assert set(_leaf_labels(result.condition_tree)) == {
+            "X001",
+            "X002",
+            "X003",
+            "X004",
+            "X005",
+            "X006",
+            "X007",
+        }
         par = _find_parallel(result.condition_tree)
         assert par is not None
 
@@ -712,10 +887,122 @@ class TestGraphWalkEdgeCases:
         rung = _RawRung(comment_lines=[], rows=rows)
         result = _analyze_single_rung(rung)
 
-        # Should have instructions for both Y001 and Y002
-        afs = [i.af_token for i in result.instructions]
-        assert "out(Y001)" in afs
-        assert "out(Y002)" in afs
+        assert result.condition_tree is None
+        assert [instruction.af_token for instruction in result.instructions] == [
+            "out(Y001)",
+            "out(Y002)",
+            "out(Y002)",
+            "out(Y002)",
+        ]
+
+    def test_bridge_reduction_is_stable_across_edge_order(self):
+        """Bridge-topology fallback should choose the same expansion edge each time."""
+        from pyrung.click._topology import Leaf, Parallel
+        from pyrung.click.codegen.analyzer import _Edge, _sp_reduce, _trees_equal
+
+        s, u, v, t = 0, 1, 2, 3
+        edges = [
+            _Edge(s, u, Leaf("A"), 0, 0),
+            _Edge(s, v, Leaf("B"), 1, 0),
+            _Edge(u, t, Leaf("C"), 0, 1),
+            _Edge(v, t, Leaf("D"), 1, 1),
+            _Edge(u, v, Leaf("E"), 0, 2),
+        ]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree_a = _sp_reduce(s, t, edges)
+            tree_b = _sp_reduce(s, t, [edges[4], *edges[:4]])
+
+        assert tree_a is not None
+        assert tree_b is not None
+        assert _trees_equal(tree_a, tree_b)
+        assert isinstance(tree_a, Parallel)
+        assert {label for label in _leaf_labels(tree_a)} == {"A", "B", "C", "D", "E"}
+
+
+class TestShannonBridgeCoverage:
+    def test_wheatstone_bridge_csv(self):
+        """The real Wheatstone fixture triggers Shannon expansion and preserves all contacts."""
+        raw_rungs = _parse_csv(_WHEATSTONE_FIXTURE)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            analyzed = _analyze_rungs(raw_rungs)
+
+        assert len(analyzed) == 1
+        assert [str(item.message) for item in caught] == [
+            "Rung contains bridge topology; resolved via Shannon expansion"
+        ]
+
+        result = analyzed[0]
+        assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
+
+        tree = result.condition_tree
+        assert tree is not None
+        assert {leaf.label for leaf in _collect_leaves(tree)} == set(_WHEATSTONE_CONTACTS)
+
+    def test_wheatstone_bridge_truth_table(self):
+        """The Shannon-expanded tree matches brute-force reachability for all 2^5 inputs."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = _analyze_rungs(_parse_csv(_WHEATSTONE_FIXTURE))[0].condition_tree
+
+        assert tree is not None
+
+        for bits in product([False, True], repeat=5):
+            values = dict(zip(_WHEATSTONE_CONTACTS, bits, strict=True))
+            expected = _wheatstone_expected(_WHEATSTONE_CONTACTS, values)
+            actual = _eval_tree(tree, values)
+            assert actual == expected, f"Mismatch for {values}"
+
+    @pytest.mark.hypothesis
+    @settings(max_examples=40, deadline=None)
+    @given(_wheatstone_grid())
+    def test_wheatstone_bridge_variants_round_trip(self, grid):
+        """Renamed and shifted bridge variants still trigger Shannon and stay stable."""
+        from pyrung.click.codegen.analyzer import (
+            _analyze_single_rung,
+            _grid_to_graph,
+            _sp_reduce,
+            _trees_equal,
+        )
+        from pyrung.click.codegen.models import _RawRung
+
+        rows, contacts, offset = grid
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = _analyze_single_rung(rung)
+
+        assert [str(item.message) for item in caught] == [
+            "Rung contains bridge topology; resolved via Shannon expansion"
+        ]
+
+        tree = result.condition_tree
+        assert tree is not None
+        assert {leaf.label for leaf in _collect_leaves(tree)} == set(contacts)
+
+        for bits in product([False, True], repeat=5):
+            values = dict(zip(contacts, bits, strict=True))
+            expected = _wheatstone_expected(contacts, values)
+            actual = _eval_tree(tree, values)
+            assert actual == expected, f"offset={offset}, values={values}"
+
+        source, sinks, edges, _ = _grid_to_graph(rows, set())
+        assert source is not None
+        assert len(sinks) == 1
+        sink, _, _ = sinks[0]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree_a = _sp_reduce(source, sink, edges)
+            tree_b = _sp_reduce(source, sink, list(reversed(edges)))
+
+        assert tree_a is not None
+        assert tree_b is not None
+        assert _trees_equal(tree_a, tree_b)
 
 
 # ---------------------------------------------------------------------------
@@ -804,548 +1091,566 @@ class TestAfArgParsing:
 
 
 class TestRoundTrip:
-    def test_simple_contact_coil(self, tmp_path: Path):
+    def test_simple_contact_coil(self):
         """Simple: X001 → out(Y001)."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_and_chain(self, tmp_path: Path):
+    def test_and_chain(self):
         """AND chain: X001, X002 → out(Y001)."""
-        A = Bool("A")
-        B = Bool("B")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1, X2):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001, X002):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(A, B):
-                out(Y)
-
-        mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_negated_contact(self, tmp_path: Path):
+    def test_negated_contact(self):
         """NC contact: ~X001 → out(Y001)."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(~X1):
+                    out(Y1)
+            """,
+            """
+            with Rung(~X001):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(~A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_rise_fall(self, tmp_path: Path):
+    def test_rise_fall(self):
         """Edge contacts: rise(X001), fall(X002)."""
-        A = Bool("A")
-        B = Bool("B")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(rise(X1)):
+                    out(Y1)
+                with Rung(fall(X2)):
+                    out(Y2)
+            """,
+            """
+            with Rung(rise(X001)):
+                out(Y001)
 
-        with Program() as logic:
-            with Rung(rise(A)):
-                out(Y1)
-            with Rung(fall(B)):
-                out(Y2)
+            with Rung(fall(X002)):
+                out(Y002)
+            """,
+        )
 
-        mapping = TagMap({A: x[1], B: x[2], Y1: y[1], Y2: y[2]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_or_expansion(self, tmp_path: Path):
+    def test_or_expansion(self):
         """OR: any_of(A, B) → out(Y)."""
-        A = Bool("A")
-        B = Bool("B")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(any_of(X1, X2)):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001 | X002):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(any_of(A, B)):
-                out(Y)
-
-        mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert "with Rung(X001 | X002):" in code
-        assert "any_of" not in code
-        assert orig == repro
-
-    def test_or_with_trailing_and(self, tmp_path: Path):
+    def test_or_with_trailing_and(self):
         """OR + trailing AND."""
-        A = Bool("A")
-        B = Bool("B")
-        Ready = Bool("Ready")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            with Rung(any_of(A, B), Ready):
-                out(Y)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Ready: c[1], Y: y[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(any_of(X1, X2), C1):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001 | X002, C1):
+                out(Y001)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "with Rung(X001 | X002, C1):" in code
-        assert orig == repro
-
-    def test_three_way_or(self, tmp_path: Path):
+    def test_three_way_or(self):
         """3-branch OR exercises | output-bus marker."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            with Rung(any_of(A, B, C)):
-                out(Y)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y: y[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(any_of(X1, X2, C1)):
+                    out(Y1)
+            """,
+            """
+            with Rung(any_of(X001, X002, C1)):
+                out(Y001)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "with Rung(any_of(X001, X002, C1)):" in code
-        assert orig == repro
-
-    def test_two_way_comparison_or_stays_any_of(self, tmp_path: Path):
+    def test_two_way_comparison_or_stays_any_of(self):
         """2-way comparison OR stays as any_of(...) for readability and precedence."""
-        Step = Int("Step")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(any_of(DS1 == 1, DS1 == 2)):
+                    out(Y1)
+            """,
+            """
+            with Rung(any_of(DS1 == 1, DS1 == 2)):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(any_of(Step == 1, Step == 2)):
-                out(Y)
-
-        mapping = TagMap({Step: ds[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert "with Rung(any_of(DS1 == 1, DS1 == 2)):" in code
-        assert orig == repro
-
-    def test_mid_rung_or(self, tmp_path: Path):
+    def test_mid_rung_or(self):
         """OR after AND exercises T: prefix on mid-rung contacts."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            with Rung(A, any_of(B, C)):
-                out(Y)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y: y[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1, any_of(X2, C1)):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001, X002 | C1):
+                out(Y001)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_two_series_ors(self, tmp_path: Path):
+    def test_two_series_ors(self):
         """Two sequential ORs: first at col 0 (bare), second mid-rung (T: prefix)."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            with Rung(any_of(A, B), any_of(C, D)):
-                out(Y)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], D: c[2], Y: y[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(any_of(X1, X2), any_of(C1, C2)):
+                    out(Y1)
+            """,
+            """
+            with Rung(X001 | X002, C1 | C2):
+                out(Y001)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        # Native merged-continuation topology for series ORs decodes to a
-        # canonicalized equivalent form in codegen today. Keep this test as
-        # a round-trip guard for parser/exporter stability.
-        assert repro[0] == orig[0]
-        assert repro[-1] == orig[-1]
-        assert repro[1][-1] == "out(Y001)"
-        assert repro[1][1] == "X001"
-        assert repro[1][2] == "T"
-        assert repro[2][1] == "X002"
-
-    def test_multiple_outputs(self, tmp_path: Path):
+    def test_multiple_outputs(self):
         """Multiple outputs from same conditions."""
-        A = Bool("A")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                latch(Y2)
-                reset(Y3)
-
-        mapping = TagMap(
-            {A: x[1], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    latch(Y2)
+                    reset(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                latch(Y002)
+                reset(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_comment(self, tmp_path: Path):
+    def test_comment(self):
         """Rung with single-line comment."""
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Start motor")
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Start motor")
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_multiline_comment(self, tmp_path: Path):
+    def test_multiline_comment(self):
         """Rung with multi-line comment."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_program_body(
+            """
+            comment("Line 1\\nLine 2")
+            with Rung(X1):
+                out(Y1)
+            """,
+            '''
+            comment("""\\
+                Line 1
+                Line 2""")
+            with Rung(X001):
+                out(Y001)
+            ''',
+        )
 
-        with Program() as logic:
-            comment("Line 1\nLine 2")
-            with Rung(A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_multiline_comment_with_triple_quotes(self, tmp_path: Path):
+    def test_multiline_comment_with_triple_quotes(self):
         """Multi-line comment containing triple-double-quotes must not break syntax."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_program_body(
+            '''
+            comment('Has """triple""" quotes\\nin comment text')
+            with Rung(X1):
+                out(Y1)
+            ''',
+            '''
+            comment("""\\
+                Has \\\"\\\"\\\"triple\\\"\\\"\\\" quotes
+                in comment text""")
+            with Rung(X001):
+                out(Y001)
+            ''',
+        )
 
-        with Program() as logic:
-            comment('Has """triple""" quotes\nin comment text')
-            with Rung(A):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_comparison_condition(self, tmp_path: Path):
+    def test_comparison_condition(self):
         """Comparison: DS1 == 5 → out(Y001)."""
-        Counter = Int("Counter")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(DS1 == 5):
+                    out(Y1)
+            """,
+            """
+            with Rung(DS1 == 5):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(Counter == 5):
-                out(Y)
-
-        mapping = TagMap({Counter: ds[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_timer_with_reset(self, tmp_path: Path):
+    def test_timer_with_reset(self):
         """Timer with .reset() pin."""
-        Enable = Bool("Enable")
-        ResetCond = Bool("ResetCond")
-        Done = Bool("Done")
-        Acc = Int("Acc")
-
-        with Program() as logic:
-            with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit=Tms).reset(ResetCond)
-
-        mapping = TagMap(
-            {Enable: x[1], ResetCond: x[2], Done: t[1], Acc: td[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    on_delay(T1, TD1, preset=100, unit=Tms).reset(X2)
+            """,
+            """
+            with Rung(X001):
+                on_delay(T1, TD1, preset=100, unit=Tms).reset(X002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_counter_with_pins(self, tmp_path: Path):
+    def test_counter_with_pins(self):
         """Counter with .down() and .reset() pins."""
-        Enable = Bool("Enable")
-        Down = Bool("Down")
-        ResetCond = Bool("ResetCond")
-        Done = Bool("Done")
-        Acc = Dint("Acc")
-
-        with Program() as logic:
-            with Rung(Enable):
-                count_up(Done, Acc, preset=10).down(Down).reset(ResetCond)
-
-        mapping = TagMap(
-            {Enable: x[1], Down: x[2], ResetCond: x[3], Done: ct[1], Acc: ctd[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    count_up(CT1, CTD1, preset=10).down(X2).reset(X3)
+            """,
+            """
+            with Rung(X001):
+                count_up(CT1, CTD1, preset=10).down(X002).reset(X003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_copy(self, tmp_path: Path):
+    def test_copy(self):
         """Copy instruction."""
-        Enable = Bool("Enable")
-        Src = Int("Src")
-        Dst = Int("Dst")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    copy(DS1, DS2)
+            """,
+            """
+            with Rung(X001):
+                copy(DS1, DS2)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(Enable):
-                copy(Src, Dst)
-
-        mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_branch(self, tmp_path: Path):
+    def test_branch(self):
         """Branch with conditions."""
-        A = Bool("A")
-        Mode = Bool("Mode")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(Mode):
-                    out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], Mode: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002):
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_branch_2_deep(self, tmp_path: Path):
-        """2-deep nesting emits flat branch(B, C)."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B, C):
-                    out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2]},
-            include_system=False,
+    def test_branch_local_or(self):
+        """branch(any_of(...)) survives round-trip and stays branch-local."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(any_of(X2, X3)):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002 | X003):
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "branch(" in code
-        assert orig == repro
-
-    def test_branch_3_deep(self, tmp_path: Path):
-        """3-deep nesting emits flat branch(B, C, D)."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        D = Bool("D")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B, C, D):
-                    out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], D: c[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert "branch(" in code
-        assert orig == repro
-
-    def test_branch_interleaved_across_depths(self, tmp_path: Path):
-        """Multiple branches at same level with different depths."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-                with branch(B):
-                    out(Y2)
-                with branch(C):
+    def test_branch_local_or_with_series_suffix_and_sibling_outputs(self):
+        """Local branch OR with siblings before/after the branch stays row-identical."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(any_of(X2, X3), X4):
+                        out(Y2)
                     out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002 | X003, X004):
+                    out(Y002)
+                out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
+    def test_branch_series_then_local_or_followed_by_sibling_output(self):
+        """A branch block can end on a lower OR leg and still resume the parent rung correctly."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    with branch(X2, any_of(X3, X4)):
+                        out(Y1)
+                    out(Y2)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002, X003 | X004):
+                    out(Y001)
+                out(Y002)
+            """,
+        )
 
-    def test_forloop(self, tmp_path: Path):
+    def test_branch_series_then_three_way_local_or_followed_by_sibling_output(self):
+        """Three-way branch-local OR keeps the parent continuation visible on intermediate rows."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    with branch(X2, any_of(X3, X4, X5)):
+                        out(Y1)
+                    out(Y2)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002, any_of(X003, X004, X005)):
+                    out(Y001)
+                out(Y002)
+            """,
+        )
+
+    def test_nested_branch(self):
+        """Nested branch blocks export/import as equivalent row-identical topology."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    with branch(X2):
+                        out(Y1)
+                        with branch(X3):
+                            out(Y2)
+            """,
+            """
+            with Rung(X001, X002):
+                out(Y001)
+                with branch(X003):
+                    out(Y002)
+            """,
+        )
+
+    def test_branch_2_deep(self):
+        """2-deep nesting emits flat branch(B, C)."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2, C1):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002, C1):
+                    out(Y002)
+            """,
+        )
+
+    def test_branch_3_deep(self):
+        """3-deep nesting emits flat branch(B, C, D)."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2, C1, C2):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002, C1, C2):
+                    out(Y002)
+            """,
+        )
+
+    def test_branch_interleaved_across_depths(self):
+        """Multiple branches at same level with different depths."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                    with branch(X2):
+                        out(Y2)
+                    with branch(C1):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                with branch(X002):
+                    out(Y002)
+                with branch(C1):
+                    out(Y003)
+            """,
+        )
+
+    def test_forloop(self):
         """For/next loop."""
-        Enable = Bool("Enable")
-        Y = Bool("Y")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    with forloop(3, oneshot=True):
+                        out(Y1)
+            """,
+            """
+            with Rung(X001):
                 with forloop(3, oneshot=True):
-                    out(Y)
+                    out(Y001)
+            """,
+        )
 
-        mapping = TagMap({Enable: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_immediate_contact(self, tmp_path: Path):
+    def test_immediate_contact(self):
         """Immediate contact."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(immediate(X1)):
+                    out(Y1)
+            """,
+            """
+            with Rung(immediate(X001)):
+                out(Y001)
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(immediate(A)):
-                out(Y)
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-
-    def test_immediate_coil(self, tmp_path: Path):
+    def test_immediate_coil(self):
         """Immediate coil (immediate only in AF, not conditions)."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(immediate(Y1))
+            """,
+            """
+            with Rung(X001):
+                out(immediate(Y001))
+            """,
+        )
 
-        with Program() as logic:
-            with Rung(A):
-                out(immediate(Y))
-
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
-        assert "immediate" in code
-
-    def test_calc(self, tmp_path: Path):
+    def test_calc(self):
         """Calc instruction."""
-        Enable = Bool("Enable")
-        A = Int("A")
-        B = Int("B")
-        Result = Int("Result")
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(A + B, Result)
-
-        mapping = TagMap(
-            {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    calc(DS1 + DS2, DS3)
+            """,
+            """
+            with Rung(X001):
+                calc(DS1 + DS2, DS3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_calc_decimal_operators(self, tmp_path: Path):
+    def test_calc_decimal_operators(self):
         """Calc with power, modulo, and math functions (decimal-mode) round-trips."""
-        from pyrung.core.expression import sqrt
+        _assert_codegen_body(
+            """
+            from pyrung.core.expression import sqrt
+            with Rung(X1):
+                calc(DS1**2, DS3)
+            with Rung(X1):
+                calc(DS1 % DS2, DS3)
+            with Rung(X1):
+                calc(sqrt(DS1), DS3)
+            """,
+            """
+            with Rung(X001):
+                calc(DS1**2, DS3)
 
-        Enable = Bool("Enable")
-        A = Int("A")
-        B = Int("B")
-        Result = Int("Result")
+            with Rung(X001):
+                calc(DS1 % DS2, DS3)
 
-        with Program() as logic:
-            with Rung(Enable):
-                calc(A**2, Result)
-            with Rung(Enable):
-                calc(A % B, Result)
-            with Rung(Enable):
-                calc(sqrt(A), Result)
-
-        mapping = TagMap(
-            {Enable: x[1], A: ds[1], B: ds[2], Result: ds[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(sqrt(DS1), DS3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_calc_hex_shift_operators(self, tmp_path: Path):
+    def test_calc_hex_shift_operators(self):
         """Calc with LSH/RSH (hex-mode) round-trips."""
-        from pyrung.core import Block, TagType
-        from pyrung.core.expression import lsh
+        _assert_codegen_body(
+            """
+            from pyrung.core.expression import lsh
+            with Rung(X1):
+                calc(DH1 << 3, DH3)
+            with Rung(X1):
+                calc(lsh(DH1, 4), DH3)
+            """,
+            """
+            with Rung(X001):
+                calc(lsh(DH1, 3), DH3)
 
-        Enable = Bool("Enable")
-        H = Block("H", TagType.WORD, 1, 1)
-        HDest = Block("HDest", TagType.WORD, 1, 1)
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(H[1] << 3, HDest[1])
-            with Rung(Enable):
-                calc(lsh(H[1], 4), HDest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], H[1]: dh[1], HDest[1]: dh[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(lsh(DH1, 4), DH3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_calc_bitwise_round_trip(self, tmp_path: Path):
+    def test_calc_bitwise_codegen(self):
         """Calc with AND/OR/XOR round-trips through Click-native operators."""
-        from pyrung.core import Block, TagType
+        _assert_codegen_body(
+            """
+            with Rung(X1):
+                calc(DH1 & DH2, DH3)
+            with Rung(X1):
+                calc(DH1 | DH2, DH3)
+            with Rung(X1):
+                calc(DH1 ^ DH2, DH3)
+            """,
+            """
+            with Rung(X001):
+                calc(DH1 & DH2, DH3)
 
-        Enable = Bool("Enable")
-        H1 = Block("H1", TagType.WORD, 1, 1)
-        H2 = Block("H2", TagType.WORD, 1, 1)
-        HDest = Block("HDest", TagType.WORD, 1, 1)
+            with Rung(X001):
+                calc(DH1 | DH2, DH3)
 
-        with Program() as logic:
-            with Rung(Enable):
-                calc(H1[1] & H2[1], HDest[1])
-            with Rung(Enable):
-                calc(H1[1] | H2[1], HDest[1])
-            with Rung(Enable):
-                calc(H1[1] ^ H2[1], HDest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], H1[1]: dh[1], H2[1]: dh[2], HDest[1]: dh[3]},
-            include_system=False,
+            with Rung(X001):
+                calc(DH1 ^ DH2, DH3)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert orig == repro
 
     def test_click_hex_literal_in_comparison(self, tmp_path: Path):
         """Click hex literal ``0000h`` in a condition becomes ``0x0000`` in Python."""
@@ -1365,10 +1670,17 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        assert "0x0000" in code
-        assert "0xFFFF" in code
-        assert "0000h" not in code
-        assert "FFFFh" not in code
+        assert _strip_codegen_program_body(code) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                with Rung(DH001 == 0x0000):
+                    out(C001)
+
+                with Rung(DH001 == 0xFFFF):
+                    out(C002)
+                """
+            )
+        )
 
         # Generated code must be valid Python
         ns: dict = {}
@@ -1392,10 +1704,17 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        assert "0x00FF" in code
-        assert "0xFFFF" in code
-        assert "00FFh" not in code
-        assert "FFFFh" not in code
+        assert _strip_codegen_program_body(code) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                with Rung():
+                    calc(DH001 & 0x00FF, DH002)
+
+                with Rung():
+                    calc(DH001 & 0xFFFF, DH003)
+                """
+            )
+        )
 
         ns: dict = {}
         exec(code, ns)
@@ -1417,657 +1736,409 @@ class TestRoundTrip:
             csv.writer(f).writerows(rows)
 
         code = ladder_to_pyrung(csv_path)
-        # Should use lowercase block variable
-        assert "dh[" in code
-        # Should not have raw uppercase prefix
-        assert "DH[" not in code
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Int, Word, copy
+            from pyrung.click import TagMap, dh, ds
+
+            # --- Tags ---
+            DS134 = Int("DS134")
+            DH051 = Word("DH051")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung():
+                    copy(dh[DS134], DH051)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                DS134: ds[134],
+                DH051: dh[51],
+            })
+            """,
+        )
         # Must be valid Python
         ns: dict = {}
         exec(code, ns)
 
-    def test_calc_sum_round_trip(self, tmp_path: Path):
+    def test_calc_sum_codegen(self):
         """Calc with SUM(range) round-trips through colon-range syntax."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        DH = Block("DH", TagType.WORD, 1, 10)
-        Dest = Block("Dest", TagType.WORD, 1, 1)
-
-        with Program() as logic:
-            with Rung(Enable):
-                calc(DH.select(1, 5).sum(), Dest[1])
-
-        mapping = TagMap(
-            {Enable: x[1], Dest[1]: dh[100], **{DH[i]: dh[i] for i in range(1, 11)}},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    calc(dh.select(1, 5).sum(), dh[100])
+            """,
+            """
+            with Rung(X001):
+                calc(dh.select(1, 5).sum(), DH100)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert "SUM" in code or ".sum()" in code
-        assert orig == repro
-
-    def test_fill(self, tmp_path: Path):
+    def test_fill(self):
         """Fill instruction."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Dest = Block("Dest", TagType.INT, 1, 10)
-
-        with Program() as logic:
-            with Rung(Enable):
-                fill(0, Dest.select(1, 10))
-
-        mapping = TagMap(
-            {Enable: x[1], Dest: ds.select(1, 10)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    fill(0, ds.select(1, 10))
+            """,
+            """
+            with Rung(X001):
+                fill(0, ds.select(1, 10))
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_unpack_to_bits(self, tmp_path: Path):
+    def test_unpack_to_bits(self):
         """Unpack instruction with range."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Bits = Block("Bits", TagType.BOOL, 1, 16)
-
-        with Program() as logic:
-            with Rung(Enable):
-                unpack_to_bits(Source, Bits.select(1, 16))
-
-        mapping = TagMap(
-            {Enable: x[1], Source: ds[1], Bits: c.select(1, 16)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    unpack_to_bits(DS1, c.select(1, 16))
+            """,
+            """
+            with Rung(X001):
+                unpack_to_bits(DS1, c.select(1, 16))
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_shift(self, tmp_path: Path):
+    def test_shift(self):
         """Shift register with .clock() and .reset() pins."""
-        from pyrung.core import Block, TagType
-
-        Data = Bool("Data")
-        Clock = Bool("Clock")
-        ResetCond = Bool("ResetCond")
-        Bits = Block("Bits", TagType.BOOL, 1, 8)
-
-        with Program() as logic:
-            with Rung(Data):
-                shift(Bits.select(1, 8)).clock(Clock).reset(ResetCond)
-
-        mapping = TagMap(
-            {Data: x[1], Clock: x[2], ResetCond: x[3], Bits: c.select(1, 8)},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    shift(c.select(1, 8)).clock(X2).reset(X3)
+            """,
+            """
+            with Rung(X001):
+                shift(c.select(1, 8)).clock(X002).reset(X003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_search(self, tmp_path: Path):
+    def test_search(self):
         """Search instruction."""
-        from pyrung.core import Block, TagType
-
-        Enable = Bool("Enable")
-        Target = Int("Target")
-        Data = Block("Data", TagType.INT, 1, 4)
-        Result = Int("Result")
-        Found = Bool("Found")
-
-        with Program() as logic:
-            with Rung(Enable):
-                search(Data.select(1, 4) == Target, result=Result, found=Found)
-
-        mapping = TagMap(
-            {Enable: x[1], Target: ds[5], Data: ds.select(1, 4), Result: ds[6], Found: c[1]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    search(ds.select(1, 4) == DS5, result=DS6, found=C1)
+            """,
+            """
+            with Rung(X001):
+                search(ds.select(1, 4) == DS5, result=DS6, found=C1)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_event_drum(self, tmp_path: Path):
+    def test_event_drum(self):
         """Event drum with reset pin."""
-        Enable = Bool("Enable")
-        ResetCond = Bool("ResetCond")
-        Out1 = Bool("Out1")
-        Out2 = Bool("Out2")
-        Event1 = Bool("Event1")
-        Event2 = Bool("Event2")
-        Step = Int("Step")
-        Done = Bool("Done")
-
-        with Program() as logic:
-            with Rung(Enable):
-                event_drum(
-                    outputs=[Out1, Out2],
-                    events=[Event1, Event2],
-                    pattern=[[1, 0], [0, 1]],
-                    current_step=Step,
-                    completion_flag=Done,
-                ).reset(ResetCond)
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                ResetCond: x[2],
-                Event1: x[3],
-                Event2: x[4],
-                Out1: y[1],
-                Out2: y[2],
-                Step: ds[1],
-                Done: c[1],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    event_drum(
+                        outputs=[Y1, Y2],
+                        events=[X3, X4],
+                        pattern=[[1, 0], [0, 1]],
+                        current_step=DS1,
+                        completion_flag=C1,
+                    ).reset(X2)
+            """,
+            """
+            with Rung(X001):
+                event_drum(outputs=[Y001, Y002], events=[X003, X004], pattern=[[1, 0], [0, 1]], current_step=DS1, completion_flag=C1).reset(X002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_time_drum(self, tmp_path: Path):
+    def test_time_drum(self):
         """Time drum with reset pin."""
-        Enable = Bool("Enable")
-        ResetCond = Bool("ResetCond")
-        Out1 = Bool("Out1")
-        Out2 = Bool("Out2")
-        Step = Int("Step")
-        Acc = Int("Acc")
-        Done = Bool("Done")
-
-        with Program() as logic:
-            with Rung(Enable):
-                time_drum(
-                    outputs=[Out1, Out2],
-                    presets=[100, 200],
-                    unit=Tms,
-                    pattern=[[1, 0], [0, 1]],
-                    current_step=Step,
-                    accumulator=Acc,
-                    completion_flag=Done,
-                ).reset(ResetCond)
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                ResetCond: x[2],
-                Out1: y[1],
-                Out2: y[2],
-                Step: ds[1],
-                Acc: td[1],
-                Done: c[1],
-            },
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    time_drum(
+                        outputs=[Y1, Y2],
+                        presets=[100, 200],
+                        unit=Tms,
+                        pattern=[[1, 0], [0, 1]],
+                        current_step=DS1,
+                        accumulator=TD1,
+                        completion_flag=C1,
+                    ).reset(X2)
+            """,
+            """
+            with Rung(X001):
+                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit=Tms, pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send(self, tmp_path: Path):
+    def test_send(self):
         """Send instruction with ModbusTcpTarget."""
-        from pyrung.click import ModbusTcpTarget, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive(self, tmp_path: Path):
+    def test_receive(self):
         """Receive instruction with ModbusTcpTarget."""
-        from pyrung.click import ModbusTcpTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_rtu(self, tmp_path: Path):
+    def test_send_rtu(self):
         """Send instruction with ModbusRtuTarget."""
-        from pyrung.click import ModbusRtuTarget, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="cpu2"),
                     remote_start="DS1",
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusRtuTarget(name="vfd1", com_port="cpu2", device_id=5), remote_start="DS1", source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_rtu(self, tmp_path: Path):
+    def test_receive_rtu(self):
         """Receive instruction with ModbusRtuTarget."""
-        from pyrung.click import ModbusRtuTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", "/dev/ttyUSB0", device_id=5, com_port="slot0_1"),
                     remote_start="DS1",
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusRtuTarget(name="vfd1", com_port="slot0_1", device_id=5), remote_start="DS1", dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_modbus_address(self, tmp_path: Path):
+    def test_send_modbus_address(self):
         """Send instruction with ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_modbus_address(self, tmp_path: Path):
+    def test_receive_modbus_address(self):
         """Receive instruction with ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusTcpTarget, RegisterType, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start=ModbusAddress(0, RegisterType.HOLDING),
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start=ModbusAddress(address=400001), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_rtu_modbus_address(self, tmp_path: Path):
+    def test_send_rtu_modbus_address(self):
         """Send with ModbusRtuTarget and ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, send
-
-        Enable = Bool("Enable")
-        Source = Int("Source")
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                    source=Source,
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=DS1,
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds[1],
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), source=DS1, sending=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_rtu_modbus_address(self, tmp_path: Path):
+    def test_receive_rtu_modbus_address(self):
         """Receive with ModbusRtuTarget and ModbusAddress remote_start."""
-        from pyrung.click import ModbusAddress, ModbusRtuTarget, RegisterType, receive
-
-        Enable = Bool("Enable")
-        Dest = Int("Dest")
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2)
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusRtuTarget("vfd1", com_port="slot1_2", device_id=2),
                     remote_start=ModbusAddress(100, RegisterType.HOLDING),
-                    dest=Dest,
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=DS1,
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS2,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds[1],
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[2],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusRtuTarget(name="vfd1", com_port="slot1_2", device_id=2), remote_start=ModbusAddress(address=400101), dest=DS1, receiving=C1, success=C2, error=C3, exception_response=DS2)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_send_block_range(self, tmp_path: Path):
+    def test_send_block_range(self):
         """Send with BlockRange source round-trips through DS1..DS3."""
-        from pyrung.click import ModbusTcpTarget, send
-
-        Enable = Bool("Enable")
-        Source = Block("Source", TagType.INT, 1, 3)
-        Sending = Bool("Sending")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 send(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    source=Source.select(1, 3),
-                    sending=Sending,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    source=ds.select(1, 3),
+                    sending=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Source: ds.select(1, 3),
-                Sending: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[4],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                send(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", source=ds.select(1, 3), sending=C1, success=C2, error=C3, exception_response=DS4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_receive_block_range(self, tmp_path: Path):
+    def test_receive_block_range(self):
         """Receive with BlockRange dest round-trips through DS1..DS3."""
-        from pyrung.click import ModbusTcpTarget, receive
-
-        Enable = Bool("Enable")
-        Dest = Block("Dest", TagType.INT, 1, 3)
-        Receiving = Bool("Receiving")
-        Success = Bool("Success")
-        Error = Bool("Error")
-        ExCode = Int("ExCode")
-
-        target = ModbusTcpTarget("plc2", "192.168.1.2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 receive(
-                    target=target,
+                    target=ModbusTcpTarget("plc2", "192.168.1.2"),
                     remote_start="DS1",
-                    dest=Dest.select(1, 3),
-                    receiving=Receiving,
-                    success=Success,
-                    error=Error,
-                    exception_response=ExCode,
+                    dest=ds.select(1, 3),
+                    receiving=C1,
+                    success=C2,
+                    error=C3,
+                    exception_response=DS4,
                 )
-
-        mapping = TagMap(
-            {
-                Enable: x[1],
-                Dest: ds.select(1, 3),
-                Receiving: c[1],
-                Success: c[2],
-                Error: c[3],
-                ExCode: ds[4],
-            },
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                receive(target=ModbusTcpTarget(name="plc2", ip="192.168.1.2", port=502, device_id=1), remote_start="DS1", dest=ds.select(1, 3), receiving=C1, success=C2, error=C3, exception_response=DS4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_subroutine(self, tmp_path: Path):
+    def test_subroutine(self):
         """Subroutine with call() and return."""
-        from pyrung.core.program import call, subroutine
-
-        Button = Bool("Button")
-        Light = Bool("Light")
-        SubLight = Bool("SubLight")
-
-        with Program() as logic:
-            with Rung(Button):
-                out(Light)
+        _assert_codegen_body(
+            """
+            with Rung(X1):
+                out(Y1)
                 call("init")
 
             with subroutine("init"):
                 with Rung():
-                    out(SubLight)
+                    out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+                call("init")
 
-        mapping = TagMap(
-            {Button: x[1], Light: y[1], SubLight: y[2]},
-            include_system=False,
+            with subroutine("init", strict=False):
+                with Rung():
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-        assert 'subroutine("init")' in code
-        assert 'call("init")' in code
-
-    def test_subroutine_with_conditions(self, tmp_path: Path):
+    def test_subroutine_with_conditions(self):
         """Subroutine rungs with conditions."""
-        from pyrung.core.program import call, subroutine
-
-        Enable = Bool("Enable")
-        Cond = Bool("Cond")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(Enable):
+        _assert_codegen_body(
+            """
+            with Rung(X1):
                 call("worker")
 
             with subroutine("worker"):
-                with Rung(Cond):
+                with Rung(X2):
                     out(Y1)
                 with Rung():
                     out(Y2)
+            """,
+            """
+            with Rung(X001):
+                call("worker")
 
-        mapping = TagMap(
-            {Enable: x[1], Cond: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+            with subroutine("worker", strict=False):
+                with Rung(X002):
+                    out(Y001)
+
+                with Rung():
+                    out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert orig == repro
-
-    def test_rise_fall_or_with_three_outputs(self, tmp_path: Path):
+    def test_rise_fall_or_with_three_outputs(self):
         """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
-        from pyrung.core.program import call, subroutine
-
-        C1 = Bool("C1")
-        C2 = Bool("C2")
-        C4 = Bool("C4")
-        DS1 = Int("DS1")
-
-        with Program() as logic:
+        _assert_codegen_body(
+            """
             with Rung(any_of(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
@@ -2076,15 +2147,18 @@ class TestRoundTrip:
             with subroutine("SubName"):
                 with Rung():
                     out(C4)
+            """,
+            """
+            with Rung(rise(C1) | fall(C2)):
+                copy(1, DS1)
+                copy(C2, C4)
+                call("SubName")
 
-        mapping = TagMap(
-            {C1: c[1], C2: c[2], C4: c[4], DS1: ds[1]},
-            include_system=False,
+            with subroutine("SubName", strict=False):
+                with Rung():
+                    out(C4)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert "with Rung(rise(C1) | fall(C2)):" in code
-        assert orig == repro
 
 
 # ---------------------------------------------------------------------------
@@ -2221,31 +2295,63 @@ class TestNicknameMerge:
 
         nicks = {"X001": "start_button", "Y001": "motor_out"}
         code = ladder_to_pyrung(csv_path, nicknames=nicks)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert 'start_button = Bool("start_button")' in code
-        assert 'motor_out = Bool("motor_out")' in code
-        assert "# X001" in code
-        assert "# Y001" in code
-        assert "out(motor_out)" in code
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
 
-    def test_dict_nicknames_reserved_python_names_prefixed(self, tmp_path: Path):
+            # --- Tags ---
+            start_button = Bool("start_button")  # X001
+            motor_out = Bool("motor_out")  # Y001
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(start_button):
+                    out(motor_out)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                start_button: x[1],
+                motor_out: y[1],
+            })
+            """,
+        )
+
+    def test_dict_nicknames_reserved_python_names_prefixed(self):
         """Reserved Python names become safe variable identifiers."""
-        Enable = Bool("Enable")
-        Src = Int("Src")
-        Dst = Int("Dst")
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                copy(DS1, DS2)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        with Program() as logic:
-            with Rung(Enable):
-                copy(Src, Dst)
+            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung.click import TagMap, ds, x
 
-        mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
-        nicks = {"DS1": "True", "DS2": "False"}
-        code, orig, repro = _round_trip(logic, mapping, tmp_path, nicknames=nicks)
+            # --- Tags ---
+            _True = Int("True")  # DS1
+            _False = Int("False")  # DS2
+            X001 = Bool("X001")
 
-        assert '_True = Int("True")' in code
-        assert '_False = Int("False")' in code
-        assert "copy(_True, _False)" in code
-        assert orig == repro
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    copy(_True, _False)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                _True: ds[1],
+                _False: ds[2],
+                X001: x[1],
+            })
+            """,
+            nicknames={"DS1": "True", "DS2": "False"},
+        )
 
     def test_dict_nicknames_prefixed_names_remain_unique(self, tmp_path: Path):
         """Sanitized identifiers stay unique if a nickname already has the prefix."""
@@ -2260,25 +2366,63 @@ class TestNicknameMerge:
         mapping = TagMap({Enable: x[1], Src: ds[1], Dst: ds[2]}, include_system=False)
         nicks = {"DS1": "True", "DS2": "_True"}
         code = ladder_to_pyrung(_export_csv(logic, mapping, tmp_path), nicknames=nicks)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert '_True = Int("True")' in code
-        assert '_True_2 = Int("_True")' in code
-        assert "copy(_True, _True_2)" in code
+            from pyrung import Program, Rung, Bool, Int, copy
+            from pyrung.click import TagMap, ds, x
 
-    def test_dict_nicknames_round_trip(self, tmp_path: Path):
+            # --- Tags ---
+            _True = Int("True")  # DS1
+            _True_2 = Int("_True")  # DS2
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    copy(_True, _True_2)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                _True: ds[1],
+                _True_2: ds[2],
+                X001: x[1],
+            })
+            """,
+        )
+
+    def test_dict_nicknames_codegen(self):
         """Nicknames round-trip: generated code re-exports same CSV."""
-        A = Bool("A")
-        Y = Bool("Y")
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        with Program() as logic:
-            with Rung(A):
-                out(Y)
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        nicks = {"X001": "start_button", "Y001": "motor_out"}
-        code, orig, repro = _round_trip(logic, mapping, tmp_path, nicknames=nicks)
+            # --- Tags ---
+            start_button = Bool("start_button")  # X001
+            motor_out = Bool("motor_out")  # Y001
 
-        assert orig == repro
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(start_button):
+                    out(motor_out)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                start_button: x[1],
+                motor_out: y[1],
+            })
+            """,
+            nicknames={"X001": "start_button", "Y001": "motor_out"},
+        )
 
     def test_no_nicknames(self, tmp_path: Path):
         """Without nicknames, raw operand names are used."""
@@ -2292,10 +2436,30 @@ class TestNicknameMerge:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
+        _assert_generated_code(
+            code,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert 'X001 = Bool("X001")' in code
-        assert 'Y001 = Bool("Y001")' in code
-        assert "out(Y001)" in code
+            from pyrung import Program, Rung, Bool, out
+            from pyrung.click import TagMap, x, y
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            Y001 = Bool("Y001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    out(Y001)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                Y001: y[1],
+            })
+            """,
+        )
 
     def test_both_raises(self, tmp_path: Path):
         """Providing both nickname_csv and nicknames raises ValueError."""
@@ -2324,14 +2488,15 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-
-        assert "from pyrung import" in code
-        assert "Program" in code
-        assert "Rung" in code
-        assert "Bool" in code
-        assert "out" in code
-        assert "from pyrung.click import" in code
-        assert "TagMap" in code
+        import_lines = "\n".join(line for line in code.splitlines() if line.startswith("from "))
+        assert normalize_pyrung(import_lines) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                from pyrung import Program, Rung, Bool, out
+                from pyrung.click import TagMap, x, y
+                """
+            )
+        )
 
     def test_output_file(self, tmp_path: Path):
         """output_path writes the generated file."""
@@ -2363,10 +2528,17 @@ class TestCodeGeneration:
         mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
         csv_path = _export_csv(logic, mapping, tmp_path)
         code = ladder_to_pyrung(csv_path)
-
-        assert "mapping = TagMap({" in code
-        assert "x[1]" in code
-        assert "y[1]" in code
+        mapping_block = code.split("# --- Tag Map ---", maxsplit=1)[1]
+        assert normalize_pyrung(mapping_block) == normalize_pyrung(
+            textwrap.dedent(
+                """
+                mapping = TagMap({
+                    X001: x[1],
+                    Y001: y[1],
+                })
+                """
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2377,79 +2549,238 @@ class TestCodeGeneration:
 class TestContinuedRoundTrip:
     """Round-trip tests for .continued() rungs."""
 
-    def test_simple_continuation(self, tmp_path: Path):
+    def test_simple_continuation(self):
         """Two independent wires: primary rung + continued rung."""
-        A = Bool("A")
-        B = Bool("B")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Y1: y[1], Y2: y[2]},
-            include_system=False,
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002).continued():
+                out(Y002)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert ".continued()" in code
-        assert orig == repro
-
-    def test_continued_chain(self, tmp_path: Path):
+    def test_continued_chain(self):
         """Three consecutive continued rungs share the same snapshot."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-            with Rung(C).continued():
-                out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], C: c[1], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
-        )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        assert code.count(".continued()") == 2
-        assert orig == repro
-
-    def test_continuation_with_branch(self, tmp_path: Path):
-        """Continued rung with a branch inside it."""
-        A = Bool("A")
-        B = Bool("B")
-        Mode = Bool("Mode")
-        Y1 = Bool("Y1")
-        Y2 = Bool("Y2")
-        Y3 = Bool("Y3")
-
-        with Program() as logic:
-            with Rung(A):
-                out(Y1)
-            with Rung(B).continued():
-                out(Y2)
-                with branch(Mode):
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+                with Rung(C1).continued():
                     out(Y3)
-
-        mapping = TagMap(
-            {A: x[1], B: x[2], Mode: x[3], Y1: y[1], Y2: y[2], Y3: y[3]},
-            include_system=False,
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002).continued():
+                out(Y002)
+            with Rung(C1).continued():
+                out(Y003)
+            """,
         )
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
 
-        assert ".continued()" in code
-        assert orig == repro
+    def test_continuation_with_branch(self):
+        """Continued rung with a branch inside it."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    out(Y2)
+                    with branch(X3):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002).continued():
+                out(Y002)
+                with branch(X003):
+                    out(Y003)
+            """,
+        )
+
+    def test_continuation_with_branch_local_or(self):
+        """continued() stays stable when the continued rung has branch-local OR."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    out(Y1)
+                with Rung(X2).continued():
+                    with branch(any_of(X3, X4)):
+                        out(Y2)
+            """,
+            """
+            with Rung(X001):
+                out(Y001)
+            with Rung(X002, X003 | X004).continued():
+                out(Y002)
+            """,
+        )
+
+    def test_nested_branch_outputs_preserve_inner_shared_prefix(self):
+        """Nested shared prefixes should come back as nested branch() blocks."""
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2):
+                        with branch(X3):
+                            out(Y1)
+                        with branch(X4):
+                            out(Y2)
+                    with branch(X5):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002):
+                    with branch(X003):
+                        out(Y001)
+                    with branch(X004):
+                        out(Y002)
+                with branch(X005):
+                    out(Y003)
+            """,
+        )
+
+    def test_greedy_group_prefix_shrinks_but_stays_nonempty(self):
+        """Growing a group shrinks the shared prefix; recursion recovers deeper nesting.
+
+        Outputs: B·C·G, B·C·H, B·E under rung A.
+        Pair {1,2} shares [B,C]; triple {1,2,3} shares only [B].
+        ``_group_outputs`` absorbs the globally-shared B into the rung
+        condition.  The emitter's greedy loop then finds C shared between
+        the first two outputs and nests them.
+        """
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3, X5):
+                        out(Y1)
+                    with branch(X2, X3, X6):
+                        out(Y2)
+                    with branch(X2, X4):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001, X002):
+                with branch(X003):
+                    with branch(X005):
+                        out(Y001)
+                    with branch(X006):
+                        out(Y002)
+                with branch(X004):
+                    out(Y003)
+            """,
+        )
+
+    def test_greedy_group_disjoint_consecutive_groups(self):
+        """Consecutive outputs with disjoint prefixes form separate groups.
+
+        Outputs: B·C (standalone), D·E, D·F under rung A.
+        {1,2} share nothing, so output 1 is emitted alone.  Then {2,3}
+        share D and are grouped.
+        """
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X4, X5):
+                        out(Y2)
+                    with branch(X4, X6):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002, X003):
+                    out(Y001)
+                with branch(X004):
+                    with branch(X005):
+                        out(Y002)
+                    with branch(X006):
+                        out(Y003)
+            """,
+        )
+
+    def test_greedy_group_all_share_single_prefix(self):
+        """All outputs share the same single-level prefix — one group.
+
+        Outputs: B·C, B·D, B·E under rung A.
+        All three share [B]; ``_group_outputs`` absorbs B into the rung
+        condition, leaving C, D, E as flat sibling branches.
+        """
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X2, X4):
+                        out(Y2)
+                    with branch(X2, X5):
+                        out(Y3)
+            """,
+            """
+            with Rung(X001, X002):
+                with branch(X003):
+                    out(Y001)
+                with branch(X004):
+                    out(Y002)
+                with branch(X005):
+                    out(Y003)
+            """,
+        )
+
+    def test_greedy_group_four_outputs_two_disjoint_pairs(self):
+        """Four outputs forming two independent pairs with different prefixes.
+
+        Outputs: B·C, B·D, E·F, E·G under rung A.
+        {1,2} share B; {3,4} share E; {2,3} share nothing.
+        Should emit two separate grouped branches.
+        """
+        _assert_codegen_body(
+            """
+            with Program(strict=False) as p:
+                with Rung(X1):
+                    with branch(X2, X3):
+                        out(Y1)
+                    with branch(X2, X4):
+                        out(Y2)
+                    with branch(X5, X6):
+                        out(Y3)
+                    with branch(X5, X7):
+                        out(Y4)
+            """,
+            """
+            with Rung(X001):
+                with branch(X002):
+                    with branch(X003):
+                        out(Y001)
+                    with branch(X004):
+                        out(Y002)
+                with branch(X005):
+                    with branch(X006):
+                        out(Y003)
+                    with branch(X007):
+                        out(Y004)
+            """,
+        )
 
 
 class TestStructuredCodegen:
@@ -2899,12 +3230,28 @@ class TestStructuredCodegen:
                 reset(Bits.select(1, 3))
 
         mapping = TagMap({Enable: x[1], Bits: c.select(1004, 1006)}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+        _assert_generated_code(
+            ladder_to_pyrung(pyrung_to_ladder(logic, mapping)),
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
 
-        assert "reset(c.select(1004, 1006))" in code
-        assert 'C1004_to_C1006 = Block("C1004_to_C1006"' not in code
-        assert "C1004_to_C1006:" not in code
-        assert orig == repro
+            from pyrung import Program, Rung, Bool, reset
+            from pyrung.click import TagMap, c, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    reset(c.select(1004, 1006))
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+        )
 
     def test_dense_named_array_backing_range_codegen_uses_instance_select(self, tmp_path: Path):
         """Dense named_array backing windows should rewrite to instance_select()."""
@@ -3469,46 +3816,45 @@ class TestStructuredCodegen:
 class TestNop:
     """Test NOP / empty rung codegen and round-trip."""
 
-    def test_empty_rung_round_trip(self, tmp_path: Path):
+    def test_empty_rung_codegen_emits_pass(self):
         """Empty (pass) rung survives program → CSV NOP → codegen → exec → CSV₂."""
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Section header")
             with Rung():
                 pass
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Section header")
+            with Rung():
+                pass
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
-        # Codegen should emit pass, not nop()
-        assert "pass" in code
-        assert "nop()" not in code
-        assert orig == repro
-
-    def test_explicit_nop_round_trip(self, tmp_path: Path):
+    def test_explicit_nop_codegen_normalizes_to_pass(self):
         """Explicit nop() rung survives round-trip via NOP in CSV."""
-        from pyrung.click import nop
-
-        A = Bool("A")
-        Y = Bool("Y")
-
-        with Program() as logic:
+        _assert_codegen_program_body(
+            """
             comment("Explicit NOP")
             with Rung():
                 nop()
-            with Rung(A):
-                out(Y)
+            with Rung(X1):
+                out(Y1)
+            """,
+            """
+            comment("Explicit NOP")
+            with Rung():
+                pass
 
-        mapping = TagMap({A: x[1], Y: y[1]}, include_system=False)
-        code, orig, repro = _round_trip(logic, mapping, tmp_path)
-
-        # Round-trip normalises nop() → pass (both map to CSV NOP)
-        assert "pass" in code
-        assert orig == repro
+            with Rung(X001):
+                out(Y001)
+            """,
+        )
 
     def test_bare_text_rejected(self, tmp_path: Path):
         """Unknown bare text in AF column raises ValueError."""
@@ -3518,3 +3864,73 @@ class TestNop:
         collection = _OperandCollection()
         with pytest.raises(ValueError, match="Unrecognised AF token"):
             _render_af_token("BOGUS", collection, None)
+
+    def test_blank_raw_rung_preserved_as_pass(self):
+        """A raw blank rung should survive import as an explicit pass rung."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        bundle = LadderBundle(
+            main_rows=(
+                header,
+                tuple(_make_row("R", {})),
+                tuple(_make_row("R", {0: "X001"}, "out(Y001)")),
+            ),
+            subroutine_rows=(),
+        )
+
+        body = _strip_codegen_program_body(ladder_to_pyrung(bundle))
+        assert body == normalize_pyrung(
+            textwrap.dedent(
+                """
+            with Rung():
+                pass
+
+            with Rung(X001):
+                out(Y001)
+            """
+            )
+        )
+
+    def test_partial_rung_without_output_fails_loudly(self):
+        """A rung with conditions but no completed output object should be rejected."""
+        from pyrung.click.ladder.types import LadderBundle
+
+        header = (
+            "marker",
+            *tuple(
+                [chr(ord("A") + i) for i in range(26)] + [f"A{chr(ord('A') + i)}" for i in range(5)]
+            ),
+            "AF",
+        )
+        bundle = LadderBundle(
+            main_rows=(
+                header,
+                tuple(_make_row("R", {0: "X001"})),
+            ),
+            subroutine_rows=(),
+        )
+
+        with pytest.raises(ValueError, match="complete output object"):
+            ladder_to_pyrung(bundle)
+
+    def test_render_pin_rejects_lossy_flat_conditions(self):
+        """Pins must not truncate multi-token conditions down to the first token."""
+        from pyrung.click.codegen.emitter import _render_pin
+        from pyrung.click.codegen.models import _OperandCollection, _PinInfo
+
+        pin = _PinInfo(
+            name="reset",
+            arg="",
+            conditions=["X001", "X002"],
+            condition_tree=None,
+        )
+
+        with pytest.raises(ValueError, match="cannot be rendered losslessly"):
+            _render_pin(pin, _OperandCollection(), None)

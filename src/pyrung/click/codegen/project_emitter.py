@@ -135,7 +135,9 @@ def _generate_readme() -> str:
     return """\
 # Setup
 
-1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already.
+1. Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you haven't already:
+
+       powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 2. Create the virtual environment and install dependencies:
 
@@ -148,6 +150,22 @@ def _generate_readme() -> str:
        code --install-extension pyrung-debug-0.1.0.vsix
 
 4. Open this folder in VS Code, press F5 to debug.
+
+# Loading into Click Programming Software
+
+1. Re-export the project to Click ladder CSV (picks up any edits you've made):
+
+       uv run python project_to_csv.py
+
+2. Install [ClickNick](https://github.com/ssweber/clicknick):
+
+       uv tool install clicknick
+
+3. In Click Programming Software, go to **Ladder → Open in Guided Paste...**
+   and point it at the `click_csv` folder.
+
+   ClickNick walks you through pasting each rung and subroutine into Click
+   with addresses and nicknames already wired up.
 """
 
 
@@ -333,7 +351,7 @@ def _generate_subroutine_file(
     lines.append("")
 
     # @subroutine("name") decorator + function
-    lines.append(f'@subroutine("{sub.name}")')
+    lines.append(f'@subroutine("{sub.name}", strict=False)')
     lines.append(f"def {func_name}():")
     if sub_rungs:
         _emit_rung_sequence(
@@ -393,7 +411,7 @@ def _generate_main_file(
     lines.append("")
 
     # Program body (main rungs only, no subroutine definitions)
-    lines.append("with Program() as logic:")
+    lines.append("with Program(strict=False) as logic:")
     if rungs:
         _emit_rung_sequence(
             lines,

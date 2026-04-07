@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
 from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
@@ -24,10 +25,7 @@ from pyrung.click.codegen.constants import (
     _RANGE_RE,
 )
 from pyrung.click.codegen.models import (
-    Leaf,
-    Parallel,
-    Series,
-    SPNode,
+    RungRole,
     _AnalyzedRung,
     _InstructionInfo,
     _OperandCollection,
@@ -400,7 +398,7 @@ def _emit_program(
     call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit the program body."""
-    lines.append("with Program() as logic:")
+    lines.append("with Program(strict=False) as logic:")
 
     if not rungs and not subroutines:
         lines.append("    pass")
@@ -423,7 +421,7 @@ def _emit_program(
             if sub_rungs and _is_trailing_return(sub_rungs[-1]):
                 sub_rungs = sub_rungs[:-1]
             lines.append("")
-            lines.append(f'    with subroutine("{sub.name}"):')
+            lines.append(f'    with subroutine("{sub.name}", strict=False):')
             if sub_rungs:
                 _emit_rung_sequence(
                     lines,
@@ -458,7 +456,7 @@ def _emit_rung_sequence(
     while i < len(rungs):
         rung = rungs[i]
 
-        if rung.is_forloop_start:
+        if rung.role is RungRole.FORLOOP_START:
             if not first:
                 lines.append("")
             first = False
@@ -474,17 +472,17 @@ def _emit_rung_sequence(
             )
             # Skip to after next()
             i += 1
-            while i < len(rungs) and not rungs[i].is_forloop_next:
+            while i < len(rungs) and rungs[i].role is not RungRole.FORLOOP_NEXT:
                 i += 1
             i += 1  # skip the next() rung
             continue
 
-        if rung.is_forloop_next:
+        if rung.role is RungRole.FORLOOP_NEXT:
             # Should have been consumed by forloop handler
             i += 1
             continue
 
-        if not first:
+        if not first and not rung.is_continued:
             lines.append("")
         first = False
         _emit_rung(
@@ -543,7 +541,7 @@ def _emit_forloop(
     body_pad = "    " * (indent + 2)
     body_count = 0
     for j in range(start_idx + 1, len(rungs)):
-        if rungs[j].is_forloop_next:
+        if rungs[j].role is RungRole.FORLOOP_NEXT:
             break
         body_rung = rungs[j]
         for instr in body_rung.instructions:
@@ -598,41 +596,96 @@ def _emit_rung(
         return
 
     conditions_str = _build_conditions_str(rung, collection, nicknames, structured_map)
+    _emit_rung_header(lines, rung, conditions_str, indent)
 
-    # Check if we need branch() blocks
-    has_branches = any(instr.branch_tree is not None for instr in real_instructions)
-    multi_output = len(real_instructions) > 1
+    if len(real_instructions) == 1:
+        _emit_instruction(
+            lines,
+            real_instructions[0],
+            collection,
+            nicknames,
+            indent + 1,
+            structured_map,
+            call_func_map,
+        )
+        return
 
-    if has_branches and multi_output:
-        _emit_rung_header(lines, rung, conditions_str, indent)
+    _emit_grouped_instructions(
+        lines,
+        [(instr.branch_tree, instr) for instr in real_instructions],
+        collection,
+        nicknames,
+        indent + 1,
+        structured_map,
+        call_func_map,
+    )
 
-        for instr in real_instructions:
-            if instr.branch_tree is not None:
-                branch_cond = _render_sp_node(
-                    instr.branch_tree, collection, nicknames, structured_map
-                )
-                lines.append(f"{pad}    with branch({branch_cond}):")
-                _emit_instruction(
-                    lines, instr, collection, nicknames, indent + 2, structured_map, call_func_map
-                )
-            else:
-                _emit_instruction(
-                    lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
-                )
-    elif multi_output and not has_branches:
-        _emit_rung_header(lines, rung, conditions_str, indent)
 
-        for instr in real_instructions:
+def _emit_grouped_instructions(
+    lines: list[str],
+    outputs: list[tuple[SPNode | None, _InstructionInfo]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    indent: int,
+    structured_map: TagMap | None = None,
+    call_func_map: dict[str, str] | None = None,
+) -> None:
+    """Emit instructions with recursive shared-prefix factoring for nested branches."""
+    pad = "    " * indent
+    index = 0
+
+    while index < len(outputs):
+        tree, instr = outputs[index]
+        if tree is None:
             _emit_instruction(
-                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+                lines,
+                instr,
+                collection,
+                nicknames,
+                indent,
+                structured_map,
+                call_func_map,
             )
-    else:
-        _emit_rung_header(lines, rung, conditions_str, indent)
+            index += 1
+            continue
 
-        for instr in real_instructions:
-            _emit_instruction(
-                lines, instr, collection, nicknames, indent + 1, structured_map, call_func_map
+        stop = index + 1
+        while stop < len(outputs):
+            candidate_tree, _candidate_instr = outputs[stop]
+            if candidate_tree is None:
+                break
+            shared = factor_outputs(
+                [candidate for candidate, _item in outputs[index : stop + 1]]
+            ).shared
+            if not shared:
+                break
+            stop += 1
+
+        group = outputs[index:stop]
+        result = factor_outputs([candidate for candidate, _item in group])
+        branch_tree = make_compound(result.shared, Series)
+        branch_cond = _render_sp_node(branch_tree, collection, nicknames, structured_map)
+        lines.append(f"{pad}with branch({branch_cond}):")
+
+        remaining_outputs = [
+            (
+                make_compound(result.branches[group_index], Series)
+                if result.branches[group_index]
+                else None,
+                group_instr,
             )
+            for group_index, (_group_tree, group_instr) in enumerate(group)
+        ]
+        _emit_grouped_instructions(
+            lines,
+            remaining_outputs,
+            collection,
+            nicknames,
+            indent + 1,
+            structured_map,
+            call_func_map,
+        )
+        index = stop
 
 
 def _render_sp_node(
@@ -667,7 +720,7 @@ def _render_sp_node(
             return parts[0]
         return f"any_of({', '.join(parts)})"
 
-    return ""
+    raise ValueError(f"Unsupported topology node for codegen: {type(node).__name__}")
 
 
 def _build_conditions_str(
@@ -858,8 +911,17 @@ def _render_pin(
     structured_map: TagMap | None = None,
 ) -> str:
     """Render a pin as a chained method call."""
-    if pin.conditions:
+    cond: str | None = None
+    if pin.condition_tree is not None:
+        cond = _render_sp_node(pin.condition_tree, collection, nicknames, structured_map)
+    elif pin.conditions:
+        if len(pin.conditions) != 1:
+            raise ValueError(
+                f"Pin .{pin.name}() cannot be rendered losslessly without a full condition tree; "
+                f"got {len(pin.conditions)} flat condition tokens."
+            )
         cond = _render_condition(pin.conditions[0], collection, nicknames, structured_map)
+    if cond:
         if pin.arg:
             arg = _sub_operand(pin.arg, collection, nicknames, structured_map)
             return f".{pin.name}({cond}, {arg})"

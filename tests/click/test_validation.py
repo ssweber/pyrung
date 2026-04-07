@@ -819,7 +819,7 @@ class TestExprCompareInCondition:
 
         report = validate_click_program(prog, tag_map, mode="warn")
         expr_findings = [f for f in report.hints if f.code == CLK_EXPR_ONLY_IN_CALC]
-        # Both condition.left (AddExpr) and condition.right (LiteralExpr) are expressions
+        # Both condition.left (BinaryExpr) and condition.right (LiteralExpr) are expressions
         assert len(expr_findings) >= 2
 
 

@@ -34,7 +34,8 @@ from pyrung.circuitpy.codegen._util import (
     _ret_types_literal,
     _subroutine_symbol,
 )
-from pyrung.circuitpy.codegen.compile import _load_cast_expr, compile_rung
+from pyrung.circuitpy.codegen.compile import compile_rung
+from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render_modbus import (
     _render_ethernet_setup,

@@ -1,0 +1,251 @@
+"""Smoke tests for the test audit helpers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from pyrung.click import pyrung_to_ladder
+from pyrung.core import Program
+from tests.click.helpers import (
+    Fixture,
+    build_program,
+    load_fixtures,
+    normalize_csv,
+    normalize_pyrung,
+    strip_pyrung_boilerplate,
+)
+
+
+class TestBuildProgram:
+    def test_simple_contact_coil(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(C1):
+                    out(Y1)
+        """)
+        assert isinstance(logic, Program)
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert any(row[-1] == "out(Y001)" for row in bundle.main_rows)
+
+    def test_timer_with_reset(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(X1):
+                    on_delay(T1, TD1, preset=100).reset(X2)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert any(t.startswith("on_delay(") for t in tokens)
+        assert ".reset()" in tokens
+
+    def test_counter_tags_inferred(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(C1):
+                    count_up(CT1, CTD1, preset=5).reset(C2)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert any(t.startswith("count_up(") for t in tokens)
+
+    def test_supports_logic_variable_name(self):
+        logic, mapping = build_program("""
+            with Program() as logic:
+                with Rung(C1):
+                    out(Y1)
+        """)
+        assert isinstance(logic, Program)
+
+    def test_wraps_bare_program_body(self):
+        logic, mapping = build_program("""
+            with Rung(C1):
+                out(Y1)
+        """)
+        assert isinstance(logic, Program)
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert any(row[-1] == "out(Y001)" for row in bundle.main_rows)
+
+    def test_or_condition(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(any_of(X1, X2)):
+                    out(Y1)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        assert len(bundle.main_rows) > 2  # header + at least 2 data rows + end
+
+    def test_supports_raw_block_range(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(X1):
+                    reset(C10..C17)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert tokens == ["reset(C10..C17)", "end()"]
+
+    def test_raw_block_range_skips_quoted_strings(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(X1):
+                    send(
+                        target=ModbusTcpTarget("plc2", "192.168.1.2"),
+                        remote_start="DS1",
+                        source=DS1..DS3,
+                        sending=C1,
+                        success=C2,
+                        error=C3,
+                        exception_response=DS4,
+                    )
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
+        assert tokens == [
+            'send(target=ModbusTcpTarget(name="plc2",ip="192.168.1.2",port=502,device_id=1),remote_start="DS1",source=DS1..DS3,sending=C1,success=C2,error=C3,exception_response=DS4)',
+            "end()",
+        ]
+
+    def test_rejects_cross_family_raw_range(self):
+        with pytest.raises(ValueError, match="within one operand family"):
+            build_program("""
+                with Program() as p:
+                    with Rung(X1):
+                        reset(DS1..DH3)
+            """)
+
+
+class TestNormalizeCsv:
+    def test_strips_header_and_end(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(C1):
+                    out(Y1)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        rows = normalize_csv(bundle.main_rows)
+        assert all(r[0] != "marker" for r in rows)
+        assert all(r[-1] != "end()" for r in rows)
+        assert len(rows) == 1
+
+    def test_strips_trailing_empty_cells(self):
+        logic, mapping = build_program("""
+            with Program() as p:
+                with Rung(any_of(X1, X2)):
+                    out(Y1)
+        """)
+        bundle = pyrung_to_ladder(logic, mapping)
+        rows = normalize_csv(bundle.main_rows)
+        # OR continuation row should have trailing empties stripped
+        continuation = [r for r in rows if r[0] == ""]
+        assert len(continuation) >= 1
+        for row in continuation:
+            assert row[-1] != ""
+
+
+class TestNormalizePyrung:
+    def test_strips_trailing_whitespace(self):
+        code = "  with Rung(C1):  \n    out(Y1)  \n"
+        result = normalize_pyrung(code)
+        assert result == "  with Rung(C1):\n    out(Y1)"
+
+    def test_strips_leading_trailing_blank_lines(self):
+        code = "\n\nwith Program():\n    pass\n\n\n"
+        result = normalize_pyrung(code)
+        assert result == "with Program():\n    pass"
+
+
+class TestStripPyrungBoilerplate:
+    def test_extracts_rung_body(self):
+        code = (
+            "# Generated by pyrung codegen\n"
+            "from pyrung import Program, Rung, Bool\n"
+            "from pyrung.click import TagMap, x, y\n"
+            "\n"
+            'C1 = Bool("C1")\n'
+            "\n"
+            "with Program() as logic:\n"
+            "    with Rung(C1):\n"
+            "        out(C1)\n"
+            "\n"
+            "mapping = TagMap({C1: c[1]})\n"
+        )
+        result = strip_pyrung_boilerplate(code)
+        assert result == "with Rung(C1):\n    out(C1)"
+
+    def test_strips_comment_calls(self):
+        code = (
+            "with Program() as logic:\n"
+            '    comment("""\\\n'
+            "        some fixture text\n"
+            '        more text""")\n'
+            "    with Rung(C1):\n"
+            "        out(C1)\n"
+        )
+        result = strip_pyrung_boilerplate(code)
+        assert result == "with Rung(C1):\n    out(C1)"
+
+    def test_raises_on_missing_program(self):
+        code = "# just a comment\nfrom pyrung import Bool\n"
+        with pytest.raises(ValueError, match="with Program"):
+            strip_pyrung_boilerplate(code)
+
+
+class TestLoadFixtures:
+    def test_empty_directory(self, tmp_path: Path):
+        result = load_fixtures(tmp_path)
+        assert result == []
+
+    def test_nonexistent_directory(self, tmp_path: Path):
+        result = load_fixtures(tmp_path / "nope")
+        assert result == []
+
+    def test_loads_fixture_with_comment(self, tmp_path: Path):
+        import csv
+
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        csv_path = tmp_path / "simple.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerows(
+                [
+                    header,
+                    ["#", "with Rung(X001):"],
+                    ["#", "    out(Y001)"],
+                    ["R", "X001", *["-"] * 30, "out(Y001)"],
+                ]
+            )
+
+        fixtures = load_fixtures(tmp_path)
+        assert len(fixtures) == 1
+        assert fixtures[0].name == "simple"
+        assert fixtures[0].expected == "with Rung(X001):\n    out(Y001)"
+        assert isinstance(fixtures[0], Fixture)
+
+    def test_skips_csv_without_comment(self, tmp_path: Path):
+        import csv
+
+        header = [
+            "marker",
+            *[chr(ord("A") + i) for i in range(26)],
+            *[f"A{chr(ord('A') + i)}" for i in range(5)],
+            "AF",
+        ]
+        csv_path = tmp_path / "no_comment.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerows(
+                [
+                    header,
+                    ["R", "X001", *["-"] * 30, "out(Y001)"],
+                ]
+            )
+
+        fixtures = load_fixtures(tmp_path)
+        assert len(fixtures) == 0

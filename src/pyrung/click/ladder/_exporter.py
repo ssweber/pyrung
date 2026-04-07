@@ -2,19 +2,30 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from pyrung.click._topology import Leaf, Series, SPNode, factor_outputs, make_compound
+from pyrung.core.condition import AllCondition, AnyCondition, Condition
 from pyrung.core.rung import Rung
 
 from .instructions import _InstructionMixin
 from .layout import _HEADER, _LayoutMixin
 from .translator import _TranslatorMixin
 from .types import ExportSummary, LadderBundle, LadderExportError, _RenderError
-from .validator import _ValidationMixin
+from .validator import _RoundTripValidationMixin, _ValidationMixin
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
     from pyrung.core.program import Program
+
+
+@dataclass(frozen=True)
+class _ConditionLeafKey:
+    """SP-tree leaf label that preserves the original condition for rebuilding."""
+
+    condition: Condition = field(compare=False)
+    signature: str
 
 
 # ---- Public entrypoint ----
@@ -25,6 +36,7 @@ def build_ladder_bundle(tag_map: TagMap, program: Program) -> LadderBundle:
 
 # ---- Orchestrator ----
 class _LadderExporter(
+    _RoundTripValidationMixin,
     _ValidationMixin,
     _LayoutMixin,
     _InstructionMixin,
@@ -51,23 +63,37 @@ class _LadderExporter(
             self._run_precheck()
 
             # Main scope always ends with an explicit end() rung.
-            main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
-            main_rows.extend(
-                self._render_scope(self._program.rungs, scope="main", subroutine_name=None)
+            rendered_main_rows = self._render_scope(
+                self._program.rungs, scope="main", subroutine_name=None
             )
+            self._validate_scope_roundtrip(
+                source_rungs=self._program.rungs,
+                rendered_rows=rendered_main_rows,
+                scope="main",
+                subroutine_name=None,
+            )
+
+            main_rows: list[tuple[str, ...]] = [tuple(_HEADER)]
+            main_rows.extend(rendered_main_rows)
             main_rows.extend(self._end_rung())
 
             # Each subroutine matrix gets a deterministic return() tail.
             subroutine_rows: list[tuple[str, tuple[tuple[str, ...], ...]]] = []
             for subroutine_name in sorted(self._program.subroutines):
-                rows: list[tuple[str, ...]] = [tuple(_HEADER)]
-                rows.extend(
-                    self._render_scope(
-                        self._program.subroutines[subroutine_name],
-                        scope="subroutine",
-                        subroutine_name=subroutine_name,
-                    )
+                rendered_sub_rows = self._render_scope(
+                    self._program.subroutines[subroutine_name],
+                    scope="subroutine",
+                    subroutine_name=subroutine_name,
                 )
+                self._validate_scope_roundtrip(
+                    source_rungs=self._program.subroutines[subroutine_name],
+                    rendered_rows=rendered_sub_rows,
+                    scope="subroutine",
+                    subroutine_name=subroutine_name,
+                )
+
+                rows: list[tuple[str, ...]] = [tuple(_HEADER)]
+                rows.extend(rendered_sub_rows)
                 rows = self._ensure_subroutine_return_tail(rows, subroutine_name=subroutine_name)
                 subroutine_rows.append((subroutine_name, tuple(rows)))
 
@@ -104,6 +130,110 @@ class _LadderExporter(
             return []
         return [("#", line) for line in rung.comment.splitlines()]
 
+    def _normalize_branching_rung(self, rung: Rung) -> Rung:
+        """Normalize a branching rung into an ordered shared-prefix tree."""
+        outputs = self._collect_instruction_trees(rung)
+        if not outputs:
+            return rung
+        normalized = self._build_normalized_rung_from_trees(outputs)
+        normalized._use_prior_snapshot = rung._use_prior_snapshot
+        normalized.comment = rung.comment
+        return normalized
+
+    def _series_tree(self, *nodes: SPNode | None) -> SPNode | None:
+        children = [node for node in nodes if node is not None]
+        if not children:
+            return None
+        return make_compound(children, Series)
+
+    def _local_condition_tree(self, rung: Rung) -> SPNode | None:
+        local_conditions = rung._conditions[rung._branch_condition_start :]
+        if not local_conditions:
+            return None
+        leaves = [
+            Leaf(
+                _ConditionLeafKey(
+                    condition=condition,
+                    signature=self._condition_signature(condition),
+                )
+            )
+            for condition in local_conditions
+        ]
+        return make_compound(leaves, Series)
+
+    def _collect_instruction_trees(
+        self,
+        rung: Rung,
+        *,
+        prefix_tree: SPNode | None = None,
+    ) -> list[tuple[SPNode | None, Any]]:
+        current_tree = self._series_tree(prefix_tree, self._local_condition_tree(rung))
+
+        outputs: list[tuple[SPNode | None, Any]] = []
+        for item in rung._execution_items:
+            if isinstance(item, Rung):
+                outputs.extend(self._collect_instruction_trees(item, prefix_tree=current_tree))
+            else:
+                outputs.append((current_tree, item))
+        return outputs
+
+    @staticmethod
+    def _leaf_condition(node: SPNode) -> Condition:
+        if not isinstance(node, Leaf) or not isinstance(node.label, _ConditionLeafKey):
+            raise TypeError(f"Expected condition leaf, got {node!r}")
+        return node.label.condition
+
+    def _build_normalized_rung_from_trees(
+        self,
+        outputs: list[tuple[SPNode | None, Any]],
+    ) -> Rung:
+        result = factor_outputs([tree for tree, _instruction in outputs])
+        normalized = Rung(*[self._leaf_condition(node) for node in result.shared])
+
+        remaining_outputs = [
+            (
+                self._series_tree(*result.branches[index]),
+                instruction,
+            )
+            for index, (_tree, instruction) in enumerate(outputs)
+        ]
+
+        index = 0
+        while index < len(remaining_outputs):
+            tree, instruction = remaining_outputs[index]
+            if tree is None:
+                normalized.add_instruction(instruction)
+                index += 1
+                continue
+
+            stop = index + 1
+            while stop < len(remaining_outputs):
+                candidate_tree, _candidate_instruction = remaining_outputs[stop]
+                if candidate_tree is None:
+                    break
+                shared = factor_outputs(
+                    [candidate for candidate, _item in remaining_outputs[index : stop + 1]]
+                ).shared
+                if not shared:
+                    break
+                stop += 1
+
+            normalized.add_branch(
+                self._build_normalized_rung_from_trees(remaining_outputs[index:stop])
+            )
+            index = stop
+
+        return normalized
+
+    def _condition_signature(self, condition: Condition) -> str:
+        if isinstance(condition, AllCondition):
+            parts = ",".join(self._condition_signature(child) for child in condition.conditions)
+            return f"AND({parts})"
+        if isinstance(condition, AnyCondition):
+            parts = ",".join(self._condition_signature(child) for child in condition.conditions)
+            return f"OR({parts})"
+        return self._condition_leaf_token(condition, path="normalize.condition")
+
     def _render_rung(self, rung: Rung, *, path: str) -> list[tuple[str, ...]]:
         comment_rows = self._comment_rows(rung)
         first_marker = "" if rung._use_prior_snapshot else "R"
@@ -116,6 +246,7 @@ class _LadderExporter(
                 output_token="NOP",
                 first_marker=first_marker,
             )
+            self._assert_rung_height(rows=output_rows, path=path, source=rung)
             return comment_rows + output_rows
 
         if any(
@@ -132,24 +263,29 @@ class _LadderExporter(
                     source=rung,
                 )
             self._forloop_count += 1
-            return comment_rows + self._render_forloop_instruction(
+            output_rows = self._render_forloop_instruction(
                 instruction=rung._instructions[0],
                 conditions=rung._conditions,
                 path=f"{path}.instruction[0](ForLoopInstruction)",
             )
+            self._assert_rung_height(rows=output_rows, path=path, source=rung)
+            return comment_rows + output_rows
 
         condition_rows = self._expand_conditions(rung._conditions, path=f"{path}.condition")
 
         if rung._branches:
+            normalized_rung = self._normalize_branching_rung(rung)
             branch_rows = self._render_rung_with_branches(
-                rung,
-                condition_rows=condition_rows,
+                normalized_rung,
                 path=path,
                 first_marker=first_marker,
             )
+            pin_rows = self._branch_pin_rows(normalized_rung, path=path)
             if not branch_rows:
                 return []
-            return comment_rows + branch_rows
+            rows = branch_rows + pin_rows
+            self._assert_rung_height(rows=rows, path=path, source=rung)
+            return comment_rows + rows
 
         output_rows: list[tuple[str, ...]]
         pin_rows: list[tuple[str, ...]]
@@ -171,6 +307,7 @@ class _LadderExporter(
 
         rows = comment_rows + output_rows
         rows.extend(pin_rows)
+        self._assert_rung_height(rows=output_rows + pin_rows, path=path, source=rung)
         return rows
 
     def _ensure_subroutine_return_tail(
@@ -247,6 +384,21 @@ class _LadderExporter(
                 "source_file": source_file,
                 "source_line": source_line,
             }
+        )
+
+    def _assert_rung_height(
+        self,
+        *,
+        rows: list[tuple[str, ...]],
+        path: str,
+        source: Any,
+    ) -> None:
+        if len(rows) <= 32:
+            return
+        self._raise_issue(
+            path=path,
+            message="Rendered rung exceeds Click's 32-row limit.",
+            source=source,
         )
 
 
