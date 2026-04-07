@@ -143,7 +143,7 @@ def _build_starter_zip(out_dir: Path, version: str) -> Path:
 def _build_vsix(out_dir: Path, version: str) -> Path:
     """Package the VS Code extension into a .vsix file."""
     vsix_name = f"pyrung-debug-{version}.vsix"
-    vsix_path = out_dir / vsix_name
+    vsix_path = (out_dir / vsix_name).resolve()
 
     # vsce package writes to cwd; run it in the extension dir, then move.
     try:
