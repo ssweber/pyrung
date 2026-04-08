@@ -107,19 +107,20 @@
 - [x] Add "Heads up" box: force I/O, fork/FIXED_STEP have no vendor equivalent
 
 ### L11 — From Simulation to Hardware
-- [ ] Move celebration paragraph to the top
-- [ ] Add E-stop discussion: `StopBtn` (control) vs `EstopOK` (permission)
-- [ ] Add AutomationDirect-style disclaimer
-- [ ] Add decision matrix for 3 deployment options (Modbus / Click codegen / CircuitPy)
-- [ ] Expand Option A: 4 Modbus use cases + protocol caveat
-- [ ] Expand Option B: `mapping.validate()` callout + "what doesn't port" list
-- [ ] Expand Option C: celebrate the transpiler ("same source, two runtimes")
-- [ ] Add "hardware will surprise you" callout
-- [ ] Add "Where to go from here" as story (built -> extend -> broader PLC -> deeper pyrung)
-- [ ] Add exercise (run `mapping.validate()`, fix a complaint)
+- [x] Move celebration paragraph to the top
+- [x] Add E-stop discussion: `StopBtn` (control) vs `EstopOK` (permission)
+- [x] Add AutomationDirect-style disclaimer
+- [x] Add decision matrix for 3 deployment options (Modbus / Click codegen / CircuitPy)
+- [x] Expand Option A: 4 Modbus use cases + protocol caveat
+- [x] Expand Option B: `mapping.validate()` callout + "what doesn't port" list
+- [x] Expand Option C: celebrate the transpiler ("same source, two runtimes")
+- [x] Add "hardware will surprise you" callout
+- [x] Add "Where to go from here" as story (built -> extend -> broader PLC -> deeper pyrung)
+- [x] Add exercise (run `mapping.validate()`, fix a complaint)
 
 ## Cross-Cutting
 - [x] Unify "order matters" thread across L1->L4->L8 with explicit callbacks
 - [x] Add `pyrung.zen` Easter egg (prints Zen of Ladder a la `import this`)
 - [x] Add one-line cross-lesson callbacks: L1->L8 (last rung wins), L4->L6/7 (`rise()`), L5->L10 (FIXED_STEP)
-- [ ] Add one-line cross-lesson callbacks (other sessions): L2->L9 (doubled name), L3->L11 (`~StopBtn`->`EstopOK`)
+- [ ] Add one-line cross-lesson callbacks (other sessions): L2->L9 (doubled name)
+- [x] Add cross-lesson callback: L3->L11 (`~StopBtn`->`EstopOK`)
