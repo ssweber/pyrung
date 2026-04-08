@@ -86,6 +86,27 @@ The gate pattern is *the* textbook ladder structure for any permission or interl
 
     **All conditions evaluate before any instructions execute.** The branch doesn't "see" results of instructions above it in the same rung — every rung is a snapshot of the world, evaluated then acted on as a unit. This is the **atomic rung** property: conditions read from the state as it was when the rung started, not from half-finished instruction results. It ties back to [Lesson 1's scan cycle](scan-cycle.md) and forward to [Testing](testing.md), where deterministic scans make this guarantee testable.
 
+## Seal-in: a branch that holds itself
+
+[Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in** — a single rung where the output feeds back into its own branch:
+
+```python
+# Latch/reset version (Lesson 3) — two rungs, two operations
+with Rung(StartBtn):
+    latch(Running)
+with Rung(~StopBtn):
+    reset(Running)
+
+# Seal-in version — one rung, self-holding branch
+with Rung(~StopBtn):
+    with branch(StartBtn | Running):
+        out(Running)
+```
+
+The seal-in works because `Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Press `StopBtn` (NC opens, `~StopBtn` goes true) and the parent rung drops, breaking the seal.
+
+Which to reach for: `latch`/`reset` is clearer for two-button start/stop — two named operations, easy to step through. Seal-in is what you'll see in textbooks and every legacy ladder you inherit. Both are valid.
+
 ## Try it
 
 ```python

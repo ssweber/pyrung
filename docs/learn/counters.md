@@ -58,6 +58,16 @@ The accumulators use `Dint` (32-bit) instead of `Int` because a 16-bit integer r
 
 If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both use two tags (done bit + accumulator), both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
 
+Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD) — boxes entering minus boxes leaving gives boxes currently in zone:
+
+```python
+count_up(ZoneDone, ZoneAcc, preset=50) \
+    .down(BoxLeavesSensor) \
+    .reset(ZoneReset)
+```
+
+Same chained-builder pattern, one more pin on the chip.
+
 ## Try it
 
 ```python
@@ -83,6 +93,8 @@ with runner.active():
     assert BinAAcc.value == 10
     assert BinADone.value is True   # Batch complete!
 ```
+
+Notice the irony: the *test* uses `for` loops to simulate physical events, while the *logic* has no loops at all. Python where Python belongs (driving the simulation, asserting state), ladder where ladder belongs (the actual control). The boundary is the runner.
 
 !!! info "Also known as..."
 

@@ -65,7 +65,7 @@ with runner.active():
     assert DiverterCmd.value is False         # Released -- box has passed
 ```
 
-`FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. This is why pyrung exists. Try writing this test against real hardware.
+`FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. In pytest you'd reach for `freezegun` or monkeypatch `time.time` — pyrung bakes determinism in because PLC time *is* the scan clock. This is why pyrung exists. Try writing this test against real hardware.
 
 ## Retentive on-delay
 
@@ -90,6 +90,12 @@ Without `.reset()`, the timer clears its accumulator the moment the rung drops �
 !!! info "Also known as..."
 
     On-delay is `TON` or `TMR`; off-delay is `TOF`; retentive on-delay is `RTO` or `TMRA`. The done bit is `.DN`, `.Done`, or `.Q`; the accumulator is `.ACC`, `.Acc`, or `.ET`. pyrung makes these explicit tags so you can inspect and test them.
+
+!!! note "Why `Tms` and not `Milliseconds`?"
+
+    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals (`T#2s500ms`), the short form fits Do-More's 16-character tag budget, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
+
+    One naming collision worth knowing: Click uses `TD` as the timer-data (accumulator) prefix (`TD1`, `TD2`); pyrung uses `Td` as the day time-base unit. Case differs and contexts differ — no conflict in practice, but if you see `TD` in Click docs, it means accumulator, not days.
 
 ## Exercise
 

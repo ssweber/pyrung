@@ -46,21 +46,21 @@
 - [x] Add "Heads up" box: `copy`=MOV, `calc`=MATH/CPT, `rise()`=ONS/R_TRIG
 
 ### L5 — Timers
-- [ ] Sharpen "this is why pyrung exists" (name `freezegun` alternative)
+- [x] Sharpen "this is why pyrung exists" (name `freezegun` alternative)
 - [x] Show TON vs RTON as same instruction +/- `.reset()` chain
 - [x] Add terminal-chain callout ("Why is `.reset()` terminal?")
 - [x] Explain accumulator tag (done bit + acc, foreshadow structured tags)
-- [ ] Add `Tms`/`Ts` naming sidebar ("Why `Tms` and not `Milliseconds`?")
-- [ ] Flag `TD` naming collision (Click timer-data vs pyrung day unit)
+- [x] Add `Tms`/`Ts` naming sidebar ("Why `Tms` and not `Milliseconds`?")
+- [x] Flag `TD` naming collision (Click timer-data vs pyrung day unit)
 - [x] Add "Heads up" box: TON/TOF/RTO across vendors
 
 ### L6 — Counters
 - [x] Lead with "counters count every scan, not edges" — use `rise()` for edges
 - [x] Promote "chip with multiple input pins" to Key Concept callout
 - [x] State counter/timer parallel (both chain `.reset()`)
-- [ ] Show bidirectional counter (`count_up(...).down(...).reset(...)`)
+- [x] Show bidirectional counter (`count_up(...).down(...).reset(...)`)
 - [x] Add "Why `Dint`, not `Int`?" one-liner (16-bit rolls at 32,767)
-- [ ] Name the meta-irony (Python loops in test, no loops in logic)
+- [x] Name the meta-irony (Python loops in test, no loops in logic)
 - [x] Add "Heads up" box: CTU/CTD/CTUD across vendors
 
 ### L7 — State Machines
@@ -74,11 +74,11 @@
 - [x] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
 
 ### L8 — Branches and OR Logic
-- [ ] State actual `|` vs `any_of` rule (precedence + arity, not count)
-- [ ] Name the gate pattern (master condition on parent rung)
-- [ ] Promote "all conditions evaluate before any instructions" to Key Concept
-- [ ] Show seal-in as a branch (contrast with L3 latch/reset)
-- [ ] Clarify `AutoDivert` connection (one-line forward ref)
+- [x] State actual `|` vs `any_of` rule (precedence + arity, not count)
+- [x] Name the gate pattern (master condition on parent rung)
+- [x] Promote "all conditions evaluate before any instructions" to Key Concept
+- [x] Show seal-in as a branch (contrast with L3 latch/reset)
+- [x] Clarify `AutoDivert` connection (one-line forward ref)
 - [x] Add "Heads up" box: BST/BND, MCR, seal-in
 
 ### L9 — Structured Tags and Blocks
