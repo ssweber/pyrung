@@ -9,7 +9,7 @@
 - [x] Add Mermaid diagram to every lesson (ladder rungs, state machines, etc.)
 - [ ] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
 - [ ] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
-- [ ] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
+- [x] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
 
 ## Landing Page
 - [ ] Lead with "pyrung won't let you cheat"
@@ -21,12 +21,12 @@
 ## Per-Lesson
 
 ### L1 — Scan Cycle
-- [ ] Promote "last one wins" to a callout with example
+- [x] Promote "last one wins" to a callout with example
 - [x] Add "Heads up" box: `out`=OTE, `X`=XIC, `~X`=XIO
 
 ### L2 — Tags
-- [ ] Explain doubled-name string (`ConveyorSpeed = Int("ConveyorSpeed")`)
-- [ ] Promote retentive vs non-retentive to its own subheading
+- [x] Explain doubled-name string (`ConveyorSpeed = Int("ConveyorSpeed")`)
+- [x] Promote retentive vs non-retentive to its own subheading
 - [x] Add naming convention admonition + PLC tag-limit table
 - [x] Add "Heads up" box: type aliases across vendors
 
@@ -94,8 +94,8 @@
 - [x] Add "Heads up" box: UDT/STRUCT, COP/BSL/BSR/FILL
 
 ### L10 — Testing
-- [ ] Pick one title (sidebar vs body)
-- [ ] Open with "If you know pytest, you already know how to test pyrung"
+- [x] Pick one title (sidebar vs body)
+- [x] Open with "If you know pytest, you already know how to test pyrung"
 - [ ] Cash in FIXED_STEP from L5 explicitly
 - [ ] Promote `fork()` — lead feature, "impossible on real hardware"
 - [ ] Promote `history[-N]` — "also impossible on real hardware"

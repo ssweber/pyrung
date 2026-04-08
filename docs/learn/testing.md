@@ -1,6 +1,8 @@
-# Lesson 10: Testing Like You Mean It
+# Lesson 10: Testing
 
-This is where pyrung pays for itself. Everything you've built -- the motor control, the sorting sequence, the bin counters, the mode switching -- is testable with pytest. No hardware, no manual verification, no "download and hope."
+If you know pytest, you already know how to test pyrung. No `plc-test` framework to learn, no proprietary test runner, no XML config. Standard pytest fixtures and asserts.
+
+This is where pyrung pays for itself. Everything you've built -- the motor control, the sorting sequence, the bin counters, the mode switching -- is testable with standard pytest. No hardware, no manual verification, no "download and hope."
 
 ```python
 import pytest

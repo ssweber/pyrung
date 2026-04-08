@@ -18,6 +18,8 @@ SpeedLimit    = Int("SpeedLimit")        # Alarm threshold
 Temperature   = Real("Temperature")     # 32-bit float
 ```
 
+The name appears twice: the Python variable is how *you* reference the tag in code; the string is the tag's identity in PLC memory — it's what HMIs and tag exports see. They're allowed to differ, but matching them avoids confusion. This duplication goes away in [Lesson 9](structured-tags.md), where UDT member names *are* the tag strings.
+
 Tags are typed and sized. You can't put a float in a Bool or store a negative number in an unsigned Word. This reflects real PLC hardware where each tag maps to a specific region of memory with a fixed width.
 
 !!! note "A note on naming"
@@ -46,7 +48,11 @@ Tags are typed and sized. You can't put a float in a Bool or store a negative nu
   +-- Char  -- text string
 ```
 
-The important distinction is **retentive** vs **non-retentive**. When a PLC goes through a STOP->RUN cycle (like a reboot), retentive tags keep their values and non-retentive tags reset to defaults. Bool tags are non-retentive by default: your outputs start in a known safe state. Int, Real, and others are retentive: your production counter doesn't reset to zero every time someone power-cycles the machine.
+## Retentive vs non-retentive
+
+When a PLC goes through a STOP→RUN cycle (like a reboot), **retentive** tags keep their values and **non-retentive** tags reset to defaults. There's no Python analog — every Python variable is "retentive" until the process exits.
+
+Bool tags are non-retentive by default: your outputs start in a known safe state. Int, Real, and others are retentive: your production counter doesn't reset to zero every time someone power-cycles the machine. This matters because a control engineer's first question about any tag is "what happens on power-up?"
 
 ## Setting values from outside the program
 

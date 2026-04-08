@@ -64,7 +64,18 @@ with runner.active():
 
 `ConveyorMotor = True` in Python sets a value once. `out(ConveyorMotor)` means "the motor follows this rung's power state, every single scan." Take your finger off the button, the conveyor stops. That's why `out` works this way -- in a factory, releasing the button *should* stop the machine.
 
-If two rungs both `out` the same tag, the last one wins. This is how real PLCs work.
+!!! tip "Last one wins"
+
+    If two rungs both `out` the same tag, the last one to execute wins — because the scan walks top to bottom and each `out` overwrites the previous value. This is how real PLCs work, and it's a landmine if you're not expecting it:
+
+    ```python
+    with Rung(SensorA):
+        out(ConveyorMotor)    # Rung 1 turns motor on
+    with Rung(SensorB):
+        out(ConveyorMotor)    # Rung 2 overwrites — motor follows SensorB
+    ```
+
+    The fix is [Lesson 8's](branches.md) rule: **one coil, one rung.** Fold every reason the output should energize into the conditions of a single rung.
 
 !!! info "Also known as..."
 
