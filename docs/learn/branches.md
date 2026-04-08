@@ -39,7 +39,7 @@ with Program() as logic:
         latch(Running)
 ```
 
-Use `|` when you're OR-ing two Bool tags. Use `any_of` when you're OR-ing comparisons or have more than two conditions.
+`|` is binary and works on any condition — Bool tags *and* comparisons. The catch is Python's operator precedence: `|` binds tighter than `==`, `<`, `>`, so comparisons need parentheses: `(Mode == 1) | (Mode == 3)`. `any_of` is variadic and skips the paren noise. Reach for `any_of` when the parens get loud or you have more than two terms. Same shape for `&` vs `all_of` — mirrors a familiar Python pattern: `a or b or c` vs `any([a, b, c])`.
 
 ## Branches
 
@@ -76,11 +76,15 @@ with Program() as logic:
         reset(Running)
 ```
 
-The `EstopOK` parent rung gates everything — if the safety relay drops permission, no branch has power, so the motor stops and the diverter closes regardless of mode. Notice the naming: `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopBtn` and `~EstopOK` because those fire when the NC circuits open.
+This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs — atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopBtn` and `~EstopOK` because those fire when the NC circuits open — same `~` convention from [Lesson 3](latch-reset.md).
 
-The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. This matters: if two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. One `out` per output avoids the problem.
+The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
 
-Important: **all conditions evaluate before any instructions execute.** The branch doesn't "see" results of instructions above it in the same rung because each rung starts from a clean snapshot.
+`AutoDivert` is latched and reset by the state machine from [Lesson 7](state-machines.md) — this rung is the consumer. The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. This matters: if two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. One `out` per output avoids the problem.
+
+!!! tip "Key concept: atomic rungs"
+
+    **All conditions evaluate before any instructions execute.** The branch doesn't "see" results of instructions above it in the same rung — every rung is a snapshot of the world, evaluated then acted on as a unit. This is the **atomic rung** property: conditions read from the state as it was when the rung started, not from half-finished instruction results. It ties back to [Lesson 1's scan cycle](scan-cycle.md) and forward to [Testing](testing.md), where deterministic scans make this guarantee testable.
 
 ## Try it
 

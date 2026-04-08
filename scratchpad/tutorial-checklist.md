@@ -38,11 +38,11 @@
 - [x] Add "Heads up" box: `latch`=SET/OTL, `reset`=RST/OTU
 
 ### L4 — Assignment
-- [ ] Give `rise()` / edge detection its own mini-section
-- [ ] Name instruction-order-within-rung rule before exercise uses it
-- [ ] Add one line on why clamp (`copy`) vs wrap (`calc`)
-- [ ] Note `copy(source, dest)` argument order + vendor variance
-- [ ] Fix naming: `LastSize`/`PreviousSize` ambiguity
+- [x] Give `rise()` / edge detection its own mini-section
+- [x] Name instruction-order-within-rung rule before exercise uses it
+- [x] Add one line on why clamp (`copy`) vs wrap (`calc`)
+- [x] Note `copy(source, dest)` argument order + vendor variance
+- [x] Fix naming: `LastSize`/`PreviousSize` ambiguity
 - [x] Add "Heads up" box: `copy`=MOV, `calc`=MATH/CPT, `rise()`=ONS/R_TRIG
 
 ### L5 — Timers
