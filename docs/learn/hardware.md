@@ -75,7 +75,7 @@ mapping = TagMap({
     Bin[2].Sensor:  x[9],
     ConveyorMotor:  y[1],       # Physical output terminal 1
     DiverterCmd:    y[2],
-    Light:          y[3],
+    StatusLight:    y[3],
 })
 
 mapping.validate(logic)                        # Check against Click constraints

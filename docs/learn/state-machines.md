@@ -27,7 +27,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 
 ```python
 from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
-from pyrung import comment, on_delay, copy, latch, reset, out, rise
+from pyrung import comment, on_delay, copy, latch, reset, rise
 
 # State values as tag-constants — initialized once, never written
 IDLE      = Int("IDLE",      default=0)
@@ -41,9 +41,6 @@ State = Int("State")
 EntrySensor   = Bool("EntrySensor")
 SizeReading   = Int("SizeReading")
 SizeThreshold = Int("SizeThreshold")
-
-# Outputs
-DiverterCmd = Bool("DiverterCmd")
 
 # Internal
 IsLarge  = Bool("IsLarge")
@@ -65,15 +62,13 @@ with Program() as logic:
     with Rung(DetDone):
         copy(SORTING, State)
 
-    comment("SORTING: hold diverter open for 2 seconds")
+    comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
-    with Rung(State == SORTING, IsLarge):
-        out(DiverterCmd)         # Extend diverter for large boxes
     with Rung(HoldDone):
         copy(RESETTING, State)
 
-    comment("RESETTING: clean up for next box")
+    comment("RESETTING: clean up and return to idle")
     with Rung(State == RESETTING):
         reset(IsLarge)
         copy(IDLE, State)
@@ -88,7 +83,7 @@ A few things to notice in the code:
 - **`rise(EntrySensor)`** — remember [Lesson 4](assignment.md)? Without it, the IDLE→DETECTING transition fires every scan the sensor sees a box, not just the first.
 - **`State == DETECTING` repeats across three rungs.** In Python you'd write one `if` and nest. In ladder, each rung stands alone — independently editable, grep-able, and deletable. The maintenance tech at 3am searching for `DETECTING` finds every rung that participates.
 - **We never reset `DetDone`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets — `DetDone` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
-- **`IsLarge` crosses states.** It's latched in DETECTING, read in SORTING, reset in RESETTING. Latches outlive rungs — they're how a state machine carries data between states without globals or context objects.
+- **`IsLarge` crosses states.** It's latched in DETECTING and reset in RESETTING. [Lesson 8](branches.md) reads it in the diverter output rung. Latches outlive rungs — they're how a state machine carries data between states without globals or context objects.
 
 ## Try it
 
@@ -103,26 +98,22 @@ with runner.active():
     # Box arrives -- large box
     EntrySensor.value = True
     SizeReading.value = 150
-runner.step()
-with runner.active():
+
+    runner.step()
     assert State.value == 1             # DETECTING
 
-# Wait for detection period (0.5s = 50 scans)
-runner.run(cycles=50)
-with runner.active():
+    # Wait for detection period (0.5s = 50 scans)
+    runner.run(cycles=50)
     assert State.value == 2             # SORTING
-    assert DiverterCmd.value is True    # Diverter extended for large box
+    assert IsLarge.value is True        # Classified as large
 
-# Wait for hold (2s = 200 scans)
-runner.run(cycles=200)
-with runner.active():
-    assert State.value == 3             # RESETTING
-
-runner.step()
-with runner.active():
+    # Wait for hold period + pass through RESETTING (2s = 200 scans)
+    runner.run(cycles=200)
     assert State.value == 0             # Back to IDLE
-    assert DiverterCmd.value is False   # Diverter retracted
+    assert IsLarge.value is False       # Cleaned up in RESETTING
 ```
+
+RESETTING is a **pass-through state** — it transitions to IDLE in the same scan. That's fine; its job is to clean up (`reset(IsLarge)`, `copy(IDLE, State)`), and cleanup doesn't need to wait. If you want to observe it, use `runner.monitor(State, callback)` — it fires on every committed change, including mid-cycle transitions.
 
 !!! info "Also known as..."
 

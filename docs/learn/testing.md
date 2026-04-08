@@ -14,32 +14,31 @@ def runner():
     r.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
     r.add_force(StopBtn, True)        # NC inputs: healthy wiring
     r.add_force(EstopOK, True)
-    with r.active():
-        State.value = 0               # Start idle
-        Auto.value = True             # Default to auto mode
+    r.add_force(Auto, True)           # Default to auto mode
     return r
 ```
 
 Remember the `FIXED_STEP` determinism from [Lesson 5](timers.md)? This is what it was for. Every test in this lesson runs in deterministic, reproducible scan time -- no flaky tests, no timing race conditions, no "works on my machine." One scan, one tick, every time.
 
-Each test gets its own `PLCRunner` because pytest's default scope is `function` -- no state accumulates between tests. The pattern is always the same: `with runner.active()` for tag I/O, outside the context for `step()` and `run()`.
+Each test gets its own `PLCRunner` because pytest's default scope is `function` -- no state accumulates between tests. All tag I/O and stepping happens inside `with runner.active()`:
 
 ```python
 def test_start_stop(runner):
     with runner.active():
         StartBtn.value = True
-    runner.step()
-    with runner.active():
+        runner.step()
+        StartBtn.value = False
+        runner.step()
         assert Running.value is True
         assert ConveyorMotor.value is True
 
 def test_estop_overrides_start(runner):
     """Safety: E-stop kills everything, even if Start is held."""
-    runner.add_force(EstopOK, False)      # E-stop fires (NC opens)
+    runner.remove_force(EstopOK)
     with runner.active():
+        EstopOK.value = False
         StartBtn.value = True
-    runner.step()
-    with runner.active():
+        runner.step()
         assert Running.value is False
         assert ConveyorMotor.value is False
 ```
@@ -70,25 +69,26 @@ Test two outcomes from the same starting point without resetting:
 def test_small_vs_large_box(runner):
     """Same setup, two outcomes."""
     with runner.active():
-        StartBtn.value = True
-    runner.step()
-    with runner.active():
-        EntrySensor.value = True
         SizeThreshold.value = 100
-    runner.step()
+        StartBtn.value = True
+        runner.step()
+        EntrySensor.value = True
+        runner.step()
 
-    # Fork: large box
+    # Fork: large box — run past detection, check mid-sorting
     large = runner.fork()
     large.add_force(SizeReading, 150)
-    large.run(cycles=300)
+    large.run(cycles=50)
     with large.active():
+        assert State.value == 2              # SORTING
         assert DiverterCmd.value is True
 
     # Fork: small box
     small = runner.fork()
     small.add_force(SizeReading, 50)
-    small.run(cycles=300)
+    small.run(cycles=50)
     with small.active():
+        assert State.value == 2
         assert DiverterCmd.value is False
 ```
 
@@ -104,13 +104,13 @@ def test_small_vs_large_box(runner):
 ])
 def test_box_classification(runner, box_size, expected_diverter):
     with runner.active():
+        SizeThreshold.value = 100
         StartBtn.value = True
-    runner.step()
+        runner.step()
 
     runner.add_force(EntrySensor, True)
     runner.add_force(SizeReading, box_size)
-    runner.add_force(SizeThreshold, 100)
-    runner.run(cycles=300)
+    runner.run(cycles=55)                    # Past detection, mid-sorting
     with runner.active():
         assert DiverterCmd.value is expected_diverter
 ```
@@ -150,15 +150,15 @@ Forces are how the sorting test above keeps `EntrySensor` on across 55+ scans wi
 def test_sorting_sequence(runner):
     """Full auto sort: box arrives, gets classified, exits to correct bin."""
     with runner.active():
+        SizeThreshold.value = 100
         StartBtn.value = True
-    runner.step()
+        runner.step()
 
     runner.add_force(EntrySensor, True)
     runner.add_force(SizeReading, 150)       # Large box
-    runner.add_force(SizeThreshold, 100)
 
-    # Run until sorting state
-    runner.run(cycles=55)                    # Past detection period
+    # Run past detection period into sorting
+    runner.run(cycles=55)
     with runner.active():
         assert DiverterCmd.value is True     # Extended for large box
 

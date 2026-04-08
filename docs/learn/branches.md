@@ -26,7 +26,7 @@ Light         = Bool("Light")
 DiverterBtn   = Bool("DiverterBtn")
 DiverterCmd   = Bool("DiverterCmd")
 ConveyorMotor = Bool("ConveyorMotor")
-AutoDivert    = Bool("AutoDivert")    # Set by state machine in auto mode
+StatusLight   = Bool("StatusLight")
 Mode          = Int("Mode")
 
 with Program() as logic:
@@ -45,28 +45,16 @@ with Program() as logic:
 
 A `branch` creates a parallel path within a rung. Think of it as a second wire that ANDs its condition with the parent's.
 
-Here's the conveyor's control rung. `EstopOK` gates everything — it's a permission input from the safety relay, True when the world is safe to run. Below that, the motor runs when started, and the diverter responds to either auto logic or the manual button:
+Here's the conveyor's motor rung. `EstopOK` gates everything — it's a permission input from the safety relay, True when the world is safe to run. Below that, the motor and status light share the same gate:
 
 ```
   EstopOK (parent rung — True when safe)
-      +-- Running -----------------------------> out(ConveyorMotor)
-      +-- any_of(Auto+AutoDivert, Manual+Btn) -> out(DiverterCmd)
+      +-- Running -> out(ConveyorMotor)
+      +-- Running -> out(StatusLight)
 ```
 
 ```python
-Light = Bool("Light")
-
 with Program() as logic:
-    comment("Motor and diverter outputs — EstopOK gates everything")
-    with Rung(EstopOK):
-        with branch(Running):
-            out(ConveyorMotor)
-        with branch(any_of(
-            all_of(Auto, AutoDivert),
-            all_of(Manual, DiverterBtn),
-        )):
-            out(DiverterCmd)
-
     comment("Start/stop — NC stop resets when pressed or wire broken")
     with Rung(StartBtn, any_of(Auto, Manual)):
         latch(Running)
@@ -74,13 +62,36 @@ with Program() as logic:
         reset(Running)
     with Rung(~EstopOK):
         reset(Running)
+
+    comment("Motor output — EstopOK gates all outputs")
+    with Rung(EstopOK):
+        with branch(Running):
+            out(ConveyorMotor)
+        with branch(Running):
+            out(StatusLight)
 ```
 
 This is the **gate pattern**. The parent rung holds your master condition, and every branch inside inherits that permission automatically. Lose the gate, lose all the outputs — atomically, in one scan. `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopBtn` and `~EstopOK` because those fire when the NC circuits open — same `~` convention from [Lesson 3](latch-reset.md).
 
 The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
 
-`AutoDivert` is latched and reset by the state machine from [Lesson 7](state-machines.md) — this rung is the consumer. The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins — a false manual rung below a true auto rung would de-energize the diverter. Fold every reason the output should energize into one rung and order stops being a side effect.
+## Combining branches and `any_of`
+
+The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `any_of` with `all_of` — same pattern as `any([all([...]), all([...]])` in Python:
+
+```python
+    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
+    with Rung(
+        EstopOK,
+        any_of(
+            all_of(State == SORTING, IsLarge, Auto),
+            all_of(Manual, DiverterBtn),
+        ),
+    ):
+        out(DiverterCmd)
+```
+
+The diverter rung reads `State` and `IsLarge` directly from the state machine in [Lesson 7](state-machines.md) — no intermediate latch needed. Both control sources fold into one rung with a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins — a false manual rung below a true auto rung would de-energize the diverter. Fold every reason the output should energize into one rung and order stops being a side effect.
 
 !!! tip "Key concept: atomic rungs"
 
@@ -122,19 +133,17 @@ with runner.active():
     runner.step()
     assert Running.value is True
     assert ConveyorMotor.value is True
+    assert StatusLight.value is True
 
     StartBtn.value = False
-
-    # Auto divert signal (from state machine)
-    AutoDivert.value = True
     runner.step()
-    assert DiverterCmd.value is True
+    assert Running.value is True     # Still running (latched)
 
     # E-stop kills everything (NC opens)
     EstopOK.value = False
     runner.step()
     assert ConveyorMotor.value is False
-    assert DiverterCmd.value is False
+    assert StatusLight.value is False
     assert Running.value is False
 ```
 
@@ -144,7 +153,7 @@ with runner.active():
 
 ## Exercise
 
-Add a `StatusLight` that is on whenever the conveyor is running in any mode, and a `ManualLight` that is on only in manual mode. Write a test that switches from Auto to Manual mid-run and verifies the diverter control source changes without the motor stopping. Test that the diverter button does nothing in auto mode.
+Add a `ManualLight` that is on only in manual mode. Write a test that switches from Auto to Manual mid-run and verifies the diverter control source changes without the motor stopping. Test that the diverter button does nothing in auto mode.
 
 ---
 
