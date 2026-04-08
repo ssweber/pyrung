@@ -31,7 +31,7 @@
 - [x] Add "Heads up" box: type aliases across vendors
 
 ### L3 — Latch and Reset
-- [ ] Rename `Estop` -> `StopBtn` throughout early lessons, use as `~StopBtn`
+- [x] Rename `Estop` -> `StopBtn` throughout early lessons, use as `~StopBtn`
 - [ ] Teach `~` as "NC contact," not "NOT" — dedicated callout
 - [ ] Land latch vs `out` distinction harder (sticky vs non-sticky)
 - [ ] Forward ref to L8 seal-in and L11 E-stop (one line each)

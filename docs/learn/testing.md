@@ -10,14 +10,16 @@ from pyrung import PLCRunner, TimeMode
 def runner():
     r = PLCRunner(logic)
     r.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+    r.add_force(StopBtn, True)        # NC inputs: healthy wiring
+    r.add_force(EstopOK, True)
     with r.active():
-        State.value = 0           # Start idle
-        Auto.value = True         # Default to auto mode
+        State.value = 0               # Start idle
+        Auto.value = True             # Default to auto mode
     return r
 
 def test_start_stop(runner):
     with runner.active():
-        Start.value = True
+        StartBtn.value = True
     runner.step()
     with runner.active():
         assert Running.value is True
@@ -25,9 +27,9 @@ def test_start_stop(runner):
 
 def test_estop_overrides_start(runner):
     """Safety: E-stop kills everything, even if Start is held."""
+    runner.add_force(EstopOK, False)      # E-stop fires (NC opens)
     with runner.active():
-        Start.value = True
-        Estop.value = True
+        StartBtn.value = True
     runner.step()
     with runner.active():
         assert Running.value is False
@@ -42,7 +44,7 @@ In the tests above, `.value` writes are one-shot -- consumed after one scan. **F
 def test_sorting_sequence(runner):
     """Full auto sort: box arrives, gets classified, exits to correct bin."""
     with runner.active():
-        Start.value = True
+        StartBtn.value = True
     runner.step()
 
     runner.add_force(EntrySensor, True)
@@ -93,7 +95,7 @@ Test two outcomes from the same starting point without resetting:
 def test_small_vs_large_box(runner):
     """Same setup, two outcomes."""
     with runner.active():
-        Start.value = True
+        StartBtn.value = True
     runner.step()
     with runner.active():
         EntrySensor.value = True

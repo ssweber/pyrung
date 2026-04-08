@@ -18,9 +18,9 @@ from pyrung import Bool, Int, Program, Rung, branch, comment, out, latch, reset,
 
 Auto          = Bool("Auto")
 Manual        = Bool("Manual")
-Estop         = Bool("Estop")
-Start         = Bool("Start")
-Stop          = Bool("Stop")
+StopBtn       = Bool("StopBtn")     # NC contact
+StartBtn      = Bool("StartBtn")
+EstopOK       = Bool("EstopOK")     # NC safety relay permission
 Running       = Bool("Running")
 Light         = Bool("Light")
 DiverterBtn   = Bool("DiverterBtn")
@@ -45,10 +45,10 @@ Use `|` when you're OR-ing two Bool tags. Use `any_of` when you're OR-ing compar
 
 A `branch` creates a parallel path within a rung. Think of it as a second wire that ANDs its condition with the parent's.
 
-Here's the conveyor's control rung. E-stop gates everything. Below that, the motor runs when started, and the diverter responds to either auto logic or the manual button:
+Here's the conveyor's control rung. `EstopOK` gates everything — it's a permission input from the safety relay, True when the world is safe to run. Below that, the motor runs when started, and the diverter responds to either auto logic or the manual button:
 
 ```
-  ~Estop (parent rung)
+  EstopOK (parent rung — True when safe)
       +-- Running -----------------------------> out(ConveyorMotor)
       +-- any_of(Auto+AutoDivert, Manual+Btn) -> out(DiverterCmd)
 ```
@@ -57,8 +57,8 @@ Here's the conveyor's control rung. E-stop gates everything. Below that, the mot
 Light = Bool("Light")
 
 with Program() as logic:
-    comment("Motor and diverter outputs - E-stop gates everything")
-    with Rung(~Estop):
+    comment("Motor and diverter outputs — EstopOK gates everything")
+    with Rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(any_of(
@@ -67,16 +67,18 @@ with Program() as logic:
         )):
             out(DiverterCmd)
 
-    comment("Start/stop - works in either mode")
-    with Rung(Start, any_of(Auto, Manual)):
+    comment("Start/stop — NC stop resets when pressed or wire broken")
+    with Rung(StartBtn, any_of(Auto, Manual)):
         latch(Running)
-    with Rung(Stop):
+    with Rung(~StopBtn):
         reset(Running)
-    with Rung(Estop):
+    with Rung(~EstopOK):
         reset(Running)
 ```
 
-The `~Estop` parent rung gates everything -- if E-stop is pressed, no branch has power, so the motor stops and the diverter closes regardless of mode. The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. This matters: if two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. One `out` per output avoids the problem.
+The `EstopOK` parent rung gates everything — if the safety relay drops permission, no branch has power, so the motor stops and the diverter closes regardless of mode. Notice the naming: `EstopOK` reads as "safety is satisfied" so the gate uses the raw tag with no `~`. The reset rungs use `~StopBtn` and `~EstopOK` because those fire when the NC circuits open.
+
+The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. This matters: if two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. One `out` per output avoids the problem.
 
 Important: **all conditions evaluate before any instructions execute.** The branch doesn't "see" results of instructions above it in the same rung because each rung starts from a clean snapshot.
 
@@ -87,21 +89,24 @@ from pyrung import PLCRunner
 
 runner = PLCRunner(logic)
 with runner.active():
+    StopBtn.value = True             # NC inputs: True = healthy
+    EstopOK.value = True
+
     Auto.value = True
-    Start.value = True
+    StartBtn.value = True
     runner.step()
     assert Running.value is True
     assert ConveyorMotor.value is True
 
-    Start.value = False
+    StartBtn.value = False
 
     # Auto divert signal (from state machine)
     AutoDivert.value = True
     runner.step()
     assert DiverterCmd.value is True
 
-    # E-stop kills everything
-    Estop.value = True
+    # E-stop kills everything (NC opens)
+    EstopOK.value = False
     runner.step()
     assert ConveyorMotor.value is False
     assert DiverterCmd.value is False

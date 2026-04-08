@@ -19,9 +19,9 @@ Run your sorting station behind a Modbus TCP interface. HMIs, SCADA systems, [Cl
 from pyrung.click import x, y, ds, TagMap, pyrung_to_ladder
 
 mapping = TagMap({
-    Start:          x[1],       # Physical input terminal 1
-    Stop:           x[2],
-    Estop:          x[3],
+    StartBtn:       x[1],       # Physical input terminal 1
+    StopBtn:        x[2],       # NC stop button
+    EstopOK:        x[3],       # NC safety relay permission
     Auto:           x[4],
     Manual:         x[5],
     EntrySensor:    x[6],
