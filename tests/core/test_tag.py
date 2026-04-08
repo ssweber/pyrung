@@ -406,11 +406,13 @@ class TestTagDefaultSeeding:
 
         with Program(strict=False) as logic:
             with Rung(X):
-                out(Bool("Unused"))
+                out(Y)
 
         runner = PLCRunner(logic)
         assert "X" in runner.current_state.tags
         assert runner.current_state.tags["X"] is False
+        assert "Y" in runner.current_state.tags
+        assert runner.current_state.tags["Y"] == 0
 
     def test_initial_state_not_overwritten_by_defaults(self):
         """User-provided initial_state values take precedence over tag defaults."""

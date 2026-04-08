@@ -47,6 +47,10 @@ This reads: "While the entry sensor sees a box, accumulate time. While the senso
 
 Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how timers work in PLCs. The accumulator tracks elapsed time; the done bit fires when it reaches the preset. Real PLCs bundle these into a structured timer type or paired addresses; pyrung makes them explicit tags you can inspect, assert on, and force independently. You'll see this two-tag model again with counters in the next lesson, and it collapses back into structure members in [Lesson 9](structured-tags.md).
 
+!!! note "Why `Tms` and not `Milliseconds`?"
+
+    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
+
 ## Test it deterministically
 
 ```python
@@ -90,10 +94,6 @@ Without `.reset()`, the timer clears its accumulator the moment the rung drops �
 !!! info "Also known as..."
 
     On-delay is `TON`; off-delay is `TOF`; retentive on-delay is `RTO`. The done bit is `.DN` or `.Q`; the accumulator is `.ACC` or `.ET`.
-
-!!! note "Why `Tms` and not `Milliseconds`?"
-
-    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
 
 ## Exercise
 

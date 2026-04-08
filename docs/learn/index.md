@@ -2,9 +2,9 @@
 
 > A guided introduction to PLC programming for Python developers, using [pyrung](https://ssweber.github.io/pyrung/).
 
-pyrung won't let you cheat: if you try to write a `for` loop where a scan cycle belongs, it'll tell you. That's the point. You're learning a different way of thinking about programs, and the guardrails are there to keep you honest.
+You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware required.
 
-You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware. No proprietary software. No Windows VM.
+pyrung won't let you cheat — if you try to write a `for` loop where a scan cycle belongs, it'll tell you. That's the point. You're learning a different way of thinking about programs, and the guardrails are there to keep you honest.
 
 ---
 
