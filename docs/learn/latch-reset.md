@@ -31,11 +31,9 @@ with Program() as logic:
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
 
+Why two rungs? Your Python instinct says "the rung went false, the output should drop." That's how `out` works. But `latch` isn't `out` — it sets the bit and *leaves it set*. After Start is pressed, `Running` stays true on its own. To clear it, you need a separate rung with `reset()`. If you only had the first rung, the motor would stop the instant you released Start — exactly the bug [Lesson 1](scan-cycle.md) ended on.
+
 `StopBtn` is wired **normally-closed** — the circuit is conductive at rest, so the PLC input reads True when healthy. Writing `~StopBtn` means "this contact fires when the stop circuit opens" — button pressed, wire cut, or power lost. The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
-
-!!! note "Why two rungs instead of one?"
-
-    Your Python instinct says "the rung went false, the output should drop." That's how `out` works — it de-energizes the moment the rung goes false. But `latch` isn't `out`. `latch` sets the bit and *leaves it set*. The latch rung only fires *once*, when Start is pressed. After that, `Running` stays true on its own. To clear it, you need a *separate* rung with `reset()`. That's why this lesson has two rungs: one to start, one to stop. If you only had the first rung, the motor would stop the instant you released Start — exactly the bug [Lesson 1](scan-cycle.md) ended on.
 
 !!! note "What `~` actually means"
 
@@ -94,7 +92,7 @@ This isn't a Python `#` comment — it's rung metadata that travels with the pro
 
 !!! info "Also known as..."
 
-    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. Seal-in rungs look the same in every ladder editor — Start OR-branched with Running, ANDed with the stop contact. You'll see that pattern in [Lesson 8](branches.md) as a *seal-in rung* — same behavior, single rung, self-holding via a feedback branch.
+    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md) — the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.
 
 By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different governance story. The wiring direction you're learning here is the easy part; the hard part is who *owns* the stop.
 

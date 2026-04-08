@@ -66,7 +66,7 @@ with runner.active():
 
 !!! tip "Last one wins"
 
-    If two rungs both `out` the same tag, the last one to execute wins — because the scan walks top to bottom and each `out` overwrites the previous value. This is how real PLCs work, and it's a landmine if you're not expecting it:
+    If two rungs both `out` the same tag, the last one to execute wins — because the scan walks top to bottom and each `out` overwrites the previous value:
 
     ```python
     with Rung(SensorA):
@@ -75,11 +75,11 @@ with runner.active():
         out(ConveyorMotor)    # Rung 2 overwrites — motor follows SensorB
     ```
 
-    The fix is [Lesson 8's](branches.md) rule: **one coil, one rung.** Fold every reason the output should energize into the conditions of a single rung.
+    There's a fix for this, and we'll get to it in [Lesson 8](branches.md).
 
 !!! info "Also known as..."
 
-    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" or `XIC`. `Rung(~Tag)` is a "normally closed contact" or `XIO`. If you Google any of those, you'll find the same thing in a different dialect.
+    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" (`XIC`). `Rung(~Tag)` is a "normally closed contact" (`XIO`). If you Google any of those, you'll find the same thing in a different dialect.
 
 ## Exercise
 

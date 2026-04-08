@@ -45,7 +45,7 @@ with Program() as logic:
 
 This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldDone` goes true, `~HoldDone` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
 
-Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how timers work in PLCs. The accumulator tracks elapsed time; the done bit fires when it reaches the preset. Real PLCs bundle these into a structured type (`TIMER` in Rockwell) or paired addresses (`T1` for the done bit, `TD1` for the accumulator in Click — pyrung borrows that convention). Either way, pyrung makes them explicit tags you can inspect, assert on, and force independently. You'll see this two-tag model again with counters in the next lesson, and it collapses back into structure members in [Lesson 9](structured-tags.md).
+Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how timers work in PLCs. The accumulator tracks elapsed time; the done bit fires when it reaches the preset. Real PLCs bundle these into a structured timer type or paired addresses; pyrung makes them explicit tags you can inspect, assert on, and force independently. You'll see this two-tag model again with counters in the next lesson, and it collapses back into structure members in [Lesson 9](structured-tags.md).
 
 ## Test it deterministically
 
@@ -85,17 +85,15 @@ Without `.reset()`, the timer clears its accumulator the moment the rung drops �
 
 !!! note "Why is `.reset()` terminal?"
 
-    In Click and most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung makes `.reset()` terminal so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions after, write a separate rung. Counters use the same pattern.
+    In most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung makes `.reset()` terminal so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions after, write a separate rung. Counters use the same pattern.
 
 !!! info "Also known as..."
 
-    On-delay is `TON` or `TMR`; off-delay is `TOF`; retentive on-delay is `RTO` or `TMRA`. The done bit is `.DN`, `.Done`, or `.Q`; the accumulator is `.ACC`, `.Acc`, or `.ET`. pyrung makes these explicit tags so you can inspect and test them.
+    On-delay is `TON`; off-delay is `TOF`; retentive on-delay is `RTO`. The done bit is `.DN` or `.Q`; the accumulator is `.ACC` or `.ET`.
 
 !!! note "Why `Tms` and not `Milliseconds`?"
 
-    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals (`T#2s500ms`), the short form fits Do-More's 16-character tag budget, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
-
-    One naming collision worth knowing: Click uses `TD` as the timer-data (accumulator) prefix (`TD1`, `TD2`); pyrung uses `Td` as the day time-base unit. Case differs and contexts differ — no conflict in practice, but if you see `TD` in Click docs, it means accumulator, not days.
+    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
 
 ## Exercise
 

@@ -117,7 +117,7 @@ RESETTING is a **pass-through state** — it transitions to IDLE in the same sca
 
 !!! info "Also known as..."
 
-    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`/`SQI`/`SQL`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator from any vendor recognizes.
+    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator recognizes.
 
 ## Exercise
 

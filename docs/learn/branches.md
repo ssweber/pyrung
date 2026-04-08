@@ -102,21 +102,12 @@ The diverter rung reads `State` and `IsLarge` directly from the state machine in
 [Lesson 3](latch-reset.md) used `latch`/`reset` for start/stop control. The classic ladder alternative is a **seal-in** — a single rung where the output feeds back into its own branch:
 
 ```python
-# Latch/reset version (Lesson 3) — two rungs, two operations
-with Rung(StartBtn):
-    latch(Running)
-with Rung(~StopBtn):
-    reset(Running)
-
-# Seal-in version — one rung, self-holding branch
 with Rung(~StopBtn):
     with branch(StartBtn | Running):
         out(Running)
 ```
 
-The seal-in works because `Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Press `StopBtn` (NC opens, `~StopBtn` goes true) and the parent rung drops, breaking the seal.
-
-Which to reach for: `latch`/`reset` is clearer for two-button start/stop — two named operations, easy to step through. Seal-in is what you'll see in textbooks and every legacy ladder you inherit. Both are valid.
+`Running` appears in its own branch condition. Press `StartBtn` and `Running` energizes; release it and `Running` still powers the branch — it holds itself in. Open `~StopBtn` and the parent rung drops, breaking the seal. Reach for `latch`/`reset` when clarity matters; expect seal-in in every legacy ladder you inherit.
 
 ## Try it
 
@@ -149,7 +140,7 @@ with runner.active():
 
 !!! info "Also known as..."
 
-    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere (sometimes with explicit `BST`/`BND` markers). The safety-gate pattern is "Master Control Reset" (`MCR`) in some editors. Seal-in is the classic OR-branch with a series stop contact — every legacy ladder opens with one.
+    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere. The safety-gate pattern is sometimes called "Master Control Reset" (`MCR`). Seal-in is the classic OR-branch with a series stop contact.
 
 ## Exercise
 

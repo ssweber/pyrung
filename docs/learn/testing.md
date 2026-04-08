@@ -171,7 +171,7 @@ def test_sorting_sequence(runner):
 
 !!! warning "Forces deserve respect"
 
-    Forcing is a *real* debugging feature on every PLC platform -- Click, Rockwell, Do-More, Codesys. On real hardware, forces override the program's control of physical outputs and bypass safety interlocks. That's why real PLCs gate force mode behind confirmation dialogs -- Rockwell warns of *injury or death*, Codesys requires an explicit force-enable step. pyrung mirrors the API because the concept matters: when you `add_force`, you are telling the engine "ignore whatever the logic computes for this tag." Use forces for testing. Treat them with the same caution you'd give the real thing.
+    Forcing is a real debugging feature on every PLC platform. On real hardware, forces override the program's control of physical outputs and bypass safety interlocks — that's why real PLCs gate force mode behind confirmation dialogs. When you `add_force`, you are telling the engine "ignore whatever the logic computes for this tag." Use forces for testing. Treat them with the same caution you'd give the real thing.
 
 ## When tests aren't enough
 
@@ -179,7 +179,7 @@ Sometimes you need to watch logic execute step by step. pyrung includes a VS Cod
 
 !!! info "Also known as..."
 
-    `runner.step()` advances exactly one scan -- some PLCs expose this as "single scan" or "test single scan" in their simulator, but many don't. `add_force`/`remove_force` mirror the universal Force On/Off features -- forcing is a real debugging tool everywhere, not a pyrung invention. `history[-N]` is sort of like a trend or data log, except trends are sampled and lossy. And then: `fork()`, `FIXED_STEP` deterministic scan time, and full-scan history have **no equivalent on real PLCs**.
+    `runner.step()` is "single scan" — some PLC simulators expose it, many don't. `add_force`/`remove_force` mirror the universal Force On/Off feature. `history[-N]` is like a trend or data log, except trends are sampled and lossy. `fork()`, `FIXED_STEP` deterministic time, and full-scan history have **no equivalent on real PLCs**.
 
 ## Exercise
 

@@ -26,17 +26,10 @@ Tags are typed and sized. You can't put a float in a Bool or store a negative nu
 
     Tag names in this guide use `TitleCase` (e.g. `ConveyorRunning`), not Python's `snake_case`. Two reasons:
 
-    1. **It matches PLC convention** — what you'll see in Click, Do-More, Rockwell, and Productivity projects.
-    2. **Characters are a budget.** Do-More caps tag names at 16, Click at 24, Rockwell at 40. `EStopPressed` fits on a Do-More; `e_stop_pressed` doesn't.
+    1. **It matches PLC convention** — what you'll see in every vendor's projects.
+    2. **Characters are a budget.** Most PLCs cap tag names at 16–40 characters. `EStopPressed` fits everywhere; `e_stop_pressed` might not.
 
-    | PLC | Tag name limit | Notes |
-    |---|---|---|
-    | Do-More | 16 | Alphanumeric + single underscore |
-    | Click | 24 | Flat namespace; underscore as pseudo-scope |
-    | Rockwell Logix | 40 | No double underscores |
-    | Productivity | 40+ | Generous |
-
-    On flat-namespace PLCs like Click, underscores do a different job: they group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
+    On flat-namespace PLCs like Click, underscores group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
 
 ```
   Tag Types
@@ -56,7 +49,7 @@ Bool tags are non-retentive by default: your outputs start in a known safe state
 
 ## Setting values from outside the program
 
-The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI or a dataview window. In pyrung, that's `with runner.active()` -- the active context. Inside it, you read and write tag values. Outside it, you call `runner.step()` or `runner.run()` to execute scans. The canonical pattern is: set inputs inside an active block, step outside, then check outputs in another active block. These early lessons keep it compact (everything in one block), but [Lesson 10](testing.md) shows the full form.
+The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with runner.active()` — inside it, you read and write tag values and call `runner.step()` or `runner.run()` to execute scans.
 
 ```python
 from pyrung import Bool, Int, Program, Rung, PLCRunner, out
@@ -85,7 +78,7 @@ with runner.active():
 
 !!! info "Also known as..."
 
-    `Bool` tags are called control relays, `C` bits, `X`/`Y` for I/O, or just `BOOL`. `Int` is a 16-bit signed type almost everywhere (`DS`, `V`, `INT`). `Real` is a 32-bit float (`DF`, `R`, `REAL`). "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.
+    `Bool` tags are called control relays, `C` bits, or `X`/`Y` for I/O. `Int` is a 16-bit signed type almost everywhere. `Real` is a 32-bit float. "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.
 
 ## Exercise
 

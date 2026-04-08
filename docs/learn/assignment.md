@@ -69,7 +69,7 @@ with runner.active():
 
 These two handle overflow differently, and the difference matters. `copy` clamps: if you copy 50000 into a 16-bit signed Int, you get 32767 (the max). `calc` wraps: if an Int at 32767 has 1 added, it rolls to -32768. Reach for `copy` when moving data (don't silently roll over a sensor reading) and `calc` for arithmetic (wrapping matches how real PLC counters and accumulators behave).
 
-Note the argument order: `copy(source, dest)` reads like an assignment left-to-right. Some vendors (Rockwell's MOV) use the same direction; Click's editor displays it destination-first. pyrung always uses source-first.
+Note the argument order: `copy(source, dest)` reads like an assignment left-to-right. Some PLC editors display it destination-first. pyrung always uses source-first.
 
 ## Unconditional rungs
 
@@ -77,7 +77,7 @@ Notice `Rung()` with no condition. That rung is always true, so its instructions
 
 !!! info "Also known as..."
 
-    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT` (or an expression in Structured Text). `rise()` and `fall()` are one-shots (`ONS`/`OSR`), positive/negative edge triggers (`R_TRIG`/`F_TRIG`), or "leading-edge" / "trailing-edge" contacts. An unconditional rung is "always on" — some PLCs expose a special bit (`SP1`, `S:1/15`), others just wire straight from the rail.
+    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT`. `rise()` and `fall()` are one-shots (`ONS`/`OSR`) or edge triggers (`R_TRIG`/`F_TRIG`). An unconditional rung is "always on" — some PLCs expose a special always-true bit, others just wire straight from the rail.
 
 ## Exercise
 

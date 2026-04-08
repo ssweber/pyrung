@@ -98,7 +98,7 @@ Notice the irony: the *test* uses `for` loops to simulate physical events, while
 
 !!! info "Also known as..."
 
-    Counters are `CTU`/`CTD`/`CTUD`, or just `CNT` with a direction flag. Done bits and accumulators look like timers — `.DN`/`.Done`/`.Q` and `.ACC`/`.Acc`/`.CV`. Reset is its own input (`RES`, `RST`, or an `R` pin on the block). Edge-counting is always "one-shot feeding the counter" — never the counter itself.
+    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. Edge-counting is always "one-shot feeding the counter" — never the counter itself.
 
 ## Exercise
 

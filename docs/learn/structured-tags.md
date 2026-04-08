@@ -126,19 +126,16 @@ with runner.active():
 
 !!! info "Also known as..."
 
-    Structured tags are UDTs or `STRUCT`s on higher-end PLCs. Flat-namespace PLCs fake it with underscore prefixes — exactly what pyrung generates as the flat identity. Block-copy, shift-register, and fill all have dedicated instructions — `COP`/`COPY`, `BSL`/`BSR`/`SHIFT`, `FAL`/`FILL`.
+    Structured tags are UDTs or `STRUCT`s. Flat-namespace PLCs fake it with underscore prefixes — exactly what pyrung generates as the flat identity. Block-copy, shift-register, and fill all have dedicated instructions on every platform.
 
 ## Going deeper
 
-The [Tag Structures guide](../guides/tag-structures.md) covers the full API. A few features worth knowing exist:
+The [Tag Structures guide](../guides/tag-structures.md) covers the full API. Two features worth knowing early:
 
 - **`Field()`** — override defaults or retentive policy per field: `id: Int = Field(default=100, retentive=True)`
-- **`auto()`** — per-instance sequences: `id: Int = auto(start=10, step=5)` gives `Alarm[1].id=10`, `Alarm[2].id=15`. Useful for alarm IDs, Modbus addresses, channel numbers
-- **`@named_array`** — like `@udt` but all fields share one type. Use UDT for mixed types (Bool + Dint + Real), named_array for same-typed records
-- **`stride`** — reserve fixed-width hardware slots per instance, even if the structure has fewer fields than slots
-- **`.clone()`** — create an independent copy with a new name: `Pump = Motor.clone("Pump", count=4)`. Define a template once, clone per subsystem
-- **`.map_to()`** — map a named array onto a hardware block: `Channel.map_to(ds.select(101, 106))`. The structure stays the same; only the hardware mapping changes per target
-- **`.slot()`** — name and configure individual block addresses: `ds.slot(1, name="SpeedCommand")`. Solves the magic-number problem from [Lesson 7](state-machines.md)
+- **`@named_array`** — like `@udt` but all fields share one type. Use UDT for mixed types, named_array for same-typed records
+
+The guide also covers cloning, stride, hardware mapping, and per-instance sequences.
 
 ## Exercise
 
