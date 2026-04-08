@@ -1,0 +1,126 @@
+# Tutorial Recommendations Checklist
+
+## Blocking Bugs
+- [ ] **L8** — Fix `NameError`: `out(Light)` / `latch(Running)` used before `Light` / `Mode` defined
+- [ ] **L7** — Rename `COUNTING` state -> `RESETTING` or `CLEANUP`
+- [ ] **L2** — Fix Python instinct strawman (use typed `conveyor_speed: int = 0`, then pivot)
+
+## Overall
+- [ ] Add ASCII ladder diagram to every lesson (L1 has one; replicate the pattern)
+- [ ] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
+- [ ] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
+- [ ] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
+
+## Landing Page
+- [ ] Lead with "pyrung won't let you cheat"
+- [ ] Surface the pedagogical scaffold as a bullet
+- [ ] Fix lesson title consistency
+- [ ] Better L11 teaser: "Map your project to a real Click PLC or P1AM-200"
+- [ ] Add TitleCase footnote in prerequisites
+
+## Per-Lesson
+
+### L1 — Scan Cycle
+- [ ] Promote "last one wins" to a callout with example
+- [ ] Add "Heads up" box: `out`=OTE, `X`=XIC, `~X`=XIO
+
+### L2 — Tags
+- [ ] Explain doubled-name string (`ConveyorSpeed = Int("ConveyorSpeed")`)
+- [ ] Promote retentive vs non-retentive to its own subheading
+- [ ] Add naming convention admonition + PLC tag-limit table
+- [ ] Add "Heads up" box: type aliases across vendors
+
+### L3 — Latch and Reset
+- [ ] Rename `Estop` -> `StopBtn` throughout early lessons, use as `~StopBtn`
+- [ ] Teach `~` as "NC contact," not "NOT" — dedicated callout
+- [ ] Land latch vs `out` distinction harder (sticky vs non-sticky)
+- [ ] Forward ref to L8 seal-in and L11 E-stop (one line each)
+- [ ] Add "Heads up" box: `latch`=SET/OTL, `reset`=RST/OTU
+
+### L4 — Assignment
+- [ ] Give `rise()` / edge detection its own mini-section
+- [ ] Name instruction-order-within-rung rule before exercise uses it
+- [ ] Add one line on why clamp (`copy`) vs wrap (`calc`)
+- [ ] Note `copy(source, dest)` argument order + vendor variance
+- [ ] Fix naming: `LastSize`/`PreviousSize` ambiguity
+- [ ] Add "Heads up" box: `copy`=MOV, `calc`=MATH/CPT, `rise()`=ONS/R_TRIG
+
+### L5 — Timers
+- [ ] Sharpen "this is why pyrung exists" (name `freezegun` alternative)
+- [ ] Show TON vs RTON as same instruction +/- `.reset()` chain
+- [ ] Add terminal-chain callout ("Why is `.reset()` terminal?")
+- [ ] Explain accumulator tag (done bit + acc, foreshadow structured tags)
+- [ ] Add `Tms`/`Ts` naming sidebar ("Why `Tms` and not `Milliseconds`?")
+- [ ] Flag `TD` naming collision (Click timer-data vs pyrung day unit)
+- [ ] Add "Heads up" box: TON/TOF/RTO across vendors
+
+### L6 — Counters
+- [ ] Lead with "counters count every scan, not edges" — use `rise()` for edges
+- [ ] Promote "chip with multiple input pins" to Key Concept callout
+- [ ] State counter/timer parallel (both chain `.reset()`)
+- [ ] Show bidirectional counter (`count_up(...).down(...).reset(...)`)
+- [ ] Add "Why `Dint`, not `Int`?" one-liner (16-bit rolls at 32,767)
+- [ ] Name the meta-irony (Python loops in test, no loops in logic)
+- [ ] Add "Heads up" box: CTU/CTD/CTUD across vendors
+
+### L7 — State Machines
+- [ ] Replace magic numbers with tag-as-constant pattern (`IDLE = Int("IDLE", initial=0)`)
+- [ ] Name-drop PackML (give learners a search term)
+- [ ] Explicit `rise()` callback from L4
+- [ ] Explain repeated `State == 1` as a feature (grep-able, independent)
+- [ ] Explain implicit timer reset (TON auto-resets when rung goes false)
+- [ ] Note `IsLarge` latch crossing states ("latches outlive rungs")
+- [ ] Add ASCII state diagram
+- [ ] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
+
+### L8 — Branches and OR Logic
+- [ ] State actual `|` vs `any_of` rule (precedence + arity, not count)
+- [ ] Name the gate pattern (master condition on parent rung)
+- [ ] Promote "all conditions evaluate before any instructions" to Key Concept
+- [ ] Show seal-in as a branch (contrast with L3 latch/reset)
+- [ ] Clarify `AutoDivert` connection (one-line forward ref)
+- [ ] Add "Heads up" box: BST/BND, MCR, seal-in
+
+### L9 — Structured Tags and Blocks
+- [ ] Land L2 payoff: doubled name is gone, explain why
+- [ ] Flag PLC arrays are 1-indexed — loudly
+- [ ] Explain `.select(start, end)` inclusive semantics vs Python slice
+- [ ] Show singleton vs counted UDT naming
+- [ ] Mention: `always_number`, `Field()`, `auto()`, `@named_array`, `stride`, `.clone()`, `.map_to()`, `.slot()`
+- [ ] Fix TitleCase inconsistency in UDT field names
+- [ ] Address rung duplication (feature, not smell)
+- [ ] Clarify build-time vs runtime loops
+- [ ] Name the shift register pattern (`blockcopy` over `select`)
+- [ ] Add "Heads up" box: UDT/STRUCT, COP/BSL/BSR/FILL
+
+### L10 — Testing
+- [ ] Pick one title (sidebar vs body)
+- [ ] Open with "If you know pytest, you already know how to test pyrung"
+- [ ] Cash in FIXED_STEP from L5 explicitly
+- [ ] Promote `fork()` — lead feature, "impossible on real hardware"
+- [ ] Promote `history[-N]` — "also impossible on real hardware"
+- [ ] Add 3-tier signal-driving table (`.value` / `add_force` / `remove_force`)
+- [ ] Add force safety warning — real PLCs gate forces behind confirmation dialogs with injury/death disclaimers (Codesys, Rockwell). Forces override the program's control of physical outputs and bypass safety interlocks. Teach respect for the tool, not just the API
+- [ ] Show `pytest.mark.parametrize` as complement to `fork()`
+- [ ] Add fixture isolation one-liner
+- [ ] Name canonical `with runner.active()` pattern
+- [ ] Add "Heads up" box: force I/O, fork/FIXED_STEP have no vendor equivalent
+
+### L11 — From Simulation to Hardware
+- [ ] Move celebration paragraph to the top
+- [ ] Add E-stop discussion: `StopBtn` (control) vs `EstopOK` (permission)
+- [ ] Add AutomationDirect-style disclaimer
+- [ ] Add decision matrix for 3 deployment options (Modbus / Click codegen / CircuitPy)
+- [ ] Expand Option A: 4 Modbus use cases + protocol caveat
+- [ ] Expand Option B: `mapping.validate()` callout + "what doesn't port" list
+- [ ] Expand Option C: celebrate the transpiler ("same source, two runtimes")
+- [ ] Mention mixed deployments
+- [ ] Add "hardware will surprise you" callout
+- [ ] Add "Where to go from here" as story (built -> extend -> broader PLC -> deeper pyrung)
+- [ ] Close with full Zen of Ladder mapping table
+- [ ] Add exercise (run `mapping.validate()`, fix a complaint)
+
+## Cross-Cutting
+- [ ] Unify "order matters" thread across L1->L4->L8 with explicit callbacks
+- [ ] Add `pyrung.zen` Easter egg (prints Zen of Ladder a la `import this`)
+- [ ] Add one-line cross-lesson callbacks: L1->L8 (last rung wins), L4->L5/6/7 (`rise()`), L2->L9 (doubled name), L3->L11 (`~StopBtn`->`EstopOK`), L5->L10 (FIXED_STEP)

@@ -1,12 +1,13 @@
 """Conveyor sorting station — the tutorial's progressive project as a Click example.
 
-Demonstrates the full pyrung → Click workflow:
-  1. Start/stop/E-stop motor control with safety interlocking
-  2. State-machine sort sequence (idle → detecting → sorting → counting)
-  3. Auto/manual mode with branch-based diverter control
-  4. Edge-triggered bin counters
-  5. TagMap linking logical tags to Click hardware addresses
-  6. Simulation with PLCRunner in FIXED_STEP mode
+Demonstrates the full pyrung -> Click workflow:
+  1. Start/stop motor control with NC stop button convention
+  2. E-stop safety gating via EstopOK permission input
+  3. State-machine sort sequence (idle -> detecting -> sorting -> resetting)
+  4. Auto/manual mode with branch-based diverter control
+  5. Edge-triggered bin counters
+  6. TagMap linking logical tags to Click hardware addresses
+  7. Simulation with PLCRunner in FIXED_STEP mode
 
 This is the completed version of the conveyor built across the
 "Know Python? Learn Ladder Logic" tutorial.  See ``devtools/build_release_assets.py``.
@@ -40,9 +41,9 @@ from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
 # ---------------------------------------------------------------------------
 # Tags — inputs
 # ---------------------------------------------------------------------------
-Start = Bool("Start")  # X001 — momentary start button
-Stop = Bool("Stop")  # X002 — momentary stop button
-Estop = Bool("Estop")  # X003 — emergency stop
+StartBtn = Bool("StartBtn")  # X001 — NO momentary start button
+StopBtn = Bool("StopBtn")  # X002 — NC stop button (healthy at rest)
+EstopOK = Bool("EstopOK")  # X003 — NC safety relay permission contact
 Auto = Bool("Auto")  # X004 — auto mode selector
 Manual = Bool("Manual")  # X005 — manual mode selector
 EntrySensor = Bool("EntrySensor")  # X006 — photo-eye at conveyor entry
@@ -64,10 +65,16 @@ Running = Bool("Running")  # C001 — motor run latch
 IsLarge = Bool("IsLarge")  # C002 — size classification result
 CountReset = Bool("CountReset")  # C003 — counter reset button
 
-State = Int("State")  # DS003 — sort sequence state (0=idle, 1=detecting, 2=sorting, 3=counting)
+# State constants — initialized once, never written
+IDLE = Int("IDLE", default=0)
+DETECTING = Int("DETECTING", default=1)
+SORTING = Int("SORTING", default=2)
+RESETTING = Int("RESETTING", default=3)
 
-SizeReading = Int("SizeReading")  # DS001 — analog size sensor value
-SizeThreshold = Int("SizeThreshold")  # DS002 — small/large cutoff
+State = Int("State")  # DS005 — sort sequence state
+
+SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
+SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
 DetDone = Bool("DetDone")  # T001
@@ -87,9 +94,9 @@ BinBAcc = Dint("BinBAcc")  # CTD002
 mapping = TagMap(
     [
         # Inputs
-        Start.map_to(x[1]),
-        Stop.map_to(x[2]),
-        Estop.map_to(x[3]),
+        StartBtn.map_to(x[1]),
+        StopBtn.map_to(x[2]),
+        EstopOK.map_to(x[3]),
         Auto.map_to(x[4]),
         Manual.map_to(x[5]),
         EntrySensor.map_to(x[6]),
@@ -104,10 +111,15 @@ mapping = TagMap(
         Running.map_to(c[1]),
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
+        # State constants
+        IDLE.map_to(ds[1]),
+        DETECTING.map_to(ds[2]),
+        SORTING.map_to(ds[3]),
+        RESETTING.map_to(ds[4]),
         # Data
-        State.map_to(ds[3]),
-        SizeReading.map_to(ds[1]),
-        SizeThreshold.map_to(ds[2]),
+        State.map_to(ds[5]),
+        SizeReading.map_to(ds[6]),
+        SizeThreshold.map_to(ds[7]),
         # Timers
         DetDone.map_to(t[1]),
         DetAcc.map_to(td[1]),
@@ -129,49 +141,49 @@ mapping = TagMap(
 
 @program
 def logic():
-    comment("Start/stop/E-stop - process control inputs first")
-    with Rung(Start, any_of(Auto, Manual)):
+    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    with Rung(StartBtn, any_of(Auto, Manual)):
         latch(Running)
-    with Rung(Stop):
+    with Rung(~StopBtn):
         reset(Running)
-    with Rung(Estop):
+    with Rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output with E-stop safety gating")
-    with Rung(~Estop):
+    comment("Motor output — EstopOK gates all outputs")
+    with Rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
-    comment("Sort state machine - IDLE to DETECTING: box arrives")
-    with Rung(State == 0, rise(EntrySensor)):
-        copy(1, State)
+    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    with Rung(State == IDLE, rise(EntrySensor)):
+        copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == 1):
+    with Rung(State == DETECTING):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
-    with Rung(State == 1, SizeReading > SizeThreshold):
+    with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetDone):
-        copy(2, State)
+        copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == 2):
+    with Rung(State == SORTING):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
     with Rung(HoldDone):
-        copy(3, State)
+        copy(RESETTING, State)
 
-    comment("COUNTING: reset and return to idle")
-    with Rung(State == 3):
+    comment("RESETTING: clean up and return to idle")
+    with Rung(State == RESETTING):
         reset(IsLarge)
-        copy(0, State)
+        copy(IDLE, State)
 
-    comment("Diverter output - auto sort OR manual button")
+    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
-        ~Estop,
+        EstopOK,
         any_of(
-            all_of(State == 2, IsLarge, Auto),
+            all_of(State == SORTING, IsLarge, Auto),
             all_of(Manual, DiverterBtn),
         ),
     ):
@@ -191,15 +203,18 @@ runner = PLCRunner(logic)
 runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
+    # NC inputs: force True to simulate healthy wiring
+    runner.add_force(StopBtn, True)
+    runner.add_force(EstopOK, True)
+
     with runner.active():
-        State.value = 0
         Auto.value = True
         SizeThreshold.value = 100
 
-        # Press Start
-        runner.patch({Start.name: True})
+        # Momentary start press
+        StartBtn.value = True
         runner.step()
-        runner.patch({Start.name: False})
+        StartBtn.value = False
 
     # Simulate a large box arriving
     runner.add_force(EntrySensor, True)

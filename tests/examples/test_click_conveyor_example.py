@@ -18,16 +18,25 @@ def click_conveyor(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     return importlib.import_module(module_name)
 
 
+def _force_nc_inputs(mod: ModuleType) -> None:
+    """Force NC-wired inputs True to simulate healthy wiring."""
+    mod.runner.add_force(mod.StopBtn, True)
+    mod.runner.add_force(mod.EstopOK, True)
+
+
 def test_motor_latches_on_start(click_conveyor: ModuleType) -> None:
     runner = click_conveyor.runner
+    _force_nc_inputs(click_conveyor)
 
     with runner.active():
         click_conveyor.Auto.value = True
-        click_conveyor.Start.value = True
-    runner.step()
+        click_conveyor.StartBtn.value = True
+        runner.step()
 
     # Finger off the button — motor stays on (latched)
-    runner.step()
+    with runner.active():
+        click_conveyor.StartBtn.value = False
+        runner.step()
 
     with runner.active():
         assert click_conveyor.Running.value is True
@@ -36,15 +45,18 @@ def test_motor_latches_on_start(click_conveyor: ModuleType) -> None:
 
 def test_motor_stops_on_stop(click_conveyor: ModuleType) -> None:
     runner = click_conveyor.runner
+    _force_nc_inputs(click_conveyor)
 
     with runner.active():
         click_conveyor.Auto.value = True
-        click_conveyor.Start.value = True
-    runner.step()
+        click_conveyor.StartBtn.value = True
+        runner.step()
 
+    # NC stop button: remove force and set False to simulate press
+    runner.remove_force(click_conveyor.StopBtn)
     with runner.active():
-        click_conveyor.Stop.value = True
-    runner.step()
+        click_conveyor.StopBtn.value = False
+        runner.step()
 
     with runner.active():
         assert click_conveyor.Running.value is False
@@ -53,12 +65,18 @@ def test_motor_stops_on_stop(click_conveyor: ModuleType) -> None:
 
 def test_estop_overrides_start(click_conveyor: ModuleType) -> None:
     runner = click_conveyor.runner
+    _force_nc_inputs(click_conveyor)
 
     with runner.active():
         click_conveyor.Auto.value = True
-        click_conveyor.Start.value = True
-        click_conveyor.Estop.value = True
-    runner.step()
+        click_conveyor.StartBtn.value = True
+        runner.step()
+
+    # Safety relay trips: EstopOK goes False
+    runner.remove_force(click_conveyor.EstopOK)
+    with runner.active():
+        click_conveyor.EstopOK.value = False
+        runner.step()
 
     with runner.active():
         assert click_conveyor.Running.value is False
@@ -68,21 +86,20 @@ def test_estop_overrides_start(click_conveyor: ModuleType) -> None:
 def test_sort_large_box(click_conveyor: ModuleType) -> None:
     """Large box: diverter extends during sorting phase."""
     runner = click_conveyor.runner
+    _force_nc_inputs(click_conveyor)
 
-    # Auto mode switch stays in position (use force for persistent Bool)
     runner.add_force(click_conveyor.Auto, True)
 
     with runner.active():
-        click_conveyor.State.value = 0
         click_conveyor.SizeThreshold.value = 100
-        click_conveyor.Start.value = True
-    runner.step()
+        click_conveyor.StartBtn.value = True
+        runner.step()
 
     # Box arrives — large
     with runner.active():
         click_conveyor.EntrySensor.value = True
         click_conveyor.SizeReading.value = 150
-    runner.step()
+        runner.step()
 
     with runner.active():
         assert click_conveyor.State.value == 1  # Detecting
@@ -100,20 +117,20 @@ def test_sort_large_box(click_conveyor: ModuleType) -> None:
 def test_sort_small_box(click_conveyor: ModuleType) -> None:
     """Small box: diverter stays retracted."""
     runner = click_conveyor.runner
+    _force_nc_inputs(click_conveyor)
 
     runner.add_force(click_conveyor.Auto, True)
 
     with runner.active():
-        click_conveyor.State.value = 0
         click_conveyor.SizeThreshold.value = 100
-        click_conveyor.Start.value = True
-    runner.step()
+        click_conveyor.StartBtn.value = True
+        runner.step()
 
     # Box arrives — small
     with runner.active():
         click_conveyor.EntrySensor.value = True
         click_conveyor.SizeReading.value = 50
-    runner.step()
+        runner.step()
 
     # Run through detection
     runner.run(cycles=50)
