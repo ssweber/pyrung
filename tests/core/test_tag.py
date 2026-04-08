@@ -362,3 +362,67 @@ class TestTagInvertOperator:
 
         assert isinstance(expr, UnaryExpr)
         assert expr.symbol == "~"
+
+
+class TestTagDefaultSeeding:
+    """Tag defaults must be seeded into initial SystemState."""
+
+    def test_bool_default_true_in_initial_state(self):
+        """Bool(default=True) should appear in state at construction."""
+        from pyrung import Bool, PLCRunner, Program, Rung, reset
+
+        StopBtn = Bool("StopBtn", default=True)
+        Running = Bool("Running")
+
+        with Program(strict=False) as logic:
+            with Rung(~StopBtn):
+                reset(Running)
+
+        runner = PLCRunner(logic)
+        assert runner.current_state.tags["StopBtn"] is True
+
+    def test_bool_default_true_condition_agrees_with_value(self):
+        """~Bool(default=True) should evaluate False — condition must agree with .value."""
+        from pyrung import Bool, PLCRunner, Program, Rung, out
+
+        Flag = Bool("Flag", default=True)
+        Result = Bool("Result")
+
+        with Program(strict=False) as logic:
+            with Rung(~Flag):
+                out(Result)
+
+        runner = PLCRunner(logic)
+        runner.step()
+        # ~Flag is NormallyClosed: True when Flag is off. Flag is True, so condition is False.
+        assert runner.current_state.tags["Result"] is False
+
+    def test_standard_defaults_also_seeded(self):
+        """Even tags with standard defaults (Bool=False) should be in state."""
+        from pyrung import Bool, Int, PLCRunner, Program, Rung, out
+
+        X = Bool("X")
+        Y = Int("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(X):
+                out(Bool("Unused"))
+
+        runner = PLCRunner(logic)
+        assert "X" in runner.current_state.tags
+        assert runner.current_state.tags["X"] is False
+
+    def test_initial_state_not_overwritten_by_defaults(self):
+        """User-provided initial_state values take precedence over tag defaults."""
+        from pyrung import Bool, PLCRunner, Program, Rung, out
+        from pyrung.core.state import SystemState
+
+        X = Bool("X")  # default=False
+
+        with Program(strict=False) as logic:
+            with Rung(X):
+                out(Bool("Out"))
+
+        state = SystemState().with_tags({"X": True})
+        runner = PLCRunner(logic, initial_state=state)
+        assert runner.current_state.tags["X"] is True

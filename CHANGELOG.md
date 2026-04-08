@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug fixes
+
+- **Tag defaults now seeded into initial state** — `PLCRunner` now populates `SystemState.tags` with every program tag's declared default at construction time. Previously, tags were absent from state until first written, causing `Tag.value` (which falls back to `tag.default`) to disagree with the engine's condition evaluation (which fell back to hardcoded `False`). A `Bool("X", default=True)` would report `True` via `.value` but evaluate as `False` in rung conditions.
+
 ## v0.3.0
 
 ### Breaking changes
