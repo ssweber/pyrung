@@ -25,7 +25,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
 from pyrung import comment, on_delay, copy, latch, reset, out, rise
 
-# State tag — 0=idle, 1=detecting, 2=sorting, 3=counting
+# State tag — 0=idle, 1=detecting, 2=sorting, 3=resetting
 State = Int("State")
 
 # Inputs
@@ -64,7 +64,7 @@ with Program() as logic:
     with Rung(HoldDone):
         copy(3, State)
 
-    comment("COUNTING: reset for next box")
+    comment("RESETTING: clean up for next box")
     with Rung(State == 3):
         reset(IsLarge)
         copy(0, State)
@@ -98,7 +98,7 @@ with runner.active():
 # Wait for hold (2s = 200 scans)
 runner.run(cycles=200)
 with runner.active():
-    assert State.value == 3             # Counting
+    assert State.value == 3             # Resetting
 
 runner.step()
 with runner.active():

@@ -3,8 +3,10 @@
 ## The Python instinct
 
 ```python
-conveyor_speed = 0  # What type? How big? Who cares?
+conveyor_speed: int = 0
 ```
+
+Python's type hint tells you it's an integer. It doesn't tell you it's 16-bit signed, non-retentive, or mapped to a specific region of physical memory.
 
 ## The ladder logic way
 

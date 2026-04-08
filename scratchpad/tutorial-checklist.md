@@ -1,12 +1,12 @@
 # Tutorial Recommendations Checklist
 
 ## Blocking Bugs
-- [ ] **L8** — Fix `NameError`: `out(Light)` / `latch(Running)` used before `Light` / `Mode` defined
-- [ ] **L7** — Rename `COUNTING` state -> `RESETTING` or `CLEANUP`
-- [ ] **L2** — Fix Python instinct strawman (use typed `conveyor_speed: int = 0`, then pivot)
+- [x] **L8** — Fix `NameError`: `out(Light)` / `latch(Running)` used before `Light` / `Mode` defined
+- [x] **L7** — Rename `COUNTING` state -> `RESETTING` or `CLEANUP`
+- [x] **L2** — Fix Python instinct strawman (use typed `conveyor_speed: int = 0`, then pivot)
 
 ## Overall
-- [ ] Add ASCII ladder diagram to every lesson (L1 has one; replicate the pattern)
+- [ ] Add Mermaid diagram to every lesson (ladder rungs, state machines, etc.)
 - [ ] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
 - [ ] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
 - [ ] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
@@ -70,7 +70,7 @@
 - [ ] Explain repeated `State == 1` as a feature (grep-able, independent)
 - [ ] Explain implicit timer reset (TON auto-resets when rung goes false)
 - [ ] Note `IsLarge` latch crossing states ("latches outlive rungs")
-- [ ] Add ASCII state diagram
+- [ ] Add Mermaid state diagram
 - [ ] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
 
 ### L8 — Branches and OR Logic

@@ -22,10 +22,12 @@ Estop         = Bool("Estop")
 Start         = Bool("Start")
 Stop          = Bool("Stop")
 Running       = Bool("Running")
+Light         = Bool("Light")
 DiverterBtn   = Bool("DiverterBtn")
 DiverterCmd   = Bool("DiverterCmd")
 ConveyorMotor = Bool("ConveyorMotor")
 AutoDivert    = Bool("AutoDivert")    # Set by state machine in auto mode
+Mode          = Int("Mode")
 
 with Program() as logic:
     # Motor runs in either mode when started
@@ -33,7 +35,6 @@ with Program() as logic:
         out(Light)                        # Status light: either mode is active
 
     # any_of for comparisons or more than two conditions
-    Mode = Int("Mode")
     with Rung(any_of(Mode == 1, Mode == 3, Mode == 5)):
         latch(Running)
 ```
