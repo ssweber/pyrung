@@ -45,6 +45,8 @@ with Program() as logic:
 
 This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldDone` goes true, `~HoldDone` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
 
+Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how timers work in PLCs. The accumulator tracks elapsed time; the done bit fires when it reaches the preset. Real PLCs bundle these into a structured type (`TIMER` in Rockwell) or paired addresses (`T1` for the done bit, `TD1` for the accumulator in Click — pyrung borrows that convention). Either way, pyrung makes them explicit tags you can inspect, assert on, and force independently. You'll see this two-tag model again with counters in the next lesson, and it collapses back into structure members in [Lesson 9](structured-tags.md).
+
 ## Test it deterministically
 
 ```python
@@ -64,6 +66,26 @@ with runner.active():
 ```
 
 `FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. This is why pyrung exists. Try writing this test against real hardware.
+
+## Retentive on-delay
+
+The example above is a TON — it auto-resets when the rung goes false. What if you need the timer to *keep* its progress across rung-false cycles? That's a retentive on-delay (RTON). In pyrung, there's no separate instruction — chain `.reset()` and the behavior changes:
+
+```python
+# TON — auto-resets when rung goes False
+on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
+
+# RTON — holds accumulator across rung-false;
+# only the explicit reset clears it
+on_delay(BatchDone, BatchAcc, preset=3600, unit=Ts) \
+    .reset(BatchReset)
+```
+
+Without `.reset()`, the timer clears its accumulator the moment the rung drops — that's TON. With `.reset()`, the timer holds its accumulator and only clears when the reset condition fires — that's RTON. Same instruction, mode determined by the chain. This chained-builder pattern returns in [Lesson 6](counters.md) with counters.
+
+!!! note "Why is `.reset()` terminal?"
+
+    In Click and most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung makes `.reset()` terminal so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions after, write a separate rung. Counters use the same pattern.
 
 !!! info "Also known as..."
 

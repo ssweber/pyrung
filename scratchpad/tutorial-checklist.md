@@ -47,9 +47,9 @@
 
 ### L5 — Timers
 - [ ] Sharpen "this is why pyrung exists" (name `freezegun` alternative)
-- [ ] Show TON vs RTON as same instruction +/- `.reset()` chain
-- [ ] Add terminal-chain callout ("Why is `.reset()` terminal?")
-- [ ] Explain accumulator tag (done bit + acc, foreshadow structured tags)
+- [x] Show TON vs RTON as same instruction +/- `.reset()` chain
+- [x] Add terminal-chain callout ("Why is `.reset()` terminal?")
+- [x] Explain accumulator tag (done bit + acc, foreshadow structured tags)
 - [ ] Add `Tms`/`Ts` naming sidebar ("Why `Tms` and not `Milliseconds`?")
 - [ ] Flag `TD` naming collision (Click timer-data vs pyrung day unit)
 - [x] Add "Heads up" box: TON/TOF/RTO across vendors
