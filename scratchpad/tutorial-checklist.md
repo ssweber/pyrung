@@ -6,7 +6,7 @@
 - [x] **L2** — Fix Python instinct strawman (use typed `conveyor_speed: int = 0`, then pivot)
 
 ## Overall
-- [ ] Add Mermaid diagram to every lesson (ladder rungs, state machines, etc.)
+- [x] Add Mermaid diagram to every lesson (ladder rungs, state machines, etc.)
 - [ ] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
 - [ ] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
 - [ ] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
@@ -22,20 +22,20 @@
 
 ### L1 — Scan Cycle
 - [ ] Promote "last one wins" to a callout with example
-- [ ] Add "Heads up" box: `out`=OTE, `X`=XIC, `~X`=XIO
+- [x] Add "Heads up" box: `out`=OTE, `X`=XIC, `~X`=XIO
 
 ### L2 — Tags
 - [ ] Explain doubled-name string (`ConveyorSpeed = Int("ConveyorSpeed")`)
 - [ ] Promote retentive vs non-retentive to its own subheading
 - [ ] Add naming convention admonition + PLC tag-limit table
-- [ ] Add "Heads up" box: type aliases across vendors
+- [x] Add "Heads up" box: type aliases across vendors
 
 ### L3 — Latch and Reset
 - [ ] Rename `Estop` -> `StopBtn` throughout early lessons, use as `~StopBtn`
 - [ ] Teach `~` as "NC contact," not "NOT" — dedicated callout
 - [ ] Land latch vs `out` distinction harder (sticky vs non-sticky)
 - [ ] Forward ref to L8 seal-in and L11 E-stop (one line each)
-- [ ] Add "Heads up" box: `latch`=SET/OTL, `reset`=RST/OTU
+- [x] Add "Heads up" box: `latch`=SET/OTL, `reset`=RST/OTU
 
 ### L4 — Assignment
 - [ ] Give `rise()` / edge detection its own mini-section
@@ -43,7 +43,7 @@
 - [ ] Add one line on why clamp (`copy`) vs wrap (`calc`)
 - [ ] Note `copy(source, dest)` argument order + vendor variance
 - [ ] Fix naming: `LastSize`/`PreviousSize` ambiguity
-- [ ] Add "Heads up" box: `copy`=MOV, `calc`=MATH/CPT, `rise()`=ONS/R_TRIG
+- [x] Add "Heads up" box: `copy`=MOV, `calc`=MATH/CPT, `rise()`=ONS/R_TRIG
 
 ### L5 — Timers
 - [ ] Sharpen "this is why pyrung exists" (name `freezegun` alternative)
@@ -52,7 +52,7 @@
 - [ ] Explain accumulator tag (done bit + acc, foreshadow structured tags)
 - [ ] Add `Tms`/`Ts` naming sidebar ("Why `Tms` and not `Milliseconds`?")
 - [ ] Flag `TD` naming collision (Click timer-data vs pyrung day unit)
-- [ ] Add "Heads up" box: TON/TOF/RTO across vendors
+- [x] Add "Heads up" box: TON/TOF/RTO across vendors
 
 ### L6 — Counters
 - [ ] Lead with "counters count every scan, not edges" — use `rise()` for edges
@@ -61,7 +61,7 @@
 - [ ] Show bidirectional counter (`count_up(...).down(...).reset(...)`)
 - [ ] Add "Why `Dint`, not `Int`?" one-liner (16-bit rolls at 32,767)
 - [ ] Name the meta-irony (Python loops in test, no loops in logic)
-- [ ] Add "Heads up" box: CTU/CTD/CTUD across vendors
+- [x] Add "Heads up" box: CTU/CTD/CTUD across vendors
 
 ### L7 — State Machines
 - [ ] Replace magic numbers with tag-as-constant pattern (`IDLE = Int("IDLE", initial=0)`)
@@ -70,8 +70,8 @@
 - [ ] Explain repeated `State == 1` as a feature (grep-able, independent)
 - [ ] Explain implicit timer reset (TON auto-resets when rung goes false)
 - [ ] Note `IsLarge` latch crossing states ("latches outlive rungs")
-- [ ] Add Mermaid state diagram
-- [ ] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
+- [x] Add Mermaid state diagram
+- [x] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
 
 ### L8 — Branches and OR Logic
 - [ ] State actual `|` vs `any_of` rule (precedence + arity, not count)
@@ -79,7 +79,7 @@
 - [ ] Promote "all conditions evaluate before any instructions" to Key Concept
 - [ ] Show seal-in as a branch (contrast with L3 latch/reset)
 - [ ] Clarify `AutoDivert` connection (one-line forward ref)
-- [ ] Add "Heads up" box: BST/BND, MCR, seal-in
+- [x] Add "Heads up" box: BST/BND, MCR, seal-in
 
 ### L9 — Structured Tags and Blocks
 - [ ] Land L2 payoff: doubled name is gone, explain why
@@ -91,7 +91,7 @@
 - [ ] Address rung duplication (feature, not smell)
 - [ ] Clarify build-time vs runtime loops
 - [ ] Name the shift register pattern (`blockcopy` over `select`)
-- [ ] Add "Heads up" box: UDT/STRUCT, COP/BSL/BSR/FILL
+- [x] Add "Heads up" box: UDT/STRUCT, COP/BSL/BSR/FILL
 
 ### L10 — Testing
 - [ ] Pick one title (sidebar vs body)
@@ -104,7 +104,7 @@
 - [ ] Show `pytest.mark.parametrize` as complement to `fork()`
 - [ ] Add fixture isolation one-liner
 - [ ] Name canonical `with runner.active()` pattern
-- [ ] Add "Heads up" box: force I/O, fork/FIXED_STEP have no vendor equivalent
+- [x] Add "Heads up" box: force I/O, fork/FIXED_STEP have no vendor equivalent
 
 ### L11 — From Simulation to Hardware
 - [ ] Move celebration paragraph to the top
@@ -122,5 +122,5 @@
 
 ## Cross-Cutting
 - [ ] Unify "order matters" thread across L1->L4->L8 with explicit callbacks
-- [ ] Add `pyrung.zen` Easter egg (prints Zen of Ladder a la `import this`)
+- [x] Add `pyrung.zen` Easter egg (prints Zen of Ladder a la `import this`)
 - [ ] Add one-line cross-lesson callbacks: L1->L8 (last rung wins), L4->L5/6/7 (`rise()`), L2->L9 (doubled name), L3->L11 (`~StopBtn`->`EstopOK`), L5->L10 (FIXED_STEP)

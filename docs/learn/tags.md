@@ -20,6 +20,16 @@ Temperature   = Real("Temperature")     # 32-bit float
 
 Tags are typed and sized. You can't put a float in a Bool or store a negative number in an unsigned Word. This reflects real PLC hardware where each tag maps to a specific region of memory with a fixed width.
 
+```mermaid
+graph TD
+    A[Tag Types] --> B["Bool — 1-bit on/off"]
+    A --> C["Int — 16-bit signed"]
+    A --> D["Dint — 32-bit signed"]
+    A --> E["Real — 32-bit float"]
+    A --> F["Word — 16-bit unsigned"]
+    A --> G["Char — text string"]
+```
+
 The important distinction is **retentive** vs **non-retentive**. When a PLC goes through a STOP->RUN cycle (like a reboot), retentive tags keep their values and non-retentive tags reset to defaults. Bool tags are non-retentive by default: your outputs start in a known safe state. Int, Real, and others are retentive: your production counter doesn't reset to zero every time someone power-cycles the machine.
 
 ## Setting values from outside the program
@@ -50,6 +60,10 @@ with runner.active():
 ```
 
 `ConveyorSpeed.value = 600` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. This is the same relationship an operator has with a real PLC: they set inputs and parameters, the logic does the rest.
+
+!!! info "Also known as..."
+
+    `Bool` tags are called control relays, `C` bits, `X`/`Y` for I/O, or just `BOOL`. `Int` is a 16-bit signed type almost everywhere (`DS`, `V`, `INT`). `Real` is a 32-bit float (`DF`, `R`, `REAL`). "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.
 
 ## Exercise
 

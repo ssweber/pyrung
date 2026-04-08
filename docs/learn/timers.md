@@ -17,6 +17,15 @@ A PLC can't sleep. It has to keep scanning because sensors are still reading, sa
 
 Timers **accumulate** across scans: every scan where the rung is true, the timer adds a little more time, and when the accumulator reaches the preset, it fires.
 
+```mermaid
+graph TD
+    A["Each scan: rung true?"] -->|Yes| B["Accumulator += elapsed time"]
+    A -->|No| C["Accumulator resets to 0"]
+    B --> D{"Acc ≥ Preset?"}
+    D -->|No| E["Done = False — keep timing"]
+    D -->|Yes| F["Done = True"]
+```
+
 The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:
 
 ```python
@@ -55,6 +64,10 @@ with runner.active():
 ```
 
 `FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. This is why pyrung exists. Try writing this test against real hardware.
+
+!!! info "Also known as..."
+
+    On-delay is `TON` or `TMR`; off-delay is `TOF`; retentive on-delay is `RTO` or `TMRA`. The done bit is `.DN`, `.Done`, or `.Q`; the accumulator is `.ACC`, `.Acc`, or `.ET`. pyrung makes these explicit tags so you can inspect and test them.
 
 ## Exercise
 

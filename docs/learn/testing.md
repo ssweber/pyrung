@@ -75,6 +75,15 @@ previous = runner.history[-2]    # Two scans ago
 
 Test two outcomes from the same starting point without resetting:
 
+```mermaid
+graph TD
+    A["Setup: start conveyor,<br/>box arrives at sensor"] --> B["runner.fork()"]
+    B --> C["Large box path<br/>SizeReading = 150"]
+    B --> D["Small box path<br/>SizeReading = 50"]
+    C --> E["Assert: DiverterCmd = True"]
+    D --> F["Assert: DiverterCmd = False"]
+```
+
 ```python
 def test_small_vs_large_box(runner):
     """Same setup, two outcomes."""
@@ -104,6 +113,10 @@ def test_small_vs_large_box(runner):
 ## When tests aren't enough
 
 Sometimes you need to watch logic execute step by step. pyrung includes a VS Code debugger that lets you set breakpoints on individual rungs, step through scans one at a time, watch tag values update live, and force overrides from the debug console. If you've ever debugged Python in VS Code, it works the same way, just with scans instead of lines. See the [DAP Debugger guide](../guides/dap-vscode.md) for setup.
+
+!!! info "Also known as..."
+
+    `runner.step()` is "single scan mode" on most PLCs. `add_force`/`remove_force` mirror the universal Force On/Off features — forcing is a real debugging tool everywhere, not a pyrung invention. `history[-N]` is sort of like a trend or data log, except trends are sampled and lossy. And then: `fork()`, `FIXED_STEP` deterministic scan time, and full-scan history have **no equivalent on real PLCs**.
 
 ## Exercise
 

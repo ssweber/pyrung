@@ -47,6 +47,14 @@ A `branch` creates a parallel path within a rung. Think of it as a second wire t
 
 Here's the conveyor's control rung. E-stop gates everything. Below that, the motor runs when started, and the diverter responds to either auto logic or the manual button:
 
+```mermaid
+graph TD
+    R["~Estop (parent rung)"] --> B1["Branch: Running"]
+    R --> B2["Branch: any_of(Auto+AutoDivert,<br/>Manual+DiverterBtn)"]
+    B1 --> O1["out(ConveyorMotor)"]
+    B2 --> O2["out(DiverterCmd)"]
+```
+
 ```python
 Light = Bool("Light")
 
@@ -101,6 +109,10 @@ with runner.active():
     assert DiverterCmd.value is False
     assert Running.value is False
 ```
+
+!!! info "Also known as..."
+
+    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere (sometimes with explicit `BST`/`BND` markers). The safety-gate pattern is "Master Control Reset" (`MCR`) in some editors. Seal-in is the classic OR-branch with a series stop contact — every legacy ladder opens with one.
 
 ## Exercise
 

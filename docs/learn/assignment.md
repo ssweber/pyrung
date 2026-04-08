@@ -35,6 +35,17 @@ with Program() as logic:
 
 `rise(EntrySensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the copy and calc would execute every scan while the sensor is active.
 
+```mermaid
+graph LR
+    subgraph "rise(EntrySensor) — one scan"
+        A[BoxSize] -->|copy| B[LastSize]
+        C["SortCount + 1"] -->|calc| D[SortCount]
+    end
+    subgraph "Every scan"
+        E["CycleCount + 1"] -->|calc| F[CycleCount]
+    end
+```
+
 ## Try it
 
 ```python
@@ -59,6 +70,10 @@ These two handle overflow differently, and the difference matters. `copy` clamps
 ## Unconditional rungs
 
 Notice `Rung()` with no condition. That rung is always true, so its instructions execute every scan. This is how you compute values that should always be current, like a cycle counter or a scaled analog reading.
+
+!!! info "Also known as..."
+
+    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT` (or an expression in Structured Text). `rise()` and `fall()` are one-shots (`ONS`/`OSR`), positive/negative edge triggers (`R_TRIG`/`F_TRIG`), or "leading-edge" / "trailing-edge" contacts. An unconditional rung is "always on" — some PLCs expose a special bit (`SP1`, `S:1/15`), others just wire straight from the rail.
 
 ## Exercise
 

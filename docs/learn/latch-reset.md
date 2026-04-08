@@ -34,6 +34,14 @@ with Program() as logic:
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
 
+```mermaid
+stateDiagram-v2
+    [*] --> Off
+    Off --> On : latch(Running)
+    On --> On : Start released (stays latched)
+    On --> Off : reset(Running)
+```
+
 ## Try it
 
 ```python
@@ -76,6 +84,10 @@ with Program() as logic:
 ```
 
 This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a Click PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
+
+!!! info "Also known as..."
+
+    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. Seal-in rungs look the same in every ladder editor — Start OR-branched with Running, ANDed with the stop contact. You'll see that pattern in Lesson 8.
 
 ## Exercise
 

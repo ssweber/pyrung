@@ -21,6 +21,15 @@ State machines in ladder logic use a tag for the current state, timers for durat
 
 Here's the full sorting sequence: a box arrives, the system reads its size, positions the diverter, holds it open, then returns to idle.
 
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> DETECTING : rise(EntrySensor)
+    DETECTING --> SORTING : DetDone (0.5s)
+    SORTING --> RESETTING : HoldDone (2s)
+    RESETTING --> IDLE : cleanup
+```
+
 ```python
 from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
 from pyrung import comment, on_delay, copy, latch, reset, out, rise
@@ -105,6 +114,10 @@ with runner.active():
     assert State.value == 0             # Back to idle
     assert DiverterCmd.value is False   # Diverter retracted
 ```
+
+!!! info "Also known as..."
+
+    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`/`SQI`/`SQL`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator from any vendor recognizes.
 
 ## Exercise
 

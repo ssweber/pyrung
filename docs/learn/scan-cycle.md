@@ -16,6 +16,13 @@ This runs once. A PLC doesn't run once. It runs in a **scan cycle**, an infinite
 
 Because a PLC controls physical things. A conveyor belt doesn't stop needing instructions and a valve doesn't pause while you wait for user input. The machine is always running, so the logic is always running.
 
+```mermaid
+graph LR
+    A[Read Inputs] --> B[Execute Logic<br/>top to bottom]
+    B --> C[Write Outputs]
+    C --> A
+```
+
 ## The ladder logic way
 
 ```python
@@ -59,6 +66,10 @@ with runner.active():
 `ConveyorMotor = True` in Python sets a value once. `out(ConveyorMotor)` means "the motor follows this rung's power state, every single scan." Take your finger off the button, the conveyor stops. That's why `out` works this way -- in a factory, releasing the button *should* stop the machine.
 
 If two rungs both `out` the same tag, the last one wins. This is how real PLCs work.
+
+!!! info "Also known as..."
+
+    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" or `XIC`. `Rung(~Tag)` is a "normally closed contact" or `XIO`. If you Google any of those, you'll find the same thing in a different dialect.
 
 ## Exercise
 
