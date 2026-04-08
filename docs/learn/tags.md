@@ -56,7 +56,7 @@ Bool tags are non-retentive by default: your outputs start in a known safe state
 
 ## Setting values from outside the program
 
-The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI or a dataview window. In pyrung, that's the `runner.active()` block:
+The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI or a dataview window. In pyrung, that's `with runner.active()` -- the active context. Inside it, you read and write tag values. Outside it, you call `runner.step()` or `runner.run()` to execute scans. The canonical pattern is: set inputs inside an active block, step outside, then check outputs in another active block. These early lessons keep it compact (everything in one block), but [Lesson 10](testing.md) shows the full form.
 
 ```python
 from pyrung import Bool, Int, Program, Rung, PLCRunner, out
@@ -89,7 +89,7 @@ with runner.active():
 
 ## Exercise
 
-Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold.
+Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold. Then test the boundary: what happens when `BoxWeight` exactly equals `WeightLimit`? Does your rung use `>` or `>=`? Make sure it does what you intend -- in a real plant, that boundary is the difference between a nuisance alarm and a missed overweight.
 
 ---
 

@@ -7,16 +7,16 @@
 
 ## Overall
 - [x] Add Mermaid diagram to every lesson (ladder rungs, state machines, etc.)
-- [ ] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
-- [ ] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
+- [x] Make early exercises adversarial (L1, L2, L4 are passive — match L3/5/6/7/8/10 rigor)
+- [x] Standardize `with runner.active()` pattern across all lessons (canonical in L10)
 - [x] Fix title inconsistency ("Testing Like You Mean It" vs sidebar "Testing")
 
 ## Landing Page
-- [ ] Lead with "pyrung won't let you cheat"
-- [ ] Surface the pedagogical scaffold as a bullet
-- [ ] Fix lesson title consistency
-- [ ] Better L11 teaser: "Map your project to a real Click PLC or P1AM-200"
-- [ ] Add TitleCase footnote in prerequisites
+- [x] Lead with "pyrung won't let you cheat"
+- [x] Surface the pedagogical scaffold as a bullet
+- [x] Fix lesson title consistency
+- [x] Better L11 teaser: "Map your project to a real Click PLC or P1AM-200"
+- [x] Add TitleCase footnote in prerequisites
 
 ## Per-Lesson
 
@@ -114,13 +114,12 @@
 - [ ] Expand Option A: 4 Modbus use cases + protocol caveat
 - [ ] Expand Option B: `mapping.validate()` callout + "what doesn't port" list
 - [ ] Expand Option C: celebrate the transpiler ("same source, two runtimes")
-- [ ] Mention mixed deployments
 - [ ] Add "hardware will surprise you" callout
 - [ ] Add "Where to go from here" as story (built -> extend -> broader PLC -> deeper pyrung)
-- [ ] Close with full Zen of Ladder mapping table
 - [ ] Add exercise (run `mapping.validate()`, fix a complaint)
 
 ## Cross-Cutting
-- [ ] Unify "order matters" thread across L1->L4->L8 with explicit callbacks
+- [x] Unify "order matters" thread across L1->L4->L8 with explicit callbacks
 - [x] Add `pyrung.zen` Easter egg (prints Zen of Ladder a la `import this`)
-- [ ] Add one-line cross-lesson callbacks: L1->L8 (last rung wins), L4->L5/6/7 (`rise()`), L2->L9 (doubled name), L3->L11 (`~StopBtn`->`EstopOK`), L5->L10 (FIXED_STEP)
+- [x] Add one-line cross-lesson callbacks: L1->L8 (last rung wins), L4->L6/7 (`rise()`), L5->L10 (FIXED_STEP)
+- [ ] Add one-line cross-lesson callbacks (other sessions): L2->L9 (doubled name), L3->L11 (`~StopBtn`->`EstopOK`)

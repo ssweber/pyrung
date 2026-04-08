@@ -85,6 +85,8 @@ with runner.active():
 
 Add an `EntrySensor` (Bool) and a `SensorLight` (Bool). Write a second rung where the sensor light comes on when the entry sensor detects a box. Test both rungs independently: the motor should follow the button, and the light should follow the sensor.
 
+Then test the "last one wins" trap from the callout above: add a *third* rung with an unconditional `out(ConveyorMotor)`. Before you run it, predict what happens when `RunButton` is true. Then test your prediction.
+
 ---
 
 The motor and sensor work, but they're just on or off. What if we need to track a speed setpoint or trigger an alarm at a threshold? That requires typed tags.

@@ -80,7 +80,7 @@ This is the **gate pattern**. The parent rung holds your master condition, and e
 
 The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
 
-`AutoDivert` is latched and reset by the state machine from [Lesson 7](state-machines.md) — this rung is the consumer. The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. This matters: if two separate rungs both `out` the same tag, the last one evaluated wins. A false manual rung below a true auto rung would de-energize the diverter. One `out` per output avoids the problem.
+`AutoDivert` is latched and reset by the state machine from [Lesson 7](state-machines.md) — this rung is the consumer. The diverter branch combines both control sources with `any_of` so there's a single `out(DiverterCmd)`. Remember "order has meaning" from [Lesson 1](scan-cycle.md)? This is how you escape it: **one coil, one rung.** If two separate rungs both `out` the same tag, the last one evaluated wins — a false manual rung below a true auto rung would de-energize the diverter. Fold every reason the output should energize into one rung and order stops being a side effect.
 
 !!! tip "Key concept: atomic rungs"
 

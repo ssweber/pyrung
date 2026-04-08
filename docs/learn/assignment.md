@@ -81,9 +81,9 @@ Notice `Rung()` with no condition. That rung is always true, so its instructions
 
 ## Exercise
 
-Instructions within a rung execute top-to-bottom, in the order you write them. That matters here.
+Remember "order has meaning" from [Lesson 1](scan-cycle.md)? It applies within a rung too: instructions execute top-to-bottom, in the order you write them. That matters here.
 
-Create a `PreviousSize` tag. Each time a new box arrives (`rise(EntrySensor)`), copy `CurrentSize` to `PreviousSize` before copying the new `BoxSize` into `CurrentSize`. The order of those two copies is load-bearing — swap them and you lose the previous reading. Test that after two boxes (sizes 100 and 200), `CurrentSize` is 200 and `PreviousSize` is 100.
+Create a `PreviousSize` tag. Each time a new box arrives (`rise(EntrySensor)`), copy `CurrentSize` to `PreviousSize` before copying the new `BoxSize` into `CurrentSize`. Test that after two boxes (sizes 100 and 200), `CurrentSize` is 200 and `PreviousSize` is 100. Then swap the two copies and run the test again -- verify that `PreviousSize` gets the *wrong* value. Understand why before you swap them back.
 
 ---
 

@@ -14,7 +14,7 @@ for item in items:
 
 There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in — and a counter that counts it.
 
-But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` to count edges instead — one increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
+But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` — the edge detection from [Lesson 4](assignment.md) — to count edges instead. One increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
 
 ```python
 from pyrung import Bool, Dint, Program, Rung, PLCRunner, count_up, rise

@@ -2,9 +2,9 @@
 
 > A guided introduction to PLC programming for Python developers, using [pyrung](https://ssweber.github.io/pyrung/).
 
-You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware. No proprietary software. No Windows VM.
-
 pyrung won't let you cheat: if you try to write a `for` loop where a scan cycle belongs, it'll tell you. That's the point. You're learning a different way of thinking about programs, and the guardrails are there to keep you honest.
+
+You know Python. You've never touched a PLC. This guide teaches you ladder logic, the dominant programming language of industrial automation, using tools you already have: Python, VS Code, and pytest. No hardware. No proprietary software. No Windows VM.
 
 ---
 
@@ -12,9 +12,9 @@ pyrung won't let you cheat: if you try to write a `for` loop where a scan cycle 
 
 Every lesson adds a feature to the same project: a **conveyor sorting station**. Boxes arrive on a belt, get measured, and a diverter gate routes them to the correct bin. By the end, you'll have a system with start/stop/e-stop, auto and manual modes, a state-driven sorting sequence, structured tags for the equipment, a full test suite, and a path to real hardware.
 
-Each lesson introduces one ladder logic concept, shows you the Python you'd instinctively reach for, then shows you the ladder logic way and *why* it works that way in a machine that controls physical things. Every lesson ends with an exercise you can run and test.
+Each lesson follows the same arc: start with the Python you'd instinctively reach for, see why it doesn't work for a machine that controls physical things, then learn the ladder logic way. Every lesson ends with an exercise you can run and test.
 
-**Prerequisites:** Python 3.11+, basic pytest knowledge, a text editor.
+**Prerequisites:** Python 3.11+, basic pytest knowledge, a text editor. Code samples use PLC-style `TitleCase` for tag names -- more on that in [Lesson 2](tags.md).
 
 ```bash
 pip install pyrung
@@ -31,8 +31,8 @@ pip install pyrung
 7. [State Machines](state-machines.md) -- The full sorting sequence.
 8. [Branches and OR Logic](branches.md) -- Auto and manual modes.
 9. [Structured Tags and Blocks](structured-tags.md) -- A Bin UDT and a sort log.
-10. [Testing Like You Mean It](testing.md) -- A pytest suite for the whole system.
-11. [From Simulation to Hardware](hardware.md) -- Map to a Click PLC or P1AM-200.
+10. [Testing](testing.md) -- A pytest suite for the whole system.
+11. [From Simulation to Hardware](hardware.md) -- Map your project to a real Click PLC or P1AM-200.
 
 ---
 
