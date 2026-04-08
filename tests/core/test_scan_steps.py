@@ -48,7 +48,7 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     assert rung0 is logic.rungs[0]
     assert ctx0.get_tag("Light1") is True
     assert runner.current_state.scan_id == 0
-    assert "Light1" not in runner.current_state.tags
+    assert runner.current_state.tags["Light1"] is False
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     idx1, rung1, ctx1 = next(scan_gen)
@@ -82,7 +82,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
     _, _, ctx = next(scan_gen)
 
     assert runner.current_state.scan_id == 0
-    assert "Output" not in runner.current_state.tags
+    assert runner.current_state.tags["Output"] is False
     assert ctx.get_tag("Output") is True
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
@@ -111,13 +111,13 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
 
     assert first_step.kind == "rung"
     assert runner.current_state.scan_id == 0
-    assert "Output" not in runner.current_state.tags
+    assert runner.current_state.tags["Output"] is False
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     second_step = next(scan_gen)
     assert second_step.kind == "instruction"
     assert runner.current_state.scan_id == 0
-    assert "Output" not in runner.current_state.tags
+    assert runner.current_state.tags["Output"] is False
     assert [state.scan_id for state in runner.history.latest(10)] == [0]
 
     # Commit only happens once the generator is exhausted.
@@ -209,7 +209,7 @@ def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs(
     assert len(sub_steps) == 2
     assert all(step.subroutine_name == "work" for step in sub_steps)
     assert runner.current_state.tags["First"] is True
-    assert "Skipped" not in runner.current_state.tags
+    assert runner.current_state.tags["Skipped"] is False
     assert runner.current_state.tags["Done"] is True
 
 

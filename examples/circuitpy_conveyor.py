@@ -1,11 +1,12 @@
 """Conveyor sorting station — CircuitPython port of click_conveyor for P1AM-200.
 
 Same logic as click_conveyor.py, targeting P1AM hardware instead of Click PLC:
-  1. Start/stop/E-stop motor control with safety interlocking
-  2. State-machine sort sequence (idle → detecting → sorting → counting)
-  3. Auto/manual mode with branch-based diverter control
-  4. Edge-triggered bin counters
-  5. Code generation with force_runtime for starter bundle
+  1. Start/stop motor control with NC stop button convention
+  2. E-stop safety gating via EstopOK permission input
+  3. State-machine sort sequence (idle -> detecting -> sorting -> resetting)
+  4. Auto/manual mode with branch-based diverter control
+  5. Edge-triggered bin counters
+  6. Code generation with force_runtime for starter bundle
 
 Hardware:
   Slot 1: P1-16ND3  (16-ch discrete input, 24V sink)
@@ -43,9 +44,9 @@ inputs = hw.slot(1, "P1-16ND3")  # 16-ch discrete input (24V sink)
 outputs = hw.slot(2, "P1-08TRS")  # 8-ch relay output
 
 # Inputs (channels 1-9)
-Start = inputs[1]  # momentary start button
-Stop = inputs[2]  # momentary stop button
-Estop = inputs[3]  # emergency stop
+StartBtn = inputs[1]  # NO momentary start button
+StopBtn = inputs[2]  # NC stop button (healthy at rest)
+EstopOK = inputs[3]  # NC safety relay permission contact
 Auto = inputs[4]  # auto mode selector
 Manual = inputs[5]  # manual mode selector
 EntrySensor = inputs[6]  # photo-eye at conveyor entry
@@ -65,7 +66,13 @@ Running = Bool("Running")  # motor run latch
 IsLarge = Bool("IsLarge")  # size classification result
 CountReset = Bool("CountReset")  # counter reset
 
-State = Int("State")  # sort sequence (0=idle, 1=detecting, 2=sorting, 3=counting)
+# State constants — initialized once, never written
+IDLE = Int("IDLE", default=0)
+DETECTING = Int("DETECTING", default=1)
+SORTING = Int("SORTING", default=2)
+RESETTING = Int("RESETTING", default=3)
+
+State = Int("State")  # sort sequence state
 
 SizeReading = Int("SizeReading")  # analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # small/large cutoff
@@ -86,49 +93,49 @@ BinBAcc = Dint("BinBAcc")
 # Logic
 # ---------------------------------------------------------------------------
 with Program() as logic:
-    comment("Start/stop/E-stop - process control inputs first")
-    with Rung(Start, any_of(Auto, Manual)):
+    comment("Start/stop — NC stop button resets when pressed or wire broken")
+    with Rung(StartBtn, any_of(Auto, Manual)):
         latch(Running)
-    with Rung(Stop):
+    with Rung(~StopBtn):
         reset(Running)
-    with Rung(Estop):
+    with Rung(~EstopOK):
         reset(Running)
 
-    comment("Motor output with E-stop safety gating")
-    with Rung(~Estop):
+    comment("Motor output — EstopOK gates all outputs")
+    with Rung(EstopOK):
         with branch(Running):
             out(ConveyorMotor)
         with branch(Running):
             out(StatusLight)
 
-    comment("Sort state machine - IDLE to DETECTING: box arrives")
-    with Rung(State == 0, rise(EntrySensor)):
-        copy(1, State)
+    comment("Sort state machine — IDLE to DETECTING: box arrives")
+    with Rung(State == IDLE, rise(EntrySensor)):
+        copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == 1):
+    with Rung(State == DETECTING):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
-    with Rung(State == 1, SizeReading > SizeThreshold):
+    with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetDone):
-        copy(2, State)
+        copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == 2):
+    with Rung(State == SORTING):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
     with Rung(HoldDone):
-        copy(3, State)
+        copy(RESETTING, State)
 
-    comment("COUNTING: reset and return to idle")
-    with Rung(State == 3):
+    comment("RESETTING: clean up and return to idle")
+    with Rung(State == RESETTING):
         reset(IsLarge)
-        copy(0, State)
+        copy(IDLE, State)
 
-    comment("Diverter output - auto sort OR manual button")
+    comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
-        ~Estop,
+        EstopOK,
         any_of(
-            all_of(State == 2, IsLarge, Auto),
+            all_of(State == SORTING, IsLarge, Auto),
             all_of(Manual, DiverterBtn),
         ),
     ):

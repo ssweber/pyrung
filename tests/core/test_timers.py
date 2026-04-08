@@ -322,7 +322,7 @@ class TestOnDelayRTON:
         runner.patch({"Enable": True})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["td.Timer_acc"] == 40
 
         runner.set_battery_present(False)
         runner.reboot()

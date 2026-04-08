@@ -267,6 +267,15 @@ class PLCRunner:
         self._pause_requested_this_scan = False
         self._known_tags_by_name: dict[str, Tag] = {}
         self._refresh_known_tags_from_logic()
+        # Seed initial state with tag defaults (skip tags already in state).
+        seed = {
+            t.name: t.default
+            for t in self._known_tags_by_name.values()
+            if t.name not in self._state.tags
+        }
+        if seed:
+            self._state = self._state.with_tags(seed)
+            self._history = History(self._state, limit=history_limit)
 
     @property
     def current_state(self) -> SystemState:

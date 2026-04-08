@@ -18,43 +18,59 @@ In the real world, you press a momentary "Start" button. Your finger comes off. 
 ```python
 from pyrung import Bool, Program, Rung, PLCRunner, latch, reset
 
-Start   = Bool("Start")
-Stop    = Bool("Stop")
-Estop   = Bool("Estop")
-Running = Bool("Running")
+StartBtn = Bool("StartBtn")    # NO momentary contact
+StopBtn  = Bool("StopBtn")     # NC contact: conductive at rest
+Running  = Bool("Running")
 
 with Program() as logic:
-    with Rung(Start):
+    with Rung(StartBtn):
         latch(Running)       # SET: Running = True, stays True
-    with Rung(Stop):
-        reset(Running)       # RESET: Running = False
-    with Rung(Estop):
-        reset(Running)       # E-stop also resets
+    with Rung(~StopBtn):
+        reset(Running)       # RESET when stop pressed or wire broken
 ```
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
+
+Why two rungs? Your Python instinct says "the rung went false, the output should drop." That's how `out` works. But `latch` isn't `out` — it sets the bit and *leaves it set*. After Start is pressed, `Running` stays true on its own. To clear it, you need a separate rung with `reset()`. If you only had the first rung, the motor would stop the instant you released Start — exactly the bug [Lesson 1](scan-cycle.md) ended on.
+
+`StopBtn` is wired **normally-closed** — the circuit is conductive at rest, so the PLC input reads True when healthy. Writing `~StopBtn` means "this contact fires when the stop circuit opens" — button pressed, wire cut, or power lost. The reset rung is last because stop should always win (remember "last rung wins" from [Lesson 1](scan-cycle.md)).
+
+!!! note "What `~` actually means"
+
+    Your Python instinct reads `~StopBtn` as "not StopBtn" — a Boolean inversion. That's not what it is. In ladder logic, `~` declares the **contact type**: normally-closed (NC), conductive in its resting state. In a real ladder editor, `~` is drawn as `|/|` (NC), versus `| |` for normally-open (NO). Two different symbols, two different physical contact types — not "X" and "not X."
+
+    Why does this matter? Because it composes naturally with how real devices are wired. Stop buttons, door interlocks, motor overload contacts, and level sensors are *typically wired NC* so that a wire break reads as "stop" instead of silently leaving the machine running. Every NC device on a real machine reads with a `~` in the rung — not because it's "alarmed" but because it's *physically wired* as normally-closed. Once you read `~` as "NC contact" instead of "not," ladder rungs start reading like wiring diagrams. Which is what they are.
+
+```
+              latch(Running)                reset(Running)
+  Off -----------------------------> On ---------------------------> Off
+                                      |                               |
+                                      +-- StartBtn released? Still On.+
+```
 
 ## Try it
 
 ```python
 runner = PLCRunner(logic)
 with runner.active():
-    Start.value = True
+    StopBtn.value = True             # NC input: True = healthy wiring
+
+    StartBtn.value = True
     runner.step()
     assert Running.value is True
 
-    Start.value = False          # Finger off the button
+    StartBtn.value = False           # Finger off the button
     runner.step()
-    assert Running.value is True  # Still running!
+    assert Running.value is True     # Still running!
 
-    Stop.value = True
+    StopBtn.value = False            # Stop pressed (NC opens)
     runner.step()
     assert Running.value is False
 ```
 
 ## A subtlety: rung order matters
 
-What if Start and Stop are both pressed at the same time? The answer: **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional. In industrial safety, stop always wins. The E-stop rung is last for the same reason.
+What if Start and Stop are both pressed at the same time? The answer: **the last rung to write wins.** Since `reset(Running)` is below `latch(Running)`, Stop wins. This is intentional — stop always wins.
 
 ## Labeling your rungs
 
@@ -65,22 +81,25 @@ from pyrung import comment
 
 with Program() as logic:
     comment("Start the conveyor")
-    with Rung(Start):
+    with Rung(StartBtn):
         latch(Running)
-    comment("Normal stop")
-    with Rung(Stop):
-        reset(Running)
-    comment("Emergency stop")
-    with Rung(Estop):
+    comment("Stop — NC contact resets when pressed or wire broken")
+    with Rung(~StopBtn):
         reset(Running)
 ```
 
 This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a Click PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
 
+By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different governance story. The wiring direction you're learning here is the easy part; the hard part is who *owns* the stop.
+
 ## Exercise
 
-Build an E-stop test: start the conveyor, then press E-stop. Verify it stops. Then verify that pressing Start while E-stop is still active does NOT restart the conveyor. (Hint: you need E-stop to block the start, not just reset after it. Think about adding `~Estop` as a condition on the latch rung.)
+Build a stop-blocks-start test: start the conveyor, then press stop. Verify it stops. Then verify that pressing Start while Stop is still held does NOT restart the conveyor. (Hint: you need `~StopBtn` to block the start, not just reset after it. Think about adding `~StopBtn` as a condition on the latch rung too.)
 
 ---
 
 The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `calc`.
+
+!!! info "Also known as..."
+
+    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md) — the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.
