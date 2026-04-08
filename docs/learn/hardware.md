@@ -8,7 +8,7 @@ Everything from here is about taking what you've built and connecting it to the 
 
 !!! warning "About this example"
 
-    pyrung and the conveyor sorting station in this guide are provided as an educational example. Like AutomationDirect's own sample code policy, this is provided "as-is" with no expressed or implied warranty. If you adapt any of this code for a real application, **it is your responsibility to completely modify, integrate, and test it to ensure it meets all system and safety requirements for your intended use.**
+    pyrung and the conveyor sorting station in this guide are provided as an educational example, "as-is" with no expressed or implied warranty. If you adapt any of this code for a real application, **it is your responsibility to completely modify, integrate, and test it to ensure it meets all system and safety requirements for your intended use.**
 
     Like all general-purpose PLCs, the hardware targeted in this lesson is not fault-tolerant and is not designed, manufactured, or intended for use in hazardous environments requiring fail-safe performance -- nuclear facilities, aircraft navigation, air traffic control, life support, or weapons systems -- where failure could lead directly to death, personal injury, or severe environmental damage.
 
@@ -146,22 +146,24 @@ Run `mapping.validate(logic)` on the conveyor program. What does it complain abo
 - [Click PLC dialect](../dialects/click.md): full hardware mapping and validation
 - [CircuitPython deployment](../dialects/circuitpy.md): generate code for P1AM-200
 
-**The Zen of Ladder.** Every line maps to something you've learned. Try `import pyrung.zen`.
+??? tip "The Zen of Ladder"
 
-- *The scan cycle is fast.* (Lesson 1 -- the scan loop is the heartbeat)
-- *Rungs giveth power and taketh away.* (Lesson 1 -- `out` energizes when true, de-energizes when false)
-- *And order has meaning.* (Lesson 1 -- last rung wins)
-- *But use order side effects sparingly.* (Lesson 4 -- instruction order within a rung)
-- *One coil, one rung.* (Lesson 8 -- branches fold every reason into one place)
-- *Latch only when needed.* (Lesson 3 -- sticky vs non-sticky)
-- *If you need a FOR loop... no you don't.* (Lesson 5, 6 -- timers and counters replace iteration)
-- *Don't forget safety.* (Lesson 3, 11 -- `~StopBtn`, `EstopOK`, and the safety relay)
-- *Keep it simple.* (Every lesson -- resist the Python instinct)
-- *Test it.* (Lesson 10 -- pytest, fork, deterministic time)
-- *Use clear tags and comments.* (Lesson 2)
-- *Name the purpose, not the part... unless you need a map to find it.* (Lesson 9 -- the TagMap is the map)
-- *PackML and state machines are a honking great idea -- let's use more of those.* (Lesson 7)
-- *The tech (maybe you) at 3am will thank you.* (Right now. You're ready.)
+    Try `import pyrung.zen`.
+
+    - *The scan cycle is fast.*
+    - *Rungs giveth power and taketh away.*
+    - *And order has meaning.*
+    - *But use order side effects sparingly.*
+    - *One coil, one rung.*
+    - *Latch only when needed.*
+    - *If you need a FOR loop... no you don't.*
+    - *Don't forget safety.*
+    - *Keep it simple.*
+    - *Test it.*
+    - *Use clear tags and comments.*
+    - *Name the purpose, not the part... unless you need a map to find it.*
+    - *PackML and state machines are a honking great idea -- let's use more of those.*
+    - *The tech (maybe you) at 3am will thank you.*
 
 ---
 

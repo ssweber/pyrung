@@ -177,10 +177,6 @@ def test_sorting_sequence(runner):
 
 Sometimes you need to watch logic execute step by step. pyrung includes a VS Code debugger that lets you set breakpoints on individual rungs, pause *between* rungs within a single scan, watch tag values update live, and force overrides from the debug console. Real PLC editors show you live rung state, but they can't stop the scan partway through -- the whole program executes as one atomic pass. pyrung can. See the [DAP Debugger guide](../guides/dap-vscode.md) for setup.
 
-!!! info "Also known as..."
-
-    `runner.step()` is "single scan" — some PLC simulators expose it, many don't. `add_force`/`remove_force` mirror the universal Force On/Off feature. `history[-N]` is like a trend or data log, except trends are sampled and lossy. `fork()`, `FIXED_STEP` deterministic time, and full-scan history have **no equivalent on real PLCs**.
-
 ## Exercise
 
 Write a test that covers the full conveyor lifecycle: start in auto mode, sort a large box (verify diverter extends and Bin B counter increments), sort a small box (verify diverter stays retracted and Bin A counter increments), then E-stop mid-sort and verify everything shuts down cleanly. Use `fork()` to test the large and small paths from a shared starting point.
@@ -188,3 +184,7 @@ Write a test that covers the full conveyor lifecycle: start in auto mode, sort a
 ---
 
 The logic is tested, the tests pass. Now deploy it.
+
+!!! info "Also known as..."
+
+    `runner.step()` is "single scan" — some PLC simulators expose it, many don't. `add_force`/`remove_force` mirror the universal Force On/Off feature. `history[-N]` is like a trend or data log, except trends are sampled and lossy. `fork()`, `FIXED_STEP` deterministic time, and full-scan history have **no equivalent on real PLCs**.

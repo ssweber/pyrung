@@ -77,10 +77,6 @@ with runner.active():
 
     There's a fix for this, and we'll get to it in [Lesson 8](branches.md).
 
-!!! info "Also known as..."
-
-    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" (`XIC`). `Rung(~Tag)` is a "normally closed contact" (`XIO`). If you Google any of those, you'll find the same thing in a different dialect.
-
 ## Exercise
 
 Add an `EntrySensor` (Bool) and a `SensorLight` (Bool). Write a second rung where the sensor light comes on when the entry sensor detects a box. Test both rungs independently: the motor should follow the button, and the light should follow the sensor.
@@ -90,3 +86,7 @@ Then test the "last one wins" trap from the callout above: add a *third* rung wi
 ---
 
 The motor and sensor work, but they're just on or off. What if we need to track a speed setpoint or trigger an alarm at a threshold? That requires typed tags.
+
+!!! info "Also known as..."
+
+    `out()` is usually called `OUT` or `OTE`. A rung condition like `Rung(Tag)` is a "normally open contact" (`XIC`). `Rung(~Tag)` is a "normally closed contact" (`XIO`). If you Google any of those, you'll find the same thing in a different dialect.

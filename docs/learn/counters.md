@@ -96,10 +96,6 @@ with runner.active():
 
 Notice the irony: the *test* uses `for` loops to simulate physical events, while the *logic* has no loops at all. Python where Python belongs (driving the simulation, asserting state), ladder where ladder belongs (the actual control). The boundary is the runner.
 
-!!! info "Also known as..."
-
-    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. Edge-counting is always "one-shot feeding the counter" — never the counter itself.
-
 ## Exercise
 
 Add a total counter (`TotalAcc`) that counts every box regardless of which bin, triggered by an `EntrySensor`. Add a `TotalReset` button. Test that after 5 boxes (3 to Bin A, 2 to Bin B), the total is 5 and the individual counts are correct. Then reset and verify all three counters clear.
@@ -107,3 +103,7 @@ Add a total counter (`TotalAcc`) that counts every box regardless of which bin, 
 ---
 
 We have sensors, timers, counters, and a diverter. But nothing coordinates the sequence: detect a box, read its size, position the diverter, wait, count. That's a state machine.
+
+!!! info "Also known as..."
+
+    Counters are `CTU`/`CTD`/`CTUD`. Done bits and accumulators follow the same naming as timers. Reset is its own input pin. Edge-counting is always "one-shot feeding the counter" — never the counter itself.

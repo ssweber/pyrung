@@ -75,10 +75,6 @@ Note the argument order: `copy(source, dest)` reads like an assignment left-to-r
 
 Notice `Rung()` with no condition. That rung is always true, so its instructions execute every scan. This is how you compute values that should always be current, like a cycle counter or a scaled analog reading.
 
-!!! info "Also known as..."
-
-    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT`. `rise()` and `fall()` are one-shots (`ONS`/`OSR`) or edge triggers (`R_TRIG`/`F_TRIG`). An unconditional rung is "always on" — some PLCs expose a special always-true bit, others just wire straight from the rail.
-
 ## Exercise
 
 Remember "order has meaning" from [Lesson 1](scan-cycle.md)? It applies within a rung too: instructions execute top-to-bottom, in the order you write them. That matters here.
@@ -88,3 +84,7 @@ Create a `PreviousSize` tag. Each time a new box arrives (`rise(EntrySensor)`), 
 ---
 
 The conveyor needs to wait -- hold the diverter gate open long enough for the box to pass through. Python would `sleep`. A PLC can't sleep. That's where timers come in.
+
+!!! info "Also known as..."
+
+    `copy` is `MOV`, `COP`, or `MOVE`. `calc` is `MATH` or `CPT`. `rise()` and `fall()` are one-shots (`ONS`/`OSR`) or edge triggers (`R_TRIG`/`F_TRIG`). An unconditional rung is "always on" — some PLCs expose a special always-true bit, others just wire straight from the rail.

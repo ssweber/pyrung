@@ -91,10 +91,6 @@ Without `.reset()`, the timer clears its accumulator the moment the rung drops �
 
     In most ladder editors, the reset input on a retentive timer is its own wire — you can power it from the rail with completely independent conditions. That flexibility makes rungs hard to read: reset logic *looks* tied to the main rung when it isn't. pyrung makes `.reset()` terminal so the syntax matches the semantics — conditions inside `.reset(...)` belong to the reset, not the rung. If you need more instructions after, write a separate rung. Counters use the same pattern.
 
-!!! info "Also known as..."
-
-    On-delay is `TON`; off-delay is `TOF`; retentive on-delay is `RTO`. The done bit is `.DN` or `.Q`; the accumulator is `.ACC` or `.ET`.
-
 ## Exercise
 
 Build a startup delay: after pressing Start, the conveyor waits 3 seconds before the motor turns on (safety: gives workers time to clear the area). Test both paths: the full 3-second wait, and releasing Start early (timer resets, motor never starts).
@@ -102,3 +98,7 @@ Build a startup delay: after pressing Start, the conveyor waits 3 seconds before
 ---
 
 The diverter holds long enough for one box. But how many boxes have gone to each bin? We need to count sensor edges without looping.
+
+!!! info "Also known as..."
+
+    On-delay is `TON`; off-delay is `TOF`; retentive on-delay is `RTO`. The done bit is `.DN` or `.Q`; the accumulator is `.ACC` or `.ET`.

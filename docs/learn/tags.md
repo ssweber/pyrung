@@ -76,10 +76,6 @@ with runner.active():
 
 `ConveyorSpeed.value = 600` happens outside the program, before the scan. The program sees the new value when it runs and reacts accordingly. This is the same relationship an operator has with a real PLC: they set inputs and parameters, the logic does the rest.
 
-!!! info "Also known as..."
-
-    `Bool` tags are called control relays, `C` bits, or `X`/`Y` for I/O. `Int` is a 16-bit signed type almost everywhere. `Real` is a 32-bit float. "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.
-
 ## Exercise
 
 Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energizes a `HeavyBox` alarm when weight exceeds the limit. Test with values below and above the threshold. Then test the boundary: what happens when `BoxWeight` exactly equals `WeightLimit`? Does your rung use `>` or `>=`? Make sure it does what you intend -- in a real plant, that boundary is the difference between a nuisance alarm and a missed overweight.
@@ -87,3 +83,7 @@ Add a `BoxWeight` (Real) tag and a `WeightLimit` (Real). Write a rung that energ
 ---
 
 The motor turns on and off with the button, but in a real factory you press Start and walk away. The motor needs to stay running after you release the button. That's latch and reset.
+
+!!! info "Also known as..."
+
+    `Bool` tags are called control relays, `C` bits, or `X`/`Y` for I/O. `Int` is a 16-bit signed type almost everywhere. `Real` is a 32-bit float. "Retentive" is universal — it's a tag's ability to survive a power cycle or STOP→RUN transition.

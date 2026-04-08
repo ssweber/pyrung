@@ -90,10 +90,6 @@ with Program() as logic:
 
 This isn't a Python `#` comment — it's rung metadata that travels with the program. When you export to a Click PLC, these appear above each rung in the ladder editor. From here on, we'll use `comment()` to label rungs as the logic gets more complex.
 
-!!! info "Also known as..."
-
-    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md) — the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.
-
 By [Lesson 11](hardware.md) you'll meet `EstopOK` — same NC wiring, different governance story. The wiring direction you're learning here is the easy part; the hard part is who *owns* the stop.
 
 ## Exercise
@@ -103,3 +99,7 @@ Build a stop-blocks-start test: start the conveyor, then press stop. Verify it s
 ---
 
 The conveyor runs and stops, but there's no tracking. When a box arrives, the system needs to record its size and keep a tally. That needs data movement -- `copy` and `calc`.
+
+!!! info "Also known as..."
+
+    `latch` is called `SET`, `OTL`, or `S`; `reset` is `RST`, `OTU`, or `R`. You'll see a single-rung alternative in [Lesson 8](branches.md) — the *seal-in rung*, which uses a self-holding branch instead of separate latch/reset.

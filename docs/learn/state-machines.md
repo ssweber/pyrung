@@ -115,10 +115,6 @@ with runner.active():
 
 RESETTING is a **pass-through state** — it transitions to IDLE in the same scan. That's fine; its job is to clean up (`reset(IsLarge)`, `copy(IDLE, State)`), and cleanup doesn't need to wait. If you want to observe it, use `runner.monitor(State, callback)` — it fires on every committed change, including mid-cycle transitions.
 
-!!! info "Also known as..."
-
-    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator recognizes.
-
 ## Exercise
 
 Add an error state (`4`). If the entry sensor stays active for more than 5 seconds during the detecting phase (the box is jammed), transition to state `4` (error) and turn on a `JamAlarm`. The jam clears only when the sensor goes false AND an operator presses an `AckButton`. Test both the jam path and the normal path.
@@ -128,3 +124,7 @@ Add an error state (`4`). If the entry sensor stays active for more than 5 secon
 > If you're a visual person, this is a good time to set up the [VS Code debugger](../guides/dap-vscode.md). From here on, the logic gets complex enough that stepping through scans and watching tags update live can be more useful than reading assertions.
 
 The sorting sequence works in one mode. But a real conveyor has auto mode (runs the sequence) and manual mode (operator controls the diverter directly). That's OR logic and branches.
+
+!!! info "Also known as..."
+
+    State machines in ladder are almost always hand-rolled using an Int tag plus comparison contacts, or built on a dedicated sequencer instruction (`SQO`, `DRUM`). IEC 61131-3 has Sequential Function Chart (SFC) as a first-class language for this. For standardized state models, search for **PackML** — it defines ~17 states that any operator recognizes.

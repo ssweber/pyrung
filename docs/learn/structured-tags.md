@@ -124,10 +124,6 @@ with runner.active():
     assert SortLog[3].value == 150
 ```
 
-!!! info "Also known as..."
-
-    Structured tags are UDTs or `STRUCT`s. Flat-namespace PLCs fake it with underscore prefixes — exactly what pyrung generates as the flat identity. Block-copy, shift-register, and fill all have dedicated instructions on every platform.
-
 ## Going deeper
 
 The [Tag Structures guide](../guides/tag-structures.md) covers the full API. Two features worth knowing early:
@@ -144,3 +140,7 @@ Add a singleton `Conveyor` UDT with fields for `Running` (Bool), `Speed` (Int), 
 ---
 
 The logic is complete. Now prove it works -- write a test suite that covers the normal cycle, the fault path, the mode switch, and the edge cases.
+
+!!! info "Also known as..."
+
+    Structured tags are UDTs or `STRUCT`s. Flat-namespace PLCs fake it with underscore prefixes — exactly what pyrung generates as the flat identity. Block-copy, shift-register, and fill all have dedicated instructions on every platform.

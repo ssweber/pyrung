@@ -138,10 +138,6 @@ with runner.active():
     assert Running.value is False
 ```
 
-!!! info "Also known as..."
-
-    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere. The safety-gate pattern is sometimes called "Master Control Reset" (`MCR`). Seal-in is the classic OR-branch with a series stop contact.
-
 ## Exercise
 
 Add a `ManualLight` that is on only in manual mode. Write a test that switches from Auto to Manual mid-run and verifies the diverter control source changes without the motor stopping. Test that the diverter button does nothing in auto mode.
@@ -149,3 +145,7 @@ Add a `ManualLight` that is on only in manual mode. Write a test that switches f
 ---
 
 Each bin has a count, the diverter has a state, and there's a mode selector. That's a lot of scattered tags. In a real PLC, you'd group them into structures -- UDTs for the bins and the equipment.
+
+!!! info "Also known as..."
+
+    OR is a parallel branch of contacts; AND is contacts in series. `branch()` is "parallel branch" everywhere. The safety-gate pattern is sometimes called "Master Control Reset" (`MCR`). Seal-in is the classic OR-branch with a series stop contact.
