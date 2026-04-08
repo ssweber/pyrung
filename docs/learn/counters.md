@@ -12,7 +12,9 @@ for item in items:
 
 ## The ladder logic way
 
-There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in. You count the edges.
+There's no `for` loop. There's no "list of items." There's a sensor at the end of each bin chute that goes True every time a box drops in — and a counter that counts it.
+
+But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` to count edges instead — one increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
 
 ```python
 from pyrung import Bool, Dint, Program, Rung, PLCRunner, count_up, rise
@@ -36,6 +38,8 @@ with Program() as logic:
 
 `rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
 
+The accumulators use `Dint` (32-bit) instead of `Int` because a 16-bit integer rolls over at 32,767 — on a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
+
 ```
   rise(BinASensor)? --yes--> Acc += 1 --> Acc >= Preset? --yes--> Done = True
           |                                     |
@@ -46,7 +50,13 @@ with Program() as logic:
   CountReset? --any time--> Acc = 0, Done = False
 ```
 
-Notice `.reset(CountReset)` on its own line below the counter. In Python, you'd pass all behavior into a single function call or handle reset in separate logic. In a ladder diagram, an instruction block like a counter is more like a chip with multiple input pins: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the counter's accumulator and done bit clear regardless of what the rung is doing. Timers have the same pattern.
+!!! tip "Key concept: chips, not function calls"
+
+    Notice `.reset(CountReset)` on its own line. In Python, you'd pass all behavior into a single function call. In a ladder diagram, an instruction block is more like a **chip with multiple input pins**: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the accumulator and done bit clear regardless of what the rung is doing.
+
+    This mental model extends to every box instruction in real PLCs — timers, PID loops, message blocks, motion instructions. The `.reset()` chain is pyrung's way of drawing those extra wires.
+
+If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both use two tags (done bit + accumulator), both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
 
 ## Try it
 

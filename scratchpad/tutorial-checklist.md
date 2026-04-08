@@ -55,11 +55,11 @@
 - [x] Add "Heads up" box: TON/TOF/RTO across vendors
 
 ### L6 — Counters
-- [ ] Lead with "counters count every scan, not edges" — use `rise()` for edges
-- [ ] Promote "chip with multiple input pins" to Key Concept callout
-- [ ] State counter/timer parallel (both chain `.reset()`)
+- [x] Lead with "counters count every scan, not edges" — use `rise()` for edges
+- [x] Promote "chip with multiple input pins" to Key Concept callout
+- [x] State counter/timer parallel (both chain `.reset()`)
 - [ ] Show bidirectional counter (`count_up(...).down(...).reset(...)`)
-- [ ] Add "Why `Dint`, not `Int`?" one-liner (16-bit rolls at 32,767)
+- [x] Add "Why `Dint`, not `Int`?" one-liner (16-bit rolls at 32,767)
 - [ ] Name the meta-irony (Python loops in test, no loops in logic)
 - [x] Add "Heads up" box: CTU/CTD/CTUD across vendors
 
