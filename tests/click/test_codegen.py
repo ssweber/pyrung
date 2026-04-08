@@ -820,6 +820,38 @@ class TestGraphWalkEdgeCases:
         assert _leaf_labels(result.condition_tree) == ["X001", "DS1==5"]
         assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
+    def test_warns_when_imported_topology_bypasses_a_contact(self):
+        """Collapsed contact cells should warn instead of disappearing silently."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        rows = [
+            _make_row(
+                "R",
+                _fill_dashes({0: "C1204", 1: "rise(C4)", 2: "T:DD2==DS353", 3: "T"}, 4, 31),
+                af="copy(DS362,DS3,oneshot=1)",
+            ),
+            _make_row("", _fill_dashes({2: "T", 3: "T"}, 4, 31)),
+            _make_row("", _fill_dashes({2: "|"}, 3, 31), af="copy(1,DS4,oneshot=1)"),
+            _make_row("", _fill_dashes({2: "T"}, 3, 31)),
+            _make_row("", _fill_dashes({2: "T:~C1263"}, 3, 31), af="latch(C1614)"),
+            _make_row("", _fill_dashes({2: "T:~C1262"}, 3, 31), af="latch(C1615)"),
+            _make_row("", _fill_dashes({2: "~C1264"}, 3, 31), af="latch(C1616)"),
+        ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = _analyze_single_rung(rung)
+
+        assert [str(item.message) for item in caught] == [
+            "Imported ladder topology bypasses contact 'DD2==DS353'; this condition was omitted from generated logic."
+        ]
+        labels = set(_leaf_labels(result.condition_tree))
+        for instruction in result.instructions:
+            labels.update(_leaf_labels(instruction.branch_tree))
+        assert "DD2==DS353" not in labels
+
     def test_another_case_t_fork_down_through_contact(self):
         """T fork down through contact reaches second AF without reverse leakage."""
         from pyrung.click.codegen.analyzer import _analyze_single_rung

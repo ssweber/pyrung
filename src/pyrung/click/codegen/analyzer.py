@@ -61,6 +61,15 @@ def _strip_wire_prefix(cell: str) -> str:
     return cell
 
 
+def _warn_bypassed_contact(label: str) -> None:
+    """Warn when imported topology shorts around a contact cell."""
+    warnings.warn(
+        f"Imported ladder topology bypasses contact {label!r}; "
+        "this condition was omitted from generated logic.",
+        stacklevel=3,
+    )
+
+
 def _extract_conditions(row: list[str], start: int, end: int) -> list[str]:
     """Extract non-wire condition tokens from columns [start, end)."""
     tokens: list[str] = []
@@ -279,6 +288,8 @@ def _grid_to_graph(
             dst = uf.find(right_port[r, c])
             if src != dst:
                 edges.append(_Edge(src, dst, Leaf(label, r, c), r, c))
+            else:
+                _warn_bypassed_contact(label)
 
     # 5. Identify source and sinks
     # Source = left power rail if any column-0 cells exist, else leftmost port
