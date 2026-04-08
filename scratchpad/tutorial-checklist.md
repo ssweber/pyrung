@@ -82,28 +82,28 @@
 - [x] Add "Heads up" box: BST/BND, MCR, seal-in
 
 ### L9 — Structured Tags and Blocks
-- [ ] Land L2 payoff: doubled name is gone, explain why
-- [ ] Flag PLC arrays are 1-indexed — loudly
-- [ ] Explain `.select(start, end)` inclusive semantics vs Python slice
-- [ ] Show singleton vs counted UDT naming
-- [ ] Mention: `always_number`, `Field()`, `auto()`, `@named_array`, `stride`, `.clone()`, `.map_to()`, `.slot()`
-- [ ] Fix TitleCase inconsistency in UDT field names
-- [ ] Address rung duplication (feature, not smell)
-- [ ] Clarify build-time vs runtime loops
-- [ ] Name the shift register pattern (`blockcopy` over `select`)
+- [x] Land L2 payoff: doubled name is gone, explain why
+- [x] Flag PLC arrays are 1-indexed — loudly
+- [x] Explain `.select(start, end)` inclusive semantics vs Python slice
+- [x] Show singleton vs counted UDT naming
+- [x] Mention: `always_number`, `Field()`, `auto()`, `@named_array`, `stride`, `.clone()`, `.map_to()`, `.slot()`
+- [x] Fix TitleCase inconsistency in UDT field names
+- [x] Address rung duplication (feature, not smell)
+- [x] Clarify build-time vs runtime loops
+- [x] Name the shift register pattern (`blockcopy` over `select`)
 - [x] Add "Heads up" box: UDT/STRUCT, COP/BSL/BSR/FILL
 
 ### L10 — Testing
 - [x] Pick one title (sidebar vs body)
 - [x] Open with "If you know pytest, you already know how to test pyrung"
-- [ ] Cash in FIXED_STEP from L5 explicitly
-- [ ] Promote `fork()` — lead feature, "impossible on real hardware"
-- [ ] Promote `history[-N]` — "also impossible on real hardware"
-- [ ] Add 3-tier signal-driving table (`.value` / `add_force` / `remove_force`)
-- [ ] Add force safety warning — real PLCs gate forces behind confirmation dialogs with injury/death disclaimers (Codesys, Rockwell). Forces override the program's control of physical outputs and bypass safety interlocks. Teach respect for the tool, not just the API
-- [ ] Show `pytest.mark.parametrize` as complement to `fork()`
-- [ ] Add fixture isolation one-liner
-- [ ] Name canonical `with runner.active()` pattern
+- [x] Cash in FIXED_STEP from L5 explicitly
+- [x] Promote `fork()` — lead feature, "impossible on real hardware"
+- [x] Promote `history[-N]` — "also impossible on real hardware"
+- [x] Add 3-tier signal-driving table (`.value` / `add_force` / `remove_force`)
+- [x] Add force safety warning — real PLCs gate forces behind confirmation dialogs with injury/death disclaimers (Codesys, Rockwell). Forces override the program's control of physical outputs and bypass safety interlocks. Teach respect for the tool, not just the API
+- [x] Show `pytest.mark.parametrize` as complement to `fork()`
+- [x] Add fixture isolation one-liner
+- [x] Name canonical `with runner.active()` pattern
 - [x] Add "Heads up" box: force I/O, fork/FIXED_STEP have no vendor equivalent
 
 ### L11 — From Simulation to Hardware
