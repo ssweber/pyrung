@@ -47,21 +47,13 @@ with Program() as logic:
 
 `@udt(count=2)` creates two instances, accessed by index. `Bin[1].sensor` and `Bin[2].sensor` are distinct tags, but they share the same structure. This maps directly to how real plants are organized: identical equipment, replicated logic, consistent naming.
 
-```mermaid
-classDiagram
-    class Bin {
-        sensor : Bool
-        done : Bool
-        acc : Dint
-        full : Bool
-    }
-    class SortLog["SortLog · Block(INT, 1–5)"] {
-        [1] : Int
-        [2] : Int
-        [3] : Int
-        [4] : Int
-        [5] : Int
-    }
+```
+  Bin (UDT, count=2)          SortLog (Block, Int, 1-5)
+  +-- .sensor : Bool          +-- [1] : Int
+  +-- .done   : Bool          +-- [2] : Int
+  +-- .acc    : Dint          +-- [3] : Int
+  +-- .full   : Bool          +-- [4] : Int
+                              +-- [5] : Int
 ```
 
 When all fields share the same type (like a group of Int fields for one sensor), pyrung also offers `named_array`, which maps to contiguous memory and supports bulk operations. See the [Tag Structures guide](../guides/tag-structures.md) for details.

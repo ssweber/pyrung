@@ -35,15 +35,13 @@ with Program() as logic:
 
 `rise(EntrySensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the copy and calc would execute every scan while the sensor is active.
 
-```mermaid
-graph LR
-    subgraph "rise(EntrySensor) — one scan"
-        A[BoxSize] -->|copy| B[LastSize]
-        C["SortCount + 1"] -->|calc| D[SortCount]
-    end
-    subgraph "Every scan"
-        E["CycleCount + 1"] -->|calc| F[CycleCount]
-    end
+```
+  rise(EntrySensor) -- fires one scan:
+      BoxSize --copy--> LastSize
+      SortCount + 1 --calc--> SortCount
+
+  Every scan:
+      CycleCount + 1 --calc--> CycleCount
 ```
 
 ## Try it

@@ -75,13 +75,18 @@ previous = runner.history[-2]    # Two scans ago
 
 Test two outcomes from the same starting point without resetting:
 
-```mermaid
-graph TD
-    A["Setup: start conveyor,<br/>box arrives at sensor"] --> B["runner.fork()"]
-    B --> C["Large box path<br/>SizeReading = 150"]
-    B --> D["Small box path<br/>SizeReading = 50"]
-    C --> E["Assert: DiverterCmd = True"]
-    D --> F["Assert: DiverterCmd = False"]
+```
+  Setup: start conveyor, box arrives at sensor
+                      |
+                runner.fork()
+                  +---+---+
+                  v       v
+          SizeReading  SizeReading
+            = 150        = 50
+              |            |
+              v            v
+          DiverterCmd  DiverterCmd
+           = True       = False
 ```
 
 ```python

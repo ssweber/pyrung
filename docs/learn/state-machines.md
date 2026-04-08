@@ -21,13 +21,8 @@ State machines in ladder logic use a tag for the current state, timers for durat
 
 Here's the full sorting sequence: a box arrives, the system reads its size, positions the diverter, holds it open, then returns to idle.
 
-```mermaid
-stateDiagram-v2
-    [*] --> IDLE
-    IDLE --> DETECTING : rise(EntrySensor)
-    DETECTING --> SORTING : DetDone (0.5s)
-    SORTING --> RESETTING : HoldDone (2s)
-    RESETTING --> IDLE : cleanup
+```
+  IDLE --rise(Entry)--> DETECTING --0.5s--> SORTING --2s--> RESETTING --cleanup--> IDLE
 ```
 
 ```python

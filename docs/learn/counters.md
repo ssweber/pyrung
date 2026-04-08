@@ -36,14 +36,14 @@ with Program() as logic:
 
 `rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
 
-```mermaid
-graph TD
-    A["rise(BinASensor)?"] -->|"Yes (one scan)"| B["BinAAcc += 1"]
-    A -->|No| C["No change"]
-    B --> D{"Acc ≥ Preset?"}
-    D -->|No| E["BinADone = False"]
-    D -->|Yes| F["BinADone = True — batch complete"]
-    G["CountReset?"] -->|"Any time"| H["Acc = 0, Done = False"]
+```
+  rise(BinASensor)? --yes--> Acc += 1 --> Acc >= Preset? --yes--> Done = True
+          |                                     |
+          no                                    no
+          v                                     v
+      no change                           keep counting
+
+  CountReset? --any time--> Acc = 0, Done = False
 ```
 
 Notice `.reset(CountReset)` on its own line below the counter. In Python, you'd pass all behavior into a single function call or handle reset in separate logic. In a ladder diagram, an instruction block like a counter is more like a chip with multiple input pins: the rung powers the count input, but the reset pin is a separate wire connected to its own condition. When `CountReset` goes true, the counter's accumulator and done bit clear regardless of what the rung is doing. Timers have the same pattern.

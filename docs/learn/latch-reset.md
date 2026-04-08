@@ -34,12 +34,11 @@ with Program() as logic:
 
 `latch` is sticky. Once set, it stays set until explicitly `reset`. This is the bread and butter of motor control, alarm acknowledgment, and mode selection in every factory on earth.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Off
-    Off --> On : latch(Running)
-    On --> On : Start released (stays latched)
-    On --> Off : reset(Running)
+```
+              latch(Running)                reset(Running)
+  Off -----------------------------> On ---------------------------> Off
+                                      |                               |
+                                      +-- Start released? Still On. --+
 ```
 
 ## Try it

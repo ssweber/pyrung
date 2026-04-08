@@ -17,13 +17,13 @@ A PLC can't sleep. It has to keep scanning because sensors are still reading, sa
 
 Timers **accumulate** across scans: every scan where the rung is true, the timer adds a little more time, and when the accumulator reaches the preset, it fires.
 
-```mermaid
-graph TD
-    A["Each scan: rung true?"] -->|Yes| B["Accumulator += elapsed time"]
-    A -->|No| C["Accumulator resets to 0"]
-    B --> D{"Acc ≥ Preset?"}
-    D -->|No| E["Done = False — keep timing"]
-    D -->|Yes| F["Done = True"]
+```
+  Each scan:
+      Rung true? --yes--> Acc += elapsed --> Acc >= Preset? --yes--> Done = True
+          |                                       |
+          no                                      no
+          v                                       v
+      Acc resets to 0                       keep timing
 ```
 
 The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:

@@ -16,11 +16,10 @@ This runs once. A PLC doesn't run once. It runs in a **scan cycle**, an infinite
 
 Because a PLC controls physical things. A conveyor belt doesn't stop needing instructions and a valve doesn't pause while you wait for user input. The machine is always running, so the logic is always running.
 
-```mermaid
-graph LR
-    A[Read Inputs] --> B[Execute Logic<br/>top to bottom]
-    B --> C[Write Outputs]
-    C --> A
+```
+  Read Inputs --> Execute Logic (top to bottom) --> Write Outputs --+
+      ^                                                            |
+      +------------------------------------------------------------+
 ```
 
 ## The ladder logic way

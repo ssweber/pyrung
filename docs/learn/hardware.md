@@ -2,11 +2,11 @@
 
 The lessons are done. You've built a conveyor sorting station with start/stop/e-stop, a state-driven sorting sequence, auto and manual modes, structured bin counting, and a test suite that proves it all works. Everything from here is about taking what you've built and connecting it to the physical world.
 
-```mermaid
-graph TD
-    A["pyrung program<br/>(tested in simulation)"] --> B["Option A: Modbus<br/>Soft PLC runtime"]
-    A --> C["Option B: Click PLC<br/>Ladder CSV export"]
-    A --> D["Option C: CircuitPython<br/>P1AM-200 codegen"]
+```
+  pyrung program (tested in simulation)
+      +-- Option A: Modbus ---- Soft PLC runtime
+      +-- Option B: Click PLC -- Ladder CSV export
+      +-- Option C: CircuitPython -- P1AM-200 codegen
 ```
 
 ## Option A: Connect via Modbus
