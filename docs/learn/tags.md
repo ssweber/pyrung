@@ -20,6 +20,22 @@ Temperature   = Real("Temperature")     # 32-bit float
 
 Tags are typed and sized. You can't put a float in a Bool or store a negative number in an unsigned Word. This reflects real PLC hardware where each tag maps to a specific region of memory with a fixed width.
 
+!!! note "A note on naming"
+
+    Tag names in this guide use `TitleCase` (e.g. `ConveyorRunning`), not Python's `snake_case`. Two reasons:
+
+    1. **It matches PLC convention** — what you'll see in Click, Do-More, Rockwell, and Productivity projects.
+    2. **Characters are a budget.** Do-More caps tag names at 16, Click at 24, Rockwell at 40. `EStopPressed` fits on a Do-More; `e_stop_pressed` doesn't.
+
+    | PLC | Tag name limit | Notes |
+    |---|---|---|
+    | Do-More | 16 | Alphanumeric + single underscore |
+    | Click | 24 | Flat namespace; underscore as pseudo-scope |
+    | Rockwell Logix | 40 | No double underscores |
+    | Productivity | 40+ | Generous |
+
+    On flat-namespace PLCs like Click, underscores do a different job: they group related tags into a pseudo-namespace (`Bin1_Count`, `Bin1_Full`) that becomes a real UDT member (`Bin1.Count`) on platforms with structures. More on that in [Structured Tags and Blocks](structured-tags.md).
+
 ```
   Tag Types
   +-- Bool  -- 1-bit on/off

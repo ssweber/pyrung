@@ -27,14 +27,14 @@
 ### L2 — Tags
 - [ ] Explain doubled-name string (`ConveyorSpeed = Int("ConveyorSpeed")`)
 - [ ] Promote retentive vs non-retentive to its own subheading
-- [ ] Add naming convention admonition + PLC tag-limit table
+- [x] Add naming convention admonition + PLC tag-limit table
 - [x] Add "Heads up" box: type aliases across vendors
 
 ### L3 — Latch and Reset
 - [x] Rename `Estop` -> `StopBtn` throughout early lessons, use as `~StopBtn`
-- [ ] Teach `~` as "NC contact," not "NOT" — dedicated callout
-- [ ] Land latch vs `out` distinction harder (sticky vs non-sticky)
-- [ ] Forward ref to L8 seal-in and L11 E-stop (one line each)
+- [x] Teach `~` as "NC contact," not "NOT" — dedicated callout
+- [x] Land latch vs `out` distinction harder (sticky vs non-sticky)
+- [x] Forward ref to L8 seal-in and L11 E-stop (one line each)
 - [x] Add "Heads up" box: `latch`=SET/OTL, `reset`=RST/OTU
 
 ### L4 — Assignment
