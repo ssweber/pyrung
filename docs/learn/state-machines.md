@@ -29,7 +29,12 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
 from pyrung import comment, on_delay, copy, latch, reset, out, rise
 
-# State tag — 0=idle, 1=detecting, 2=sorting, 3=resetting
+# State values as tag-constants — initialized once, never written
+IDLE      = Int("IDLE",      default=0)
+DETECTING = Int("DETECTING", default=1)
+SORTING   = Int("SORTING",   default=2)
+RESETTING = Int("RESETTING", default=3)
+
 State = Int("State")
 
 # Inputs
@@ -49,32 +54,41 @@ HoldAcc  = Int("HoldAcc")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")
-    with Rung(State == 0, rise(EntrySensor)):
-        copy(1, State)
+    with Rung(State == IDLE, rise(EntrySensor)):
+        copy(DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == 1):
+    with Rung(State == DETECTING):
         on_delay(DetDone, DetAcc, preset=500, unit=Tms)
-    with Rung(State == 1, SizeReading > SizeThreshold):
+    with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetDone):
-        copy(2, State)
+        copy(SORTING, State)
 
     comment("SORTING: hold diverter open for 2 seconds")
-    with Rung(State == 2):
+    with Rung(State == SORTING):
         on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
-    with Rung(State == 2, IsLarge):
+    with Rung(State == SORTING, IsLarge):
         out(DiverterCmd)         # Extend diverter for large boxes
     with Rung(HoldDone):
-        copy(3, State)
+        copy(RESETTING, State)
 
     comment("RESETTING: clean up for next box")
-    with Rung(State == 3):
+    with Rung(State == RESETTING):
         reset(IsLarge)
-        copy(0, State)
+        copy(IDLE, State)
 ```
 
 Each state has a small group of rungs: one to run its timer or check its condition, one to handle the transition. Clean, readable, testable.
+
+The state values are **tag-constants** — `Int` tags initialized once and never written. Your Python instinct says `Enum`; the ladder answer is "constants are tags." They live in the PLC's tag table, visible to anyone who opens the project — better documentation than a Python comment because they travel with the project file.
+
+A few things to notice in the code:
+
+- **`rise(EntrySensor)`** — remember [Lesson 4](assignment.md)? Without it, the IDLE→DETECTING transition fires every scan the sensor sees a box, not just the first.
+- **`State == DETECTING` repeats across three rungs.** In Python you'd write one `if` and nest. In ladder, each rung stands alone — independently editable, grep-able, and deletable. The maintenance tech at 3am searching for `DETECTING` finds every rung that participates.
+- **We never reset `DetDone`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets — `DetDone` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
+- **`IsLarge` crosses states.** It's latched in DETECTING, read in SORTING, reset in RESETTING. Latches outlive rungs — they're how a state machine carries data between states without globals or context objects.
 
 ## Try it
 
@@ -91,22 +105,22 @@ with runner.active():
     SizeReading.value = 150
 runner.step()
 with runner.active():
-    assert State.value == 1             # Detecting
+    assert State.value == 1             # DETECTING
 
 # Wait for detection period (0.5s = 50 scans)
 runner.run(cycles=50)
 with runner.active():
-    assert State.value == 2             # Sorting
+    assert State.value == 2             # SORTING
     assert DiverterCmd.value is True    # Diverter extended for large box
 
 # Wait for hold (2s = 200 scans)
 runner.run(cycles=200)
 with runner.active():
-    assert State.value == 3             # Resetting
+    assert State.value == 3             # RESETTING
 
 runner.step()
 with runner.active():
-    assert State.value == 0             # Back to idle
+    assert State.value == 0             # Back to IDLE
     assert DiverterCmd.value is False   # Diverter retracted
 ```
 

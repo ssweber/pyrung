@@ -64,12 +64,12 @@
 - [x] Add "Heads up" box: CTU/CTD/CTUD across vendors
 
 ### L7 — State Machines
-- [ ] Replace magic numbers with tag-as-constant pattern (`IDLE = Int("IDLE", initial=0)`)
-- [ ] Name-drop PackML (give learners a search term)
-- [ ] Explicit `rise()` callback from L4
-- [ ] Explain repeated `State == 1` as a feature (grep-able, independent)
-- [ ] Explain implicit timer reset (TON auto-resets when rung goes false)
-- [ ] Note `IsLarge` latch crossing states ("latches outlive rungs")
+- [x] Replace magic numbers with tag-as-constant pattern (`IDLE = Int("IDLE", initial=0)`)
+- [x] Name-drop PackML (give learners a search term)
+- [x] Explicit `rise()` callback from L4
+- [x] Explain repeated `State == 1` as a feature (grep-able, independent)
+- [x] Explain implicit timer reset (TON auto-resets when rung goes false)
+- [x] Note `IsLarge` latch crossing states ("latches outlive rungs")
 - [x] Add Mermaid state diagram
 - [x] Add "Heads up" box: SQO/SQI/SQL, DRUM, SFC
 
