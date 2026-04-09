@@ -9,50 +9,7 @@ from pathlib import Path
 
 import mkdocs_gen_files
 
-PACKAGE = "pyrung"
-ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = ROOT / "src" / PACKAGE
 PUBLIC_MODULES = ("pyrung", "pyrung.click", "pyrung.circuitpy")
-SKIP_MODULE_PAGES: set[str] = {
-    # Top-level public modules (curated pages cover their exports)
-    "pyrung",
-    "pyrung.click",
-    "pyrung.circuitpy",
-    # Internal codegen
-    "pyrung.circuitpy.codegen.context",
-    "pyrung.circuitpy.codegen.generate",
-    "pyrung.circuitpy.codegen.render",
-    "pyrung.circuitpy.codegen.render_modbus",
-    # Re-export packages (symbols on curated pages)
-    "pyrung.circuitpy.modbus",
-    "pyrung.circuitpy.p1am",
-    "pyrung.circuitpy.validation",
-    "pyrung.click.validation",
-    # DAP internals
-    "pyrung.dap",
-    "pyrung.dap.breakpoints",
-    "pyrung.dap.execution_flow",
-    "pyrung.dap.formatter",
-    "pyrung.dap.handlers",
-    "pyrung.dap.handlers.breakpoint_requests",
-    "pyrung.dap.handlers.lifecycle_launch",
-    "pyrung.dap.handlers.monitor_data_breakpoints",
-    "pyrung.dap.handlers.stack_variables_evaluate",
-    "pyrung.dap.session",
-    # Core internals
-    "pyrung.core.copy_converters",
-    "pyrung.core.debug_trace",
-    "pyrung.core.input_overrides",
-    "pyrung.core.system_points",
-    "pyrung.core.trace_formatter",
-    "pyrung.core.instruction.conversions",
-    "pyrung.core.instruction.drums",
-    "pyrung.core.program.validation",
-    # Click internals
-    "pyrung.click.capabilities",
-    "pyrung.click.profile",
-    "pyrung.click.system_mappings",
-}
 
 
 @dataclass(frozen=True)
@@ -102,7 +59,6 @@ CLICK_HELPER_SYMBOLS: tuple[str, ...] = (
     "pyrung.click.ModbusTcpTarget",
     "pyrung.click.RegisterType",
     "pyrung.click.WordOrder",
-    "pyrung.click.validate_click_program",
     "pyrung.click.ladder_to_pyrung",
     "pyrung.click.ladder_to_pyrung_project",
     "pyrung.click.pyrung_to_ladder",
@@ -124,13 +80,6 @@ PAGES: tuple[ReferencePage, ...] = (
         symbols=(
             "pyrung.PLC",
             "pyrung.system",
-            "pyrung.TimeMode",
-            "pyrung.TimeUnit",
-            "pyrung.Tms",
-            "pyrung.Ts",
-            "pyrung.Tm",
-            "pyrung.Th",
-            "pyrung.Td",
         ),
     ),
     ReferencePage(
@@ -143,6 +92,8 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.auto",
             "pyrung.udt",
             "pyrung.named_array",
+            "pyrung.Timer",
+            "pyrung.Counter",
             "pyrung.TagType",
             "pyrung.Bool",
             "pyrung.Int",
@@ -253,7 +204,6 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.circuitpy.CircuitPyOutput",
             "pyrung.circuitpy.generate_circuitpy",
             "pyrung.circuitpy.write_circuitpy",
-            "pyrung.circuitpy.validate_circuitpy_program",
         ),
     ),
 )
@@ -369,53 +319,12 @@ def _write_index() -> None:
     for page in dialect:
         lines.append(f"- [{page.title}](api/{page.slug}.md)")
 
-    lines.extend(
-        [
-            "",
-            "## Module Pages",
-            "",
-            "Additional module-level pages are generated for deep links and internal browsing.",
-        ]
-    )
-
     with mkdocs_gen_files.open("reference/index.md", "w") as fd:
         fd.write("\n".join(lines).rstrip() + "\n")
     mkdocs_gen_files.set_edit_path("reference/index.md", Path("docs/gen_reference.py"))
-
-
-def _write_module_pages() -> None:
-    for module_path in sorted(SRC_DIR.rglob("*.py")):
-        if module_path.name == "__main__.py":
-            continue
-
-        rel = module_path.relative_to(SRC_DIR)
-        if rel.name == "__init__.py":
-            module_parts = [PACKAGE, *rel.parent.parts] if rel.parent.parts else [PACKAGE]
-            if rel.parent.parts:
-                doc_rel_path = Path("reference/api").joinpath(*rel.parent.parts).with_suffix(".md")
-            else:
-                doc_rel_path = Path("reference/api") / f"{PACKAGE}.md"
-        else:
-            module_parts = [PACKAGE, *rel.with_suffix("").parts]
-            doc_rel_path = (
-                Path("reference/api").joinpath(*rel.with_suffix("").parts).with_suffix(".md")
-            )
-
-        # Auto-skip private modules (filename starts with _ but isn't __init__.py)
-        if rel.name != "__init__.py" and rel.stem.startswith("_"):
-            continue
-
-        identifier = ".".join(module_parts)
-        if identifier in SKIP_MODULE_PAGES:
-            continue
-        with mkdocs_gen_files.open(doc_rel_path, "w") as fd:
-            fd.write(f"::: {identifier}\n")
-
-        mkdocs_gen_files.set_edit_path(doc_rel_path, module_path.relative_to(ROOT))
 
 
 _validate_manifest()
 for reference_page in PAGES:
     _write_curated_page(reference_page)
 _write_index()
-_write_module_pages()

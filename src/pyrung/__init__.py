@@ -30,7 +30,6 @@ from pyrung.core import (
     SlotView,
     TagType,
     Timer,
-    TimeUnit,
     Word,
     WordOrder,
     auto,
@@ -80,7 +79,6 @@ from pyrung.core import (
 __all__ = [
     "PLC",
     "system",
-    "TimeUnit",
     "Field",
     "auto",
     "udt",

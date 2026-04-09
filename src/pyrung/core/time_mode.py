@@ -21,7 +21,7 @@ class TimeMode(Enum):
 
 
 class TimeUnit(Enum):
-    """Timer time units for Click PLC.
+    """Timer time units.
 
     The accumulator stores integer values in the specified unit.
     Conversion from dt (seconds) uses appropriate scaling.
