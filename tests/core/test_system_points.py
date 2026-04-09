@@ -25,7 +25,7 @@ from pyrung.core import (
 
 
 def _resolved(runner: PLC, tag_name: str):
-    found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
+    found, value = runner.debug.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
     return value
 
@@ -140,7 +140,7 @@ def test_rtc_fixed_step_advances_deterministically_with_simulation_time():
 
     runner.run(cycles=1000)
 
-    rtc_now = runner.system_runtime._rtc_now(runner.current_state)
+    rtc_now = runner.debug.system_runtime._rtc_now(runner.current_state)
     assert (rtc_now - base).total_seconds() == pytest.approx(1.0)
 
 
@@ -273,7 +273,7 @@ def test_storage_sd_read_only_status_points_reject_logic_patch_and_force():
         runner.patch({system.storage.sd.error_code.name: 1})
 
     with pytest.raises(ValueError, match="read-only system point"):
-        runner.add_force(system.storage.sd.error, True)
+        runner.force(system.storage.sd.error, True)
 
 
 def test_storage_sd_commands_auto_clear_and_pulse_write_status():

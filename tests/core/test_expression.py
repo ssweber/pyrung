@@ -309,14 +309,14 @@ class TestExpressionInRung:
         # Test when condition is true
         state = SystemState().with_tags({"DS1": 60, "DS2": 50})
         ctx = ScanContext(state)
-        logic.evaluate(ctx)
+        logic._evaluate(ctx)
         result = ctx.commit(dt=0.0)
         assert result.tags["Alarm"] is True
 
         # Test when condition is false
         state2 = SystemState().with_tags({"DS1": 40, "DS2": 50})
         ctx2 = ScanContext(state2)
-        logic.evaluate(ctx2)
+        logic._evaluate(ctx2)
         result2 = ctx2.commit(dt=0.0)
         assert result2.tags.get("Alarm", False) is False
 
@@ -335,14 +335,14 @@ class TestExpressionInRung:
         # 100C = 212F (boiling point)
         state = SystemState().with_tags({"Temperature": 100})
         ctx = ScanContext(state)
-        logic.evaluate(ctx)
+        logic._evaluate(ctx)
         result = ctx.commit(dt=0.0)
         assert result.tags.get("Boiling", False) is False  # 212 > 212 is false
 
         # 101C = 213.8F
         state2 = SystemState().with_tags({"Temperature": 101})
         ctx2 = ScanContext(state2)
-        logic.evaluate(ctx2)
+        logic._evaluate(ctx2)
         result2 = ctx2.commit(dt=0.0)
         assert result2.tags["Boiling"] is True
 
@@ -377,7 +377,7 @@ class TestExpressionInCopy:
             }
         )
         ctx = ScanContext(state)
-        logic.evaluate(ctx)
+        logic._evaluate(ctx)
         result = ctx.commit(dt=0.0)
         assert result.tags["Result"] == 25  # 10 * 2 + 5
 
@@ -402,7 +402,7 @@ class TestExpressionInCopy:
             }
         )
         ctx = ScanContext(state)
-        logic.evaluate(ctx)
+        logic._evaluate(ctx)
         result = ctx.commit(dt=0.0)
         assert result.tags["Result"] == pytest.approx(4.0)
 

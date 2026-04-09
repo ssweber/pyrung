@@ -1202,7 +1202,7 @@ def test_trace_body_uses_committed_core_event_when_no_inflight_scan_context(tmp_
     _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
 
-    # Drop in-flight scan context so runner.inspect_event() falls back to committed data.
+    # Drop in-flight scan context so runner.debug.last_event() falls back to committed data.
     if adapter._scan_gen is not None:
         adapter._scan_gen.close()
     adapter._scan_gen = None
@@ -1232,7 +1232,7 @@ def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: 
     _drain_messages(out_stream)
 
     assert adapter._runner is not None
-    inspect_event = adapter._runner.inspect_event()
+    inspect_event = adapter._runner.debug.last_event()
     assert inspect_event is not None
     scan_id, rung_id, event = inspect_event
     adapter._runner._latest_inflight_trace_event = (

@@ -23,7 +23,7 @@ from pyrung.core import (
 
 
 def _resolved(runner: PLC, tag_name: str):
-    found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
+    found, value = runner.debug.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
     return value
 
@@ -55,7 +55,7 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
     runner.step()
 
     runner.patch({retentive_tag: 9})
-    runner.add_force(non_retentive_tag, False)
+    runner.force(non_retentive_tag, False)
     runner._state = runner._state.with_memory({"user.custom.memory": 123})
 
     runner.stop()
@@ -82,8 +82,8 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
         ("step", lambda r: r.step()),
         ("run", lambda r: r.run(1)),
         ("run_for", lambda r: r.run_for(0.01)),
-        ("run_until", lambda r: r.run_until_fn(lambda s: s.scan_id >= 1, max_cycles=1)),
-        ("scan_steps", lambda r: list(r.scan_steps())),
+        ("run_until", lambda r: r.run_until(lambda s: s.scan_id >= 1, max_cycles=1)),
+        ("scan_steps", lambda r: list(r.debug.scan_steps())),
     ],
 )
 def test_all_execution_methods_auto_restart_from_stop(
@@ -111,7 +111,7 @@ def test_stop_restart_preserves_time_mode_and_debug_registrations():
     runner = PLC(logic=[], dt=0.25)
 
     monitor = runner.monitor("WatchedTag", lambda current, previous: None)
-    breakpoint_handle = runner.when_fn(lambda _state: False).pause()
+    breakpoint_handle = runner.when(lambda _state: False).pause()
 
     runner.stop()
     runner.step()
@@ -126,11 +126,11 @@ def test_stop_restart_preserves_rtc_continuity():
     runner = PLC(logic=[], dt=0.25)
     runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
     runner.run(cycles=4)
-    before_stop_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    before_stop_rtc = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     runner.stop()
     runner.step()
-    after_restart_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    after_restart_rtc = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     assert (after_restart_rtc - before_stop_rtc).total_seconds() == pytest.approx(0.25)
 

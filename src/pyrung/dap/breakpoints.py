@@ -66,7 +66,7 @@ class BreakpointManager:
         self.subroutine_source_map = {}
         visited_rungs: set[int] = set()
         visited_programs: set[int] = set()
-        for rung in runner.iter_top_level_rungs():
+        for rung in runner.debug.iter_top_level_rungs():
             self._index_rung_lines(
                 rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs
             )

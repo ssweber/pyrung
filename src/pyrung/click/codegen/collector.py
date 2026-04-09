@@ -327,7 +327,7 @@ def _enrich_with_ownership(
         if existing is not None:
             return existing
 
-        entry = structured_map.block_entry_by_name(block_name)
+        entry = structured_map._block_entry_by_name(block_name)
         if entry is None or not entry.hardware_addresses:
             return None
 
@@ -373,7 +373,7 @@ def _enrich_with_ownership(
         return decl
 
     for operand in list(collection.tags):
-        owner = structured_map.owner_of(operand)
+        owner = structured_map._owner_of(operand)
         if owner is None:
             continue
         if owner.structure_type in ("named_array", "udt"):
@@ -422,10 +422,10 @@ def _enrich_with_ownership(
         )
 
     for range_str, range_decl in collection.ranges.items():
-        start_owner = structured_map.owner_of(
+        start_owner = structured_map._owner_of(
             format_address_display(range_decl.prefix, range_decl.start)
         )
-        end_owner = structured_map.owner_of(
+        end_owner = structured_map._owner_of(
             format_address_display(range_decl.prefix, range_decl.end)
         )
         if start_owner is None:

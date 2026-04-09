@@ -292,7 +292,7 @@ class TagMap:
 
         raise TypeError("resolve source must be Tag, Block, or str.")
 
-    def offset_for(self, block: Block) -> int:
+    def _offset_for(self, block: Block) -> int:
         """Return affine offset for a mapped block."""
         entry = self._block_lookup.get(id(block))
         if entry is None:
@@ -316,7 +316,7 @@ class TagMap:
     def blocks(self) -> tuple[_BlockEntry, ...]:
         return self._block_entries_tuple
 
-    def block_entry_by_name(self, name: str) -> _BlockEntry | None:
+    def _block_entry_by_name(self, name: str) -> _BlockEntry | None:
         """Look up a block entry by logical block name."""
         return self._block_by_name.get(name)
 
@@ -424,7 +424,7 @@ class TagMap:
     def structure_warnings(self) -> tuple[str, ...]:
         return self._structure_warnings
 
-    def owner_of(self, display_address: str) -> OwnerInfo | None:
+    def _owner_of(self, display_address: str) -> OwnerInfo | None:
         """Return the structure/block that owns a hardware display address.
 
         Args:

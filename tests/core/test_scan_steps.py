@@ -41,7 +41,7 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     runner = PLC(logic)
     runner.patch({"Start": True})
 
-    scan_gen = runner.scan_steps()
+    scan_gen = runner.debug.scan_steps()
 
     idx0, rung0, ctx0 = next(scan_gen)
     assert idx0 == 0
@@ -78,7 +78,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
     runner = PLC(logic)
     runner.patch({"Enable": True})
 
-    scan_gen = runner.scan_steps()
+    scan_gen = runner.debug.scan_steps()
     _, _, ctx = next(scan_gen)
 
     assert runner.current_state.scan_id == 0
@@ -106,7 +106,7 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
     runner = PLC(logic)
     runner.patch({"Enable": True})
 
-    scan_gen = runner.scan_steps_debug()
+    scan_gen = runner.debug.scan_steps_debug()
     first_step = next(scan_gen)
 
     assert first_step.kind == "rung"
@@ -146,7 +146,7 @@ def test_step_and_scan_steps_have_equivalent_results():
     via_scan_steps.patch({"Enable": True})
 
     via_step.step()
-    for _ in via_scan_steps.scan_steps():
+    for _ in via_scan_steps.debug.scan_steps():
         pass
 
     assert via_step.current_state == via_scan_steps.current_state
@@ -169,7 +169,7 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
             out(top_light)
 
     runner = PLC(logic)
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     boundary_steps = [step for step in steps if step.kind != "instruction"]
     assert [step.kind for step in boundary_steps] == ["rung", "subroutine", "branch"]
@@ -203,7 +203,7 @@ def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs(
             out(done)
 
     runner = PLC(logic)
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     sub_steps = [step for step in steps if step.kind == "subroutine"]
     assert len(sub_steps) == 2
@@ -226,7 +226,7 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
 
     runner = PLC(logic)
     runner.patch({"Enable": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     kinds = [step.kind for step in steps]
     assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
@@ -252,7 +252,7 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
 
     runner = PLC(logic)
     runner.patch({"Step": 0, "Auto": True, "BranchDone": False, "SubLight": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     kinds = [entry.kind for entry in steps]
     assert [kind for kind in kinds if kind != "instruction"] == ["rung", "branch", "subroutine"]
@@ -274,7 +274,7 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
 
     runner = PLC(logic)
     runner.patch({"Enable": True, "Mode": False, "BranchOut": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     # Branch remains unpowered for this scan despite Mode being written before branch item.
     kinds = [step.kind for step in steps]
@@ -350,7 +350,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
             "Jog": False,
         }
     )
-    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"]
 
     assert [step.instruction_kind for step in instruction_steps] == [
         "Count Up",

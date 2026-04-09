@@ -27,7 +27,7 @@ class _MidCycleWriteProbeRung:
 class TestPLCForce:
     def test_add_force_persists_across_scans(self):
         runner = PLC(logic=[])
-        runner.add_force("Button", True)
+        runner.force("Button", True)
 
         runner.patch({"Button": False})
         runner.step()
@@ -41,7 +41,7 @@ class TestPLCForce:
         button = Bool("Button")
         runner = PLC(logic=[])
 
-        runner.add_force(button, True)
+        runner.force(button, True)
         runner.step()
 
         assert runner.current_state.tags["Button"] is True
@@ -50,13 +50,13 @@ class TestPLCForce:
         runner = PLC(logic=[])
 
         with pytest.raises(ValueError, match="read-only system point"):
-            runner.add_force(system.sys.always_on, False)
+            runner.force(system.sys.always_on, False)
 
     def test_remove_force(self):
         runner = PLC(logic=[])
-        runner.add_force("Light", True)
+        runner.force("Light", True)
 
-        runner.remove_force("Light")
+        runner.unforce("Light")
         runner.patch({"Light": False})
         runner.step()
 
@@ -65,9 +65,9 @@ class TestPLCForce:
     def test_remove_force_accepts_tag_object(self):
         light = Bool("Light")
         runner = PLC(logic=[])
-        runner.add_force(light, True)
+        runner.force(light, True)
 
-        runner.remove_force(light)
+        runner.unforce(light)
         runner.patch({"Light": False})
         runner.step()
 
@@ -77,12 +77,12 @@ class TestPLCForce:
         runner = PLC(logic=[])
 
         with pytest.raises(KeyError):
-            runner.remove_force("Missing")
+            runner.unforce("Missing")
 
     def test_clear_forces(self):
         runner = PLC(logic=[])
-        runner.add_force("A", True)
-        runner.add_force("B", False)
+        runner.force("A", True)
+        runner.force("B", False)
 
         runner.clear_forces()
         runner.patch({"A": False, "B": True})
@@ -94,7 +94,7 @@ class TestPLCForce:
 
     def test_force_overwrites_patch(self):
         runner = PLC(logic=[])
-        runner.add_force("A", True)
+        runner.force("A", True)
 
         runner.patch({"A": False})
         runner.step()
@@ -103,7 +103,7 @@ class TestPLCForce:
 
     def test_force_reasserts_after_logic(self):
         runner = PLC(logic=[_SetTagRung("A", False)])
-        runner.add_force("A", True)
+        runner.force("A", True)
 
         runner.step()
 
@@ -111,7 +111,7 @@ class TestPLCForce:
 
     def test_force_does_not_lock_midcycle(self):
         runner = PLC(logic=[_MidCycleWriteProbeRung()])
-        runner.add_force("Signal", True)
+        runner.force("Signal", True)
 
         runner.step()
 
@@ -121,7 +121,7 @@ class TestPLCForce:
     def test_force_context_manager_temporary(self):
         runner = PLC(logic=[])
 
-        with runner.force({"A": True}):
+        with runner.forced({"A": True}):
             runner.step()
             assert runner.current_state.tags["A"] is True
             assert dict(runner.forces) == {"A": True}
@@ -136,7 +136,7 @@ class TestPLCForce:
         a = Bool("A")
         runner = PLC(logic=[])
 
-        with runner.force({a: True}):
+        with runner.forced({a: True}):
             runner.step()
             assert runner.current_state.tags["A"] is True
             assert dict(runner.forces) == {"A": True}
@@ -149,11 +149,11 @@ class TestPLCForce:
 
     def test_force_context_manager_nested(self):
         runner = PLC(logic=[])
-        runner.add_force("Outer", True)
+        runner.force("Outer", True)
 
-        with runner.force({"Outer": False, "Mid": True}):
+        with runner.forced({"Outer": False, "Mid": True}):
             assert dict(runner.forces) == {"Outer": False, "Mid": True}
-            with runner.force({"Mid": False, "Inner": True}):
+            with runner.forced({"Mid": False, "Inner": True}):
                 assert dict(runner.forces) == {"Outer": False, "Mid": False, "Inner": True}
             assert dict(runner.forces) == {"Outer": False, "Mid": True}
 
@@ -161,17 +161,17 @@ class TestPLCForce:
 
     def test_force_context_manager_exception_safe(self):
         runner = PLC(logic=[])
-        runner.add_force("Baseline", True)
+        runner.force("Baseline", True)
 
         with pytest.raises(RuntimeError, match="boom"):
-            with runner.force({"Temp": True}):
+            with runner.forced({"Temp": True}):
                 raise RuntimeError("boom")
 
         assert dict(runner.forces) == {"Baseline": True}
 
     def test_forces_property_readonly(self):
         runner = PLC(logic=[])
-        runner.add_force("A", True)
+        runner.force("A", True)
 
         active_forces = runner.forces
         assert dict(active_forces) == {"A": True}
@@ -187,7 +187,7 @@ class TestPLCForce:
                 out(pulse)
 
         runner = PLC(logic=logic)
-        runner.add_force(button, True)
+        runner.force(button, True)
 
         runner.step()
         assert runner.current_state.tags["Pulse"] is True
@@ -197,8 +197,8 @@ class TestPLCForce:
 
     def test_force_multiple_tags(self):
         runner = PLC(logic=[])
-        runner.add_force("A", True)
-        runner.add_force("Count", 42)
+        runner.force("A", True)
+        runner.force("Count", 42)
 
         runner.step()
 
@@ -208,7 +208,7 @@ class TestPLCForce:
     def test_peek_live_reflects_force(self):
         count = Int("Count")
         runner = PLC(logic=[])
-        runner.add_force(count, 7)
+        runner.force(count, 7)
 
         with runner:
             assert count.value == 7

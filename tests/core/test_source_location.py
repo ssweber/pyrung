@@ -248,7 +248,7 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
 
     runner = PLC(prog)
     runner.patch({"Enable": True, "Reset": False})
-    scan_gen = runner.scan_steps_debug()
+    scan_gen = runner.debug.scan_steps_debug()
     rung_step = next(scan_gen)
     assert rung_step.kind == "rung"
     step = next(scan_gen)
@@ -421,7 +421,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
 
     runner = PLC(prog)
     runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
-    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"]
     assert [step.source_line for step in instruction_steps] == [
         cu_line,
         cu_down_line,

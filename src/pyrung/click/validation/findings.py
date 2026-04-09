@@ -122,10 +122,10 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
         block_name = str(meta.get("block_name", ""))
         expr_dsl = str(meta.get("expr_dsl", ""))
         if block_name and expr_dsl:
-            block_entry = tag_map.block_entry_by_name(block_name)
+            block_entry = tag_map._block_entry_by_name(block_name)
             if block_entry is not None:
                 try:
-                    offset = tag_map.offset_for(block_entry.logical)
+                    offset = tag_map._offset_for(block_entry.logical)
                     return (
                         f"Click cannot compute {block_name}[{expr_dsl}] at runtime. "
                         f"Store the index in a DS tag and use copy(): "

@@ -260,17 +260,17 @@ def test_fork_starts_with_same_rtc_as_parent_at_fork_point() -> None:
     runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
     runner.run(cycles=6)
 
-    expected_parent_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    expected_parent_rtc = runner.debug.system_runtime._rtc_now(runner.current_state)
     fork = runner.fork()
 
-    assert fork.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
+    assert fork.debug.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
 def test_fork_starts_clean_and_parent_fork_evolve_independently() -> None:
     runner = PLC(logic=[])
     runner.patch({"X": 1})
     runner.step()
-    runner.add_force("X", 5)
+    runner.force("X", 5)
     runner.patch({"Y": 2})  # pending only in parent runtime state
 
     fork = runner.fork()
@@ -325,10 +325,10 @@ def test_fork_from_starts_with_same_rtc_as_parent_at_selected_scan() -> None:
     runner.run(cycles=6)
 
     snapshot = runner.history.at(3)
-    expected_parent_rtc = runner.system_runtime._rtc_now(snapshot)
+    expected_parent_rtc = runner.debug.system_runtime._rtc_now(snapshot)
     fork = runner.fork_from(3)
 
-    assert fork.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
+    assert fork.debug.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
 def test_fork_from_inherits_history_limit_and_evicts_oldest() -> None:
@@ -351,7 +351,7 @@ def test_fork_from_starts_clean_and_parent_fork_evolve_independently() -> None:
     runner = PLC(logic=[])
     runner.patch({"X": 1})
     runner.step()
-    runner.add_force("X", 5)
+    runner.force("X", 5)
     runner.patch({"Y": 2})  # pending only in parent runtime state
 
     fork = runner.fork_from(1)

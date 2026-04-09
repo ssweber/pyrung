@@ -55,7 +55,7 @@ class Rung:
         )
 
         # Consume any pending comment() call.
-        prog = Program.current()
+        prog = Program._current()
         if prog is not None and prog._pending_comment is not None:
             self._rung.comment = prog._pending_comment
             prog._pending_comment = None
@@ -145,9 +145,9 @@ class Rung:
             context_name="Rung",
         )
         # Add rung to current program
-        prog = Program.current()
+        prog = Program._current()
         if prog is not None:
-            prog.add_rung(self._rung)
+            prog._add_rung(self._rung)
 
 
 _MAX_COMMENT_LENGTH = 1400
@@ -165,7 +165,7 @@ def comment(text: str) -> None:
         with Rung(C_UnitModeChgRequest):
             copy(1, C_UnitModeChgRequestBool, oneshot=True)
     """
-    prog = Program.current()
+    prog = Program._current()
     if prog is None:
         raise RuntimeError("comment() must be used inside a Program context")
     if prog._pending_comment is not None:

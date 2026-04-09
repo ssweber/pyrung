@@ -488,7 +488,7 @@ class DAPAdapter:
 
     def _top_level_rungs(self, runner: PLC) -> list[Rung]:
         """Return top-level rungs through the runner's public debug API."""
-        return list(runner.iter_top_level_rungs())
+        return list(runner.debug.iter_top_level_rungs())
 
     def _current_trace_body_locked(self) -> dict[str, Any] | None:
         runner = self._runner
@@ -496,7 +496,7 @@ class DAPAdapter:
             return None
 
         return self._formatter.current_trace_body(
-            event_result=runner.inspect_event(),
+            event_result=runner.debug.last_event(),
             current_scan_id=runner.current_state.scan_id,
             trace_version=self.TRACE_VERSION,
             canonical_path=self._canonical_path,

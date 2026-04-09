@@ -432,7 +432,7 @@ def call(target: str | SubroutineFunc) -> None:
                 call(init_sequence)
     """
     ctx, source_file, source_line = _capture_instruction_context("call", source_depth=3)
-    prog = Program.current()
+    prog = Program._current()
     if prog is None:
         raise RuntimeError("call() must be used inside a Program context")
 
@@ -456,7 +456,7 @@ def return_early() -> None:
                 return_early()
     """
     ctx, source_file, source_line = _capture_instruction_context("return_early", source_depth=3)
-    prog = Program.current()
+    prog = Program._current()
     if prog is None or prog._current_subroutine is None:
         raise RuntimeError("return_early() must be used inside a subroutine")
     _attach_instruction(ctx, ReturnInstruction(), source_file, source_line)

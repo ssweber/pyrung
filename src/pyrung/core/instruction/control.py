@@ -157,7 +157,7 @@ class CallInstruction(Instruction):
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        self._program.call_subroutine_ctx(self.subroutine_name, ctx)
+        self._program._call_subroutine_ctx(self.subroutine_name, ctx)
 
 
 class ReturnInstruction(Instruction):

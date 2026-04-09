@@ -202,8 +202,8 @@ runner = PLC(logic, dt=0.010)
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     # NC inputs: force True to simulate healthy wiring
-    runner.add_force(StopBtn, True)
-    runner.add_force(EstopOK, True)
+    runner.force(StopBtn, True)
+    runner.force(EstopOK, True)
 
     with runner:
         Auto.value = True
@@ -215,11 +215,11 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
         StartBtn.value = False
 
     # Simulate a large box arriving
-    runner.add_force(EntrySensor, True)
-    runner.add_force(SizeReading, 150)
+    runner.force(EntrySensor, True)
+    runner.force(SizeReading, 150)
     runner.run(cycles=300)  # Through detection + sorting
-    runner.remove_force(EntrySensor)
-    runner.remove_force(SizeReading)
+    runner.unforce(EntrySensor)
+    runner.unforce(SizeReading)
     runner.run(cycles=10)
 
     # Report

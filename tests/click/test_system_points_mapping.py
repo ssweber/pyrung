@@ -147,7 +147,7 @@ def test_provider_write_sc50_stops_runner_immediately():
 
     provider.write("SC50", True)
 
-    assert runner.system_runtime.resolve(system.sys.mode_run.name, runner.current_state) == (
+    assert runner.debug.system_runtime.resolve(system.sys.mode_run.name, runner.current_state) == (
         True,
         False,
     )

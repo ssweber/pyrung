@@ -153,7 +153,7 @@ class TestRunUntil:
         runner = PLC(logic=[], dt=0.1)
 
         # Run until scan_id reaches 5
-        runner.run_until_fn(lambda s: s.scan_id >= 5)
+        runner.run_until(lambda s: s.scan_id >= 5)
 
         assert runner.current_state.scan_id == 5
 
@@ -164,7 +164,7 @@ class TestRunUntil:
         runner = PLC(logic=[])
 
         # Predicate never true, but max_cycles prevents infinite loop
-        runner.run_until_fn(lambda s: False, max_cycles=10)
+        runner.run_until(lambda s: False, max_cycles=10)
 
         assert runner.current_state.scan_id == 10
 
@@ -174,6 +174,6 @@ class TestRunUntil:
 
         runner = PLC(logic=[])
 
-        result = runner.run_until_fn(lambda s: s.scan_id == 3)
+        result = runner.run_until(lambda s: s.scan_id == 3)
 
         assert result.scan_id == 3

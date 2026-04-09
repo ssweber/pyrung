@@ -571,7 +571,7 @@ class InputBlock(Block):
 
     Use `InputBlock` when the tags represent real hardware inputs (sensors,
     switches, etc.). In simulation, values are supplied via `runner.patch()` or
-    `runner.add_force()` during the *Read Inputs* scan phase.
+    `runner.force()` during the *Read Inputs* scan phase.
 
     Example:
         ```python

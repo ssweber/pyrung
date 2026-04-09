@@ -125,7 +125,7 @@ class ClickDataProvider:
         if mapped is None:
             return self._fallback.read(normalized)
         if mapped.source == "system":
-            found, value = self._runner.system_runtime.resolve(
+            found, value = self._runner._system_runtime.resolve(
                 mapped.logical_name, self._runner.current_state
             )
             if found:

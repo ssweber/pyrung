@@ -8,7 +8,7 @@ from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, copy, sys
 
 
 def _resolved(runner: PLC, tag_name: str):
-    found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
+    found, value = runner.debug.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
     return value
 
@@ -22,7 +22,7 @@ def test_reboot_with_battery_preserves_all_known_tags():
     runner.step()
 
     runner.patch({retentive_tag: 123})
-    runner.add_force(non_retentive_tag, False)
+    runner.force(non_retentive_tag, False)
     runner._state = runner._state.with_memory({"user.custom.memory": 42})
 
     rebooted = runner.reboot()
@@ -100,10 +100,10 @@ def test_reboot_with_battery_preserves_rtc_continuity():
     runner = PLC(logic=[])
     runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
     runner.step()
-    rtc_before_reboot = runner.system_runtime._rtc_now(runner.current_state)
+    rtc_before_reboot = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     runner.reboot()
-    rtc_after_reboot = runner.system_runtime._rtc_now(runner.current_state)
+    rtc_after_reboot = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     assert rtc_after_reboot == rtc_before_reboot
 
@@ -126,5 +126,5 @@ def test_reboot_without_battery_resets_rtc_to_reboot_wall_time(monkeypatch):
     _FrozenDateTime.fixed_now = datetime(2028, 7, 8, 9, 10, 11)
     runner.reboot()
 
-    rtc_after_reboot = runner.system_runtime._rtc_now(runner.current_state)
+    rtc_after_reboot = runner.debug.system_runtime._rtc_now(runner.current_state)
     assert rtc_after_reboot == datetime(2028, 7, 8, 9, 10, 11)

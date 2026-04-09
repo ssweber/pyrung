@@ -160,13 +160,13 @@ def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:
         tag = parts[1]
         raw_value = expression.strip().split(None, 2)[2]
         value = adapter._parse_literal(raw_value)
-        runner.add_force(tag, value)
+        runner.force(tag, value)
         return f"Forced {tag}={value!r}"
     if command in {"remove_force", "unforce"}:
         if len(parts) != 2:
-            raise adapter.DAPAdapterError("Usage: remove_force <tag>")
+            raise adapter.DAPAdapterError("Usage: unforce <tag>")
         tag = parts[1]
-        runner.remove_force(tag)
+        runner.unforce(tag)
         return f"Removed force {tag}"
     if command == "clear_forces":
         runner.clear_forces()

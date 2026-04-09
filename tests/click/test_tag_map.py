@@ -40,7 +40,7 @@ def test_offset_for_block():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})
 
-    assert mapping.offset_for(alarms) == 100
+    assert mapping._offset_for(alarms) == 100
 
 
 def test_offset_for_sparse_block_raises():
@@ -48,7 +48,7 @@ def test_offset_for_sparse_block_raises():
     mapping = TagMap({alarms: x.select(1, 21)})
 
     with pytest.raises(ValueError, match="affine"):
-        mapping.offset_for(alarms)
+        mapping._offset_for(alarms)
 
 
 def test_map_to_syntax():
@@ -550,7 +550,7 @@ def test_block_entry_by_name_found():
     alarms = Block("Alarm", TagType.BOOL, 1, 3)
     mapping = TagMap({alarms: c.select(101, 103)})
 
-    entry = mapping.block_entry_by_name("Alarm")
+    entry = mapping._block_entry_by_name("Alarm")
     assert entry is not None
     assert entry.logical is alarms
 
@@ -558,7 +558,7 @@ def test_block_entry_by_name_found():
 def test_block_entry_by_name_not_found():
     mapping = TagMap(include_system=False)
 
-    assert mapping.block_entry_by_name("NoSuchBlock") is None
+    assert mapping._block_entry_by_name("NoSuchBlock") is None
 
 
 def test_from_nickname_file_udt_grouping_success(tmp_path):
@@ -656,8 +656,8 @@ def test_from_nickname_file_udt_grouping_count_mismatch_falls_back(tmp_path):
     assert restored.structure_by_name("Alarm") is None
     assert restored.structure_warnings
     assert "Alarm" in restored.structure_warnings[0]
-    assert restored.block_entry_by_name("Alarm.id") is not None
-    assert restored.block_entry_by_name("Alarm.On") is not None
+    assert restored._block_entry_by_name("Alarm.id") is not None
+    assert restored._block_entry_by_name("Alarm.On") is not None
 
 
 def test_from_nickname_file_udt_grouping_count_mismatch_fails_in_strict_mode(tmp_path):
@@ -1599,7 +1599,7 @@ def test_to_nickname_file_exports_named_array_markers_from_structured_metadata(t
 
 def test_owner_of_unmapped_address():
     mapping = TagMap(include_system=False)
-    assert mapping.owner_of("DS999") is None
+    assert mapping._owner_of("DS999") is None
 
 
 def test_owner_of_named_array(tmp_path):
@@ -1663,14 +1663,14 @@ def test_owner_of_named_array(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("DS501")
+    owner = restored._owner_of("DS501")
     assert owner is not None
     assert owner.structure_name == "Channel"
     assert owner.instance == 1
     assert owner.field == "id"
     assert owner.structure_type == "named_array"
 
-    owner2 = restored.owner_of("DS505")
+    owner2 = restored._owner_of("DS505")
     assert owner2 is not None
     assert owner2.instance == 2
     assert owner2.field == "val"
@@ -1719,14 +1719,14 @@ def test_owner_of_udt(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("DS1001")
+    owner = restored._owner_of("DS1001")
     assert owner is not None
     assert owner.structure_name == "Motor"
     assert owner.instance == 1
     assert owner.field == "speed"
     assert owner.structure_type == "udt"
 
-    owner2 = restored.owner_of("C102")
+    owner2 = restored._owner_of("C102")
     assert owner2 is not None
     assert owner2.structure_name == "Motor"
     assert owner2.instance == 2
@@ -1760,7 +1760,7 @@ def test_owner_of_singleton(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("DS301")
+    owner = restored._owner_of("DS301")
     assert owner is not None
     assert owner.structure_name == "Config"
     assert owner.instance is None
@@ -1793,7 +1793,7 @@ def test_owner_of_plain_block(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("C101")
+    owner = restored._owner_of("C101")
     assert owner is not None
     assert owner.structure_name == "Alarm"
     assert owner.instance == 1
@@ -1827,7 +1827,7 @@ def test_bare_plain_block_marker_is_group_only(tmp_path):
 
     restored = TagMap.from_nickname_file(path)
     assert restored.blocks() == ()
-    assert restored.owner_of("C101") is None
+    assert restored._owner_of("C101") is None
     assert restored.resolve("Alarm1") == "C101"
     assert restored.resolve("Alarm2") == "C102"
 
@@ -1858,7 +1858,7 @@ def test_bare_dotted_marker_is_group_only(tmp_path):
 
     restored = TagMap.from_nickname_file(path)
     assert restored.structures == ()
-    assert restored.owner_of("DS301") is None
+    assert restored._owner_of("DS301") is None
     assert restored.resolve("Config1_timeout") == "DS301"
     assert restored.resolve("Config1_enabled") == "C201"
 
@@ -1888,8 +1888,8 @@ def test_group_block_import_stays_standalone_tags(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    assert restored.block_entry_by_name("Alarm") is None
-    assert restored.owner_of("C101") is None
+    assert restored._block_entry_by_name("Alarm") is None
+    assert restored._owner_of("C101") is None
     assert restored.resolve("AlarmA") == "C101"
     assert restored.resolve("AlarmB") == "C102"
 
@@ -1920,7 +1920,7 @@ def test_owner_of_structure_wins_over_block(tmp_path):
     pyclickplc.write_csv(path, records)
 
     restored = TagMap.from_nickname_file(path)
-    owner = restored.owner_of("DS501")
+    owner = restored._owner_of("DS501")
     assert owner is not None
     assert owner.structure_type == "named_array"
     assert owner.structure_name == "Packed"
