@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — Cleaner surface, honest abstractions
 
 ### Breaking changes
 
