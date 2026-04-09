@@ -2499,6 +2499,167 @@ class TestNicknameMerge:
         with pytest.raises(ValueError, match="not both"):
             ladder_to_pyrung(csv_path, nickname_csv="foo.csv", nicknames={"X001": "a"})
 
+    def test_named_timer(self):
+        """Timer with nickname emits Timer.named() declaration."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer"},
+        )
+
+    def test_named_timer_done_suffix_stripped(self):
+        """Nickname ending in _Done has suffix stripped for the slug."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer_Done"},
+        )
+
+    def test_named_counter(self):
+        """Counter with nickname emits Counter.named() declaration."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                count_up(Counter[1], preset=10).reset(X2)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Counter, Bool, Dint, count_up
+            from pyrung.click import TagMap, ct, ctd, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            X002 = Bool("X002")
+
+            PartCounter = Counter.named(1, "PartCounter")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    count_up(PartCounter, preset=10).reset(X002)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                X002: x[2],
+            })
+            """,
+            nicknames={"CT1": "PartCounter"},
+        )
+
+    def test_timer_without_nickname_unchanged(self):
+        """Timer without nickname still emits Timer[n]."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(Timer[1], preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+        )
+
+    def test_named_timer_condition_reference(self):
+        """Timer done-bit used as condition renders as Slug.Done."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            with Rung(Timer[1].Done):
+                out(Y1)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay, out
+            from pyrung.click import TagMap, t, td, x, y
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            Y001 = Bool("Y001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+                with Rung(OvenTimer.Done):
+                    out(Y001)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                Y001: y[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer"},
+        )
+
 
 # ---------------------------------------------------------------------------
 # Code generation structure tests

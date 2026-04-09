@@ -121,6 +121,10 @@ def _generate_code(
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
+    if collection.named_timer_counters:
+        _emit_named_tc_declarations(lines, collection)
+        lines.append("")
+
     if collection.plain_blocks:
         lines.append("# --- Blocks ---")
         _emit_plain_block_declarations(lines, collection)
@@ -289,6 +293,12 @@ def _emit_tag_declarations(
         if decl.comment and not suppress_comments:
             line += decl.comment
         lines.append(line)
+
+
+def _emit_named_tc_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit Timer.named() / Counter.named() declarations."""
+    for decl in collection.named_timer_counters:
+        lines.append(f'{decl.var_name} = {decl.kind}.named({decl.index}, "{decl.slug}")')
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -838,15 +848,27 @@ def _render_search_token(
     return f"search({', '.join([comparison, *rest])})"
 
 
-def _merge_timer_counter_args(func_name: str, done_bit_operand: str) -> str | None:
-    """Merge done_bit + accumulator operands into a Timer[n] or Counter[n] reference.
+def _merge_timer_counter_args(
+    func_name: str,
+    done_bit_operand: str,
+    collection: _OperandCollection,
+) -> str | None:
+    """Merge done_bit + accumulator operands into a Timer/Counter reference.
 
     Returns the merged reference string, or None if the operand can't be parsed.
+    Uses the named declaration's var_name when a nickname was provided,
+    otherwise falls back to Timer[n] / Counter[n].
     """
     parsed = _parse_operand_prefix(done_bit_operand)
     if parsed is None:
         return None
     prefix, _, _, index = parsed
+
+    # Named timer/counter — use the slug variable
+    for decl in collection.named_timer_counters:
+        if decl.done_operand == done_bit_operand:
+            return decl.var_name
+
     if func_name in {"on_delay", "off_delay"} and prefix == "T":
         return f"Timer[{index}]"
     if func_name in {"count_up", "count_down"} and prefix == "CT":
@@ -909,7 +931,7 @@ def _render_af_token(
 
     # Timer/counter instructions: merge done_bit + accumulator into Timer[n]/Counter[n]
     if func_name in {"on_delay", "off_delay", "count_up", "count_down"} and len(args) >= 2:
-        udt_ref = _merge_timer_counter_args(func_name, args[0])
+        udt_ref = _merge_timer_counter_args(func_name, args[0], collection)
         if udt_ref is not None:
             rendered_parts: list[str] = [udt_ref]
             for key, value in kwargs:
