@@ -5,7 +5,7 @@ For the scan model and DSL vocabulary, start with [Core Concepts](../getting-sta
 ```python
 with Rung(Start, ~Fault):
     out(MotorRunning)
-    on_delay(RunDelayDone, RunDelayAcc, preset=500)
+    on_delay(RunDelay, preset=500)
 ```
 
 Read it like a ladder diagram: conditions go on `Rung(...)`, instructions go in the body. Use the pages below by instruction family.

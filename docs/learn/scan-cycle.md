@@ -49,14 +49,13 @@ The left rail is power. `[ ]` is a contact (condition). `( )` is a coil (output)
 ## Try it
 
 ```python
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     RunButton.value = True
-    runner.step()               # One scan
+    plc.step()               # One scan
     assert ConveyorMotor.value is True
 
     RunButton.value = False
-    runner.step()               # Next scan
+    plc.step()               # Next scan
     assert ConveyorMotor.value is False  # Motor follows button, every scan
 ```
 

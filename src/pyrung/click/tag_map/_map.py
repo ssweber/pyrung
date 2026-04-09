@@ -60,10 +60,10 @@ def _auto_resolve_builtin_tag(tag: Tag) -> str | None:
         from pyrung.core.structure import Counter, Timer
 
         _BUILTIN_BANK_MAP = {
-            (id(Timer), "done"): "T",
-            (id(Timer), "acc"): "TD",
-            (id(Counter), "done"): "CT",
-            (id(Counter), "acc"): "CTD",
+            (id(Timer), "Done"): "T",
+            (id(Timer), "Acc"): "TD",
+            (id(Counter), "Done"): "CT",
+            (id(Counter), "Acc"): "CTD",
         }
 
     bank_prefix = _BUILTIN_BANK_MAP.get((id(runtime), field))

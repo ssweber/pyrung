@@ -744,7 +744,7 @@ class TestTimerCounterInstructions:
                 on_delay(Timer[1], preset=1000, unit="Tms")
 
         mapping = TagMap(
-            {Enable: x[1], Timer[1].done: t[1], Timer[1].acc: td[1]},
+            {Enable: x[1], Timer[1].Done: t[1], Timer[1].Acc: td[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)
@@ -764,7 +764,7 @@ class TestTimerCounterInstructions:
                 count_up(Counter[1], preset=10).reset(ResetCond)
 
         mapping = TagMap(
-            {Enable: x[1], ResetCond: x[2], Counter[1].done: ct[1], Counter[1].acc: ctd[1]},
+            {Enable: x[1], ResetCond: x[2], Counter[1].Done: ct[1], Counter[1].Acc: ctd[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)

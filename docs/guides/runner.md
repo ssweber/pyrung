@@ -30,10 +30,10 @@ runner = PLC(logic, realtime=True)   # wall-clock
 
 | Mode | Behavior | Use case |
 |------|----------|----------|
-| `FIXED_STEP` | `timestamp += dt` each scan | Tests, offline simulation |
-| `REALTIME` | `timestamp` = actual elapsed time | Live hardware, integration tests |
+| `dt=0.010` | `timestamp += dt` each scan | Tests, offline simulation |
+| `realtime=True` | `timestamp` = actual elapsed time | Live hardware, integration tests |
 
-`FIXED_STEP` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `REALTIME` is intentionally non-deterministic — scan `dt` follows host elapsed time.
+`dt=` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `realtime=True` is intentionally non-deterministic — scan `dt` follows host elapsed time.
 
 ## Real-time clock
 
@@ -47,7 +47,7 @@ from datetime import datetime
 runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
 ```
 
-The RTC then advances with simulation time: `rtc = base_datetime + (current_sim_time - sim_time_at_set)`. In `FIXED_STEP`, this makes time-of-day logic fully deterministic. In `REALTIME`, it effectively offsets the wall clock.
+The RTC then advances with simulation time: `rtc = base_datetime + (current_sim_time - sim_time_at_set)`. With a fixed `dt`, this makes time-of-day logic fully deterministic. With `realtime=True`, it effectively offsets the wall clock.
 
 ## Execution methods
 
@@ -114,15 +114,15 @@ runner.patch({Button: True, Step: 5})
 
 Values are applied at the start of the next `step()` and then discarded. Multiple patches before a step merge — last write per tag wins.
 
-### `.value` via `active()`
+### `.value` via context manager
 
-Inside `with runner:`, tag `.value` reads and writes go through the runner's current state:
+Inside `with PLC(...) as plc:` (or `with runner:`), tag `.value` reads and writes go through the runner's current state:
 
 ```python
-with runner:
+with PLC(logic) as plc:
     Button.value = True       # queues a patch
     print(Step.value)         # reads current value
-    runner.step()             # executes with the queued patch
+    plc.step()                # executes with the queued patch
     assert Motor.value is True
 ```
 

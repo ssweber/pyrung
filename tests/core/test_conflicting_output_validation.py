@@ -413,7 +413,7 @@ class TestTimerConflict:
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer1_done" for f in report.findings)
+        assert any(f.target_name == "Timer1_Done" for f in report.findings)
 
     def test_shared_accumulator(self):
         with Program() as prog:
@@ -423,7 +423,7 @@ class TestTimerConflict:
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer1_acc" for f in report.findings)
+        assert any(f.target_name == "Timer1_Acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +440,7 @@ class TestCounterConflict:
                 count_up(Counter[1], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Counter1_acc" for f in report.findings)
+        assert any(f.target_name == "Counter1_Acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -454,10 +454,10 @@ class TestTimerOutConflict:
             with Rung(ButtonA):
                 on_delay(Timer[2], preset=1000)
             with Rung(ButtonB):
-                out(Timer[2].done)
+                out(Timer[2].Done)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer2_done" for f in report.findings)
+        assert any(f.target_name == "Timer2_Done" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +613,7 @@ class TestEdgeCases:
                 off_delay(Timer[3], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer3_done" for f in report.findings)
+        assert any(f.target_name == "Timer3_Done" for f in report.findings)
 
     def test_count_down_conflict(self):
         with Program() as prog:
@@ -623,7 +623,7 @@ class TestEdgeCases:
                 count_down(Counter[2], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Counter2_done" for f in report.findings)
+        assert any(f.target_name == "Counter2_Done" for f in report.findings)
 
     def test_exclusive_conditions_same_scope_still_conflict(self):
         """Timers in same scope always execute — conditions don't help."""
@@ -634,8 +634,8 @@ class TestEdgeCases:
                 on_delay(Timer[4], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer4_done" for f in report.findings)
-        assert any(f.target_name == "Timer4_acc" for f in report.findings)
+        assert any(f.target_name == "Timer4_Done" for f in report.findings)
+        assert any(f.target_name == "Timer4_Acc" for f in report.findings)
 
     def test_exclusive_timers_in_subroutines(self):
         """Timers in different subroutines with exclusive callers are safe."""

@@ -1456,15 +1456,15 @@ class TestRuntimeSplit:
         with Program(strict=False) as prog:
             with Rung(State == "r"):
                 on_delay(RedTimer, preset=5000, unit="Tms")
-            with Rung(RedTimer.done):
+            with Rung(RedTimer.Done):
                 copy("g", State)
             with Rung(State == "g"):
                 on_delay(GreenTimer, preset=4000, unit="Tms")
-            with Rung(GreenTimer.done):
+            with Rung(GreenTimer.Done):
                 copy("y", State)
             with Rung(State == "y"):
                 on_delay(YellowTimer, preset=1500, unit="Tms")
-            with Rung(YellowTimer.done):
+            with Rung(YellowTimer.Done):
                 copy("r", State)
             with Rung():
                 receive(
@@ -1483,12 +1483,12 @@ class TestRuntimeSplit:
         mapping = TagMap(
             {
                 State: txt[1],
-                RedTimer.done: t[1],
-                RedTimer.acc: td[1],
-                GreenTimer.done: t[2],
-                GreenTimer.acc: td[2],
-                YellowTimer.done: t[3],
-                YellowTimer.acc: td[3],
+                RedTimer.Done: t[1],
+                RedTimer.Acc: td[1],
+                GreenTimer.Done: t[2],
+                GreenTimer.Acc: td[2],
+                YellowTimer.Done: t[3],
+                YellowTimer.Acc: td[3],
                 WalkRequest: c[1],
                 RxBusy: c[2],
                 RxOk: c[3],
@@ -1528,7 +1528,7 @@ class TestRuntimeSplit:
         with Program(strict=False) as prog:
             with Rung(State == "r"):
                 on_delay(Timer[4], preset=3000, unit="Tms")
-            with Rung(Timer[4].done):
+            with Rung(Timer[4].Done):
                 copy("g", State)
             with Rung(State == "g"):
                 copy(0, board.neopixel.r)

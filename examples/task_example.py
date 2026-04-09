@@ -59,7 +59,7 @@ def task_logic() -> None:
     with Rung(Step1_Active):
         out(Valve1)
 
-    with Rung(Step1_Active, StepTimer.acc >= 5):
+    with Rung(Step1_Active, StepTimer.Acc >= 5):
         copy(1, Task.Advance)
 
     with Rung(Task.Step == 3):
@@ -74,8 +74,8 @@ def task_logic() -> None:
         copy(0, Task.Active)
         copy(0, Task.Step)
         copy(0, Task.Advance)
-        copy(0, ElapsedTimer.acc)
-        copy(0, StepTimer.acc)
+        copy(0, ElapsedTimer.Acc)
+        copy(0, StepTimer.Acc)
 
         reset(Valve1)
         reset(Step1_Active)
@@ -89,7 +89,7 @@ def task_logic() -> None:
     with Rung(Task.Advance == 1):
         calc(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
-        copy(0, StepTimer.acc)
+        copy(0, StepTimer.Acc)
 
 
 @program
@@ -113,7 +113,7 @@ with runner:
 def print_row(current_time: float) -> None:
     with runner:
         step = Task.Step.value
-        timer = StepTimer.acc.value
+        timer = StepTimer.Acc.value
         valve = Valve1.value
     print(f"{current_time:<10.2f} | {step:<5} | {timer:<10} | {valve}")
 

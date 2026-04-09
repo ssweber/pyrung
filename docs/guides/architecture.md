@@ -48,7 +48,7 @@ All writes within a scan are batched and committed atomically at phase 8. Rungs 
 
 Inside a scan, tag writes and memory updates accumulate in a mutable working space. The engine creates this space at scan start, instructions write into it throughout execution, and phase 8 commits everything at once to produce the next immutable `SystemState`.
 
-User code never interacts with this layer directly. Inside a `with runner:` block, tag reads and writes are routed through the runner's pending scan state and committed atomically when the scan completes.
+User code never interacts with this layer directly. Inside a `with PLC(...) as plc:` block, tag reads and writes are routed through the runner's pending scan state and committed atomically when the scan completes.
 
 ## Consumer-driven execution
 

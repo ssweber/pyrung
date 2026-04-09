@@ -159,7 +159,7 @@ def _build_program_and_mapping():
             count_down(Counter[2], preset=5).reset(ShiftReset)
 
         # R7: copy + calc + indirect copy + blockcopy + fill
-        with Rung(Running, Timer[1].done):
+        with Rung(Running, Timer[1].Done):
             copy(120, Source)
             calc((Source * 2) + (Idx * 2) - 3, CalcOut)
             copy(SrcBlk[Idx], DstBlk[Idx])
@@ -236,7 +236,7 @@ def _build_program_and_mapping():
             copy(Idx, DstBlk[4])
             with branch(AutoMode):
                 copy(CalcOut, DstBlk[1])
-            with branch(Found, Counter[1].done):
+            with branch(Found, Counter[1].Done):
                 copy(FoundAddr, DstBlk[2])
             copy(Source, DstBlk[5])
 
@@ -296,15 +296,15 @@ def _build_program_and_mapping():
             # Internal bits (C)
             Found: c[1],
             # Timers
-            Timer[1].done: t[1],
-            Timer[1].acc: td[1],
-            Timer[2].done: t[2],
-            Timer[2].acc: td[2],
+            Timer[1].Done: t[1],
+            Timer[1].Acc: td[1],
+            Timer[2].Done: t[2],
+            Timer[2].Acc: td[2],
             # Counters
-            Counter[1].done: ct[1],
-            Counter[1].acc: ctd[1],
-            Counter[2].done: ct[2],
-            Counter[2].acc: ctd[2],
+            Counter[1].Done: ct[1],
+            Counter[1].Acc: ctd[1],
+            Counter[2].Done: ct[2],
+            Counter[2].Acc: ctd[2],
             # Data (DS)
             Idx: ds[1],
             Source: ds[2],

@@ -34,36 +34,34 @@ with Program() as logic:
 
 ```python
 def test_motor_start_stop():
-    runner = PLC(logic, dt=0.1)
-
-    # Start the motor
-    runner.patch({StartButton: True})
-    runner.step()
-    with runner:
+    with PLC(logic, dt=0.1) as plc:
+        # Start the motor
+        StartButton.value = True
+        plc.step()
         assert MotorRunning.value is True
 
-    # Release button — motor stays latched
-    runner.run(cycles=5)
-    with runner:
+        # Release button — motor stays latched
+        StartButton.value = False
+        plc.run(cycles=5)
         assert MotorRunning.value is True
 
-    # Stop the motor
-    runner.patch({StopButton: True})
-    runner.step()
-    with runner:
+        # Stop the motor
+        StopButton.value = True
+        plc.step()
         assert MotorRunning.value is False
 
-    # Speed only copies while running
-    runner.patch({StartButton: True, Speed: 75.0})
-    runner.step()
-    with runner:
+        # Speed only copies while running
+        StopButton.value = False
+        StartButton.value = True
+        Speed.value = 75.0
+        plc.step()
         assert DisplaySpeed.value == 75.0
 
-    runner.patch({StopButton: True})
-    runner.step()
-    runner.patch({Speed: 99.0})
-    runner.step()
-    with runner:
+        StartButton.value = False
+        StopButton.value = True
+        plc.step()
+        Speed.value = 99.0
+        plc.step()
         assert DisplaySpeed.value == 75.0  # Didn't update — motor is off
 ```
 

@@ -117,15 +117,15 @@ mapping = TagMap(
         SizeReading.map_to(ds[6]),
         SizeThreshold.map_to(ds[7]),
         # Timers
-        DetTimer.done.map_to(t[1]),
-        DetTimer.acc.map_to(td[1]),
-        HoldTimer.done.map_to(t[2]),
-        HoldTimer.acc.map_to(td[2]),
+        DetTimer.Done.map_to(t[1]),
+        DetTimer.Acc.map_to(td[1]),
+        HoldTimer.Done.map_to(t[2]),
+        HoldTimer.Acc.map_to(td[2]),
         # Counters
-        BinACounter.done.map_to(ct[1]),
-        BinACounter.acc.map_to(ctd[1]),
-        BinBCounter.done.map_to(ct[2]),
-        BinBCounter.acc.map_to(ctd[2]),
+        BinACounter.Done.map_to(ct[1]),
+        BinACounter.Acc.map_to(ctd[1]),
+        BinBCounter.Done.map_to(ct[2]),
+        BinBCounter.Acc.map_to(ctd[2]),
     ],
     include_system=False,
 )
@@ -161,13 +161,13 @@ def logic():
         on_delay(DetTimer, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.done):
+    with Rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
         on_delay(HoldTimer, preset=2000, unit="Tms")
-    with Rung(HoldTimer.done):
+    with Rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
@@ -224,5 +224,5 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
         print(f"State     : {State.value!r}")
         print(f"Diverter  : {'EXTENDED' if DiverterCmd.value else 'retracted'}")
         print(f"IsLarge   : {IsLarge.value}")
-        print(f"Bin A     : {BinACounter.acc.value} boxes")
-        print(f"Bin B     : {BinBCounter.acc.value} boxes")
+        print(f"Bin A     : {BinACounter.Acc.value} boxes")
+        print(f"Bin B     : {BinBCounter.Acc.value} boxes")

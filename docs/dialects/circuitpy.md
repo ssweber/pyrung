@@ -81,11 +81,9 @@ with Program() as logic:
         out(Light)
 
 # 3. Simulate
-runner = PLC(logic, dt=0.1)
-
-with runner:
+with PLC(logic, dt=0.1) as plc:
     Button.value = True
-    runner.step()
+    plc.step()
     assert Light.value is True
 
 # 4. Generate code.py — copy to CIRCUITPY drive

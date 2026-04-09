@@ -51,16 +51,15 @@ This is the biggest conceptual jump from Python. In Python, `if sensor:` is abou
 ## Try it
 
 ```python
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     BoxSize.value = 150
     EntrySensor.value = True
-    runner.step()
+    plc.step()
     assert CurrentSize.value == 150
     assert SortCount.value == 1
 
     EntrySensor.value = False
-    runner.step()
+    plc.step()
     assert SortCount.value == 1       # rise() only fires once
     assert CycleCount.value == 2      # Unconditional rung runs every scan
 ```

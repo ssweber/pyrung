@@ -9,35 +9,35 @@ import pytest
 from pyrung import PLC
 
 @pytest.fixture
-def runner():
+def plc():
     r = PLC(logic, dt=0.010)
-    r.add_force(StopBtn, True)        # NC inputs: healthy wiring
-    r.add_force(EstopOK, True)
-    r.add_force(Auto, True)           # Default to auto mode
+    r.force(StopBtn, True)            # NC inputs: healthy wiring
+    r.force(EstopOK, True)
+    r.force(Auto, True)               # Default to auto mode
     return r
 ```
 
-Remember the `FIXED_STEP` determinism from [Lesson 5](timers.md)? This is what it was for. Every test in this lesson runs in deterministic, reproducible scan time -- no flaky tests, no timing race conditions, no "works on my machine." One scan, one tick, every time.
+Remember the `dt=0.010` determinism from [Lesson 5](timers.md)? This is what it was for. Every test in this lesson runs in deterministic, reproducible scan time -- no flaky tests, no timing race conditions, no "works on my machine." One scan, one tick, every time.
 
-Each test gets its own `PLC` because pytest's default scope is `function` -- no state accumulates between tests. All tag I/O and stepping happens inside `with runner:`:
+Each test gets its own `PLC` because pytest's default scope is `function` -- no state accumulates between tests. All tag I/O and stepping happens inside the context manager:
 
 ```python
-def test_start_stop(runner):
-    with runner:
+def test_start_stop(plc):
+    with plc:
         StartBtn.value = True
-        runner.step()
+        plc.step()
         StartBtn.value = False
-        runner.step()
+        plc.step()
         assert Running.value is True
         assert ConveyorMotor.value is True
 
-def test_estop_overrides_start(runner):
+def test_estop_overrides_start(plc):
     """Safety: E-stop kills everything, even if Start is held."""
-    runner.remove_force(EstopOK)
-    with runner:
+    plc.unforce(EstopOK)
+    with plc:
         EstopOK.value = False
         StartBtn.value = True
-        runner.step()
+        plc.step()
         assert Running.value is False
         assert ConveyorMotor.value is False
 ```
@@ -65,28 +65,28 @@ Test two outcomes from the same starting point without resetting:
 ```
 
 ```python
-def test_small_vs_large_box(runner):
+def test_small_vs_large_box(plc):
     """Same setup, two outcomes."""
-    with runner:
+    with plc:
         SizeThreshold.value = 100
         StartBtn.value = True
-        runner.step()
+        plc.step()
         EntrySensor.value = True
-        runner.step()
+        plc.step()
 
     # Fork: large box — run past detection, check mid-sorting
-    large = runner.fork()
-    large.add_force(SizeReading, 150)
-    large.run(cycles=50)
+    large = plc.fork()
+    large.force(SizeReading, 150)
     with large:
+        large.run(cycles=50)
         assert State.value == 2              # SORTING
         assert DiverterCmd.value is True
 
     # Fork: small box
-    small = runner.fork()
-    small.add_force(SizeReading, 50)
-    small.run(cycles=50)
+    small = plc.fork()
+    small.force(SizeReading, 50)
     with small:
+        small.run(cycles=50)
         assert State.value == 2
         assert DiverterCmd.value is False
 ```
@@ -101,16 +101,15 @@ def test_small_vs_large_box(runner):
     (100, False),   # boundary, exactly at threshold
     (101, True),    # boundary, just over
 ])
-def test_box_classification(runner, box_size, expected_diverter):
-    with runner:
+def test_box_classification(plc, box_size, expected_diverter):
+    with plc:
         SizeThreshold.value = 100
         StartBtn.value = True
-        runner.step()
+        plc.step()
 
-    runner.add_force(EntrySensor, True)
-    runner.add_force(SizeReading, box_size)
-    runner.run(cycles=55)                    # Past detection, mid-sorting
-    with runner:
+        plc.force(EntrySensor, True)
+        plc.force(SizeReading, box_size)
+        plc.run(cycles=55)                    # Past detection, mid-sorting
         assert DiverterCmd.value is expected_diverter
 ```
 
@@ -123,13 +122,12 @@ The kind of boundary testing that's agonizing on real hardware -- load 5 specifi
     Real PLC software has trends and trace buffers, but they're sampled and lossy. pyrung's history is **every scan, every tag, immutable, indexable**. This is post-mortem debugging -- the alarm fired, you have the complete record, and you can walk backwards until you find the cause.
 
 ```python
-runner.run(cycles=100)
-with runner:
-    assert JamAlarm.value is True
+plc.run(cycles=100)
+assert JamAlarm.value is True
 
 # Why did the jam fire? Walk back through scans:
 for i in range(-1, -10, -1):
-    snapshot = runner.history[i]
+    snapshot = plc.history[i]
     print(f"scan {i}: State={snapshot[State]} EntrySensor={snapshot[EntrySensor]}")
 ```
 
@@ -139,38 +137,36 @@ Three ways to set a tag's value, each with different persistence:
 
 | Mechanism | Persistence | Use case |
 |---|---|---|
-| `tag.value = X` (inside `with runner:`) | one scan | Setting an initial value, simulating a one-shot input |
-| `runner.add_force(tag, X)` | persistent until removed | Holding a sensor on across many scans |
-| `runner.remove_force(tag)` | releases the force | Letting the logic see the computed value again |
+| `tag.value = X` (inside `with plc:`) | one scan | Setting an initial value, simulating a one-shot input |
+| `plc.force(tag, X)` | persistent until removed | Holding a sensor on across many scans |
+| `plc.unforce(tag)` | releases the force | Letting the logic see the computed value again |
 
 Forces are how the sorting test above keeps `EntrySensor` on across 55+ scans without re-setting it every cycle:
 
 ```python
-def test_sorting_sequence(runner):
+def test_sorting_sequence(plc):
     """Full auto sort: box arrives, gets classified, exits to correct bin."""
-    with runner:
+    with plc:
         SizeThreshold.value = 100
         StartBtn.value = True
-        runner.step()
+        plc.step()
 
-    runner.add_force(EntrySensor, True)
-    runner.add_force(SizeReading, 150)       # Large box
+        plc.force(EntrySensor, True)
+        plc.force(SizeReading, 150)       # Large box
 
-    # Run past detection period into sorting
-    runner.run(cycles=55)
-    with runner:
+        # Run past detection period into sorting
+        plc.run(cycles=55)
         assert DiverterCmd.value is True     # Extended for large box
 
-    runner.remove_force(EntrySensor)
-    runner.run(cycles=250)                   # Past hold period
-    with runner:
+        plc.unforce(EntrySensor)
+        plc.run(cycles=250)                   # Past hold period
         assert DiverterCmd.value is False    # Retracted after sort
         assert State.value == 0              # Back to idle
 ```
 
 !!! warning "Forces deserve respect"
 
-    Forcing is a real debugging feature on every PLC platform. On real hardware, forces override the program's control of physical outputs and bypass safety interlocks — that's why real PLCs gate force mode behind confirmation dialogs. When you `add_force`, you are telling the engine "ignore whatever the logic computes for this tag." Use forces for testing. Treat them with the same caution you'd give the real thing.
+    Forcing is a real debugging feature on every PLC platform. On real hardware, forces override the program's control of physical outputs and bypass safety interlocks — that's why real PLCs gate force mode behind confirmation dialogs. When you `force()`, you are telling the engine "ignore whatever the logic computes for this tag." Use forces for testing. Treat them with the same caution you'd give the real thing.
 
 ## When tests aren't enough
 
@@ -186,4 +182,4 @@ The logic is tested, the tests pass. Now deploy it.
 
 !!! info "Also known as..."
 
-    `runner.step()` is "single scan" — some PLC simulators expose it, many don't. `add_force`/`remove_force` mirror the universal Force On/Off feature. `history[-N]` is like a trend or data log, except trends are sampled and lossy. `fork()`, `FIXED_STEP` deterministic time, and full-scan history have **no equivalent on real PLCs**.
+    `plc.step()` is "single scan" — some PLC simulators expose it, many don't. `force`/`unforce` mirror the universal Force On/Off feature. `history[-N]` is like a trend or data log, except trends are sampled and lossy. `fork()`, deterministic `dt` time, and full-scan history have **no equivalent on real PLCs**.

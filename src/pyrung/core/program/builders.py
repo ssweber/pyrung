@@ -32,19 +32,19 @@ if TYPE_CHECKING:
 
 
 def _extract_done_acc(instance: InstanceView, func_name: str) -> tuple[Tag, Tag]:
-    """Extract ``done`` and ``acc`` tags from a Timer/Counter InstanceView."""
+    """Extract ``Done`` and ``Acc`` tags from a Timer/Counter InstanceView."""
     try:
-        done_bit = instance.done
+        done_bit = instance.Done
     except AttributeError:
         raise TypeError(
-            f"{func_name}() requires a Timer/Counter instance with a 'done' field, "
+            f"{func_name}() requires a Timer/Counter instance with a 'Done' field, "
             f"got {instance!r}."
         ) from None
     try:
-        accumulator = instance.acc
+        accumulator = instance.Acc
     except AttributeError:
         raise TypeError(
-            f"{func_name}() requires a Timer/Counter instance with an 'acc' field, "
+            f"{func_name}() requires a Timer/Counter instance with an 'Acc' field, "
             f"got {instance!r}."
         ) from None
     return done_bit, accumulator

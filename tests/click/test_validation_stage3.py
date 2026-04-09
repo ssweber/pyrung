@@ -82,10 +82,10 @@ def test_r7_timer_role_validation():
     prog = _build_program(logic)
     tag_map = TagMap(
         [
-            Timer[1].done.map_to(t[1]),
-            Timer[1].acc.map_to(td[1]),
-            Timer[2].done.map_to(c[1]),
-            Timer[2].acc.map_to(td[2]),
+            Timer[1].Done.map_to(t[1]),
+            Timer[1].Acc.map_to(td[1]),
+            Timer[2].Done.map_to(c[1]),
+            Timer[2].Acc.map_to(td[2]),
         ],
         include_system=False,
     )

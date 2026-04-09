@@ -334,7 +334,7 @@ class TestTopologyAnalysis:
                 on_delay(Timer[1], preset=100, unit="Tms").reset(Reset)
 
         mapping = TagMap(
-            {Enable: x[1], Reset: x[2], Timer[1].done: t[1], Timer[1].acc: td[1]},
+            {Enable: x[1], Reset: x[2], Timer[1].Done: t[1], Timer[1].Acc: td[1]},
             include_system=False,
         )
         csv_path = _export_csv(logic, mapping, tmp_path)

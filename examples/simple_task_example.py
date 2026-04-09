@@ -53,7 +53,7 @@ def task_logic() -> None:
         with branch(Task.Step == 1):
             out(Valve1)
 
-        with branch(Task.Step == 1, StepTimer.acc >= 5):
+        with branch(Task.Step == 1, StepTimer.Acc >= 5):
             copy(1, Task.Advance)
 
     # Reset all task state when call is cleared.
@@ -61,13 +61,13 @@ def task_logic() -> None:
         copy(0, Task.Active)
         copy(0, Task.Step)
         copy(0, Task.Advance)
-        copy(0, StepTimer.acc)
+        copy(0, StepTimer.Acc)
 
     # Consume advance: increment step, reset step timer.
     with Rung(Task.Advance == 1):
         calc(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
-        copy(0, StepTimer.acc)
+        copy(0, StepTimer.Acc)
 
 
 @program
@@ -92,7 +92,7 @@ with runner:
 def print_row(current_time: float) -> None:
     with runner:
         step = Task.Step.value
-        timer = StepTimer.acc.value
+        timer = StepTimer.Acc.value
         valve = Valve1.value
     print(f"{current_time:<10.2f} | {step:<5} | {timer:<10} | {valve}")
 

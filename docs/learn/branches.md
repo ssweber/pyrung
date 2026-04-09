@@ -114,25 +114,24 @@ with Rung(~StopBtn):
 ```python
 from pyrung import PLC
 
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     StopBtn.value = True             # NC inputs: True = healthy
     EstopOK.value = True
 
     Auto.value = True
     StartBtn.value = True
-    runner.step()
+    plc.step()
     assert Running.value is True
     assert ConveyorMotor.value is True
     assert StatusLight.value is True
 
     StartBtn.value = False
-    runner.step()
+    plc.step()
     assert Running.value is True     # Still running (latched)
 
     # E-stop kills everything (NC opens)
     EstopOK.value = False
-    runner.step()
+    plc.step()
     assert ConveyorMotor.value is False
     assert StatusLight.value is False
     assert Running.value is False

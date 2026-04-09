@@ -114,13 +114,13 @@ with Program() as logic:
         on_delay(DetTimer, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetTimer.done):
+    with Rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
         on_delay(HoldTimer, preset=2000, unit="Tms")
-    with Rung(HoldTimer.done):
+    with Rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")

@@ -118,8 +118,8 @@ class InstanceView:
     """1-based indexed view into one structure instance.
 
     When *custom_name* is set (via ``_StructRuntime.named()``), field access
-    produces tags with that name as prefix (e.g. ``OvenTimer_done``) instead
-    of the default ``Timer1_done`` form.
+    produces tags with that name as prefix (e.g. ``OvenTimer_Done``) instead
+    of the default ``Timer1_Done`` form.
     """
 
     def __init__(self, owner: _StructRuntime, index: int, *, custom_name: str | None = None):
@@ -280,8 +280,8 @@ class _StructRuntime:
     def named(self, index: int, name: str) -> InstanceView:
         """Create a named instance whose tags use *name* as prefix.
 
-        ``Timer.named(1, "OvenTimer")`` produces tags ``OvenTimer_done``
-        and ``OvenTimer_acc`` instead of the default ``Timer1_done`` form.
+        ``Timer.named(1, "OvenTimer")`` produces tags ``OvenTimer_Done``
+        and ``OvenTimer_Acc`` instead of the default ``Timer1_Done`` form.
         The underlying block index is preserved for TagMap resolution.
         """
         if not isinstance(index, int):
@@ -679,8 +679,8 @@ Timer = _StructRuntime(
     name="Timer",
     count=500,
     field_specs=(
-        _FieldSpec("done", TagType.BOOL, UNSET, retentive=False),
-        _FieldSpec("acc", TagType.INT, UNSET, retentive=True),
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Acc", TagType.INT, UNSET, retentive=True),
     ),
 )
 
@@ -688,7 +688,7 @@ Counter = _StructRuntime(
     name="Counter",
     count=250,
     field_specs=(
-        _FieldSpec("done", TagType.BOOL, UNSET, retentive=False),
-        _FieldSpec("acc", TagType.DINT, UNSET, retentive=True),
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Acc", TagType.DINT, UNSET, retentive=True),
     ),
 )

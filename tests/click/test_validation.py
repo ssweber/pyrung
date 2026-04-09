@@ -1246,7 +1246,7 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1])],
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
@@ -1259,7 +1259,7 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1])],
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
@@ -1275,7 +1275,7 @@ class TestTimerPresetOverflow:
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1]), Preset.map_to(ds[2])],
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1]), Preset.map_to(ds[2])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")

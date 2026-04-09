@@ -133,7 +133,7 @@ with Program(strict=False) as logic:
         count_down(Ctd, preset=5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
-    with Rung(Running, RTon.done):
+    with Rung(Running, RTon.Done):
         copy(120, Source)
         calc((Source * 2) + (Idx << 1) - 3, CalcOut, mode="decimal")
         copy(DS[Idx], DD[Idx + 1])
@@ -205,7 +205,7 @@ with Program(strict=False) as logic:
         copy(Idx, DS[14])
         with branch(AutoMode):
             copy(FnOut, DS[12])
-        with branch(Found, Ctu.done):
+        with branch(Found, Ctu.Done):
             copy(FoundAddr + 1, DS[13])
         copy(Span + Idx, DS[15])
 

@@ -7,6 +7,7 @@ Quick reference for writing pyrung programs targeting AutomationDirect Click PLC
 ```python
 from pyrung import (
     Bool, Int, Dint, Real, Word, Char,         # tag types
+    Timer, Counter,                             # built-in UDTs
     named_array, Field, auto,                    # structures
     Program, Rung, PLC,         # structure
     rise, fall, And, Or, system,         # conditions
@@ -172,33 +173,37 @@ unpack_to_words(DD[1], DS.select(1, 2))    # DINT → 2 INTs
 
 ## Timers
 
-Two-tag model: done-bit (BOOL) + accumulator (INT). Units: `Tms`, `Ts`, `Tm`, `Th`, `Td`.
+Built-in `Timer` type: `.Done` (Bool) + `.Acc` (Int). Units: `"Tms"`, `"Ts"`, `"Tm"`, `"Th"`, `"Td"`.
 
 ```python
+MyTimer = Timer.named(1, "MyTimer")
+
 # TON — auto-reset when rung goes False
-on_delay(Done, accumulator=Acc, preset=500, unit=Tms)
+on_delay(MyTimer, preset=500, unit="Tms")
 
 # RTON — retentive, needs manual reset
-on_delay(Done, accumulator=Acc, preset=500).reset(ResetBtn)
+on_delay(MyTimer, preset=500).reset(ResetBtn)
 
 # TOF — off-delay
-off_delay(Done, accumulator=Acc, preset=500)
+off_delay(CoolDown, preset=500, unit="Tms")
 ```
 
 ## Counters
 
-Two-tag model: done-bit (BOOL) + accumulator (DINT). Counts every scan while True — use `rise()` for edge-triggered.
+Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts every scan while True — use `rise()` for edge-triggered.
 
 ```python
-count_up(Done, accumulator=Acc, preset=100).reset(ResetBtn)
-count_down(Done, accumulator=Acc, preset=100).reset(ResetBtn)
+PartCounter = Counter.named(1, "PartCounter")
+
+count_up(PartCounter, preset=100).reset(ResetBtn)
+count_down(Dispense, preset=100).reset(ResetBtn)
 
 # Edge-triggered counting
 with Rung(rise(Sensor)):
-    count_up(Done, Acc, preset=9999).reset(CountReset)
+    count_up(PartCounter, preset=9999).reset(CountReset)
 
 # Bidirectional
-count_up(Done, accumulator=Acc, preset=100).down(DownCondition).reset(ResetBtn)
+count_up(ZoneCounter, preset=100).down(DownCondition).reset(ResetBtn)
 ```
 
 ## Program structure
@@ -340,26 +345,23 @@ Use `on_delay` per state, `copy` to advance on done:
 
 ```python
 State = Char("State")
-GreenDone = Bool("GreenDone")
-GreenAcc = Int("GreenAcc")
-YellowDone = Bool("YellowDone")
-YellowAcc = Int("YellowAcc")
-RedDone = Bool("RedDone")
-RedAcc = Int("RedAcc")
+GreenTimer  = Timer.named(1, "GreenTimer")
+YellowTimer = Timer.named(2, "YellowTimer")
+RedTimer    = Timer.named(3, "RedTimer")
 
 with Rung(State == "g"):
-    on_delay(GreenDone, GreenAcc, preset=3000, unit=Tms)
-with Rung(GreenDone):
+    on_delay(GreenTimer, preset=3000, unit="Tms")
+with Rung(GreenTimer.Done):
     copy("y", State)
 
 with Rung(State == "y"):
-    on_delay(YellowDone, YellowAcc, preset=1000, unit=Tms)
-with Rung(YellowDone):
+    on_delay(YellowTimer, preset=1000, unit="Tms")
+with Rung(YellowTimer.Done):
     copy("r", State)
 
 with Rung(State == "r"):
-    on_delay(RedDone, RedAcc, preset=3000, unit=Tms)
-with Rung(RedDone):
+    on_delay(RedTimer, preset=3000, unit="Tms")
+with Rung(RedTimer.Done):
     copy("g", State)
 ```
 

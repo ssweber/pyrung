@@ -18,7 +18,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **Don't teach two ways to do the same thing.** Pick the best pattern, show that. Put alternatives in reference docs.
 - **Don't front-load internals.** Concepts page = vocabulary for writing programs. Architecture page = how the engine works. API reference = exhaustive details. Keep them separate.
 - **Real scenarios, not API walkthroughs.** The quickstart is a traffic light, not "Step 1: Define tags." Teach by building something.
-- **Respect the reader's time.** If we've explained FIXED_STEP in the quickstart, don't re-explain it in concepts. Link, don't repeat.
+- **Respect the reader's time.** If we've explained `dt=` determinism in the quickstart, don't re-explain it in concepts. Link, don't repeat.
 
 ## API design decisions (implemented)
 

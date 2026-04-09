@@ -24,7 +24,7 @@ pyrung is intentionally permissive. Write logic with semantic tag names and nati
 The natural progression:
 
 1. **Write** — define semantic tags (`StartButton`, `MotorRunning`, `Speed`) and express logic in Python
-2. **Simulate** — run tests with `FIXED_STEP`; patch inputs, assert outputs, iterate
+2. **Simulate** — run tests with a fixed `dt`; set inputs, assert outputs, iterate
 3. **Map** — create a `TagMap` linking semantic tags to Click hardware addresses
 4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces Click-incompatible patterns
 5. **Iterate** — fix findings, tighten to `mode="strict"` when the program is clean
@@ -136,11 +136,9 @@ with Program() as logic:
         copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
-runner = PLC(logic, dt=0.1)
-
-with runner:
+with PLC(logic, dt=0.1) as plc:
     StartButton.value = True
-    runner.step()
+    plc.step()
 ```
 
 ## TagMap — mapping to hardware
@@ -339,10 +337,10 @@ Click timer accumulators are 16-bit signed INT (max 32,767). A literal preset ex
 
 ```python
 # Wrong — clamps silently to 32.7 seconds
-on_delay(Done, Acc, preset=60000, unit="Tms")
+on_delay(MyTimer, preset=60000, unit="Tms")
 
 # Right — use seconds
-on_delay(Done, Acc, preset=60, unit="Ts")
+on_delay(MyTimer, preset=60, unit="Ts")
 ```
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.

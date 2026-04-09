@@ -66,21 +66,21 @@ def logic():
     with Rung(State == "g"):
         on_delay(GreenTimer, preset=3000, unit="Tms")
 
-    with Rung(GreenTimer.done):
+    with Rung(GreenTimer.Done):
         copy("y", State)
 
     # Yellow phase: 1 000 ms then transition to red
     with Rung(State == "y"):
         on_delay(YellowTimer, preset=1000, unit="Tms")
 
-    with Rung(YellowTimer.done):
+    with Rung(YellowTimer.Done):
         copy("r", State)
 
     # Red phase: 3 000 ms then transition to green
     with Rung(State == "r"):
         on_delay(RedTimer, preset=3000, unit="Tms")
 
-    with Rung(RedTimer.done):
+    with Rung(RedTimer.Done):
         copy("g", State)
 
     # ------------------------------------------------------------------
@@ -129,5 +129,5 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     with runner:
         print(f"Light state : {State.value}")
         print(f"Sim time    : {runner.simulation_time:.1f} s")
-        print(f"Cars counted: {CarCounter.acc.value}")
+        print(f"Cars counted: {CarCounter.Acc.value}")
         print(f"Speed log   : {[DS[i].value for i in range(1, 6)]}")

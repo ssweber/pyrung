@@ -54,23 +54,23 @@ with Program() as logic:
     # --- State machine (frozen when ManualOverride is ON) ---
     with Rung(State == "r", ~ManualOverride):
         on_delay(RedTimer, preset=5000, unit="Tms")
-    with Rung(RedTimer.done):
+    with Rung(RedTimer.Done):
         copy("g", State)
 
     with Rung(State == "g", ~ManualOverride):
         on_delay(GreenTimer, preset=4000, unit="Tms")
-    with Rung(GreenTimer.done):
+    with Rung(GreenTimer.Done):
         copy("y", State)
 
     with Rung(State == "y", ~ManualOverride):
         on_delay(YellowTimer, preset=1500, unit="Tms")
-    with Rung(YellowTimer.done):
+    with Rung(YellowTimer.Done):
         copy("r", State)
 
     # --- Walk request: latch on rising edge, clear after green phase ---
     with Rung(Or(rise(WalkRequest), rise(LocalPedButton))):
         out(WalkActive)
-    with Rung(GreenTimer.done):
+    with Rung(GreenTimer.Done):
         copy(False, WalkActive)
 
     # --- Drive relay outputs ---
@@ -101,12 +101,12 @@ mapping = TagMap({
     WalkActive: c[1],       # C1 = walk active flag
     WalkRequest: c[2],      # C2 = walk request (received from remote)
     # Timers — done bits (T) and accumulators (TD)
-    RedTimer.done: t[1],
-    RedTimer.acc: td[1],
-    GreenTimer.done: t[2],
-    GreenTimer.acc: td[2],
-    YellowTimer.done: t[3],
-    YellowTimer.acc: td[3],
+    RedTimer.Done: t[1],
+    RedTimer.Acc: td[1],
+    GreenTimer.Done: t[2],
+    GreenTimer.Acc: td[2],
+    YellowTimer.Done: t[3],
+    YellowTimer.Acc: td[3],
     # Modbus client status
     RxBusy: c[3],
     RxOk: c[4],

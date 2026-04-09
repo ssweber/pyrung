@@ -17,37 +17,35 @@ There's no `for` loop. There's no "list of items." There's a sensor at the end o
 But here's the catch: **a counter increments every scan while its rung is True**, not every edge. A sensor held True for 100 scans racks up 100 counts from a single box. Wrap the sensor with `rise()` — the edge detection from [Lesson 4](assignment.md) — to count edges instead. One increment per False→True transition. You'll do this almost every time you use a counter on a sensor input.
 
 ```python
-from pyrung import Bool, Dint, Program, Rung, PLC, count_up, rise
+from pyrung import Bool, Counter, Program, Rung, PLC, count_up, rise
 
-BinASensor = Bool("BinASensor")
-BinBSensor = Bool("BinBSensor")
-BinADone   = Bool("BinADone")
-BinAAcc    = Dint("BinAAcc")
-BinBDone   = Bool("BinBDone")
-BinBAcc    = Dint("BinBAcc")
-CountReset = Bool("CountReset")
+BinASensor  = Bool("BinASensor")
+BinBSensor  = Bool("BinBSensor")
+BinACounter = Counter.named(1, "BinACounter")
+BinBCounter = Counter.named(2, "BinBCounter")
+CountReset  = Bool("CountReset")
 
 with Program() as logic:
     with Rung(rise(BinASensor)):
-        count_up(BinADone, BinAAcc, preset=10) \
+        count_up(BinACounter, preset=10) \
             .reset(CountReset)
     with Rung(rise(BinBSensor)):
-        count_up(BinBDone, BinBAcc, preset=10) \
+        count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 ```
 
 `rise(BinASensor)` fires for exactly one scan when the sensor goes from False to True. Without it, the counter would increment every scan while the sensor is active, racking up hundreds of counts per box.
 
-The accumulators use `Dint` (32-bit) instead of `Int` because a 16-bit integer rolls over at 32,767 — on a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
+`Counter` is a built-in structured type — the mirror of `Timer`. Its `.Acc` is a Dint (32-bit) because a 16-bit integer rolls over at 32,767 — on a fast line, that's a few hours of production. Production counters in real PLCs are almost always 32-bit for the same reason.
 
 ```
-  rise(BinASensor)? --yes--> Acc += 1 --> Acc >= Preset? --yes--> Done = True
+  rise(BinASensor)? --yes--> .Acc += 1 --> .Acc >= Preset? --yes--> .Done = True
           |                                     |
           no                                    no
           v                                     v
       no change                           keep counting
 
-  CountReset? --any time--> Acc = 0, Done = False
+  CountReset? --any time--> .Acc = 0, .Done = False
 ```
 
 !!! tip "Key concept: chips, not function calls"
@@ -56,12 +54,14 @@ The accumulators use `Dint` (32-bit) instead of `Int` because a 16-bit integer r
 
     This mental model extends to every box instruction in real PLCs — timers, PID loops, message blocks, motion instructions. The `.reset()` chain is pyrung's way of drawing those extra wires.
 
-If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both use two tags (done bit + accumulator), both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
+If this looks familiar, it should — it's the same `.reset()` chain from the [retentive timer in Lesson 5](timers.md#retentive-on-delay). Counters and timers are structurally identical: both are built-in types with `.Done` and `.Acc` fields, both chain `.reset()`, and `.reset()` is terminal for the [same reason](timers.md#retentive-on-delay).
 
 Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD) — boxes entering minus boxes leaving gives boxes currently in zone:
 
 ```python
-count_up(ZoneDone, ZoneAcc, preset=50) \
+ZoneCounter = Counter.named(3, "ZoneCounter")
+
+count_up(ZoneCounter, preset=50) \
     .down(BoxLeavesSensor) \
     .reset(ZoneReset)
 ```
@@ -71,34 +71,33 @@ Same chained-builder pattern, one more pin on the chip.
 ## Try it
 
 ```python
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     # Simulate 3 boxes into Bin A
     for _ in range(3):
         BinASensor.value = True
-        runner.step()
+        plc.step()
         BinASensor.value = False
-        runner.step()
+        plc.step()
 
-    assert BinAAcc.value == 3
-    assert BinADone.value is False
+    assert BinACounter.Acc.value == 3
+    assert BinACounter.Done.value is False
 
     # Simulate 7 more
     for _ in range(7):
         BinASensor.value = True
-        runner.step()
+        plc.step()
         BinASensor.value = False
-        runner.step()
+        plc.step()
 
-    assert BinAAcc.value == 10
-    assert BinADone.value is True   # Batch complete!
+    assert BinACounter.Acc.value == 10
+    assert BinACounter.Done.value is True   # Batch complete!
 ```
 
 Notice the irony: the *test* uses `for` loops to simulate physical events, while the *logic* has no loops at all. Python where Python belongs (driving the simulation, asserting state), ladder where ladder belongs (the actual control). The boundary is the runner.
 
 ## Exercise
 
-Add a total counter (`TotalAcc`) that counts every box regardless of which bin, triggered by an `EntrySensor`. Add a `TotalReset` button. Test that after 5 boxes (3 to Bin A, 2 to Bin B), the total is 5 and the individual counts are correct. Then reset and verify all three counters clear.
+Add a `TotalCounter` that counts every box regardless of which bin, triggered by an `EntrySensor`. Add a `TotalReset` button. Test that after 5 boxes (3 to Bin A, 2 to Bin B), the total is 5 and the individual counts are correct. Then reset and verify all three counters clear.
 
 ---
 

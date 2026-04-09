@@ -51,20 +51,19 @@ Why two rungs? Your Python instinct says "the rung went false, the output should
 ## Try it
 
 ```python
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     StopBtn.value = True             # NC input: True = healthy wiring
 
     StartBtn.value = True
-    runner.step()
+    plc.step()
     assert Running.value is True
 
     StartBtn.value = False           # Finger off the button
-    runner.step()
+    plc.step()
     assert Running.value is True     # Still running!
 
     StopBtn.value = False            # Stop pressed (NC opens)
-    runner.step()
+    plc.step()
     assert Running.value is False
 ```
 

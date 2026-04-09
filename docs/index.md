@@ -12,10 +12,9 @@ with Program() as logic:
     with Rung(Button):
         out(Light)
 
-runner = PLC(logic)
-with runner:
+with PLC(logic) as plc:
     Button.value = True
-    runner.step()
+    plc.step()
     assert Light.value is True
 ```
 
@@ -38,7 +37,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **You drive execution.** The engine never runs on its own. Call `step()`, `run()`, or `run_until()` from tests, a GUI, or a debugger. Pause anywhere, inject inputs, inspect any historical state.
 
-**Time is a variable.** `FIXED_STEP` mode advances the clock by a fixed amount each scan, making timers and counters perfectly deterministic in tests. Rewind and replay whenever you need to.
+**Time is a variable.** `dt=0.010` advances the clock by a fixed amount each scan, making timers and counters perfectly deterministic in tests. Rewind and replay whenever you need to.
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
