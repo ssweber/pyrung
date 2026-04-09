@@ -897,6 +897,22 @@ class TestTagMapValidate:
 
         assert _finding_codes(report_direct) == _finding_codes(report_method)
 
+    def test_program_validate_click_matches_direct(self):
+        A = Tag("A", TagType.INT)
+        B = Tag("B", TagType.INT)
+
+        def logic():
+            with Rung((A + B) > 10):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report_direct = validate_click_program(prog, tag_map, mode="warn")
+        report_facade = prog.validate("click", tag_map=tag_map, mode="warn")
+
+        assert _finding_codes(report_direct) == _finding_codes(report_facade)
+
     def test_strict_mode_via_tagmap(self):
         A = Tag("A", TagType.INT)
 
