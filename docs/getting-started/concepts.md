@@ -58,7 +58,7 @@ with Rung(Temp > 150.0):          # Comparison
     out(OverTempAlarm)
 
 with Rung(State == "g"):          # Equality
-    on_delay(GreenDone, GreenAcc, preset=3000, unit=Tms)
+    on_delay(GreenTimer, preset=3000, unit="Tms")
 ```
 
 ### Branches
@@ -91,8 +91,8 @@ reset(Motor)                  # Clear a latched tag
 copy("g", State)              # Copy a value into a tag
 calc(Step + 1, Step)          # Evaluate an expression, store the result
 
-on_delay(Done, Acc, preset=3000, unit=Tms)   # Timer: accumulate while rung is true
-count_up(Done, Acc, preset=100)              # Counter: increment on rising edge
+on_delay(MyTimer, preset=3000, unit="Tms")   # Timer: accumulate while rung is true
+count_up(MyCounter, preset=100)              # Counter: increment each scan
 ```
 
 `out` vs `latch`: `out` follows the rung — true when the rung is true, false when it's false. `latch` is sticky — once set, it stays set until explicitly `reset`.
@@ -101,23 +101,26 @@ The full instruction set (branching, subroutines, shift registers, edge detectio
 
 ## Timers and counters
 
-Timers accumulate time while their rung is true. When the accumulator reaches the preset, the done bit fires.
+`Timer` and `Counter` are built-in structured types. Each has a `.Done` bit and an `.Acc` accumulator. Use `Timer.named(n, "Name")` for named instances:
 
 ```python
-GreenDone = Bool("GreenDone")
-GreenAcc  = Int("GreenAcc")
+from pyrung import Timer, Counter
+
+GreenTimer = Timer.named(1, "GreenTimer")
 
 with Rung(State == "g"):
-    on_delay(GreenDone, GreenAcc, preset=3000, unit=Tms)  # 3000 ms
+    on_delay(GreenTimer, preset=3000, unit="Tms")  # 3000 ms
 ```
 
-The accumulator tracks progress in the unit you specify (`Tms` for milliseconds). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
+The accumulator tracks progress in the unit you specify (`"Tms"` for milliseconds). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
 
-Counters increment once per scan while enabled. To count only on the rising edge (holding the sensor high counts once), use `oneshot=True`:
+Counters increment once per scan while enabled. Use `rise()` on the rung condition if you want one increment per leading edge:
 
 ```python
-with Rung(Sensor):
-    count_up(CountDone, CountAcc, preset=9999, oneshot=True).reset(CountReset)
+PartCounter = Counter.named(1, "PartCounter")
+
+with Rung(rise(Sensor)):
+    count_up(PartCounter, preset=9999).reset(CountReset)
 ```
 
 ## Instruction pins
@@ -127,8 +130,8 @@ Some instructions have extra condition inputs beyond the rung — like the `.res
 ```
                     ┌─────────────────┐
  Sensor ───────────▶│   count_up       │
-                    │                  │──▶ Done
- Reverse ──.down()─▶│  preset: 100     │──▶ Acc
+                    │                  │──▶ .Done
+ Reverse ──.down()─▶│  preset: 100     │──▶ .Acc
  Home, Auto .reset()▶│                  │
                     └─────────────────┘
 ```
@@ -138,17 +141,17 @@ The rung condition powers the instruction (top wire). Other pins are wired with 
 ```
                        ┌─────────────────┐
  State == "g" ────────▶│   on_delay       │
-                       │                  │──▶ Done
-                       │  preset: 3000    │──▶ Acc
- StopBtn, Fault .reset()▶│  unit: Tms       │
+                       │                  │──▶ .Done
+                       │  preset: 3000    │──▶ .Acc
+ StopBtn, Fault .reset()▶│  unit: "Tms"     │
                        └─────────────────┘
 ```
 
 Each pin gets its own line with `\` continuation:
 
 ```python
-with Rung(Sensor):
-    count_up(Done, Acc, preset=100) \
+with Rung(rise(Sensor)):
+    count_up(PartCounter, preset=100) \
         .down(Reverse) \
         .reset(Home, Auto)
 ```
@@ -178,7 +181,7 @@ def logic():
         reset(Running)
 ```
 
-Both forms produce the same thing — a `Program` you pass to `PLCRunner`.
+Both forms produce the same thing — a `Program` you pass to `PLC`.
 
 ## Structured tags (UDTs)
 
@@ -189,15 +192,15 @@ from pyrung import udt
 
 @udt()
 class Motor:
-    running: Bool
-    speed: Int
-    fault: Bool
+    Running: Bool
+    Speed: Int
+    Fault: Bool
 ```
 
 Access fields with dot notation:
 
 ```python
-with Rung(Motor.running):
+with Rung(Motor.Running):
     out(StatusLight)
 ```
 
@@ -206,11 +209,11 @@ For multiple instances of the same structure, set `count`:
 ```python
 @udt(count=3)
 class Pump:
-    running: Bool
-    flow: Real
+    Running: Bool
+    Flow: Real
 
 # Access by instance
-with Rung(Pump[1].running):
+with Rung(Pump[1].Running):
     out(Pump1Light)
 ```
 
@@ -242,23 +245,45 @@ blockcopy(ds.select(1, 4), ds.select(2, 5))  # Shift DS1..DS4 into DS2..DS5
 
 ## Reading and writing values
 
-Inside a `runner.active()` block, you can read and write tag values directly:
+Inside a `with PLC(...) as plc:` block (or `with runner:` when you have a runner from a fixture), you can read and write tag values directly:
 
 ```python
-with runner.active():
+with PLC(logic) as plc:
     State.value = "g"           # Write (one-shot, consumed after one scan)
     print(State.value)          # Read
-    runner.step()               # Step with current values
+    plc.step()                  # Step with current values
 ```
 
 For persistent overrides that hold across multiple scans, use forces:
 
 ```python
-runner.add_force("Button", True)
-runner.step()   # True
-runner.step()   # Still True
-runner.remove_force("Button")
+plc.force("Button", True)
+plc.step()   # True
+plc.step()   # Still True
+plc.unforce("Button")
 ```
+
+## System points
+
+The PLC exposes built-in status and control through the `system` namespace. Import it with `from pyrung import system`.
+
+**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`. Use `first_scan` for one-time initialization:
+
+```python
+with Rung(system.sys.first_scan):
+    copy("g", State)
+```
+
+**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan.
+
+```python
+with Rung(system.fault.division_error):
+    latch(MathFaultSeen)
+```
+
+**`system.rtc`** — real-time clock: `year4`, `month`, `day`, `hour`, `minute`, `second` (read-only). Writable counterparts (`new_hour`, etc.) with `apply_date`/`apply_time` triggers. Use for time-of-day logic like shift changes.
+
+The [Click cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
 
 ## Next steps
 

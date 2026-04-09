@@ -90,6 +90,18 @@ class _TagDecl:
 
 
 @dataclass
+class _NamedTimerCounterDecl:
+    """A Timer.named() / Counter.named() declaration derived from a nickname."""
+
+    var_name: str  # safe Python identifier (e.g. "OvenTimer")
+    kind: str  # "Timer" or "Counter"
+    index: int  # 1-based block index
+    slug: str  # name passed to .named() (same as var_name)
+    done_operand: str  # original done-bit operand (e.g. "T1")
+    acc_operand: str  # original accumulator operand (e.g. "TD1")
+
+
+@dataclass
 class _RangeDecl:
     """Parsed range metadata from the source ladder."""
 
@@ -180,11 +192,10 @@ class _OperandCollection:
     used_blocks: set[str] = field(default_factory=set)  # block vars used
     used_instructions: set[str] = field(default_factory=set)  # instruction names
     used_conditions: set[str] = field(default_factory=set)  # rise, fall, immediate
-    used_time_units: set[str] = field(default_factory=set)  # Tms, Ts, etc.
     used_copy_converters: set[str] = field(default_factory=set)  # to_value, to_text, etc.
     used_expr_funcs: set[str] = field(default_factory=set)  # sqrt, lsh, etc.
-    has_any_of: bool = False
-    has_all_of: bool = False
+    has_Or: bool = False
+    has_And: bool = False
     has_branch: bool = False
     has_comment: bool = False
     has_subroutine: bool = False
@@ -198,6 +209,8 @@ class _OperandCollection:
     semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)
     semantic_ranges: dict[str, _SemanticRender] = field(default_factory=dict)
     range_comments: dict[str, str] = field(default_factory=dict)
+    timer_counter_operands: set[str] = field(default_factory=set)
+    named_timer_counters: list[_NamedTimerCounterDecl] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +228,11 @@ class _FileRefs:
     structure_names: set[str] = field(default_factory=set)
     used_instructions: set[str] = field(default_factory=set)
     used_conditions: set[str] = field(default_factory=set)
-    used_time_units: set[str] = field(default_factory=set)
     used_copy_converters: set[str] = field(default_factory=set)
     used_expr_funcs: set[str] = field(default_factory=set)
     used_click_blocks: set[str] = field(default_factory=set)
-    has_any_of: bool = False
-    has_all_of: bool = False
+    has_Or: bool = False
+    has_And: bool = False
     has_branch: bool = False
     has_comment: bool = False
     has_forloop: bool = False
@@ -228,4 +240,5 @@ class _FileRefs:
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
     has_system_import: bool = False
+    named_tc_var_names: set[str] = field(default_factory=set)
     subroutine_func_names: set[str] = field(default_factory=set)

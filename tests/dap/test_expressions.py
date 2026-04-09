@@ -65,8 +65,8 @@ def test_parse_rejects_unparenthesized_comparisons_with_boolean_operators() -> N
 
 
 def test_parse_all_of_any_of() -> None:
-    all_expr = parse("all_of(Fault, Pump, Valve)")
-    any_expr = parse("any_of(Low, High, Emergency)")
+    all_expr = parse("And(Fault, Pump, Valve)")
+    any_expr = parse("Or(Low, High, Emergency)")
     assert isinstance(all_expr, And)
     assert len(all_expr.children) == 3
     assert isinstance(any_expr, Or)

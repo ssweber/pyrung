@@ -17,7 +17,7 @@ class ForbiddenControlFlowError(RuntimeError):
 _IF_HINT = "Use `Rung(condition)` to express conditional logic"
 
 
-_BOOL_HINT = "Use `all_of()` / `any_of()` for compound conditions"
+_BOOL_HINT = "Use `And()` / `Or()` for compound conditions"
 
 
 _NOT_HINT = "Use `~Tag` for normally-closed contacts"

@@ -1,17 +1,19 @@
-"""Tests for PLCRunner.scan_steps rung-level stepping."""
+"""Tests for PLC.scan_steps rung-level stepping."""
 
 from __future__ import annotations
 
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
+    Counter,
     Int,
-    PLCRunner,
     Program,
     Rung,
     TagType,
+    Timer,
     branch,
     call,
     copy,
@@ -38,10 +40,10 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
         with Rung(light1):
             out(light2)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Start": True})
 
-    scan_gen = runner.scan_steps()
+    scan_gen = runner.debug.scan_steps()
 
     idx0, rung0, ctx0 = next(scan_gen)
     assert idx0 == 0
@@ -75,10 +77,10 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
         with Rung(enable):
             out(output)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
-    scan_gen = runner.scan_steps()
+    scan_gen = runner.debug.scan_steps()
     _, _, ctx = next(scan_gen)
 
     assert runner.current_state.scan_id == 0
@@ -103,10 +105,10 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
         with Rung(enable):
             out(output)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
-    scan_gen = runner.scan_steps_debug()
+    scan_gen = runner.debug.scan_steps_debug()
     first_step = next(scan_gen)
 
     assert first_step.kind == "rung"
@@ -139,14 +141,14 @@ def test_step_and_scan_steps_have_equivalent_results():
         with Rung(enable):
             out(light)
 
-    via_step = PLCRunner(logic)
-    via_scan_steps = PLCRunner(logic)
+    via_step = PLC(logic)
+    via_scan_steps = PLC(logic)
 
     via_step.patch({"Enable": True})
     via_scan_steps.patch({"Enable": True})
 
     via_step.step()
-    for _ in via_scan_steps.scan_steps():
+    for _ in via_scan_steps.debug.scan_steps():
         pass
 
     assert via_step.current_state == via_scan_steps.current_state
@@ -168,8 +170,8 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
                 out(branch_light)
             out(top_light)
 
-    runner = PLCRunner(logic)
-    steps = list(runner.scan_steps_debug())
+    runner = PLC(logic)
+    steps = list(runner.debug.scan_steps_debug())
 
     boundary_steps = [step for step in steps if step.kind != "instruction"]
     assert [step.kind for step in boundary_steps] == ["rung", "subroutine", "branch"]
@@ -202,8 +204,8 @@ def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs(
             call("work")
             out(done)
 
-    runner = PLCRunner(logic)
-    steps = list(runner.scan_steps_debug())
+    runner = PLC(logic)
+    steps = list(runner.debug.scan_steps_debug())
 
     sub_steps = [step for step in steps if step.kind == "subroutine"]
     assert len(sub_steps) == 2
@@ -224,9 +226,9 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
                 out(branch_out)
             out(top_out)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     kinds = [step.kind for step in steps]
     assert [kind for kind in kinds if kind != "instruction"] == ["rung"]
@@ -250,9 +252,9 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
                 copy(1, step, oneshot=True)
             call("sub")
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Step": 0, "Auto": True, "BranchDone": False, "SubLight": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     kinds = [entry.kind for entry in steps]
     assert [kind for kind in kinds if kind != "instruction"] == ["rung", "branch", "subroutine"]
@@ -272,9 +274,9 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
             with branch(mode):
                 out(branch_out)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Mode": False, "BranchOut": False})
-    steps = list(runner.scan_steps_debug())
+    steps = list(runner.debug.scan_steps_debug())
 
     # Branch remains unpowered for this scan despite Mode being written before branch item.
     kinds = [step.kind for step in steps]
@@ -288,12 +290,6 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
     down = Bool("Down")
     reset = Bool("Reset")
     clock = Bool("Clock")
-    up_done = Bool("UpDone")
-    up_acc = Int("UpAcc")
-    down_done = Bool("DownDone")
-    down_acc = Int("DownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -307,13 +303,13 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
 
     with Program(strict=False) as logic:
         with Rung(enable):
-            count_up(up_done, up_acc, preset=5).down(down).reset(reset)
+            count_up(Counter[1], preset=5).down(down).reset(reset)
 
         with Rung(enable):
-            count_down(down_done, down_acc, preset=5).reset(reset)
+            count_down(Counter[2], preset=5).reset(reset)
 
         with Rung(enable):
-            on_delay(timer_done, timer_acc, preset=50).reset(reset)
+            on_delay(Timer[1], preset=50).reset(reset)
 
         with Rung(enable):
             shift(bits.select(1, 4)).clock(clock).reset(reset)
@@ -337,7 +333,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
                 completion_flag=drum_done,
             ).reset(reset).jump(jump, step=drum_step).jog(jog)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -350,7 +346,9 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
             "Jog": False,
         }
     )
-    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [
+        step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"
+    ]
 
     assert [step.instruction_kind for step in instruction_steps] == [
         "Count Up",

@@ -17,7 +17,7 @@ from pyrung.click.validation import (
     CLK_PROFILE_UNAVAILABLE,
     validate_click_program,
 )
-from pyrung.core import Bool, Char, Dint, Int, to_ascii, to_binary, to_text, to_value
+from pyrung.core import Bool, Char, Dint, Int, Timer, to_ascii, to_binary, to_text, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -74,23 +74,18 @@ def test_r6_sc_subset_address_aware():
 
 
 def test_r7_timer_role_validation():
-    done_ok = Bool("DoneOk")
-    acc_ok = Int("AccOk")
-    done_bad = Bool("DoneBad")
-    acc_bad = Int("AccBad")
-
     def logic():
         with Rung():
-            on_delay(done_ok, acc_ok, preset=10)
-            on_delay(done_bad, acc_bad, preset=10)
+            on_delay(Timer[1], preset=10)
+            on_delay(Timer[2], preset=10)
 
     prog = _build_program(logic)
     tag_map = TagMap(
         [
-            done_ok.map_to(t[1]),
-            acc_ok.map_to(td[1]),
-            done_bad.map_to(c[1]),
-            acc_bad.map_to(td[2]),
+            Timer[1].Done.map_to(t[1]),
+            Timer[1].Acc.map_to(td[1]),
+            Timer[2].Done.map_to(c[1]),
+            Timer[2].Acc.map_to(td[2]),
         ],
         include_system=False,
     )

@@ -32,11 +32,11 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    Tms,
-    any_of,
+    Timer,
 )
 from pyrung.core.program import (
     branch,
@@ -256,13 +256,13 @@ class TestTopologyAnalysis:
         assert [instruction.af_token for instruction in r.instructions] == ["out(Y001)"]
 
     def test_or_expansion(self, tmp_path: Path):
-        """OR: any_of(A, B) → out(Y)."""
+        """OR: Or(A, B) → out(Y)."""
         A = Bool("A")
         B = Bool("B")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B)):
+            with Rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -277,14 +277,14 @@ class TestTopologyAnalysis:
         assert len(par.children) == 2
 
     def test_or_with_trailing_and(self, tmp_path: Path):
-        """OR + AND: any_of(A, B), Ready → out(Y)."""
+        """OR + AND: Or(A, B), Ready → out(Y)."""
         A = Bool("A")
         B = Bool("B")
         Ready = Bool("Ready")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B), Ready):
+            with Rung(Or(A, B), Ready):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
@@ -328,15 +328,13 @@ class TestTopologyAnalysis:
         """Timer with .reset() pin."""
         Enable = Bool("Enable")
         Reset = Bool("Reset")
-        Done = Bool("Done")
-        Acc = Int("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit=Tms).reset(Reset)
+                on_delay(Timer[1], preset=100, unit="Tms").reset(Reset)
 
         mapping = TagMap(
-            {Enable: x[1], Reset: x[2], Done: t[1], Acc: td[1]},
+            {Enable: x[1], Reset: x[2], Timer[1].Done: t[1], Timer[1].Acc: td[1]},
             include_system=False,
         )
         csv_path = _export_csv(logic, mapping, tmp_path)
@@ -820,6 +818,38 @@ class TestGraphWalkEdgeCases:
         assert _leaf_labels(result.condition_tree) == ["X001", "DS1==5"]
         assert [instruction.af_token for instruction in result.instructions] == ["out(Y001)"]
 
+    def test_warns_when_imported_topology_bypasses_a_contact(self):
+        """Collapsed contact cells should warn instead of disappearing silently."""
+        from pyrung.click.codegen.analyzer import _analyze_single_rung
+        from pyrung.click.codegen.models import _RawRung
+
+        rows = [
+            _make_row(
+                "R",
+                _fill_dashes({0: "C1204", 1: "rise(C4)", 2: "T:DD2==DS353", 3: "T"}, 4, 31),
+                af="copy(DS362,DS3,oneshot=1)",
+            ),
+            _make_row("", _fill_dashes({2: "T", 3: "T"}, 4, 31)),
+            _make_row("", _fill_dashes({2: "|"}, 3, 31), af="copy(1,DS4,oneshot=1)"),
+            _make_row("", _fill_dashes({2: "T"}, 3, 31)),
+            _make_row("", _fill_dashes({2: "T:~C1263"}, 3, 31), af="latch(C1614)"),
+            _make_row("", _fill_dashes({2: "T:~C1262"}, 3, 31), af="latch(C1615)"),
+            _make_row("", _fill_dashes({2: "~C1264"}, 3, 31), af="latch(C1616)"),
+        ]
+        rung = _RawRung(comment_lines=[], rows=rows)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = _analyze_single_rung(rung)
+
+        assert [str(item.message) for item in caught] == [
+            "Imported ladder topology bypasses contact 'DD2==DS353'; this condition was omitted from generated logic."
+        ]
+        labels = set(_leaf_labels(result.condition_tree))
+        for instruction in result.instructions:
+            labels.update(_leaf_labels(instruction.branch_tree))
+        assert "DD2==DS353" not in labels
+
     def test_another_case_t_fork_down_through_contact(self):
         """T fork down through contact reaches second AF without reverse leakage."""
         from pyrung.click.codegen.analyzer import _analyze_single_rung
@@ -1153,15 +1183,15 @@ class TestRoundTrip:
         )
 
     def test_or_expansion(self):
-        """OR: any_of(A, B) → out(Y)."""
+        """OR: Or(A, B) → out(Y)."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2)):
+                with Rung(Or(X1, X2)):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002):
+            with Rung(Or(X001, X002)):
                 out(Y001)
             """,
         )
@@ -1171,39 +1201,39 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2), C1):
+                with Rung(Or(X1, X2), C1):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002, C1):
+            with Rung(Or(X001, X002), C1):
                 out(Y001)
             """,
         )
 
     def test_three_way_or(self):
-        """3-branch OR exercises | output-bus marker."""
+        """3-branch OR."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2, C1)):
+                with Rung(Or(X1, X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(any_of(X001, X002, C1)):
+            with Rung(Or(X001, X002, C1)):
                 out(Y001)
             """,
         )
 
-    def test_two_way_comparison_or_stays_any_of(self):
-        """2-way comparison OR stays as any_of(...) for readability and precedence."""
+    def test_two_way_comparison_or(self):
+        """2-way comparison OR emits as Or(...)."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(DS1 == 1, DS1 == 2)):
+                with Rung(Or(DS1 == 1, DS1 == 2)):
                     out(Y1)
             """,
             """
-            with Rung(any_of(DS1 == 1, DS1 == 2)):
+            with Rung(Or(DS1 == 1, DS1 == 2)):
                 out(Y001)
             """,
         )
@@ -1213,11 +1243,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1, any_of(X2, C1)):
+                with Rung(X1, Or(X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(X001, X002 | C1):
+            with Rung(X001, Or(X002, C1)):
                 out(Y001)
             """,
         )
@@ -1227,11 +1257,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2), any_of(C1, C2)):
+                with Rung(Or(X1, X2), Or(C1, C2)):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002, C1 | C2):
+            with Rung(Or(X001, X002), Or(C1, C2)):
                 out(Y001)
             """,
         )
@@ -1323,11 +1353,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    on_delay(T1, TD1, preset=100, unit=Tms).reset(X2)
+                    on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
             """,
             """
             with Rung(X001):
-                on_delay(T1, TD1, preset=100, unit=Tms).reset(X002)
+                on_delay(Timer[1], preset=100, unit="Tms").reset(X002)
             """,
         )
 
@@ -1337,11 +1367,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    count_up(CT1, CTD1, preset=10).down(X2).reset(X3)
+                    count_up(Counter[1], preset=10).down(X2).reset(X3)
             """,
             """
             with Rung(X001):
-                count_up(CT1, CTD1, preset=10).down(X002).reset(X003)
+                count_up(Counter[1], preset=10).down(X002).reset(X003)
             """,
         )
 
@@ -1378,19 +1408,19 @@ class TestRoundTrip:
         )
 
     def test_branch_local_or(self):
-        """branch(any_of(...)) survives round-trip and stays branch-local."""
+        """branch(Or(...)) survives round-trip and stays branch-local."""
         _assert_codegen_body(
             """
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
-                    with branch(any_of(X2, X3)):
+                    with branch(Or(X2, X3)):
                         out(Y2)
             """,
             """
             with Rung(X001):
                 out(Y001)
-                with branch(X002 | X003):
+                with branch(Or(X002, X003)):
                     out(Y002)
             """,
         )
@@ -1402,14 +1432,14 @@ class TestRoundTrip:
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
-                    with branch(any_of(X2, X3), X4):
+                    with branch(Or(X2, X3), X4):
                         out(Y2)
                     out(Y3)
             """,
             """
             with Rung(X001):
                 out(Y001)
-                with branch(X002 | X003, X004):
+                with branch(Or(X002, X003), X004):
                     out(Y002)
                 out(Y003)
             """,
@@ -1421,13 +1451,13 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    with branch(X2, any_of(X3, X4)):
+                    with branch(X2, Or(X3, X4)):
                         out(Y1)
                     out(Y2)
             """,
             """
             with Rung(X001):
-                with branch(X002, X003 | X004):
+                with branch(X002, Or(X003, X004)):
                     out(Y001)
                 out(Y002)
             """,
@@ -1439,13 +1469,13 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    with branch(X2, any_of(X3, X4, X5)):
+                    with branch(X2, Or(X3, X4, X5)):
                         out(Y1)
                     out(Y2)
             """,
             """
             with Rung(X001):
-                with branch(X002, any_of(X003, X004, X005)):
+                with branch(X002, Or(X003, X004, X005)):
                     out(Y001)
                 out(Y002)
             """,
@@ -1863,7 +1893,7 @@ class TestRoundTrip:
                     time_drum(
                         outputs=[Y1, Y2],
                         presets=[100, 200],
-                        unit=Tms,
+                        unit="Tms",
                         pattern=[[1, 0], [0, 1]],
                         current_step=DS1,
                         accumulator=TD1,
@@ -1872,7 +1902,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit=Tms, pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
+                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit="Tms", pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
             """,
         )
 
@@ -2139,7 +2169,7 @@ class TestRoundTrip:
         """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
         _assert_codegen_body(
             """
-            with Rung(any_of(rise(C1), fall(C2))):
+            with Rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
@@ -2149,7 +2179,7 @@ class TestRoundTrip:
                     out(C4)
             """,
             """
-            with Rung(rise(C1) | fall(C2)):
+            with Rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
@@ -2469,6 +2499,167 @@ class TestNicknameMerge:
         with pytest.raises(ValueError, match="not both"):
             ladder_to_pyrung(csv_path, nickname_csv="foo.csv", nicknames={"X001": "a"})
 
+    def test_named_timer(self):
+        """Timer with nickname emits Timer.named() declaration."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer"},
+        )
+
+    def test_named_timer_done_suffix_stripped(self):
+        """Nickname ending in _Done has suffix stripped for the slug."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer_Done"},
+        )
+
+    def test_named_counter(self):
+        """Counter with nickname emits Counter.named() declaration."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                count_up(Counter[1], preset=10).reset(X2)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Counter, Bool, Dint, count_up
+            from pyrung.click import TagMap, ct, ctd, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            X002 = Bool("X002")
+
+            PartCounter = Counter.named(1, "PartCounter")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    count_up(PartCounter, preset=10).reset(X002)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                X002: x[2],
+            })
+            """,
+            nicknames={"CT1": "PartCounter"},
+        )
+
+    def test_timer_without_nickname_unchanged(self):
+        """Timer without nickname still emits Timer[n]."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay
+            from pyrung.click import TagMap, t, td, x
+
+            # --- Tags ---
+            X001 = Bool("X001")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(Timer[1], preset=100, unit="Tms")
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+            })
+            """,
+        )
+
+    def test_named_timer_condition_reference(self):
+        """Timer done-bit used as condition renders as Slug.Done."""
+        _assert_codegen_full(
+            """
+            with Rung(X1):
+                on_delay(Timer[1], preset=100, unit="Tms")
+            with Rung(Timer[1].Done):
+                out(Y1)
+            """,
+            """
+            \"\"\"Auto-generated pyrung program from laddercodec CSV.\"\"\"
+
+            from pyrung import Program, Rung, Timer, Bool, Int, on_delay, out
+            from pyrung.click import TagMap, t, td, x, y
+
+            # --- Tags ---
+            X001 = Bool("X001")
+            Y001 = Bool("Y001")
+
+            OvenTimer = Timer.named(1, "OvenTimer")
+
+            # --- Program ---
+            with Program(strict=False) as logic:
+                with Rung(X001):
+                    on_delay(OvenTimer, preset=100, unit="Tms")
+
+                with Rung(OvenTimer.Done):
+                    out(Y001)
+
+            # --- Tag Map ---
+            mapping = TagMap({
+                X001: x[1],
+                Y001: y[1],
+            })
+            """,
+            nicknames={"T1": "OvenTimer"},
+        )
+
 
 # ---------------------------------------------------------------------------
 # Code generation structure tests
@@ -2619,13 +2810,13 @@ class TestContinuedRoundTrip:
                 with Rung(X1):
                     out(Y1)
                 with Rung(X2).continued():
-                    with branch(any_of(X3, X4)):
+                    with branch(Or(X3, X4)):
                         out(Y2)
             """,
             """
             with Rung(X001):
                 out(Y001)
-            with Rung(X002, X003 | X004).continued():
+            with Rung(X002, Or(X003, X004)).continued():
                 out(Y002)
             """,
         )

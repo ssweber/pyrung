@@ -12,7 +12,6 @@ from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.state import SystemState
 
     from ..validation import DialectValidator
 
@@ -31,11 +30,11 @@ class Program:
             with Rung(Button):
                 out(Light)
 
-    Also works with PLCRunner:
-        runner = PLCRunner(logic)
+    Also works with PLC:
+        runner = PLC(logic)
     """
 
-    _current: Program | None = None
+    _active: Program | None = None
     _dialect_validators: ClassVar[dict[str, DialectValidator]] = {}
 
     def __init__(self, *, strict: bool = True) -> None:
@@ -54,13 +53,13 @@ class Program:
                     _check_with_body_from_frame(caller, opt_out_hint="Program(strict=False)")
             finally:
                 del frame
-        Program._current = self
+        Program._active = self
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        Program._current = None
+        Program._active = None
 
-    def add_rung(self, rung: RungLogic) -> None:
+    def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
         target = (
             self.subroutines[self._current_subroutine]
@@ -79,30 +78,17 @@ class Program:
             )
         target.append(rung)
 
-    def start_subroutine(self, name: str) -> None:
+    def _start_subroutine(self, name: str) -> None:
         """Start defining a subroutine."""
         _validate_subroutine_name(name)
         self._current_subroutine = name
         self.subroutines[name] = []
 
-    def end_subroutine(self) -> None:
+    def _end_subroutine(self) -> None:
         """End subroutine definition."""
         self._current_subroutine = None
 
-    def call_subroutine(self, name: str, state: SystemState) -> SystemState:
-        """Execute a subroutine by name (legacy state-based API)."""
-        # This method is kept for backwards compatibility but should not be used
-        # with ScanContext-based execution. Use call_subroutine_ctx instead.
-        from pyrung.core.context import ScanContext
-
-        if name not in self.subroutines:
-            raise KeyError(f"Subroutine '{name}' not defined")
-        ctx = ScanContext(state)
-        for rung in self.subroutines[name]:
-            rung.evaluate(ctx)
-        return ctx.commit(dt=0.0)
-
-    def call_subroutine_ctx(self, name: str, ctx: ScanContext) -> None:
+    def _call_subroutine_ctx(self, name: str, ctx: ScanContext) -> None:
         """Execute a subroutine by name within a ScanContext."""
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
@@ -117,9 +103,9 @@ class Program:
             ctx._condition_snapshot = saved_snapshot
 
     @classmethod
-    def current(cls) -> Program | None:
+    def _current(cls) -> Program | None:
         """Get the current program context (if any)."""
-        return cls._current
+        return cls._active
 
     @classmethod
     def register_dialect(cls, name: str, validator: DialectValidator) -> None:
@@ -149,7 +135,7 @@ class Program:
             )
         return validator(self, mode=mode, **kwargs)
 
-    def evaluate(self, ctx: ScanContext) -> None:
+    def _evaluate(self, ctx: ScanContext) -> None:
         """Evaluate all main rungs in order (not subroutines) within a ScanContext."""
         for rung in self.rungs:
             rung.evaluate(ctx)

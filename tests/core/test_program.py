@@ -8,7 +8,7 @@ This tests the DSL syntax:
 
 import pytest
 
-from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Real, SystemState, TagType
+from pyrung.core import PLC, Block, Bool, Dint, Int, Real, SystemState, TagType
 from tests.conftest import evaluate_condition, evaluate_program, evaluate_rung
 
 
@@ -412,7 +412,7 @@ class TestSearchDSL:
             with Rung(Enable):
                 search(DS.select(1, 4) == 7, result=Result, found=Found, continuous=True)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {"Enable": True, "DS1": 7, "DS2": 0, "DS3": 7, "DS4": 0, "Result": 0, "Found": False}
         )
@@ -461,7 +461,7 @@ class TestSearchDSL:
             with Rung(Enable):
                 search(CH.select(1, 6) == "ADC", result=Result, found=Found)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {
                 "Enable": True,
@@ -521,7 +521,7 @@ class TestStrictDslControlFlowGuard:
         B = Bool("B")
         Light = Bool("Light")
 
-        with pytest.raises(ForbiddenControlFlowError, match="all_of\\(\\).*any_of\\(\\)"):
+        with pytest.raises(ForbiddenControlFlowError, match="And\\(\\).*Or\\(\\)"):
             with Program():
                 with Rung(A and B):
                     out(Light)
@@ -709,7 +709,7 @@ class TestStrictDslControlFlowGuard:
             with Rung(Enable):
                 call(init_sequence)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Enable": True, "Light": False})
         runner.step()
         assert runner.current_state.tags["Light"] is True
@@ -841,7 +841,7 @@ class TestCopyAndMathReferenceExamples:
             with Rung(Enable):
                 blockcopy(DS.select(1, 3), DS.select(501, 503), oneshot=True)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {
                 "Enable": False,
@@ -889,7 +889,7 @@ class TestCopyAndMathReferenceExamples:
             with Rung(Enable):
                 fill(1000, DS.select(501, 503), oneshot=True)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Enable": False, "DS501": 1, "DS502": 2, "DS503": 3})
         runner.step()
 
@@ -1026,11 +1026,11 @@ class TestClickPrebuiltProgramIntegration:
         assert new_state.tags["DD1"] == (1 << 16)
 
 
-class TestPLCRunnerIntegration:
-    """Test full integration with PLCRunner."""
+class TestPLCIntegration:
+    """Test full integration with PLC."""
 
     def test_runner_executes_program(self):
-        """PLCRunner evaluates program logic each scan."""
+        """PLC evaluates program logic each scan."""
         from pyrung.core.program import Program, Rung, out
 
         Button = Bool("Button")
@@ -1040,7 +1040,7 @@ class TestPLCRunnerIntegration:
             with Rung(Button):
                 out(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": False, "Light": False})
         runner.step()  # Apply initial state
 
@@ -1076,7 +1076,7 @@ class TestPLCRunnerIntegration:
             with Rung(StopButton):
                 reset(MotorRunning)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"StartButton": False, "StopButton": False, "MotorRunning": False})
         runner.step()
 
@@ -1119,7 +1119,7 @@ class TestPLCRunnerIntegration:
             with Rung(NextButton, Step == 0):
                 copy(1, Step, oneshot=True)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "NextButton": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1164,7 +1164,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": True, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1186,7 +1186,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 1, "AutoMode": True, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1209,7 +1209,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1231,7 +1231,7 @@ class TestBranch:
                 with branch(AutoMode):
                     copy(1, Step, oneshot=True)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": True, "Light": False})
         runner.step()
 
@@ -1260,7 +1260,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1304,7 +1304,7 @@ class TestBranch:
                 with branch(Mode2):
                     out(Light3)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {
                 "Step": 0,
@@ -1385,7 +1385,7 @@ class TestBranch:
                     copy(1, Step, oneshot=True)
                 call("sub")
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": True, "BranchDone": False, "SubLight": False})
         runner.step()
 
@@ -1416,7 +1416,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": True})
         runner.step()
 
@@ -1443,7 +1443,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": False})
         runner.step()
 
@@ -1470,7 +1470,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": False, "C": True})
         runner.step()
 
@@ -1501,7 +1501,7 @@ class TestNestedBranches:
                         with branch(D):
                             out(W)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": True, "D": True})
         runner.step()
 
@@ -1561,7 +1561,7 @@ class TestNestedBranches:
                 copy(Trace * 10 + Order, Trace)
                 copy(5, Order)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": True, "Order": 0, "Trace": 0})
         runner.step()
 
@@ -1589,7 +1589,7 @@ class TestNestedBranches:
                     with branch(Flag):
                         out(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "Flag": False, "Light": False})
         runner.step()
 
@@ -1625,7 +1625,7 @@ class TestNestedBranches:
                         # Deep was False at rung entry — should not fire
                         out(Bool("L2"))
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "Flag": False, "Deep": False})
         runner.step()
 
@@ -1660,7 +1660,7 @@ class TestNestedBranches:
                     with branch(C2):
                         out(Z)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C1": True, "C2": False})
         runner.step()
 
@@ -1723,7 +1723,7 @@ class TestNestedBranches:
                         copy(V + 1, V)  # nested: V = 11
                 copy(V * 2, V)  # parent: V = 22
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": True, "V": 0})
         runner.step()
 
@@ -1748,7 +1748,7 @@ class TestNestedBranches:
                         copy(99, V)  # skipped — C is false
                 copy(V + 1, V)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "B": True, "C": False, "V": 0})
         runner.step()
 
@@ -1794,7 +1794,7 @@ class TestSubroutineAndCall:
                 with Rung():  # Unconditional
                     out(SubLight)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Light": False, "SubLight": False})
         runner.step()
 
@@ -1818,7 +1818,7 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(SubLight)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": False, "Light": False, "SubLight": False})
         runner.step()
 
@@ -1843,7 +1843,7 @@ class TestSubroutineAndCall:
                 with Rung(Step == 1):  # Only executes when Step==1
                     out(SubLight)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Step": 0, "Light": False, "SubLight": False})
         runner.step()
 
@@ -1871,7 +1871,7 @@ class TestSubroutineAndCall:
                 out(Light)
                 call("nonexistent")
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Light": False})
 
         with pytest.raises(KeyError, match="nonexistent"):
@@ -1892,7 +1892,7 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(SubLight)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Light": False, "SubLight": False})
         runner.step()
 
@@ -1922,7 +1922,7 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(Third)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Run": True, "First": False, "Second": False, "Third": False})
         runner.step()
 
@@ -1954,7 +1954,7 @@ class TestSubroutineAndCall:
                     return_early()
                     out(CalleeAfter)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {
                 "Run": True,
@@ -2016,7 +2016,7 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(init_sequence)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Light": False, "SubLight": False})
         runner.step()
 
@@ -2040,7 +2040,7 @@ class TestSubroutineDecorator:
                 out(Light)
 
         # Subroutine was never call()'d, so not registered
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Light": False, "SubLight": False})
         runner.step()
 
@@ -2065,7 +2065,7 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(my_sub)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": False, "Light": False, "SubLight": False})
         runner.step()
 
@@ -2091,7 +2091,7 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(my_sub)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Step": 0, "Light": False, "SubLight": False})
         runner.step()
 
@@ -2141,7 +2141,7 @@ class TestSubroutineDecorator:
         assert isinstance(my_logic, Program)
         assert "init" in my_logic.subroutines
 
-        runner = PLCRunner(my_logic)
+        runner = PLC(my_logic)
         runner.patch({"Button": True, "SubLight": False})
         runner.step()
 
@@ -2169,7 +2169,7 @@ class TestSubroutineDecorator:
                 with Rung():
                     out(Light2)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "Light1": False, "Light2": False})
         runner.step()
 
@@ -2191,7 +2191,7 @@ class TestSubroutineDecorator:
                 with Rung():
                     out(SubLight)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Button": True, "SubLight": False})
         runner.step()
 

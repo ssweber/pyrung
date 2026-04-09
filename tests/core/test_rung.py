@@ -262,11 +262,11 @@ class TestRungImmutability:
 
 
 class TestRungWithAnyOf:
-    """Test rung with any_of() composite condition (OR logic)."""
+    """Test rung with Or() composite condition (OR logic)."""
 
     def test_rung_with_any_of_first_true(self):
-        """Rung executes when first condition in any_of is true."""
-        from pyrung.core import any_of
+        """Rung executes when first condition in Or is true."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -274,7 +274,7 @@ class TestRungWithAnyOf:
         CmdStart = Bool("CmdStart")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Start, CmdStart))
+        rung = Rung(Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Start": True, "CmdStart": False, "Light": False})
@@ -283,8 +283,8 @@ class TestRungWithAnyOf:
         assert new_state.tags["Light"] is True
 
     def test_rung_with_any_of_second_true(self):
-        """Rung executes when second condition in any_of is true."""
-        from pyrung.core import any_of
+        """Rung executes when second condition in Or is true."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -292,7 +292,7 @@ class TestRungWithAnyOf:
         CmdStart = Bool("CmdStart")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Start, CmdStart))
+        rung = Rung(Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Start": False, "CmdStart": True, "Light": False})
@@ -301,8 +301,8 @@ class TestRungWithAnyOf:
         assert new_state.tags["Light"] is True
 
     def test_rung_with_any_of_all_false(self):
-        """Rung does not execute when all conditions in any_of are false."""
-        from pyrung.core import any_of
+        """Rung does not execute when all conditions in Or are false."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -310,7 +310,7 @@ class TestRungWithAnyOf:
         CmdStart = Bool("CmdStart")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Start, CmdStart))
+        rung = Rung(Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Start": False, "CmdStart": False, "Light": False})
@@ -319,8 +319,8 @@ class TestRungWithAnyOf:
         assert new_state.tags["Light"] is False
 
     def test_rung_with_any_of_int_truthiness(self):
-        """any_of accepts INT tags and treats nonzero as true."""
-        from pyrung.core import any_of
+        """Or accepts INT tags and treats nonzero as true."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -328,7 +328,7 @@ class TestRungWithAnyOf:
         CmdStart = Bool("CmdStart")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Step, CmdStart))
+        rung = Rung(Or(Step, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Step": 2, "CmdStart": False, "Light": False})
@@ -340,8 +340,8 @@ class TestRungWithAnyOf:
         assert new_state.tags["Light"] is False
 
     def test_rung_with_and_plus_any_of(self):
-        """Rung with AND condition plus any_of (Step == 1, any_of(Start, CmdStart))."""
-        from pyrung.core import any_of
+        """Rung with AND condition plus Or (Step == 1, Or(Start, CmdStart))."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -351,7 +351,7 @@ class TestRungWithAnyOf:
         Light = Bool("Light")
 
         # Step == 1 AND (Start OR CmdStart)
-        rung = Rung(Step == 1, any_of(Start, CmdStart))
+        rung = Rung(Step == 1, Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         # Step is 1, Start is true -> executes
@@ -383,11 +383,12 @@ class TestRungWithAnyOf:
         assert new_state.tags["Light"] is False
 
 
-class TestRungWithBitwiseOr:
-    """Test rung with | operator for OR conditions."""
+class TestRungWithOr:
+    """Test rung with Or() for OR conditions."""
 
-    def test_rung_with_pipe_operator(self):
-        """Rung executes when | condition is true."""
+    def test_rung_with_or(self):
+        """Rung executes when Or() condition is true."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -395,7 +396,7 @@ class TestRungWithBitwiseOr:
         CmdStart = Bool("CmdStart")
         Light = Bool("Light")
 
-        rung = Rung(Start | CmdStart)
+        rung = Rung(Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         # Only CmdStart is true
@@ -404,8 +405,9 @@ class TestRungWithBitwiseOr:
 
         assert new_state.tags["Light"] is True
 
-    def test_rung_with_chained_pipe(self):
-        """Rung with chained | operators (A | B | C)."""
+    def test_rung_with_three_way_or(self):
+        """Rung with three-way Or(A, B, C)."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -414,7 +416,7 @@ class TestRungWithBitwiseOr:
         C = Bool("C")
         Light = Bool("Light")
 
-        rung = Rung(A | B | C)
+        rung = Rung(Or(A, B, C))
         rung.add_instruction(OutInstruction(Light))
 
         # Only C is true
@@ -423,8 +425,9 @@ class TestRungWithBitwiseOr:
 
         assert new_state.tags["Light"] is True
 
-    def test_rung_with_and_plus_pipe(self):
-        """Rung with AND condition plus | operator."""
+    def test_rung_with_and_plus_or(self):
+        """Rung with AND condition plus Or()."""
+        from pyrung.core import Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -434,7 +437,7 @@ class TestRungWithBitwiseOr:
         Light = Bool("Light")
 
         # Step == 1 AND (Start OR CmdStart)
-        rung = Rung(Step == 1, Start | CmdStart)
+        rung = Rung(Step == 1, Or(Start, CmdStart))
         rung.add_instruction(OutInstruction(Light))
 
         # Step is 1, CmdStart is true -> executes
@@ -453,11 +456,11 @@ class TestRungWithBitwiseOr:
 
 
 class TestRungWithAllOf:
-    """Test rung with all_of() composite condition (AND logic)."""
+    """Test rung with And() composite condition (AND logic)."""
 
     def test_rung_with_all_of(self):
-        """Rung executes only when all conditions in all_of are true."""
-        from pyrung.core import all_of
+        """Rung executes only when all conditions in And are true."""
+        from pyrung.core import And
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -465,7 +468,7 @@ class TestRungWithAllOf:
         Auto = Bool("Auto")
         Light = Bool("Light")
 
-        rung = Rung(all_of(Ready, Auto))
+        rung = Rung(And(Ready, Auto))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Ready": True, "Auto": True, "Light": False})
@@ -477,8 +480,8 @@ class TestRungWithAllOf:
         assert new_state.tags["Light"] is False
 
     def test_rung_with_all_of_int_truthiness(self):
-        """all_of accepts INT tags and treats nonzero as true."""
-        from pyrung.core import all_of
+        """And accepts INT tags and treats nonzero as true."""
+        from pyrung.core import And
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -486,7 +489,7 @@ class TestRungWithAllOf:
         Auto = Bool("Auto")
         Light = Bool("Light")
 
-        rung = Rung(all_of(Step, Auto))
+        rung = Rung(And(Step, Auto))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Step": 1, "Auto": True, "Light": False})
@@ -524,11 +527,11 @@ class TestRungBranchIntTruthiness:
 
 
 class TestRungWithGroupedAnyOf:
-    """Test explicit grouped AND terms inside any_of()."""
+    """Test explicit grouped AND terms inside Or()."""
 
     def test_rung_with_any_of_group(self):
-        """Rung executes when explicit all_of() group inside any_of() is true."""
-        from pyrung.core import all_of, any_of
+        """Rung executes when explicit And() group inside Or() is true."""
+        from pyrung.core import And, Or
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -537,7 +540,7 @@ class TestRungWithGroupedAnyOf:
         Auto = Bool("Auto")
         Light = Bool("Light")
 
-        rung = Rung(any_of(Start, all_of(Ready, Auto)))
+        rung = Rung(Or(Start, And(Ready, Auto)))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags(
@@ -553,11 +556,12 @@ class TestRungWithGroupedAnyOf:
         assert new_state.tags["Light"] is False
 
 
-class TestRungWithBitwiseAnd:
-    """Test rung with & operator for AND conditions."""
+class TestRungWithAnd:
+    """Test rung with And() for AND conditions."""
 
-    def test_rung_with_ampersand(self):
-        """Rung executes when both & conditions are true."""
+    def test_rung_with_and(self):
+        """Rung executes when both And() conditions are true."""
+        from pyrung.core import And
         from pyrung.core.instruction import OutInstruction
         from pyrung.core.rung import Rung
 
@@ -565,7 +569,7 @@ class TestRungWithBitwiseAnd:
         Auto = Bool("Auto")
         Light = Bool("Light")
 
-        rung = Rung(Ready & Auto)
+        rung = Rung(And(Ready, Auto))
         rung.add_instruction(OutInstruction(Light))
 
         state = SystemState().with_tags({"Ready": True, "Auto": True, "Light": False})

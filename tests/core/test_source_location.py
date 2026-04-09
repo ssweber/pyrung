@@ -8,15 +8,17 @@ from types import FrameType
 from typing import cast
 
 from pyrung.core import (
+    PLC,
+    And,
     Block,
     Bool,
+    Counter,
     Int,
-    PLCRunner,
+    Or,
     Program,
     Rung,
     TagType,
-    all_of,
-    any_of,
+    Timer,
     branch,
     copy,
     count_down,
@@ -71,33 +73,27 @@ def test_condition_helpers_and_operators_capture_source_lines():
     line_rise = _line_no() + 1
     cond_rise = rise(b)
     line_any = _line_no() + 1
-    cond_any = any_of(a, b)
+    cond_any = Or(a, b)
     line_all = _line_no() + 1
-    cond_all = all_of(a, c)
-    line_or = _line_no() + 1
-    cond_or = a | b
-    line_and = _line_no() + 1
-    cond_and = a & b
+    cond_all = And(a, c)
     line_cmp = _line_no() + 1
     cond_cmp = step == 10
     line_expr_cmp = _line_no() + 1
     cond_expr_cmp = (step + 1) > 0
     line_chain = _line_no() + 1
-    cond_chain = (a | b) | (step > 1)
+    cond_chain = Or(Or(a, b), step > 1)
 
     assert cond_nc.source_line == line_nc
     assert cond_rise.source_line == line_rise
     assert cond_any.source_line == line_any
     assert cond_all.source_line == line_all
-    assert cond_or.source_line == line_or
-    assert cond_and.source_line == line_and
     assert cond_cmp.source_line == line_cmp
     assert cond_expr_cmp.source_line == line_expr_cmp
     assert cond_chain.source_line == line_chain
 
     # Direct-Tag children get inherited source metadata when they are wrapped.
-    assert cond_or.conditions[0].source_line == line_or
-    assert cond_or.conditions[1].source_line == line_or
+    assert cond_any.conditions[0].source_line == line_any
+    assert cond_any.conditions[1].source_line == line_any
 
 
 def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_instructions():
@@ -106,12 +102,6 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     branch_out = Bool("BranchOut")
     forloop_counter = Int("ForLoopCounter")
     reset_cond = Bool("Reset")
-    cu_done = Bool("CountUpDone")
-    cu_acc = Int("CountUpAcc")
-    cd_done = Bool("CountDownDone")
-    cd_acc = Int("CountDownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -137,15 +127,15 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
 
         with Rung(enable):
             count_up_line = _line_no() + 1
-            count_up(cu_done, cu_acc, preset=5).reset(reset_cond)
+            count_up(Counter[1], preset=5).reset(reset_cond)
 
         with Rung(enable):
             count_down_line = _line_no() + 1
-            count_down(cd_done, cd_acc, preset=5).reset(reset_cond)
+            count_down(Counter[2], preset=5).reset(reset_cond)
 
         with Rung(enable):
             on_delay_line = _line_no() + 1
-            on_delay(timer_done, timer_acc, preset=50).reset(reset_cond)
+            on_delay(Timer[1], preset=50).reset(reset_cond)
 
         with Rung(enable):
             shift_line = _line_no() + 1
@@ -228,16 +218,13 @@ def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
 
 def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_line():
     enable = Bool("Enable")
-    done = Bool("Done")
-    acc = Int("Acc")
     reset_cond = Bool("Reset")
 
     with Program(strict=False) as prog:
         with Rung(enable):
             count_up_line = _line_no() + 1
             count_up(
-                done,
-                acc,
+                Counter[3],
                 preset=5,
             ).reset(reset_cond)
             count_up_end_line = _line_no() - 1
@@ -246,9 +233,9 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
     assert instruction.source_line == count_up_line
     assert instruction.end_line == count_up_end_line
 
-    runner = PLCRunner(prog)
+    runner = PLC(prog)
     runner.patch({"Enable": True, "Reset": False})
-    scan_gen = runner.scan_steps_debug()
+    scan_gen = runner.debug.scan_steps_debug()
     rung_step = next(scan_gen)
     assert rung_step.kind == "rung"
     step = next(scan_gen)
@@ -262,12 +249,6 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     down = Bool("Down")
     reset_cond = Bool("Reset")
     clock = Bool("Clock")
-    up_done = Bool("UpDone")
-    up_acc = Int("UpAcc")
-    down_done = Bool("DownDone")
-    down_acc = Int("DownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -282,7 +263,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     with Program(strict=False) as prog:
         with Rung(enable):
             cu_line = _line_no() + 1
-            cu_builder = count_up(up_done, up_acc, preset=5)
+            cu_builder = count_up(Counter[4], preset=5)
             cu_down_line = _line_no() + 1
             cu_builder = cu_builder.down(down)
             cu_reset_line = _line_no() + 1
@@ -290,13 +271,13 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
 
         with Rung(enable):
             cd_line = _line_no() + 1
-            cd_builder = count_down(down_done, down_acc, preset=5)
+            cd_builder = count_down(Counter[5], preset=5)
             cd_reset_line = _line_no() + 1
             cd_builder.reset(reset_cond)
 
         with Rung(enable):
             timer_line = _line_no() + 1
-            timer_builder = on_delay(timer_done, timer_acc, preset=50)
+            timer_builder = on_delay(Timer[2], preset=50)
             timer_reset_line = _line_no() + 1
             timer_builder.reset(reset_cond)
 
@@ -419,9 +400,11 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
         time_jog_line,
     ]
 
-    runner = PLCRunner(prog)
+    runner = PLC(prog)
     runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
-    instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [
+        step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"
+    ]
     assert [step.source_line for step in instruction_steps] == [
         cu_line,
         cu_down_line,

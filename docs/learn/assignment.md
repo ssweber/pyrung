@@ -14,7 +14,7 @@ Assignment is so fundamental in Python that it barely registers as a concept. Yo
 In ladder logic, moving data is an explicit instruction that lives on the instruction side of a rung. It executes when the rung is true and does nothing when the rung is false.
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, copy, calc, rise
+from pyrung import Bool, Int, Program, Rung, PLC, copy, calc, rise
 
 EntrySensor = Bool("EntrySensor")
 BoxSize     = Int("BoxSize")          # Raw sensor reading
@@ -51,16 +51,15 @@ This is the biggest conceptual jump from Python. In Python, `if sensor:` is abou
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-with runner.active():
+with PLC(logic) as plc:
     BoxSize.value = 150
     EntrySensor.value = True
-    runner.step()
+    plc.step()
     assert CurrentSize.value == 150
     assert SortCount.value == 1
 
     EntrySensor.value = False
-    runner.step()
+    plc.step()
     assert SortCount.value == 1       # rise() only fires once
     assert CycleCount.value == 2      # Unconditional rung runs every scan
 ```

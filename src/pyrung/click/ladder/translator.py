@@ -519,11 +519,11 @@ class _TranslatorMixin:
         return f"[{','.join(addresses)}]"
 
     def _render_indirect_ref(self, indirect: IndirectRef, *, path: str, source: Any) -> str:
-        entry = self._tag_map.block_entry_by_name(indirect.block.name)
+        entry = self._tag_map._block_entry_by_name(indirect.block.name)
 
         if entry is not None:
             try:
-                offset = self._tag_map.offset_for(entry.logical)
+                offset = self._tag_map._offset_for(entry.logical)
             except Exception:
                 self._raise_issue(
                     path=path,
@@ -564,7 +564,7 @@ class _TranslatorMixin:
         return f"{bank}[{pointer}{sign}{abs(offset)}]"
 
     def _require_block_entry(self, block_name: str, *, path: str, source: Any) -> _BlockEntry:
-        entry: _BlockEntry | None = self._tag_map.block_entry_by_name(block_name)
+        entry: _BlockEntry | None = self._tag_map._block_entry_by_name(block_name)
         if entry is None:
             self._raise_issue(
                 path=path,

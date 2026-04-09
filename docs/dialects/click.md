@@ -13,7 +13,7 @@ pip install pyrung
 ## Imports
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung import Bool, Int, PLC, Program, Rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, TagMap
 ```
 
@@ -24,7 +24,7 @@ pyrung is intentionally permissive. Write logic with semantic tag names and nati
 The natural progression:
 
 1. **Write** — define semantic tags (`StartButton`, `MotorRunning`, `Speed`) and express logic in Python
-2. **Simulate** — run tests with `FIXED_STEP`; patch inputs, assert outputs, iterate
+2. **Simulate** — run tests with a fixed `dt`; set inputs, assert outputs, iterate
 3. **Map** — create a `TagMap` linking semantic tags to Click hardware addresses
 4. **Validate** — `mapping.validate(logic, mode="warn")` surfaces Click-incompatible patterns
 5. **Iterate** — fix findings, tighten to `mode="strict"` when the program is clean
@@ -114,7 +114,7 @@ The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`
 ## Writing a Click program
 
 ```python
-from pyrung import Bool, Real, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung import Bool, Real, PLC, Program, Rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
@@ -136,12 +136,9 @@ with Program() as logic:
         copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-
-with runner.active():
+with PLC(logic, dt=0.1) as plc:
     StartButton.value = True
-    runner.step()
+    plc.step()
 ```
 
 ## TagMap — mapping to hardware
@@ -175,6 +172,34 @@ Alarms = Block("Alarms", TagType.BOOL, 1, 100)
 mapping = TagMap({
     Alarms: c.select(101, 200),    # Alarms[1..100] → C101..C200
 })
+```
+
+### Built-in Timer/Counter mapping
+
+Built-in `Timer` and `Counter` UDTs are automatically resolved to their Click hardware banks — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, `Counter[n].Done` → CT*n*, `Counter[n].Acc` → CTD*n*. No explicit TagMap entries are needed for these.
+
+#### Named timers/counters from nicknames
+
+When importing ladder CSV with nicknames (via `nicknames=` dict or `nickname_csv=`), a nickname on a T or CT address promotes the anonymous `Timer[n]` / `Counter[n]` to a named instance:
+
+```python
+# Without nickname: Timer[1]
+on_delay(Timer[1], preset=100, unit="Tms")
+
+# With nickname {"T1": "OvenTimer"}: Timer.named()
+OvenTimer = Timer.named(1, "OvenTimer")
+on_delay(OvenTimer, preset=100, unit="Tms")
+```
+
+The T (done-bit) nickname drives the name — any nickname on the matching TD/CTD address is silently overridden. This keeps `.Done` and `.Acc` fields under a single consistent prefix.
+
+If the nickname already ends with `_Done` or `_Acc` (common in Click projects where users name the done-bit address directly), the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.named(1, "OvenTimer")`, not `Timer.named(1, "OvenTimer_Done")`.
+
+Condition references resolve through the named instance too. A rung conditioned on T1 renders as `OvenTimer.Done`:
+
+```python
+with Rung(OvenTimer.Done):
+    out(AlarmLight)
 ```
 
 ### Type validation at map time
@@ -227,9 +252,9 @@ Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, a
 
 When both count and stride are given, the row span must equal `count × stride`. When stride is omitted, the row count must be divisible by count.
 
-**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_id` → field `id`).
+**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_Id` → field `Id`).
 
-For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
+For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_Call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
 
 ```
 <Task:named_array(1,2,always_number)>
@@ -244,29 +269,29 @@ Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS101 | `Channel1_id` | `<Channel:named_array(2,3)>` |
-| DS102 | `Channel1_val` | |
-| DS103 | `Channel1_name` | |
-| DS104 | `Channel2_id` | |
-| DS105 | `Channel2_val` | |
-| DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
+| DS101 | `Channel1_Id` | `<Channel:named_array(2,3)>` |
+| DS102 | `Channel1_Val` | |
+| DS103 | `Channel1_Name` | |
+| DS104 | `Channel2_Id` | |
+| DS105 | `Channel2_Val` | |
+| DS106 | `Channel2_Name` | `</Channel:named_array(2,3)>` |
 
 Singleton with compact names (`count=1`):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS501 | `Task_call` | `<Task:named_array(1,2)>` |
-| DS502 | `Task_done` | `</Task:named_array(1,2)>` |
+| DS501 | `Task_Call` | `<Task:named_array(1,2)>` |
+| DS502 | `Task_Done` | `</Task:named_array(1,2)>` |
 
 If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS101 | `Sensor1_raw` | `<Sensor:named_array(2,3)>` |
-| DS102 | `Sensor1_scaled` | |
+| DS101 | `Sensor1_Raw` | `<Sensor:named_array(2,3)>` |
+| DS102 | `Sensor1_Scaled` | |
 | DS103 | | *(gap)* |
-| DS104 | `Sensor2_raw` | |
-| DS105 | `Sensor2_scaled` | |
+| DS104 | `Sensor2_Raw` | |
+| DS105 | `Sensor2_Scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
 Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
@@ -279,14 +304,14 @@ fill(0, RecipeProfile.instance_select(1, 2))
 **UDTs** use explicit `:udt` markers per field and memory bank. Each attribute range is a separate marker:
 
 ```text
-<Motor.speed:udt>
-</Motor.speed:udt>
-<Config.timeout:udt />
+<Motor.Speed:udt>
+</Motor.Speed:udt>
+<Config.Timeout:udt />
 ```
 
-The importer collects all `Base.field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
+The importer collects all `Base.Field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
 
-Bare dotted tags such as `<Motor.speed>` are grouping-only and do not reconstruct a UDT.
+Bare dotted tags such as `<Motor.Speed>` are grouping-only and do not reconstruct a UDT.
 
 Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
 
@@ -325,6 +350,26 @@ Common findings:
 |-------|--------------|----------------|
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
+
+### Timer preset limits
+
+Click timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets — use a larger time unit instead.
+
+| Unit | Max preset | Max duration |
+|------|-----------|--------------|
+| `Tms` | 32,767 | 32.7 seconds |
+| `Ts` | 32,767 | 9.1 hours |
+| `Tm` | 32,767 | 22.7 days |
+| `Th` | 32,767 | 3.7 years |
+| `Td` | 32,767 | 89 years |
+
+```python
+# Wrong — clamps silently to 32.7 seconds
+on_delay(MyTimer, preset=60000, unit="Tms")
+
+# Right — use seconds
+on_delay(MyTimer, preset=60, unit="Ts")
+```
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
@@ -372,11 +417,11 @@ Use Click Programming Software's **Data > Read Data from PLC** to dump the live 
 
 ```python
 from pyclickplc import read_plc_data
-from pyrung.core import PLCRunner, SystemState
+from pyrung.core import PLC, SystemState
 
 data = read_plc_data("data.csv", skip_default=True)
 tags = mapping.tags_from_plc_data(data)
-runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 ```
 
 `read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.

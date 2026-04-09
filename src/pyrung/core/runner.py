@@ -1,4 +1,4 @@
-"""PLCRunner - Generator-driven PLC execution engine.
+"""PLC - Generator-driven PLC execution engine.
 
 The runner orchestrates scan cycle execution with inversion of control.
 The consumer drives execution via step(), allowing input injection,
@@ -13,9 +13,10 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
+from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -113,11 +114,11 @@ class _RunnerHandle:
 
 
 class _BreakpointBuilder:
-    """Fluent builder returned by ``runner.when(...)`` / ``runner.when_fn(...)``."""
+    """Fluent builder returned by ``runner.when(...)``."""
 
     __slots__ = ("_runner", "_predicate")
 
-    def __init__(self, runner: PLCRunner, predicate: Callable[[SystemState], bool]) -> None:
+    def __init__(self, runner: PLC, predicate: Callable[[SystemState], bool]) -> None:
         self._runner = runner
         self._predicate = predicate
 
@@ -180,7 +181,68 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
     return tuple(found_by_name.values())
 
 
-class PLCRunner:
+class _DebugNamespace:
+    """Namespace exposing debugger-facing methods on ``plc.debug``."""
+
+    __slots__ = ("_plc",)
+
+    def __init__(self, plc: PLC) -> None:
+        self._plc = plc
+
+    # -- DebugRunner protocol (used by PLCDebugger) --
+
+    def prepare_scan(self) -> tuple[ScanContext, float]:
+        return self._plc._prepare_scan()
+
+    def commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        self._plc._commit_scan(ctx, dt)
+
+    def iter_top_level_rungs(self) -> Iterable[Rung]:
+        return self._plc._logic
+
+    def evaluate_condition_value(
+        self,
+        condition: Any,
+        ctx: ScanContext | ConditionView,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        return self._plc._evaluate_condition_value(condition, ctx)
+
+    def condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
+        return self._plc._condition_term_text(condition, details)
+
+    def condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
+        return self._plc._condition_annotation(
+            status=status, expression=expression, summary=summary
+        )
+
+    def condition_expression(self, condition: Any) -> str:
+        return self._plc._condition_expression(condition)
+
+    # -- Public debug surface --
+
+    def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
+        """Execute one scan cycle yielding after each rung."""
+        return self._plc._scan_steps()
+
+    def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
+        """Execute one scan cycle yielding fine-grained debug steps."""
+        return self._plc._scan_steps_debug()
+
+    def rung_trace(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
+        """Return retained rung-level debug trace for one scan."""
+        return self._plc._inspect(rung_id, scan_id)
+
+    def last_event(self) -> tuple[int, int, RungTraceEvent] | None:
+        """Return the latest debug-trace event."""
+        return self._plc._inspect_event()
+
+    @property
+    def system_runtime(self) -> SystemPointRuntime:
+        """System point runtime component."""
+        return self._plc._system_runtime
+
+
+class PLC:
     """Generator-driven PLC execution engine.
 
     Executes PLC logic as pure functions: Logic(state) -> new_state.
@@ -201,16 +263,26 @@ class PLCRunner:
         logic: list[Any] | Any = None,
         initial_state: SystemState | None = None,
         *,
+        dt: float | None = None,
+        realtime: bool = False,
         history_limit: int | None = None,
     ) -> None:
-        """Create a new PLCRunner.
+        """Create a new PLC.
 
         Args:
             logic: Program, list of rungs, or None for empty logic.
             initial_state: Starting state. Defaults to SystemState().
+            dt: Time delta per scan in seconds (default 0.010).
+                Only used in fixed-step mode.
+            realtime: Use wall-clock timing instead of fixed step.
+                Mutually exclusive with dt.
             history_limit: Max retained snapshots including initial state.
                 Use None for unbounded history.
         """
+        if realtime and dt is not None:
+            raise ValueError("Cannot specify dt= with realtime=True")
+        if dt is None:
+            dt = 0.010
         if history_limit is not None and history_limit < 1:
             raise ValueError("history_limit must be >= 1 or None")
 
@@ -244,9 +316,13 @@ class PLCRunner:
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
         self._latest_committed_trace_event: tuple[int, int, RungTraceEvent] | None = None
         self._playhead = self._state.scan_id
-        self._time_mode = TimeMode.FIXED_STEP
-        self._dt = 0.1  # Default: 100ms per scan
-        self._last_step_time: float | None = None  # For REALTIME mode
+        self._dt = dt
+        self._last_step_time: float | None = None
+        if realtime:
+            self._time_mode = TimeMode.REALTIME
+            self._last_step_time = time.perf_counter()
+        else:
+            self._time_mode = TimeMode.FIXED_STEP
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -261,10 +337,12 @@ class PLCRunner:
         self._forces = self._input_overrides.forces_mutable
         self._condition_trace = ConditionTraceEngine(formatter=TraceFormatter())
         self._debugger = PLCDebugger(step_factory=ScanStep)
+        self._debug_ns = _DebugNamespace(self)
         self._next_debug_handle_id = 1
         self._monitors_by_id: dict[int, _MonitorRegistration] = {}
         self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
         self._pause_requested_this_scan = False
+        self._active_tokens: list[Token[PLC | None]] = []
         self._known_tags_by_name: dict[str, Tag] = {}
         self._refresh_known_tags_from_logic()
         # Seed initial state with tag defaults (skip tags already in state).
@@ -327,7 +405,7 @@ class PLCRunner:
                 changed[key] = (old_value, new_value)
         return changed
 
-    def inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
+    def _inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
         """Return retained rung-level debug trace for one scan.
 
         If ``scan_id`` is omitted, the current playhead scan is inspected.
@@ -346,7 +424,7 @@ class PLCRunner:
         except KeyError as exc:
             raise KeyError(rung_id) from exc
 
-    def inspect_event(self) -> tuple[int, int, RungTraceEvent] | None:
+    def _inspect_event(self) -> tuple[int, int, RungTraceEvent] | None:
         """Return the latest debug-trace event for active/committed debug-path scans.
 
         Returns:
@@ -381,7 +459,7 @@ class PLCRunner:
         self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
         return self._latest_committed_trace_event
 
-    def fork(self, scan_id: int | None = None) -> PLCRunner:
+    def fork(self, scan_id: int | None = None) -> PLC:
         """Create an independent runner from retained historical state.
 
         Args:
@@ -389,17 +467,17 @@ class PLCRunner:
         """
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
         historical_state = self.history.at(target_scan_id)
-        fork = PLCRunner(
+        fork = PLC(
             logic=list(self._logic),
             initial_state=historical_state,
             history_limit=self._history_limit,
         )
-        fork.set_time_mode(self._time_mode, dt=self._dt)
-        parent_rtc_at_fork_point = self.system_runtime._rtc_now(historical_state)
+        fork._set_time_mode(self._time_mode, dt=self._dt)
+        parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         return fork
 
-    def fork_from(self, scan_id: int) -> PLCRunner:
+    def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
 
@@ -414,9 +492,9 @@ class PLCRunner:
         return self._time_mode
 
     @property
-    def system_runtime(self) -> SystemPointRuntime:
-        """System point runtime component."""
-        return self._system_runtime
+    def debug(self) -> _DebugNamespace:
+        """Debugger-facing methods and internal runtime access."""
+        return self._debug_ns
 
     def stop(self) -> None:
         """Transition PLC to STOP mode."""
@@ -429,8 +507,13 @@ class PLCRunner:
             battery_present=self._battery_present,
         )
 
-    def set_battery_present(self, value: bool) -> None:
-        """Configure simulated backup battery presence."""
+    @property
+    def battery_present(self) -> bool:
+        """Simulated backup battery presence."""
+        return self._battery_present
+
+    @battery_present.setter
+    def battery_present(self, value: bool) -> None:
         self._battery_present = bool(value)
         self._state = self._apply_runtime_memory_flags(
             self._state,
@@ -456,13 +539,8 @@ class PLCRunner:
         """Set the current RTC value for the runner."""
         self._set_rtc_internal(self._normalize_rtc_datetime(value), self._state.timestamp)
 
-    def set_time_mode(self, mode: TimeMode, *, dt: float = 0.1) -> None:
-        """Set the time mode for simulation.
-
-        Args:
-            mode: TimeMode.FIXED_STEP or TimeMode.REALTIME.
-            dt: Time delta per scan (only used for FIXED_STEP mode).
-        """
+    def _set_time_mode(self, mode: TimeMode, *, dt: float = 0.010) -> None:
+        """Set the time mode (internal, used by fork)."""
         self._time_mode = mode
         self._dt = dt
         if mode == TimeMode.REALTIME:
@@ -607,14 +685,14 @@ class PLCRunner:
             self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
         )
 
-    @contextmanager
-    def active(self) -> Iterator[PLCRunner]:
+    def __enter__(self) -> PLC:
         """Bind this runner as active for live Tag.value access."""
-        token = set_active_runner(self)
-        try:
-            yield self
-        finally:
-            reset_active_runner(token)
+        self._active_tokens.append(set_active_runner(self))
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._active_tokens:
+            reset_active_runner(self._active_tokens.pop())
 
     def patch(
         self,
@@ -633,7 +711,7 @@ class PLCRunner:
         self._register_known_tags_from_mapping_keys(tags)
         self._input_overrides.patch(tags)
 
-    def add_force(self, tag: str | Tag, value: bool | int | float | str) -> None:
+    def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
         """Persistently override a tag value until explicitly removed.
 
         The forced value is applied at the pre-logic force pass (phase 3) and
@@ -641,7 +719,7 @@ class PLCRunner:
         may temporarily diverge the value mid-scan, but the post-logic pass
         restores it before outputs are written.
 
-        Forces persist across scans until `remove_force()` or `clear_forces()`
+        Forces persist across scans until `unforce()` or `clear_forces()`
         is called.  Multiple forces may be active simultaneously.
 
         If a tag is both patched and forced in the same scan, the force
@@ -660,7 +738,7 @@ class PLCRunner:
             self._register_known_tag(tag)
         self._input_overrides.add_force(tag, value)
 
-    def remove_force(self, tag: str | Tag) -> None:
+    def unforce(self, tag: str | Tag) -> None:
         """Remove a single persistent force override.
 
         After removal the tag resumes its logic-computed value starting
@@ -680,12 +758,12 @@ class PLCRunner:
         self._input_overrides.clear_forces()
 
     @contextmanager
-    def force(
+    def forced(
         self,
         overrides: Mapping[str, bool | int | float | str]
         | Mapping[Tag, bool | int | float | str]
         | Mapping[str | Tag, bool | int | float | str],
-    ) -> Iterator[PLCRunner]:
+    ) -> Iterator[PLC]:
         """Temporarily apply forces for the duration of the context.
 
         On entry, saves the current force map and adds the given overrides.
@@ -693,7 +771,7 @@ class PLCRunner:
         restored — forces that existed before the context are reinstated, and
         forces added inside the context are removed.
 
-        Safe for nesting: inner ``force()`` contexts layer on top of outer ones
+        Safe for nesting: inner ``forced()`` contexts layer on top of outer ones
         without disrupting them.
 
         Args:
@@ -701,8 +779,8 @@ class PLCRunner:
 
         Example:
             ```python
-            with runner.force({"AutoMode": True, "Fault": False}):
-                runner.run(5)
+            with plc.forced({"AutoMode": True, "Fault": False}):
+                plc.run(5)
             # AutoMode and Fault forces released here
             ```
         """
@@ -733,15 +811,33 @@ class PLCRunner:
 
     def when(
         self,
-        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        *conditions: Condition
+        | Tag
+        | Callable[[SystemState], bool]
+        | tuple[Condition | Tag, ...]
+        | list[Condition | Tag],
     ) -> _BreakpointBuilder:
-        """Create a condition breakpoint builder evaluated after each committed scan."""
-        predicate = self._compile_condition_predicate(*conditions, method="when")
+        """Create a breakpoint builder evaluated after each committed scan.
+
+        Accepts ``Tag``/``Condition`` expressions (implicit AND) or a single
+        callable predicate receiving ``SystemState``.
+        """
+        if self._is_fn_predicate(conditions):
+            return _BreakpointBuilder(self, conditions[0])
+        predicate = self._compile_condition_predicate(*conditions, method="when")  # ty: ignore[invalid-argument-type]
         return _BreakpointBuilder(self, predicate)
 
-    def when_fn(self, predicate: Callable[[SystemState], bool]) -> _BreakpointBuilder:
-        """Create a callable-predicate breakpoint builder evaluated after each scan."""
-        return _BreakpointBuilder(self, predicate)
+    @staticmethod
+    def _is_fn_predicate(
+        conditions: tuple[Any, ...],
+    ) -> TypeGuard[tuple[Callable[[SystemState], bool]]]:
+        """Return True if conditions is a single callable predicate (not a Tag/Condition)."""
+        if len(conditions) != 1 or not callable(conditions[0]):
+            return False
+        from pyrung.core.condition import Condition as ConditionClass
+        from pyrung.core.tag import Tag as TagClass
+
+        return not isinstance(conditions[0], (TagClass, ConditionClass))
 
     def _compile_condition_predicate(
         self,
@@ -751,11 +847,6 @@ class PLCRunner:
         """Compile a Tag/Condition expression into a ``SystemState`` predicate."""
         if not conditions:
             raise TypeError(f"{method}() requires at least one condition")
-        if len(conditions) == 1 and callable(conditions[0]):
-            raise TypeError(
-                f"{method}() now accepts Tag/Condition expressions; "
-                f"use {method}_fn(...) for callable predicates."
-            )
 
         from pyrung.core.condition import _as_condition, _normalize_and_condition
 
@@ -971,7 +1062,7 @@ class PLCRunner:
             "rtc_offset_seconds": float((rtc_now - wall_now).total_seconds()),
         }
 
-    def scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
+    def _scan_steps(self) -> Generator[tuple[int, Rung, ScanContext], None, None]:
         """Execute one scan cycle and yield after each rung evaluation.
 
         Scan phases:
@@ -996,7 +1087,7 @@ class PLCRunner:
 
         self._commit_scan(ctx, dt)
 
-    def scan_steps_debug(self) -> Generator[ScanStep, None, None]:
+    def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle and yield ``ScanStep`` objects at all boundaries.
 
         Yields a `ScanStep` at each:
@@ -1010,12 +1101,12 @@ class PLCRunner:
         ``source_line``, ``end_line``), rung enable state, and a trace of
         evaluated conditions and instructions.
 
-        This is the API used by the DAP adapter.  Prefer `scan_steps()` for
-        non-debug consumers — it has less overhead and a simpler yield type.
+        This is the API used by the DAP adapter via ``plc.debug.scan_steps_debug()``.
+        Prefer ``_scan_steps()`` for non-debug consumers — it has less overhead
+        and a simpler yield type.
 
         Note:
-            Like `scan_steps()`, the scan is committed only when the generator
-            is **fully exhausted**.
+            The scan is committed only when the generator is **fully exhausted**.
         """
         self._ensure_running()
         pending_scan_id = self._state.scan_id + 1
@@ -1023,7 +1114,7 @@ class PLCRunner:
         self._start_inflight_debug_scan(scan_id=pending_scan_id, events_by_rung=events_by_rung)
 
         try:
-            for step in self._debugger.scan_steps_debug(self):
+            for step in self._debugger.scan_steps_debug(self._debug_ns):
                 event = self._rung_trace_event_from_step(step)
                 events_by_rung.setdefault(step.rung_index, []).append(event)
                 self._latest_inflight_trace_event = (pending_scan_id, step.rung_index, event)
@@ -1069,42 +1160,6 @@ class PLCRunner:
             trace=step.trace,
         )
 
-    def prepare_scan(self) -> tuple[ScanContext, float]:
-        """Debugger-facing scan preparation API."""
-        return self._prepare_scan()
-
-    def commit_scan(self, ctx: ScanContext, dt: float) -> None:
-        """Debugger-facing scan commit API."""
-        self._commit_scan(ctx, dt)
-
-    def iter_top_level_rungs(self) -> Iterable[Rung]:
-        """Debugger-facing top-level rung iterator."""
-        return self._logic
-
-    def evaluate_condition_value(
-        self,
-        condition: Any,
-        ctx: ScanContext | ConditionView,
-    ) -> tuple[bool, list[dict[str, Any]]]:
-        """Debugger-facing condition evaluation API."""
-        return self._evaluate_condition_value(condition, ctx)
-
-    def condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
-        """Debugger-facing condition summary API."""
-        return self._condition_term_text(condition, details)
-
-    def condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
-        """Debugger-facing annotation API."""
-        return self._condition_annotation(
-            status=status,
-            expression=expression,
-            summary=summary,
-        )
-
-    def condition_expression(self, condition: Any) -> str:
-        """Debugger-facing expression rendering API."""
-        return self._condition_expression(condition)
-
     def _evaluate_condition_value(
         self,
         condition: Any,
@@ -1131,7 +1186,7 @@ class PLCRunner:
         return self._run_single_scan(consume_pause_request=True)
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
-        for _ in self.scan_steps():
+        for _ in self._scan_steps():
             pass
 
         if consume_pause_request:
@@ -1175,36 +1230,29 @@ class PLCRunner:
 
     def run_until(
         self,
-        *conditions: Condition | Tag | tuple[Condition | Tag, ...] | list[Condition | Tag],
+        *conditions: Condition
+        | Tag
+        | Callable[[SystemState], bool]
+        | tuple[Condition | Tag, ...]
+        | list[Condition | Tag],
         max_cycles: int = 10000,
     ) -> SystemState:
         """Run until condition is true, pause breakpoint fires, or max_cycles reached.
 
+        Accepts ``Tag``/``Condition`` expressions (implicit AND) or a single
+        callable predicate receiving ``SystemState``.
+
         Args:
-            conditions: ``Tag`` / ``Condition`` expressions evaluated with implicit AND.
+            conditions: Condition expressions or a single callable predicate.
             max_cycles: Maximum scans before giving up (default 10000).
 
         Returns:
             The state that matched the condition, or final state if max reached.
         """
-        predicate = self._compile_condition_predicate(*conditions, method="run_until")
-        return self.run_until_fn(predicate, max_cycles=max_cycles)
-
-    def run_until_fn(
-        self,
-        predicate: Callable[[SystemState], bool],
-        *,
-        max_cycles: int = 10000,
-    ) -> SystemState:
-        """Run until callable predicate is true, paused, or ``max_cycles`` reached.
-
-        Args:
-            predicate: Callable receiving committed ``SystemState`` snapshots.
-            max_cycles: Maximum scans before giving up (default 10000).
-
-        Returns:
-            The state that matched the predicate, or final state if max reached.
-        """
+        if self._is_fn_predicate(conditions):
+            predicate = conditions[0]
+        else:
+            predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
         self._ensure_running()
         for _ in range(max_cycles):
             self._consume_pause_request()

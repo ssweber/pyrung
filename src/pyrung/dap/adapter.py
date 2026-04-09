@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable, Generator
 from typing import Any, BinaryIO, TypeVar
 
-from pyrung.core import PLCRunner
+from pyrung.core import PLC
 from pyrung.core.context import ScanContext
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
@@ -82,11 +82,11 @@ class DAPAdapter:
         self._pending_snapshot_labels_by_scan: dict[int, set[str]] = {}
 
     @property
-    def _runner(self) -> PLCRunner | None:
+    def _runner(self) -> PLC | None:
         return self._session.runner
 
     @_runner.setter
-    def _runner(self, value: PLCRunner | None) -> None:
+    def _runner(self, value: PLC | None) -> None:
         self._session.runner = value
 
     @property
@@ -276,7 +276,7 @@ class DAPAdapter:
     def _on_launch(self, args: dict[str, Any]) -> HandlerResult:
         return lifecycle_launch.on_launch(self, args)
 
-    def _discover_runner(self, namespace: dict[str, Any]) -> PLCRunner:
+    def _discover_runner(self, namespace: dict[str, Any]) -> PLC:
         return lifecycle_launch.discover_runner(self, namespace)
 
     def _on_stackTrace(self, args: dict[str, Any]) -> HandlerResult:
@@ -478,7 +478,7 @@ class DAPAdapter:
     def _clear_debug_registrations_locked(self) -> None:
         monitor_data_breakpoints.clear_debug_registrations_locked(self)
 
-    def _require_runner_locked(self) -> PLCRunner:
+    def _require_runner_locked(self) -> PLC:
         if self._runner is None:
             raise DAPAdapterError("No program launched")
         return self._runner
@@ -486,9 +486,9 @@ class DAPAdapter:
     def _shutdown(self) -> HandlerResult:
         return lifecycle_launch.shutdown(self)
 
-    def _top_level_rungs(self, runner: PLCRunner) -> list[Rung]:
+    def _top_level_rungs(self, runner: PLC) -> list[Rung]:
         """Return top-level rungs through the runner's public debug API."""
-        return list(runner.iter_top_level_rungs())
+        return list(runner.debug.iter_top_level_rungs())
 
     def _current_trace_body_locked(self) -> dict[str, Any] | None:
         runner = self._runner
@@ -496,7 +496,7 @@ class DAPAdapter:
             return None
 
         return self._formatter.current_trace_body(
-            event_result=runner.inspect_event(),
+            event_result=runner.debug.last_event(),
             current_scan_id=runner.current_state.scan_id,
             trace_version=self.TRACE_VERSION,
             canonical_path=self._canonical_path,

@@ -4,9 +4,9 @@ Generates rungs with branch() blocks and checks structural invariants on the
 exported CSV, plus parse -> re-export stability through ladder_to_pyrung().
 
 Exercises:
-- Parent conditions, with and without any_of(...)
+- Parent conditions, with and without Or(...)
 - Parent instructions before and after branches
-- Branch-local any_of(...)
+- Branch-local Or(...)
 - Nested branch() blocks
 - Nested branch() blocks with inner OR
 - continued() rungs whose branch rows must stay visually pushed down
@@ -24,7 +24,7 @@ from hypothesis import strategies as st
 pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
-from pyrung.core import Bool, Program, Rung, all_of, any_of
+from pyrung.core import And, Bool, Or, Program, Rung
 from pyrung.core.program import branch, out
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ def _new_tag_builders():
 def _draw_or_term(draw, make_cond):
     n = draw(st.integers(min_value=1, max_value=2))
     leaves = [make_cond() for _ in range(n)]
-    return leaves[0] if n == 1 else all_of(*leaves)
+    return leaves[0] if n == 1 else And(*leaves)
 
 
 def _draw_parent_conditions(draw, make_cond, *, use_or_parent: bool) -> list:
@@ -65,7 +65,7 @@ def _draw_parent_conditions(draw, make_cond, *, use_or_parent: bool) -> list:
     if use_or_parent:
         n_or_branches = draw(st.integers(min_value=2, max_value=3))
         parent_conditions.append(
-            any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_or_branches)])
+            Or(*[_draw_or_term(draw, make_cond) for _ in range(n_or_branches)])
         )
 
     n_suffix = draw(st.integers(min_value=0, max_value=1))
@@ -86,7 +86,7 @@ def _branch_rung(draw, *, use_or_parent: bool = False, use_local_or: bool = Fals
         (parent_conditions, before_outputs, branch_specs, after_outputs, cond_tags, out_tags)
 
     Each branch spec is (branch_conditions, branch_output), where branch_conditions
-    may contain Bool terms and any_of(...) terms.
+    may contain Bool terms and Or(...) terms.
     """
     make_cond, make_out, cond_tags, out_tags = _new_tag_builders()
     parent_conditions = _draw_parent_conditions(draw, make_cond, use_or_parent=use_or_parent)
@@ -109,7 +109,7 @@ def _branch_rung(draw, *, use_or_parent: bool = False, use_local_or: bool = Fals
 
             n_local_or = draw(st.integers(min_value=2, max_value=3))
             branch_conditions.append(
-                any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)])
+                Or(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)])
             )
 
             if draw(st.booleans()):
@@ -164,9 +164,7 @@ def _nested_branch_rung(draw, *, use_inner_or: bool = False):
         if draw(st.booleans()):
             inner_conditions.append(make_cond())
         n_inner_or = draw(st.integers(min_value=2, max_value=3))
-        inner_conditions.append(
-            any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_inner_or)])
-        )
+        inner_conditions.append(Or(*[_draw_or_term(draw, make_cond) for _ in range(n_inner_or)]))
         if draw(st.booleans()):
             inner_conditions.append(make_cond())
     else:
@@ -212,7 +210,7 @@ def _continued_branch_rung(draw):
     if draw(st.booleans()):
         branch_conditions.append(make_cond())
     n_local_or = draw(st.integers(min_value=2, max_value=3))
-    branch_conditions.append(any_of(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)]))
+    branch_conditions.append(Or(*[_draw_or_term(draw, make_cond) for _ in range(n_local_or)]))
     if draw(st.booleans()):
         branch_conditions.append(make_cond())
 

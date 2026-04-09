@@ -70,6 +70,5 @@ __all__ = [
     "ValidationMode",
     "board",
     "generate_circuitpy",
-    "validate_circuitpy_program",
     "write_circuitpy",
 ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, call, forloop, out, subroutine
+from pyrung.core import PLC, Bool, Int, Program, Rung, call, forloop, out, subroutine
 from pyrung.core.debug_handlers import (
     CallInstructionDebugHandler,
     ForLoopInstructionDebugHandler,
@@ -75,8 +75,8 @@ def test_call_handler_preserves_subroutine_context_and_call_stack() -> None:
             call("work")
             out(done)
 
-    runner = PLCRunner(logic)
-    steps = list(runner.scan_steps_debug())
+    runner = PLC(logic)
+    steps = list(runner.debug.scan_steps_debug())
 
     sub_instruction_steps = [
         step for step in steps if step.kind == "instruction" and step.subroutine_name == "work"
@@ -95,8 +95,8 @@ def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
             with forloop(2):
                 out(pulse)
 
-    runner = PLCRunner(logic)
-    steps = list(runner.scan_steps_debug())
+    runner = PLC(logic)
+    steps = list(runner.debug.scan_steps_debug())
 
     instruction_steps = [step for step in steps if step.kind == "instruction"]
     assert len(instruction_steps) == 2
@@ -112,39 +112,39 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
         with Rung(enable):
             out(light)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
     class RunnerFacade:
-        def __init__(self, inner: PLCRunner) -> None:
-            self._inner = inner
+        def __init__(self, inner: PLC) -> None:
+            self._debug = inner.debug
 
         def prepare_scan(self) -> tuple[Any, float]:
-            return self._inner.prepare_scan()
+            return self._debug.prepare_scan()
 
         def commit_scan(self, ctx: Any, dt: float) -> None:
-            self._inner.commit_scan(ctx, dt)
+            self._debug.commit_scan(ctx, dt)
 
         def iter_top_level_rungs(self) -> Any:
-            return self._inner.iter_top_level_rungs()
+            return self._debug.iter_top_level_rungs()
 
         def evaluate_condition_value(
             self, condition: Any, ctx: Any
         ) -> tuple[bool, list[dict[str, Any]]]:
-            return self._inner.evaluate_condition_value(condition, ctx)
+            return self._debug.evaluate_condition_value(condition, ctx)
 
         def condition_term_text(self, condition: Any, details: list[dict[str, Any]]) -> str:
-            return self._inner.condition_term_text(condition, details)
+            return self._debug.condition_term_text(condition, details)
 
         def condition_annotation(self, *, status: str, expression: str, summary: str) -> str:
-            return self._inner.condition_annotation(
+            return self._debug.condition_annotation(
                 status=status,
                 expression=expression,
                 summary=summary,
             )
 
         def condition_expression(self, condition: Any) -> str:
-            return self._inner.condition_expression(condition)
+            return self._debug.condition_expression(condition)
 
     debugger = PLCDebugger(step_factory=ScanStep)
     steps = list(debugger.scan_steps_debug(RunnerFacade(runner)))

@@ -194,9 +194,9 @@ class _Parser:
 
         tag_name = self._parse_tag()
         self._skip_ws()
-        if tag_name in {"all_of", "any_of"} and self._consume_if("("):
+        if tag_name in {"And", "Or"} and self._consume_if("("):
             args = self._parse_call_args(tag_name)
-            if tag_name == "all_of":
+            if tag_name == "And":
                 return self._ParsedNode(expr=And(children=args))
             return self._ParsedNode(expr=Or(children=args))
 

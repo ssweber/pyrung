@@ -1,4 +1,4 @@
-"""Debugger stepping engine for PLCRunner."""
+"""Debugger stepping engine for PLC."""
 
 from __future__ import annotations
 

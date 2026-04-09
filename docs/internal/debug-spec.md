@@ -50,7 +50,7 @@ Each engine feature is designed with the editor as its primary consumer, ensurin
 
 ## Scope
 
-Debugging and inspection APIs on top of `PLCRunner`:
+Debugging and inspection APIs on top of `PLC`:
 
 - force (Click "override")
 - source location capture for DSL elements
@@ -131,7 +131,7 @@ class Rung:
         )
 ```
 
-Conditions (`rise()`, `fall()`, `any_of()`, `all_of()`, tag/expression comparisons, `|`/`&` combinations) and instruction emitters (`out()`, `latch()`, `copy()`, `run_function()`, `search()`, `call()`, etc.) capture source at construction time.
+Conditions (`rise()`, `fall()`, `Or()`, `And()`, tag/expression comparisons) and instruction emitters (`out()`, `latch()`, `copy()`, `run_function()`, `search()`, `call()`, etc.) capture source at construction time.
 
 Builder flows also preserve original callsite metadata:
 
@@ -165,11 +165,11 @@ If rungs are built in a loop, multiple rung objects may share source lines. The 
 
 ## VS Code Extension
 
-The extension uses the Debug Adapter Protocol (DAP) to expose PLCRunner debugging in VS Code.
+The extension uses the Debug Adapter Protocol (DAP) to expose PLC debugging in VS Code.
 
 ### DAP mapping
 
-| PLCRunner concept | VS Code / DAP feature |
+| PLC concept | VS Code / DAP feature |
 |---|---|
 | `step()` | Step button |
 | `scan_steps()` | Rung-boundary stepping internals |
@@ -201,7 +201,7 @@ After each scan, the extension reads trace data and applies decorations to the s
 
 The extension consists of:
 
-- A **Debug Adapter** (Python or TypeScript) that wraps PLCRunner over stdin/stdout or socket
+- A **Debug Adapter** (Python or TypeScript) that wraps PLC over stdin/stdout or socket
 - A **decoration provider** that maps rung trace data to source line highlights
 - A small **protocol** between the adapter and the runner for trace and state queries
 

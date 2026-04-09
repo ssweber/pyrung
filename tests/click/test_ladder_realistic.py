@@ -35,15 +35,17 @@ from pyrung.click import (
     y,
 )
 from pyrung.core import (
+    And,
     Block,
     Bool,
+    Counter,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    all_of,
-    any_of,
+    Timer,
     fall,
     rise,
 )
@@ -91,16 +93,6 @@ def _build_program_and_mapping():
     StepDone = Bool("StepDone")
     Found = Bool("Found")
 
-    # ── Timer / counter tags ─────────────────────────────────────────────
-    RTonDone = Bool("RTonDone")
-    RTonAcc = Int("RTonAcc")
-    TofDone = Bool("TofDone")
-    TofAcc = Int("TofAcc")
-    CtuDone = Bool("CtuDone")
-    CtuAcc = Dint("CtuAcc")
-    CtdDone = Bool("CtdDone")
-    CtdAcc = Dint("CtdAcc")
-
     # ── Data tags ────────────────────────────────────────────────────────
     Idx = Int("Idx", default=1)
     Source = Int("Source")
@@ -143,31 +135,31 @@ def _build_program_and_mapping():
     # ── Program ──────────────────────────────────────────────────────────
     with Program() as logic:
         # R1: Run-latch — OR with rising/falling edges
-        with Rung(any_of(Enable, rise(Start), fall(Stop))):
+        with Rung(Or(Enable, rise(Start), fall(Stop))):
             latch(Running)
 
         # R2: Stop conditions — simple OR
-        with Rung(any_of(Stop, Abort)):
+        with Rung(Or(Stop, Abort)):
             reset(Running)
 
         # R3: Retentive on-delay with reset pin
         with Rung(Running):
-            on_delay(RTonDone, RTonAcc, preset=250).reset(ShiftReset)
+            on_delay(Timer[1], preset=250).reset(ShiftReset)
 
         # R4: Off-delay
         with Rung(Running):
-            off_delay(TofDone, TofAcc, preset=100)
+            off_delay(Timer[2], preset=100)
 
         # R5: Count-up with reset pin
         with Rung(Running):
-            count_up(CtuDone, CtuAcc, preset=50).reset(Stop)
+            count_up(Counter[1], preset=50).reset(Stop)
 
         # R6: Count-down with reset pin
         with Rung(Running):
-            count_down(CtdDone, CtdAcc, preset=5).reset(ShiftReset)
+            count_down(Counter[2], preset=5).reset(ShiftReset)
 
         # R7: copy + calc + indirect copy + blockcopy + fill
-        with Rung(Running, RTonDone):
+        with Rung(Running, Timer[1].Done):
             copy(120, Source)
             calc((Source * 2) + (Idx * 2) - 3, CalcOut)
             copy(SrcBlk[Idx], DstBlk[Idx])
@@ -244,7 +236,7 @@ def _build_program_and_mapping():
             copy(Idx, DstBlk[4])
             with branch(AutoMode):
                 copy(CalcOut, DstBlk[1])
-            with branch(Found, CtuDone):
+            with branch(Found, Counter[1].Done):
                 copy(FoundAddr, DstBlk[2])
             copy(Source, DstBlk[5])
 
@@ -273,7 +265,7 @@ def _build_program_and_mapping():
             )
 
         # R19: OR condition
-        with Rung(AutoMode | Found):
+        with Rung(Or(AutoMode, Found)):
             out(StepDone)
 
         # R20: Compare condition
@@ -284,7 +276,7 @@ def _build_program_and_mapping():
         with subroutine("service"):
             with Rung(Abort):
                 return_early()
-            with Rung(all_of(Running, Found)):
+            with Rung(And(Running, Found)):
                 copy(CalcOut, DstBlk[3])
 
     # ── TagMap ───────────────────────────────────────────────────────────
@@ -304,15 +296,15 @@ def _build_program_and_mapping():
             # Internal bits (C)
             Found: c[1],
             # Timers
-            RTonDone: t[1],
-            RTonAcc: td[1],
-            TofDone: t[2],
-            TofAcc: td[2],
+            Timer[1].Done: t[1],
+            Timer[1].Acc: td[1],
+            Timer[2].Done: t[2],
+            Timer[2].Acc: td[2],
             # Counters
-            CtuDone: ct[1],
-            CtuAcc: ctd[1],
-            CtdDone: ct[2],
-            CtdAcc: ctd[2],
+            Counter[1].Done: ct[1],
+            Counter[1].Acc: ctd[1],
+            Counter[2].Done: ct[2],
+            Counter[2].Acc: ctd[2],
             # Data (DS)
             Idx: ds[1],
             Source: ds[2],
@@ -470,7 +462,7 @@ def test_realistic_or_condition_expansion():
     logic, mapping = _build_program_and_mapping()
     bundle = pyrung_to_ladder(logic, mapping)
 
-    # R1: any_of(Enable, rise(Start), fall(Stop)) — 3-way OR
+    # R1: Or(Enable, rise(Start), fall(Stop)) — 3-way OR
     # First rung row should have latch(Y001) as AF token.
     r1_idx = None
     for i, row in enumerate(bundle.main_rows):

@@ -21,15 +21,17 @@ from pyrung.click.validation import (
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
+    CLK_TIMER_PRESET_OVERFLOW,
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Tag, TagType, immediate, to_value
+from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, immediate, to_value
 from pyrung.core.program import (
     Program,
     Rung,
     calc,
     copy,
+    on_delay,
     out,
     reset,
     rise,
@@ -261,9 +263,9 @@ class TestIntTruthinessInCondition:
         Start = Bool("Start")
 
         def logic():
-            from pyrung.core import any_of
+            from pyrung.core import Or
 
-            with Rung(any_of(Step, Start)):
+            with Rung(Or(Step, Start)):
                 out(Bool("Light"))
 
         prog = _build_program(logic)
@@ -895,6 +897,22 @@ class TestTagMapValidate:
 
         assert _finding_codes(report_direct) == _finding_codes(report_method)
 
+    def test_program_validate_click_matches_direct(self):
+        A = Tag("A", TagType.INT)
+        B = Tag("B", TagType.INT)
+
+        def logic():
+            with Rung((A + B) > 10):
+                out(Bool("Light"))
+
+        prog = _build_program(logic)
+        tag_map = TagMap(include_system=False)
+
+        report_direct = validate_click_program(prog, tag_map, mode="warn")
+        report_facade = prog.validate("click", tag_map=tag_map, mode="warn")
+
+        assert _finding_codes(report_direct) == _finding_codes(report_facade)
+
     def test_strict_mode_via_tagmap(self):
         A = Tag("A", TagType.INT)
 
@@ -1229,3 +1247,52 @@ class TestImmediateValidation:
 
         report = validate_click_program(prog, tag_map, mode="strict")
         assert any(f.code == CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y for f in report.errors)
+
+
+# ---------------------------------------------------------------------------
+# Timer preset overflow
+# ---------------------------------------------------------------------------
+
+
+class TestTimerPresetOverflow:
+    def test_preset_within_range_no_finding(self):
+        def logic():
+            with Rung():
+                on_delay(Timer[1], preset=32767, unit="Tms")
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
+            include_system=False,
+        )
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)
+
+    def test_preset_exceeds_int_range(self):
+        def logic():
+            with Rung():
+                on_delay(Timer[1], preset=60000, unit="Tms")
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1])],
+            include_system=False,
+        )
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_TIMER_PRESET_OVERFLOW in _finding_codes(report)
+
+    def test_preset_tag_skipped(self):
+        """Dynamic preset via Tag should not trigger overflow check."""
+        Preset = Int("Preset")
+
+        def logic():
+            with Rung():
+                on_delay(Timer[1], preset=Preset, unit="Tms")
+
+        prog = _build_program(logic)
+        tag_map = TagMap(
+            [Timer[1].Done.map_to(c[1]), Timer[1].Acc.map_to(ds[1]), Preset.map_to(ds[2])],
+            include_system=False,
+        )
+        report = validate_click_program(prog, tag_map, mode="warn")
+        assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)

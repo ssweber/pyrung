@@ -4,6 +4,7 @@ import os
 from pyrung.core import (
     Block,
     Bool,
+    Counter,
     Int,
     PLCRunner,
     Program,
@@ -35,8 +36,7 @@ MainLight = Bool("MainLight")
 AutoLight = Bool("AutoLight")
 SubLight = Bool("SubLight")
 SkippedAfterReturn = Bool("SkippedAfterReturn")
-CountDone = Bool("CountDone")
-CountAcc = Int("CountAcc")
+BoxCounter = Counter.named(1, "BoxCounter")
 ResetCount = Bool("ResetCount")
 
 with Program(strict=False) as logic:
@@ -58,7 +58,7 @@ with Program(strict=False) as logic:
     # the instruction metadata, only rung.end_line (AST) covers it.
     with Rung(Step == 1, AutoMode):
         out(MainLight)
-        count_up(CountDone, CountAcc,
+        count_up(BoxCounter,
                  preset=10) \
             .reset(ResetCount)
 
@@ -86,8 +86,8 @@ runner.patch(
         "AutoLight": False,
         "SubLight": False,
         "SkippedAfterReturn": False,
-        "CountDone": False,
-        "CountAcc": 0,
+        "BoxCounter_done": False,
+        "BoxCounter_acc": 0,
         "ResetCount": False,
     }
 )

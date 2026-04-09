@@ -17,7 +17,7 @@ Flipping the board switch prints:
   Mode: RUN    (run indicator ON, count resumes from retentive value)
 """
 
-from pyrung import Int, Program, Rung, copy, out, rise
+from pyrung import Int, Or, Program, Rung, copy, out, rise
 from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy
 
 # ── Hardware ──────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ with Program() as logic:
         out(RunIndicator)
 
     # Save retentive memory after each count change
-    with Rung(rise(CountButton) | ResetButton):
+    with Rung(Or(rise(CountButton), ResetButton)):
         out(board.save_memory_cmd)
 
     # Count indicator: ON when count > 0

@@ -29,47 +29,45 @@ Timers **accumulate** across scans: every scan where the rung is true, the timer
 The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms, on_delay, out
+from pyrung import Bool, Timer, Program, Rung, PLC, on_delay, out
 
 EntrySensor = Bool("EntrySensor")
 DiverterCmd = Bool("DiverterCmd")
-HoldDone    = Bool("HoldDone")
-HoldAcc     = Int("HoldAcc")
+HoldTimer   = Timer.named(1, "HoldTimer")
 
 with Program() as logic:
     with Rung(EntrySensor):
-        on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)  # 2 seconds
-    with Rung(EntrySensor, ~HoldDone):
+        on_delay(HoldTimer, preset=2000, unit="Tms")  # 2 seconds
+    with Rung(EntrySensor, ~HoldTimer.Done):
         out(DiverterCmd)         # Hold diverter open while timing
 ```
 
-This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldDone` goes true, `~HoldDone` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
+This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldTimer.Done` goes true, `~HoldTimer.Done` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
 
-Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how timers work in PLCs. The accumulator tracks elapsed time; the done bit fires when it reaches the preset. Real PLCs bundle these into a structured timer type or paired addresses; pyrung makes them explicit tags you can inspect, assert on, and force independently. You'll see this two-tag model again with counters in the next lesson, and it collapses back into structure members in [Lesson 9](structured-tags.md).
+`Timer` is a built-in structured type with two fields: `.Done` (Bool) fires when the accumulator reaches the preset, and `.Acc` (Int) tracks elapsed time. `Timer.named(1, "HoldTimer")` creates instance 1 with the name "HoldTimer" — in the PLC tag table, that expands to `HoldTimer_Done` and `HoldTimer_Acc`. You'll see the same two-field model again with counters in the next lesson.
 
-!!! note "Why `Tms` and not `Milliseconds`?"
+!!! tip "Name your timers"
 
-    Time units in pyrung are 2–3 characters: `Tms`, `Ts`, `Tm`, `Th`, `Td`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`). The same convention works as a tag-name suffix: `HeatTs`, `MotorTms`, `IdleTm`.
+    For real programs deploying to hardware, always use `Timer.named(n, "Name")`. When `Timer1_Done` shows up in a fault log six months later, it tells you nothing. `HoldTimer_Done` tells you everything. `Timer[n]` (anonymous, auto-numbered) is fine for throwaway simulation tests — but named instances are the 95% case.
+
+!!! note "Why `\"Tms\"` and not `\"Milliseconds\"`?"
+
+    Time units in pyrung are 2–3 character strings: `"Tms"`, `"Ts"`, `"Tm"`, `"Th"`, `"Td"`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`).
 
 ## Test it deterministically
 
 ```python
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
-
-with runner.active():
+with PLC(logic, dt=0.010) as plc:
     EntrySensor.value = True
 
-runner.run(cycles=199)                        # 1.99 seconds
-with runner.active():
-    assert DiverterCmd.value is True          # Diverter still held open
+    plc.run(cycles=199)                        # 1.99 seconds
+    assert DiverterCmd.value is True           # Diverter still held open
 
-runner.step()                                 # 2.00 seconds
-with runner.active():
-    assert DiverterCmd.value is False         # Released -- box has passed
+    plc.step()                                 # 2.00 seconds
+    assert DiverterCmd.value is False          # Released -- box has passed
 ```
 
-`FIXED_STEP` mode advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. In pytest you'd reach for `freezegun` or monkeypatch `time.time` — pyrung bakes determinism in because PLC time *is* the scan clock. This is why pyrung exists. Try writing this test against real hardware.
+`dt=0.010` advances the clock by exactly 10 ms each scan. No wall clock. Perfectly deterministic. In pytest you'd reach for `freezegun` or monkeypatch `time.time` — pyrung bakes determinism in because PLC time *is* the scan clock. This is why pyrung exists. Try writing this test against real hardware.
 
 ## Retentive on-delay
 
@@ -77,11 +75,11 @@ The example above is a TON — it auto-resets when the rung goes false. What if 
 
 ```python
 # TON — auto-resets when rung goes False
-on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
+on_delay(HoldTimer, preset=2000, unit="Tms")
 
 # RTON — holds accumulator across rung-false;
 # only the explicit reset clears it
-on_delay(BatchDone, BatchAcc, preset=3600, unit=Ts) \
+on_delay(BatchTimer, preset=3600, unit="Ts") \
     .reset(BatchReset)
 ```
 

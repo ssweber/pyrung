@@ -37,6 +37,7 @@ from .findings import (
     CLK_PTR_EXPR_NOT_ALLOWED,
     CLK_PTR_POINTER_MUST_BE_DS,
     CLK_TILDE_BOOL_CONTACT_ONLY,
+    CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
     ClickValidationReport,
     FindingSeverity,
@@ -48,6 +49,7 @@ from .hardware import (
     _evaluate_drums,
     _evaluate_pack_text,
     _evaluate_role_assignments,
+    _evaluate_timer_preset_overflow,
     _evaluate_write_targets,
 )
 from .hardware import (
@@ -146,6 +148,7 @@ def validate_click_program(
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
+        findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
 
@@ -226,7 +229,7 @@ __all__ = [
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
+    "CLK_TIMER_PRESET_OVERFLOW",
     "ClickFinding",
     "ClickValidationReport",
-    "validate_click_program",
 ]

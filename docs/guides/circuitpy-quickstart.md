@@ -5,7 +5,7 @@ Wire up a discrete input and output on a P1AM-200, test the logic locally, gener
 ## Configure hardware
 
 ```python
-from pyrung import Bool, Int, Program, Rung, TimeMode, PLCRunner, out, copy, rise
+from pyrung import Bool, Int, Program, Rung, PLC, out, copy, rise
 from pyrung.circuitpy import P1AM, write_circuitpy
 
 hw = P1AM()
@@ -38,34 +38,28 @@ Button held → Light on. Each rising edge of Button increments the press counte
 
 ```python
 def test_button_press():
-    runner = PLCRunner(logic)
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-
-    # Press button — light turns on, counter increments
-    runner.patch({Button: True})
-    runner.step()
-    with runner.active():
+    with PLC(logic, dt=0.1) as plc:
+        # Press button — light turns on, counter increments
+        Button.value = True
+        plc.step()
         assert Light.value is True
         assert PressCount.value == 1
 
-    # Hold button — light stays on, counter doesn't increment (no new edge)
-    runner.run(cycles=5)
-    with runner.active():
+        # Hold button — light stays on, counter doesn't increment (no new edge)
+        plc.run(cycles=5)
         assert Light.value is True
         assert PressCount.value == 1
 
-    # Release and press again — second count
-    runner.patch({Button: False})
-    runner.step()
-    runner.patch({Button: True})
-    runner.step()
-    with runner.active():
+        # Release and press again — second count
+        Button.value = False
+        plc.step()
+        Button.value = True
+        plc.step()
         assert PressCount.value == 2
 
-    # Release — light turns off (out de-energizes when rung is false)
-    runner.patch({Button: False})
-    runner.step()
-    with runner.active():
+        # Release — light turns off (out de-energizes when rung is false)
+        Button.value = False
+        plc.step()
         assert Light.value is False
 ```
 

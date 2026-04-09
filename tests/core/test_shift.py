@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, SystemState, TagType, shift
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, SystemState, TagType, shift
 from tests.conftest import evaluate_program
 
 
@@ -20,7 +20,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": True, "C2": False, "C3": False}
         )
@@ -88,7 +88,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": True, "C3": True}
         )
@@ -112,7 +112,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(2, 7)).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Data": False, "Clock": False, "Reset": False, "C2": True, "C7": False})
         runner.step()
         runner.patch({"Clock": True})
@@ -132,7 +132,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(2, 7).reverse()).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Data": False, "Clock": False, "Reset": False, "C2": False, "C7": True})
         runner.step()
         runner.patch({"Clock": True})
@@ -152,7 +152,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False}
         )
@@ -173,7 +173,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {"Data": False, "Clock": False, "Reset": False, "C1": True, "C2": True, "C3": False}
         )

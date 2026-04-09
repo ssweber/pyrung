@@ -6,7 +6,7 @@ from pyclickplc import DataViewFile, DataViewRecord, run_server_tui, write_cdv
 from pyclickplc.server import ClickServer
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
-    Bool, Int, PLCRunner, Program, Rung,
+    Bool, Int, PLCRunner, Program, Rung, Timer,
     branch, TimeMode, TimeUnit, any_of, call, copy,
     latch, calc, on_delay, reset, return_early, subroutine,
     named_array,
@@ -40,8 +40,11 @@ sub = SubNameDs[1]
 BatchIsOdd = Int("BatchIsOdd")
 
 FillValve, Heater, Complete, Reject = Bool("FillV"), Bool("Heat"), Bool("Comp"), Bool("Rej")
-Fill_Acc, Heat_Acc, Check_Acc, Comp_Acc, Rej_Acc = Int("FA"), Int("HA"), Int("CA"), Int("COA"), Int("RA")
-Fill_T, Heat_T, Check_T, Comp_T, Rej_T = Bool("FT"), Bool("HT"), Bool("CT"), Bool("COT"), Bool("RT")
+FillTmr = Timer.named(1, "FillTmr")
+HeatTmr = Timer.named(2, "HeatTmr")
+CheckTmr = Timer.named(3, "CheckTmr")
+CompTmr = Timer.named(4, "CompTmr")
+RejTmr = Timer.named(5, "RejTmr")
 
 def main() -> Program:
     with Program() as logic:
@@ -65,22 +68,22 @@ def main() -> Program:
 
             with Rung(sub.CurStep == 3):
                 latch(FillValve)
-                on_delay(Fill_T, Fill_Acc, preset=2000, unit=TimeUnit.Tms)
-            with Rung(sub.CurStep == 3, Fill_T):
+                on_delay(FillTmr, preset=2000, unit=TimeUnit.Tms)
+            with Rung(sub.CurStep == 3, FillTmr.done):
                 reset(FillValve); copy(1, sub.Trans)
 
             with Rung(sub.CurStep == 5):
                 latch(Heater)
-                on_delay(Heat_T, Heat_Acc, preset=3000, unit=TimeUnit.Tms)
+                on_delay(HeatTmr, preset=3000, unit=TimeUnit.Tms)
             with Rung(sub.CurStep == 5):
-                with branch(Heat_T): reset(Heater); copy(1, sub.Trans)
+                with branch(HeatTmr.done): reset(Heater); copy(1, sub.Trans)
                 with branch(sub.FastProcess == 1): reset(Heater); copy(0, sub.FastProcess); copy(1, sub.Trans)
 
             with Rung(sub.CurStep == 7):
-                on_delay(Check_T, Check_Acc, preset=500, unit=TimeUnit.Tms)
-            
+                on_delay(CheckTmr, preset=500, unit=TimeUnit.Tms)
+
             # --- CRITICAL FIX IN STEP 7 ---
-            with Rung(sub.CurStep == 7, Check_T):
+            with Rung(sub.CurStep == 7, CheckTmr.done):
                 # Pass logic (Step 9) -> Uses pre-calculated BatchIsOdd
                 with branch(sub.Quality_Mode == 1): copy(1, sub.Trans)
                 with branch(sub.Quality_Mode == 0, BatchIsOdd == 0): copy(1, sub.Trans)
@@ -92,8 +95,8 @@ def main() -> Program:
             with Rung(sub.CurStep == 9):
                 latch(Complete)
                 copy(sub.Batch_Counter + 1, sub.Batch_Counter, oneshot=True)
-                on_delay(Comp_T, Comp_Acc, preset=500, unit=TimeUnit.Tms)
-            with Rung(sub.CurStep == 9, Comp_T):
+                on_delay(CompTmr, preset=500, unit=TimeUnit.Tms)
+            with Rung(sub.CurStep == 9, CompTmr.done):
                 reset(Complete)
                 # FIX: Loop to 1, not 0
                 calc(1, sub.CurStep) 
@@ -102,8 +105,8 @@ def main() -> Program:
                 latch(Reject)
                 copy(sub.Reject_Counter + 1, sub.Reject_Counter, oneshot=True)
                 copy(sub.Batch_Counter + 1, sub.Batch_Counter, oneshot=True)
-                on_delay(Rej_T, Rej_Acc, preset=1000, unit=TimeUnit.Tms)
-            with Rung(sub.CurStep == 11, Rej_T):
+                on_delay(RejTmr, preset=1000, unit=TimeUnit.Tms)
+            with Rung(sub.CurStep == 11, RejTmr.done):
                 reset(Reject); calc(2, sub.CurStep)
 
             # --- ENGINE ---
@@ -111,7 +114,7 @@ def main() -> Program:
             with Rung(sub._ValStepIsOdd == 0, sub.CurStep > 0):
                 calc(sub.CurStep + 1, sub.CurStep)
             with Rung(sub.Trans > 0):
-                copy(0, Fill_Acc); copy(0, Heat_Acc); copy(0, Check_Acc); copy(0, Comp_Acc); copy(0, Rej_Acc)
+                copy(0, FillTmr.acc); copy(0, HeatTmr.acc); copy(0, CheckTmr.acc); copy(0, CompTmr.acc); copy(0, RejTmr.acc)
                 calc(sub.CurStep + sub.Trans, sub.CurStep)
                 copy(0, sub.Trans)
             
@@ -124,10 +127,10 @@ def build_mapping() -> TagMap:
         *SubNameDs.map_to(ds.select(3001, 3020)),
         # Map the temp variable safely outside the struct range
         BatchIsOdd.map_to(ds[3022]),
-        
+
         FillValve.map_to(c[1502]), Heater.map_to(c[1503]), Complete.map_to(c[1504]), Reject.map_to(c[1505]),
-        Fill_T.map_to(t[302]), Heat_T.map_to(t[303]), Check_T.map_to(t[304]), Comp_T.map_to(t[305]), Rej_T.map_to(t[306]),
-        Fill_Acc.map_to(td[302]), Heat_Acc.map_to(td[303]), Check_Acc.map_to(td[304]), Comp_Acc.map_to(td[305]), Rej_Acc.map_to(td[306]),
+        FillTmr.done.map_to(t[302]), HeatTmr.done.map_to(t[303]), CheckTmr.done.map_to(t[304]), CompTmr.done.map_to(t[305]), RejTmr.done.map_to(t[306]),
+        FillTmr.acc.map_to(td[302]), HeatTmr.acc.map_to(td[303]), CheckTmr.acc.map_to(td[304]), CompTmr.acc.map_to(td[305]), RejTmr.acc.map_to(td[306]),
     ])
 
 

@@ -4,7 +4,6 @@ import re
 from typing import TYPE_CHECKING
 
 from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
-from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
 _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
@@ -40,6 +39,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
+    _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
 )
@@ -121,6 +121,10 @@ def _generate_code(
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
+    if collection.named_timer_counters:
+        _emit_named_tc_declarations(lines, collection)
+        lines.append("")
+
     if collection.plain_blocks:
         lines.append("# --- Blocks ---")
         _emit_plain_block_declarations(lines, collection)
@@ -175,16 +179,22 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     if has_retentive_field:
         core_imports.append("Field")
 
+    # Built-in Timer/Counter UDTs
+    if collection.used_instructions & {"on_delay", "off_delay"}:
+        core_imports.append("Timer")
+    if collection.used_instructions & {"count_up", "count_down"}:
+        core_imports.append("Counter")
+
     # Tag types
     for tt in sorted(collection.used_types):
         if tt not in core_imports:
             core_imports.append(tt)
 
     # Condition helpers
-    if collection.has_any_of:
-        core_imports.append("any_of")
-    if collection.has_all_of:
-        core_imports.append("all_of")
+    if collection.has_Or:
+        core_imports.append("Or")
+    if collection.has_And:
+        core_imports.append("And")
     for cw in sorted(collection.used_conditions):
         core_imports.append(cw)
 
@@ -226,10 +236,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         core_imports.append("forloop")
     if collection.has_subroutine:
         core_imports.append("subroutine")
-
-    # Time units
-    for tu in sorted(collection.used_time_units):
-        core_imports.append(tu)
 
     # Copy converters
     for cc in sorted(collection.used_copy_converters):
@@ -281,10 +287,18 @@ def _emit_tag_declarations(
     for decl in sorted_tags:
         if decl.operand in collection.semantic_operands:
             continue
+        if decl.operand in collection.timer_counter_operands:
+            continue
         line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
         if decl.comment and not suppress_comments:
             line += decl.comment
         lines.append(line)
+
+
+def _emit_named_tc_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit Timer.named() / Counter.named() declarations."""
+    for decl in collection.named_timer_counters:
+        lines.append(f'{decl.var_name} = {decl.kind}.named({decl.index}, "{decl.slug}")')
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -704,21 +718,16 @@ def _render_sp_node(
         )
 
     if isinstance(node, Parallel):
-        if _parallel_renders_with_pipe(node, collection):
-            return " | ".join(
-                _render_sp_node(child, collection, nicknames, structured_map)
-                for child in node.children
-            )
         parts: list[str] = []
         for child in node.children:
             rendered = _render_sp_node(child, collection, nicknames, structured_map)
             if isinstance(child, Series) and len(child.children) > 1:
-                parts.append(f"all_of({rendered})")
+                parts.append(f"And({rendered})")
             else:
                 parts.append(rendered)
         if len(parts) == 1:
             return parts[0]
-        return f"any_of({', '.join(parts)})"
+        return f"Or({', '.join(parts)})"
 
     raise ValueError(f"Unsupported topology node for codegen: {type(node).__name__}")
 
@@ -839,6 +848,34 @@ def _render_search_token(
     return f"search({', '.join([comparison, *rest])})"
 
 
+def _merge_timer_counter_args(
+    func_name: str,
+    done_bit_operand: str,
+    collection: _OperandCollection,
+) -> str | None:
+    """Merge done_bit + accumulator operands into a Timer/Counter reference.
+
+    Returns the merged reference string, or None if the operand can't be parsed.
+    Uses the named declaration's var_name when a nickname was provided,
+    otherwise falls back to Timer[n] / Counter[n].
+    """
+    parsed = _parse_operand_prefix(done_bit_operand)
+    if parsed is None:
+        return None
+    prefix, _, _, index = parsed
+
+    # Named timer/counter — use the slug variable
+    for decl in collection.named_timer_counters:
+        if decl.done_operand == done_bit_operand:
+            return decl.var_name
+
+    if func_name in {"on_delay", "off_delay"} and prefix == "T":
+        return f"Timer[{index}]"
+    if func_name in {"count_up", "count_down"} and prefix == "CT":
+        return f"Counter[{index}]"
+    return None
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -892,7 +929,19 @@ def _render_af_token(
     if func_name == "search":
         return _render_search_token(args, kwargs, collection, nicknames, structured_map)
 
-    rendered_parts: list[str] = []
+    # Timer/counter instructions: merge done_bit + accumulator into Timer[n]/Counter[n]
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"} and len(args) >= 2:
+        udt_ref = _merge_timer_counter_args(func_name, args[0], collection)
+        if udt_ref is not None:
+            rendered_parts: list[str] = [udt_ref]
+            for key, value in kwargs:
+                if key in _DROP_KWARGS:
+                    continue
+                rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+                rendered_parts.append(f"{key}={rendered_v}")
+            return f"{py_func}({', '.join(rendered_parts)})"
+
+    rendered_parts = []
     for arg in args:
         rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
     for key, value in kwargs:
@@ -994,6 +1043,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         for decl in sorted_tags:
             if decl.operand in collection.semantic_operands:
                 continue
+            if decl.operand in collection.timer_counter_operands:
+                continue
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         lines.append("])")
     else:
@@ -1003,6 +1054,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             )
         for decl in sorted_tags:
             if decl.operand in collection.semantic_operands:
+                continue
+            if decl.operand in collection.timer_counter_operands:
                 continue
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 

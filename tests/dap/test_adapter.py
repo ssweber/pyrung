@@ -139,7 +139,7 @@ def _wait_for_event(
 
 def _runner_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "\n"
         "button = Bool('Button')\n"
         "light = Bool('Light')\n"
@@ -148,13 +148,13 @@ def _runner_script() -> str:
         "    with Rung(button):\n"
         "        out(light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _conditional_breakpoint_script(*, button: bool) -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "from pyrung.core.state import SystemState\n"
         "\n"
         "button = Bool('Button')\n"
@@ -164,13 +164,13 @@ def _conditional_breakpoint_script(*, button: bool) -> str:
         "    with Rung(button):\n"
         "        out(light)\n"
         "\n"
-        f"runner = PLCRunner(prog, initial_state=SystemState().with_tags({{'Button': {button!r}}}))\n"
+        f"runner = PLC(prog, initial_state=SystemState().with_tags({{'Button': {button!r}}}))\n"
     )
 
 
 def _monitor_change_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "\n"
         "Tick = Bool('Tick')\n"
         "\n"
@@ -178,13 +178,13 @@ def _monitor_change_script() -> str:
         "    with Rung():\n"
         "        out(Tick)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _snapshot_once_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "from pyrung.core.state import SystemState\n"
         "\n"
         "Tick = Bool('Tick')\n"
@@ -193,13 +193,13 @@ def _snapshot_once_script() -> str:
         "    with Rung():\n"
         "        out(Tick)\n"
         "\n"
-        "runner = PLCRunner(prog, initial_state=SystemState().with_tags({'Tick': False}))\n"
+        "runner = PLC(prog, initial_state=SystemState().with_tags({'Tick': False}))\n"
     )
 
 
 def _counter_change_script() -> str:
     return (
-        "from pyrung.core import Int, PLCRunner, Program, Rung, copy\n"
+        "from pyrung.core import Int, PLC, Program, Rung, copy\n"
         "\n"
         "Counter = Int('Counter')\n"
         "\n"
@@ -207,7 +207,7 @@ def _counter_change_script() -> str:
         "    with Rung():\n"
         "        copy(Counter + 1, Counter)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
@@ -226,7 +226,7 @@ def _program_only_script() -> str:
 
 def _unconditional_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "\n"
         "light = Bool('Light')\n"
         "\n"
@@ -234,13 +234,13 @@ def _unconditional_script() -> str:
         "    with Rung():\n"
         "        out(light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _two_rung_unconditional_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, out\n"
         "\n"
         "light = Bool('Light')\n"
         "other = Bool('Other')\n"
@@ -251,17 +251,17 @@ def _two_rung_unconditional_script() -> str:
         "    with Rung():\n"
         "        out(other)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _empty_logic_runner_script() -> str:
-    return "from pyrung.core import PLCRunner\n\nrunner = PLCRunner()\n"
+    return "from pyrung.core import PLC\n\nrunner = PLC()\n"
 
 
 def _composite_condition_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, all_of, any_of, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, And, Or, out\n"
         "\n"
         "start = Bool('Start')\n"
         "ready = Bool('Ready')\n"
@@ -269,67 +269,67 @@ def _composite_condition_script() -> str:
         "light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(start, all_of(ready, auto))):\n"
+        "    with Rung(Or(start, And(ready, auto))):\n"
         "        out(light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _all_of_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, all_of, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, And, out\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(all_of(Step == 1, AutoMode)):\n"
+        "    with Rung(And(Step == 1, AutoMode)):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Step': 0, 'AutoMode': True})\n"
     )
 
 
 def _any_of_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, any_of, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, Or, out\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(Step == 0, AutoMode)):\n"
+        "    with Rung(Or(Step == 0, AutoMode)):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Step': 0, 'AutoMode': False})\n"
     )
 
 
 def _any_of_rise_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, any_of, out, rise\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, Or, out, rise\n"
         "\n"
         "Pulse = Bool('Pulse')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(rise(Pulse), AutoMode)):\n"
+        "    with Rung(Or(rise(Pulse), AutoMode)):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Pulse': True, 'AutoMode': False})\n"
     )
 
 
 def _indirect_condition_script() -> str:
     return (
-        "from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, out\n"
+        "from pyrung.core import Block, Bool, Int, PLC, Program, Rung, TagType, out\n"
         "\n"
         "Step = Block('Step', TagType.INT, 0, 9, address_formatter=lambda name, addr: f\"{name}[{addr}]\")\n"
         "CurStep = Int('CurStep')\n"
@@ -340,14 +340,14 @@ def _indirect_condition_script() -> str:
         "    with Rung(Step[CurStep] == DebugStep):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'CurStep': 1, 'Step[1]': 0, 'DebugStep': 5})\n"
     )
 
 
 def _right_indirect_condition_script() -> str:
     return (
-        "from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, out\n"
+        "from pyrung.core import Block, Bool, Int, PLC, Program, Rung, TagType, out\n"
         "\n"
         "Step = Block('Step', TagType.INT, 0, 9, address_formatter=lambda name, addr: f\"{name}[{addr}]\")\n"
         "CurStep = Int('CurStep')\n"
@@ -358,14 +358,14 @@ def _right_indirect_condition_script() -> str:
         "    with Rung(DebugStep == Step[CurStep]):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'CurStep': 1, 'Step[1]': 0, 'DebugStep': 5})\n"
     )
 
 
 def _right_indirect_expr_condition_script() -> str:
     return (
-        "from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, out\n"
+        "from pyrung.core import Block, Bool, Int, PLC, Program, Rung, TagType, out\n"
         "\n"
         "Step = Block('Step', TagType.INT, 0, 9, address_formatter=lambda name, addr: f\"{name}[{addr}]\")\n"
         "CurStep = Int('CurStep')\n"
@@ -376,14 +376,14 @@ def _right_indirect_expr_condition_script() -> str:
         "    with Rung(DebugStep == Step[CurStep + 1]):\n"
         "        out(Light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'CurStep': 4, 'Step[5]': 5, 'DebugStep': 5})\n"
     )
 
 
 def _nested_debug_script() -> str:
     return (
-        "from pyrung.core import Bool, PLCRunner, Program, Rung, branch, call, out, subroutine\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, branch, call, out, subroutine\n"
         "\n"
         "main_light = Bool('MainLight')\n"
         "branch_light = Bool('BranchLight')\n"
@@ -400,38 +400,32 @@ def _nested_debug_script() -> str:
         "            out(branch_light)\n"
         "        out(main_light)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
     )
 
 
 def _chained_builder_debug_script() -> str:
     return (
-        "from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Program, Rung, TagType, count_down, count_up, on_delay, shift\n"
+        "from pyrung.core import Block, Bool, Counter, PLC, Program, Rung, TagType, Timer, count_down, count_up, on_delay, shift\n"
         "\n"
         "Enable = Bool('Enable')\n"
         "Down = Bool('Down')\n"
         "Reset = Bool('Reset')\n"
         "Clock = Bool('Clock')\n"
-        "DoneUp = Bool('DoneUp')\n"
-        "AccUp = Dint('AccUp')\n"
-        "DoneDown = Bool('DoneDown')\n"
-        "AccDown = Dint('AccDown')\n"
-        "TimerDone = Bool('TimerDone')\n"
-        "TimerAcc = Int('TimerAcc')\n"
         "C = Block('C', TagType.BOOL, 1, 8)\n"
         "\n"
         "with Program(strict=False) as prog:\n"
         "    with Rung(Enable):\n"
-        "        cu_builder = count_up(DoneUp, AccUp, preset=5)\n"
+        "        cu_builder = count_up(Counter[1], preset=5)\n"
         "        cu_builder = cu_builder.down(Down)\n"
         "        cu_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        cd_builder = count_down(DoneDown, AccDown, preset=5)\n"
+        "        cd_builder = count_down(Counter[2], preset=5)\n"
         "        cd_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        timer_builder = on_delay(TimerDone, TimerAcc, preset=50)\n"
+        "        timer_builder = on_delay(Timer[1], preset=50)\n"
         "        timer_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
@@ -439,7 +433,7 @@ def _chained_builder_debug_script() -> str:
         "        shift_builder = shift_builder.clock(Clock)\n"
         "        shift_builder.reset(Reset)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Enable': True, 'Down': True, 'Reset': False, 'Clock': True})\n"
     )
 
@@ -447,7 +441,7 @@ def _chained_builder_debug_script() -> str:
 def _nested_debug_autorun_script() -> str:
     return (
         "import os\n"
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, call, copy, out, return_early, subroutine\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, branch, call, copy, out, return_early, subroutine\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
@@ -470,7 +464,7 @@ def _nested_debug_autorun_script() -> str:
         "            return_early()\n"
         "            out(SkippedAfterReturn)\n"
         "\n"
-        "runner = PLCRunner(logic)\n"
+        "runner = PLC(logic)\n"
         "runner.patch({'Step': 0, 'AutoMode': True, 'MainLight': False, 'AutoLight': False, 'SubLight': False, 'SkippedAfterReturn': False})\n"
         "if os.getenv('PYRUNG_DAP_ACTIVE') != '1':\n"
         "    runner.step()\n"
@@ -479,7 +473,7 @@ def _nested_debug_autorun_script() -> str:
 
 def _branch_unpowered_after_first_scan_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, copy, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, branch, copy, out\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
@@ -493,14 +487,14 @@ def _branch_unpowered_after_first_scan_script() -> str:
         "            out(AutoLight)\n"
         "            copy(1, Step, oneshot=True)\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Step': 0, 'AutoMode': True, 'MainLight': False, 'AutoLight': False})\n"
     )
 
 
 def _branch_then_call_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLCRunner, Program, Rung, branch, call, copy, out, subroutine\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, branch, call, copy, out, subroutine\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
@@ -518,7 +512,7 @@ def _branch_then_call_script() -> str:
         "            copy(1, Step, oneshot=True)\n"
         "        call('sub')\n"
         "\n"
-        "runner = PLCRunner(prog)\n"
+        "runner = PLC(prog)\n"
         "runner.patch({'Step': 0, 'AutoMode': True, 'BranchDone': False, 'SubLight': False})\n"
     )
 
@@ -611,7 +605,7 @@ def test_launch_reports_clear_discovery_error(tmp_path: Path):
 
     response = _single_response(messages)
     assert response["success"] is False
-    assert "Found 0 PLCRunner(s), 0 Program(s)" in response["message"]
+    assert "Found 0 PLC(s), 0 Program(s)" in response["message"]
 
 
 def test_launch_requires_program_string(tmp_path: Path):
@@ -1026,17 +1020,17 @@ def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_li
     expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
 
     expected = [
-        ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, preset=5)")),
+        ("Count Up", _line_number(script, "cu_builder = count_up(Counter[1], preset=5)")),
         ("Count Down", _line_number(script, "cu_builder = cu_builder.down(Down)")),
         ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
         (
             "Count Down",
-            _line_number(script, "cd_builder = count_down(DoneDown, AccDown, preset=5)"),
+            _line_number(script, "cd_builder = count_down(Counter[2], preset=5)"),
         ),
         ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
         (
             "Enable",
-            _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, preset=50)"),
+            _line_number(script, "timer_builder = on_delay(Timer[1], preset=50)"),
         ),
         ("Reset", _line_number(script, "timer_builder.reset(Reset)")),
         ("Data", _line_number(script, "shift_builder = shift(C.select(1, 3))")),
@@ -1202,7 +1196,7 @@ def test_trace_body_uses_committed_core_event_when_no_inflight_scan_context(tmp_
     _send_request(adapter, out_stream, seq=3, command="next")
     _drain_messages(out_stream)
 
-    # Drop in-flight scan context so runner.inspect_event() falls back to committed data.
+    # Drop in-flight scan context so runner.debug.last_event() falls back to committed data.
     if adapter._scan_gen is not None:
         adapter._scan_gen.close()
     adapter._scan_gen = None
@@ -1232,7 +1226,7 @@ def test_trace_body_with_unsupported_trace_type_returns_empty_regions(tmp_path: 
     _drain_messages(out_stream)
 
     assert adapter._runner is not None
-    inspect_event = adapter._runner.inspect_event()
+    inspect_event = adapter._runner.debug.last_event()
     assert inspect_event is not None
     scan_id, rung_id, event = inspect_event
     adapter._runner._latest_inflight_trace_event = (
@@ -1276,8 +1270,8 @@ def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
     expression = str(conditions[0]["expression"])
     assert "|" in expression
     assert "&" in expression
-    assert "any_of" not in expression
-    assert "all_of" not in expression
+    assert "Or" not in expression
+    assert "And" not in expression
     details = {item["name"]: item["value"] for item in conditions[0]["details"]}
     terms = str(details.get("terms", ""))
     assert "(true)" in terms or "(false)" in terms
@@ -1696,7 +1690,7 @@ def test_evaluate_force_commands_mutate_force_map(tmp_path: Path):
         out_stream,
         seq=3,
         command="evaluate",
-        arguments={"expression": "remove_force Button"},
+        arguments={"expression": "unforce Button"},
     )
     assert "Button" not in adapter._runner.forces
 
@@ -1746,10 +1740,10 @@ def test_evaluate_watch_bare_tag_returns_raw_value(tmp_path: Path):
         tmp_path,
         "seeded_state.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'Counter': 7}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'Counter': 7}))\n"
         ),
     )
 
@@ -1775,14 +1769,14 @@ def test_evaluate_watch_udt_count_one_qualified_reference_resolves(tmp_path: Pat
         tmp_path,
         "udt_state.py",
         (
-            "from pyrung.core import Bool, PLCRunner, udt\n"
+            "from pyrung.core import Bool, PLC, udt\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
             "@udt()\n"
             "class Tmr:\n"
             "    GreenDone: Bool\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'Tmr_GreenDone': True}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'Tmr_GreenDone': True}))\n"
         ),
     )
 
@@ -1808,10 +1802,10 @@ def test_evaluate_watch_indexed_tag_reference_resolves(tmp_path: Path):
         tmp_path,
         "indexed_state.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'DS1': 123}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'DS1': 123}))\n"
         ),
     )
 
@@ -1837,10 +1831,10 @@ def test_evaluate_watch_struct_instance_reference_resolves_with_unique_suffix(tm
         tmp_path,
         "struct_state.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'Alarm1_id': 42}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'Alarm1_id': 42}))\n"
         ),
     )
 
@@ -1866,10 +1860,10 @@ def test_evaluate_watch_named_array_instance_reference_resolves(tmp_path: Path):
         tmp_path,
         "named_array_state.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
         ),
     )
 
@@ -1895,10 +1889,10 @@ def test_evaluate_watch_field_index_reference_resolves(tmp_path: Path):
         tmp_path,
         "field_index_state.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
+            "runner = PLC(initial_state=SystemState().with_tags({'SubName1_xCall': 9}))\n"
         ),
     )
 
@@ -1924,10 +1918,10 @@ def test_evaluate_watch_struct_instance_reference_ambiguous_suffix_errors(tmp_pa
         tmp_path,
         "struct_state_ambiguous.py",
         (
-            "from pyrung.core import PLCRunner\n"
+            "from pyrung.core import PLC\n"
             "from pyrung.core.state import SystemState\n"
             "\n"
-            "runner = PLCRunner(\n"
+            "runner = PLC(\n"
             "    initial_state=SystemState().with_tags({'Alarm1_id': 42, 'Pump1_id': 84})\n"
             ")\n"
         ),

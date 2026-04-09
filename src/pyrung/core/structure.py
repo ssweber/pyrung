@@ -23,6 +23,7 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
+        "named",
         "instance",
         "instance_select",
         "stride",
@@ -114,19 +115,47 @@ def resolve_default(spec: object, index: int) -> object:
 
 
 class InstanceView:
-    """1-based indexed view into one structure instance."""
+    """1-based indexed view into one structure instance.
 
-    def __init__(self, owner: _StructRuntime, index: int):
+    When *custom_name* is set (via ``_StructRuntime.named()``), field access
+    produces tags with that name as prefix (e.g. ``OvenTimer_Done``) instead
+    of the default ``Timer1_Done`` form.
+    """
+
+    def __init__(self, owner: _StructRuntime, index: int, *, custom_name: str | None = None):
         self._owner = owner
         self._index = index
+        self._custom_name = custom_name
+        self._tag_cache: dict[str, Tag] = {}
 
-    def __getattr__(self, field_name: str) -> LiveTag:
+    def __getattr__(self, field_name: str) -> Tag:
+        cached = self._tag_cache.get(field_name)
+        if cached is not None:
+            return cached
         block = self._owner._blocks.get(field_name)
         if block is None:
             raise AttributeError(f"{type(self._owner).__name__!s} has no field {field_name!r}.")
-        return block[self._index]
+        if self._custom_name is None:
+            tag = block[self._index]
+        else:
+            field_spec = self._owner._field_specs[field_name]
+            tag = Tag(
+                f"{self._custom_name}_{field_name}",
+                type=field_spec.type,
+                retentive=field_spec.retentive,
+            )
+            # Attach structure metadata so TagMap can trace back to the block.
+            object.__setattr__(tag, "_pyrung_structure_runtime", self._owner)
+            object.__setattr__(tag, "_pyrung_structure_kind", self._owner._structure_kind)
+            object.__setattr__(tag, "_pyrung_structure_name", self._custom_name)
+            object.__setattr__(tag, "_pyrung_structure_field", field_name)
+            object.__setattr__(tag, "_pyrung_structure_index", self._index)
+        self._tag_cache[field_name] = tag
+        return tag
 
     def __repr__(self) -> str:
+        if self._custom_name is not None:
+            return f"InstanceView({self._custom_name})"
         return f"InstanceView({self._owner.name}[{self._index}])"
 
 
@@ -213,16 +242,12 @@ class _StructRuntime:
         self.always_number = always_number
         self._structure_kind = kind
         self._original_field_specs = field_specs
-        self._field_specs: dict[str, Field] = {}
+        self._field_specs: dict[str, _FieldSpec] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
 
         for field_spec in field_specs:
-            self._field_specs[field_spec.name] = Field(
-                type=field_spec.type,
-                default=field_spec.default,
-                retentive=field_spec.retentive,
-            )
+            self._field_specs[field_spec.name] = field_spec
             block = Block(
                 name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
@@ -252,9 +277,28 @@ class _StructRuntime:
             kind=self._structure_kind,
         )
 
+    def named(self, index: int, name: str) -> InstanceView:
+        """Create a named instance whose tags use *name* as prefix.
+
+        ``Timer.named(1, "OvenTimer")`` produces tags ``OvenTimer_Done``
+        and ``OvenTimer_Acc`` instead of the default ``Timer1_Done`` form.
+        The underlying block index is preserved for TagMap resolution.
+        """
+        if not isinstance(index, int):
+            raise TypeError(f"{type(self).__name__}.named() index must be an int.")
+        if index < 1 or index > self.count:
+            raise IndexError(
+                f"{type(self).__name__}.named() index {index} out of range 1..{self.count}."
+            )
+        _validate_name(name)
+        return InstanceView(self, index, custom_name=name)
+
     @property
     def fields(self) -> dict[str, Field]:
-        return dict(self._field_specs)
+        return {
+            name: Field(type=spec.type, default=spec.default, retentive=spec.retentive)
+            for name, spec in self._field_specs.items()
+        }
 
     @property
     def field_names(self) -> tuple[str, ...]:
@@ -621,3 +665,30 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
             f"Field {field_name!r} uses auto() but type {type.name} is not numeric. "
             "Supported types: INT, DINT, WORD."
         )
+
+
+# ---------------------------------------------------------------------------
+# Built-in Timer / Counter UDTs
+# ---------------------------------------------------------------------------
+# Counts match Click PLC bank sizes (T1–T500, CT1–CT250) so TagMap mapping
+# is 1-to-1 by index.  Use ``Timer.named(n, "...")`` for production code;
+# ``Timer[n]`` for throwaway simulation.
+
+
+Timer = _StructRuntime(
+    name="Timer",
+    count=500,
+    field_specs=(
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Acc", TagType.INT, UNSET, retentive=True),
+    ),
+)
+
+Counter = _StructRuntime(
+    name="Counter",
+    count=250,
+    field_specs=(
+        _FieldSpec("Done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("Acc", TagType.DINT, UNSET, retentive=True),
+    ),
+)

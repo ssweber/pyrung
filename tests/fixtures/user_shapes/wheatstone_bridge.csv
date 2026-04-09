@@ -1,5 +1,5 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
-#,"with Rung(any_of(all_of(X005, X001 | X002, X003 | X004), all_of(X001, X003), all_of(X002, X004))):"
+#,"with Rung(Or(And(X005, Or(X001, X002), Or(X003, X004)), And(X001, X003), And(X002, X004))):"
 #,    out(Y001)
 R,X001,T,X003,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
 ,,X005,|,|,,,,,,,,,,,,,,,,,,,,,,,,,,,,

@@ -1,6 +1,9 @@
 """Time modes for PLC simulation."""
 
+from __future__ import annotations
+
 from enum import Enum
+from typing import Literal
 
 
 class TimeMode(Enum):
@@ -18,7 +21,7 @@ class TimeMode(Enum):
 
 
 class TimeUnit(Enum):
-    """Timer time units for Click PLC.
+    """Timer time units.
 
     The accumulator stores integer values in the specified unit.
     Conversion from dt (seconds) uses appropriate scaling.
@@ -43,3 +46,17 @@ class TimeUnit(Enum):
                 return dt_seconds / 3600
             case TimeUnit.Td:
                 return dt_seconds / 86400
+
+
+TimeUnitStr = Literal["Tms", "Ts", "Tm", "Th", "Td"]
+
+_VALID_UNITS: dict[str, TimeUnit] = {m.name: m for m in TimeUnit}
+
+
+def _parse_time_unit(value: str) -> TimeUnit:
+    """Convert a string unit name to a TimeUnit enum member."""
+    try:
+        return _VALID_UNITS[value]
+    except KeyError:
+        valid = ", ".join(f"'{n}'" for n in _VALID_UNITS)
+        raise ValueError(f"unknown unit '{value}'; expected one of {valid}") from None

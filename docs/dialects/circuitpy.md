@@ -11,7 +11,7 @@ pip install pyrung
 ```
 
 ```python
-from pyrung import Bool, Int, Real, PLCRunner, Program, Rung, TimeMode, out, copy, rise
+from pyrung import Bool, Int, Real, PLC, Program, Rung, out, copy, rise
 from pyrung.circuitpy import P1AM, RunStopConfig, board, generate_circuitpy, validate_circuitpy_program
 ```
 
@@ -63,7 +63,7 @@ Type mapping: discrete → `Bool`, analog → `Int`, temperature → `Real`.
 Programs use the same DSL as any other pyrung dialect — only the hardware setup and export step are dialect-specific.
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, out, copy, rise
+from pyrung import Bool, Int, PLC, Program, Rung, out, copy, rise
 from pyrung.circuitpy import P1AM, write_circuitpy
 
 # 1. Configure hardware
@@ -81,12 +81,9 @@ with Program() as logic:
         out(Light)
 
 # 3. Simulate
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
-
-with runner.active():
+with PLC(logic, dt=0.1) as plc:
     Button.value = True
-    runner.step()
+    plc.step()
     assert Light.value is True
 
 # 4. Generate code.py — copy to CIRCUITPY drive

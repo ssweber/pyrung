@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from examples.custom_math import weighted_average
-from pyrung.core import Bool, Int, PLCRunner, Program, Real, Rung, run_function
+from pyrung.core import PLC, Bool, Int, Program, Real, Rung, run_function
 
 
 def test_weighted_average_end_to_end():
@@ -23,7 +23,7 @@ def test_weighted_average_end_to_end():
                 outs={"result": Average},
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch(
         {
             "Enable": True,
@@ -60,7 +60,7 @@ def test_weighted_average_zero_weight_sum_returns_zero():
                 outs={"result": Result},
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Sensor1": 42, "Sensor2": 100, "Sensor3": 7, "Result": -1.0})
     runner.step()
 

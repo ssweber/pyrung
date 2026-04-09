@@ -22,7 +22,7 @@ calc(DH[1] | DH[2], DH[3])              # WORD-only math infers hex mode
 
 ## Division
 
-- Division by zero produces result = 0 and sets the system fault flag.
+- Division by zero produces result = 0 and sets `system.fault.division_error`.
 - Integer division truncates toward zero: `−7 / 2 = −3`.
 
 ## Mode inference
@@ -44,7 +44,7 @@ For Click portability, do not mix WORD and non-WORD math in the same `calc()` ex
 | `calc()` | Wraps (modular arithmetic) |
 | Timer accumulator | Clamps at 32,767 |
 | Counter accumulator | Clamps at DINT min/max |
-| Division by zero | Result = 0, fault flag set |
+| Division by zero | Result = 0, `system.fault.division_error` set |
 
 ## `BlockRange.sum()` — sum a range
 

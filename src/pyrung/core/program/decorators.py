@@ -39,7 +39,7 @@ def program(
             with Rung(Button):
                 out(Light)
 
-        runner = PLCRunner(my_logic)
+        runner = PLC(my_logic)
     """
 
     def _decorate(inner_fn: Callable[[], None]) -> Program:

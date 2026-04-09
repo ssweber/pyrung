@@ -1,13 +1,13 @@
 # Runner
 
-`PLCRunner` is the execution engine. It takes a program, holds the current state, and exposes methods to drive execution scan by scan.
+`PLC` is the execution engine. It takes a program, holds the current state, and exposes methods to drive execution scan by scan.
 
 ## Creating a runner
 
 ```python
-from pyrung import PLCRunner
+from pyrung import PLC
 
-runner = PLCRunner(logic)
+runner = PLC(logic)
 ```
 
 The constructor accepts:
@@ -24,22 +24,20 @@ Optional keyword arguments:
 ## Time modes
 
 ```python
-from pyrung import TimeMode
-
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
-runner.set_time_mode(TimeMode.REALTIME)                # wall-clock
+runner = PLC(logic, dt=0.010)        # fixed-step, 10 ms per scan (default)
+runner = PLC(logic, realtime=True)   # wall-clock
 ```
 
 | Mode | Behavior | Use case |
 |------|----------|----------|
-| `FIXED_STEP` | `timestamp += dt` each scan | Tests, offline simulation |
-| `REALTIME` | `timestamp` = actual elapsed time | Live hardware, integration tests |
+| `dt=0.010` | `timestamp += dt` each scan | Tests, offline simulation |
+| `realtime=True` | `timestamp` = actual elapsed time | Live hardware, integration tests |
 
-`FIXED_STEP` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `REALTIME` is intentionally non-deterministic — scan `dt` follows host elapsed time.
+`dt=` is the default. Timer and counter instructions use `timestamp`, so fixed steps give perfectly reproducible results. `realtime=True` is intentionally non-deterministic — scan `dt` follows host elapsed time.
 
 ## Real-time clock
 
-Logic that depends on time of day (shift changes, scheduled events) uses the RTC system points (`rtc.year4`, `rtc.month`, `rtc.hour`, etc.). By default, these track wall-clock time.
+Logic that depends on time of day (shift changes, scheduled events) uses the RTC system points (`system.rtc.year4`, `system.rtc.month`, `system.rtc.hour`, etc.). By default, these track wall-clock time. See [System points](../getting-started/concepts.md#system-points) for the full namespace overview.
 
 `set_rtc` pins the RTC to a specific datetime:
 
@@ -49,7 +47,7 @@ from datetime import datetime
 runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
 ```
 
-The RTC then advances with simulation time: `rtc = base_datetime + (current_sim_time - sim_time_at_set)`. In `FIXED_STEP`, this makes time-of-day logic fully deterministic. In `REALTIME`, it effectively offsets the wall clock.
+The RTC then advances with simulation time: `rtc = base_datetime + (current_sim_time - sim_time_at_set)`. With a fixed `dt`, this makes time-of-day logic fully deterministic. With `realtime=True`, it effectively offsets the wall clock.
 
 ## Execution methods
 
@@ -88,7 +86,7 @@ Accepts the same condition expressions used inside `Rung()`. Multiple conditions
 ```python
 runner.run_until(Motor & ~Fault)
 runner.run_until(Temp > 150.0)
-runner.run_until(any_of(AlarmA, AlarmB, AlarmC))
+runner.run_until(Or(AlarmA, AlarmB, AlarmC))
 ```
 
 Stops when the condition is true, a pause breakpoint fires, or `max_cycles` is reached — whichever comes first.
@@ -116,15 +114,15 @@ runner.patch({Button: True, Step: 5})
 
 Values are applied at the start of the next `step()` and then discarded. Multiple patches before a step merge — last write per tag wins.
 
-### `.value` via `active()`
+### `.value` via context manager
 
-Inside `with runner.active():`, tag `.value` reads and writes go through the runner's current state:
+Inside `with PLC(...) as plc:` (or `with runner:`), tag `.value` reads and writes go through the runner's current state:
 
 ```python
-with runner.active():
+with PLC(logic) as plc:
     Button.value = True       # queues a patch
     print(Step.value)         # reads current value
-    runner.step()             # executes with the queued patch
+    plc.step()                # executes with the queued patch
     assert Motor.value is True
 ```
 
@@ -164,7 +162,7 @@ Simulates a power cycle. Tag behavior depends on battery:
 Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
 
 ```python
-runner.set_battery_present(False)
+runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
@@ -193,7 +191,7 @@ Both `scan_id` and `timestamp` reset to 0 on STOP→RUN transition or `reboot()`
 Enable history retention to keep immutable state snapshots:
 
 ```python
-runner = PLCRunner(logic, history_limit=1000)  # keep latest 1000
+runner = PLC(logic, history_limit=1000)  # keep latest 1000
 
 runner.history.at(5)          # snapshot at scan 5
 runner.history.range(3, 7)    # [scan 3, 4, 5, 6] if retained

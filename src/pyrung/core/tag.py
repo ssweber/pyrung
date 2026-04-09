@@ -124,62 +124,50 @@ class Tag:
         return cond
 
     def __or__(self, other: object) -> Any:
-        """Create OR condition (for BOOL) or bitwise OR expression (for non-BOOL)."""
-        from pyrung.core.condition import AnyCondition
+        """Bitwise OR expression: Tag | value."""
         from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
 
-        # For non-BOOL tags, use bitwise OR
-        if self.type != TagType.BOOL:
-            if isinstance(other, CondBase):
+        if self.type == TagType.BOOL:
+            if isinstance(other, (Tag, CondBase)):
                 raise TypeError(
-                    f"Cannot OR Tag with {type(other).__name__}. "
-                    "Bitwise OR requires numeric/tag expression operands."
+                    f"Cannot use '|' to combine conditions. Use Or({self.name}, ...) instead."
                 )
-            return TagExpr(self) | cast(Any, other)
-
-        if isinstance(other, Tag | CondBase):
-            cond = AnyCondition(self, other)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        raise TypeError(
-            f"Cannot OR Tag with {type(other).__name__}. "
-            f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
-        )
+            if isinstance(other, (int, float)):
+                raise TypeError(
+                    f"Cannot use bitwise | between Bool tag {self.name!r} and {other!r}. "
+                    "This is usually a precedence mistake — "
+                    "add parentheses: Ready | (Speed > 50)"
+                )
+        if isinstance(other, CondBase):
+            raise TypeError(
+                f"Cannot OR Tag with {type(other).__name__}. "
+                "Bitwise OR requires numeric/tag expression operands."
+            )
+        return TagExpr(self) | cast(Any, other)
 
     def __ror__(self, other: Any) -> Any:
-        """Support reverse OR for both condition and bitwise operations."""
-        from pyrung.core.condition import AnyCondition
+        """Bitwise OR expression (reverse): value | Tag."""
         from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
 
-        # For non-BOOL tags, use bitwise OR
-        if self.type != TagType.BOOL:
-            if isinstance(other, CondBase):
+        if self.type == TagType.BOOL:
+            if isinstance(other, (Tag, CondBase)):
                 raise TypeError(
-                    f"Cannot OR {type(other).__name__} with Tag. "
-                    "Bitwise OR requires numeric/tag expression operands."
+                    f"Cannot use '|' to combine conditions. Use Or(..., {self.name}) instead."
                 )
-            return other | TagExpr(self)
-
-        if isinstance(other, Tag | CondBase):
-            cond = AnyCondition(other, self)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        raise TypeError(
-            f"Cannot OR {type(other).__name__} with Tag. "
-            f"If using comparisons with |, add parentheses: (Step == 0) | (Mode == 1)"
-        )
+            if isinstance(other, (int, float)):
+                raise TypeError(
+                    f"Cannot use bitwise | between {other!r} and Bool tag {self.name!r}. "
+                    "This is usually a precedence mistake — "
+                    "add parentheses: (Speed > 50) | Ready"
+                )
+        if isinstance(other, CondBase):
+            raise TypeError(
+                f"Cannot OR {type(other).__name__} with Tag. "
+                "Bitwise OR requires numeric/tag expression operands."
+            )
+        return other | TagExpr(self)
 
     def __bool__(self) -> bool:
         """Prevent accidental use as boolean."""
@@ -197,12 +185,11 @@ class Tag:
         the next `step()`.
 
         Raises:
-            RuntimeError: If called outside `with runner.active(): ...`.
+            RuntimeError: If called outside a ``with PLC(...) as plc:`` block.
 
         Example:
             ```python
-            runner = PLCRunner(logic)
-            with runner.active():
+            with PLC(logic) as plc:
                 print(StartButton.value)    # read current value
                 StartButton.value = True    # queue for next scan
             ```
@@ -330,58 +317,32 @@ class Tag:
     # =========================================================================
 
     def __and__(self, other: Any) -> Any:
-        """Create AND condition (for BOOL) or bitwise AND expression (non-BOOL)."""
-        from pyrung.core.condition import AllCondition
+        """Bitwise AND expression: Tag & value."""
         from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
 
-        if self.type == TagType.BOOL:
-            if isinstance(other, CondBase):
-                cond = AllCondition(self, other)
-                cond.source_file, cond.source_line = _capture_source(depth=2)
-                for child in cond.conditions:
-                    if child.source_file is None:
-                        child.source_file = cond.source_file
-                    if child.source_line is None:
-                        child.source_line = cond.source_line
-                return cond
-            if isinstance(other, Tag) and other.type == TagType.BOOL:
-                cond = AllCondition(self, other)
-                cond.source_file, cond.source_line = _capture_source(depth=2)
-                for child in cond.conditions:
-                    if child.source_file is None:
-                        child.source_file = cond.source_file
-                    if child.source_line is None:
-                        child.source_line = cond.source_line
-                return cond
-
+        if self.type == TagType.BOOL and isinstance(other, (Tag, CondBase)):
+            raise TypeError(
+                f"Cannot use '&' to combine conditions. Use And({self.name}, ...) instead."
+            )
         return TagExpr(self) & other
 
     def __rand__(self, other: Any) -> Any:
-        """Support reverse AND for conditions and bitwise expressions."""
-        from pyrung.core.condition import AllCondition
+        """Bitwise AND expression (reverse): value & Tag."""
         from pyrung.core.condition import Condition as CondBase
         from pyrung.core.expression import TagExpr
 
         if self.type == TagType.BOOL:
-            if isinstance(other, CondBase):
-                cond = AllCondition(other, self)
-                cond.source_file, cond.source_line = _capture_source(depth=2)
-                for child in cond.conditions:
-                    if child.source_file is None:
-                        child.source_file = cond.source_file
-                    if child.source_line is None:
-                        child.source_line = cond.source_line
-                return cond
-            if isinstance(other, Tag) and other.type == TagType.BOOL:
-                cond = AllCondition(other, self)
-                cond.source_file, cond.source_line = _capture_source(depth=2)
-                for child in cond.conditions:
-                    if child.source_file is None:
-                        child.source_file = cond.source_file
-                    if child.source_line is None:
-                        child.source_line = cond.source_line
-                return cond
+            if isinstance(other, (Tag, CondBase)):
+                raise TypeError(
+                    f"Cannot use '&' to combine conditions. Use And(..., {self.name}) instead."
+                )
+            if isinstance(other, (int, float)):
+                raise TypeError(
+                    f"Cannot use bitwise & between {other!r} and Bool tag {self.name!r}. "
+                    "This is usually a precedence mistake — "
+                    "add parentheses: (Speed > 50) & Ready"
+                )
 
         return other & TagExpr(self)
 
@@ -439,7 +400,7 @@ def _require_active_runner(tag_name: str):
     runner = get_active_runner()
     if runner is None:
         raise RuntimeError(
-            f"Tag '{tag_name}' is not bound to an active runner. Use: with runner.active(): ..."
+            f"Tag '{tag_name}' is not bound to an active runner. Use: with PLC(...) as plc: ..."
         )
     return runner
 
@@ -454,7 +415,7 @@ class LiveTag(Tag):
 
     Note:
         `.value` requires an active runner scope. Access outside
-        `with runner.active(): ...` raises `RuntimeError`.
+        a ``with PLC(...) as plc:`` block raises `RuntimeError`.
     """
 
 

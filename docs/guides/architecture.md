@@ -38,17 +38,17 @@ Phase 3  APPLY FORCES   Pre-logic force pass (debug overrides)
 Phase 4  EXECUTE LOGIC  Rungs evaluated top-to-bottom
 Phase 5  APPLY FORCES   Post-logic force pass (re-assert force values)
 Phase 6  WRITE OUTPUTS  OutputBlock values pushed to external sink
-Phase 7  ADVANCE CLOCK  scan_id += 1, timestamp updated per TimeMode
+Phase 7  ADVANCE CLOCK  scan_id += 1, timestamp updated per time mode
 Phase 8  SNAPSHOT       New SystemState committed
 ```
 
-All writes within a scan are batched in a `ScanContext` and committed atomically at phase 8. Rungs see each other's writes immediately — a write in rung 3 is visible to rung 4 in the same scan.
+All writes within a scan are batched and committed atomically at phase 8. Rungs see each other's writes immediately — a write in rung 3 is visible to rung 4 in the same scan.
 
-## ScanContext
+## Batched writes
 
-`ScanContext` is the mutable working space for a single scan. It holds pending tag writes, memory updates, and force state. The engine creates one at scan start and commits it at phase 8 to produce the next immutable `SystemState`.
+Inside a scan, tag writes and memory updates accumulate in a mutable working space. The engine creates this space at scan start, instructions write into it throughout execution, and phase 8 commits everything at once to produce the next immutable `SystemState`.
 
-User code never touches `ScanContext` directly — it's an internal detail of the scan cycle. The `runner.active()` context manager reads and writes through it transparently.
+User code never interacts with this layer directly. Inside a `with PLC(...) as plc:` block, tag reads and writes are routed through the runner's pending scan state and committed atomically when the scan completes.
 
 ## Consumer-driven execution
 

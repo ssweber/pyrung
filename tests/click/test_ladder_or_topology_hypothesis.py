@@ -1,11 +1,11 @@
 """Property-based tests for OR/AND condition tree layout in ladder CSV export.
 
-Generates random condition trees with any_of/all_of nesting and asserts
+Generates random condition trees with Or/And nesting and asserts
 structural invariants on the exported CSV, plus a full round-trip through
 the codegen parser to verify semantic correctness.
 
-The bug that motivated this test: a multi-contact all_of branch inside
-any_of (e.g. ``any_of(all_of(A, B, C), all_of(D, E))``) failed to get
+The bug that motivated this test: a multi-contact And branch inside
+Or (e.g. ``Or(And(A, B, C), And(D, E))``) failed to get
 the ``T:`` prefix on its first contact when preceded by a series contact,
 producing invalid CSV that the Click editor would misinterpret.
 """
@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 pytestmark = pytest.mark.hypothesis
 
 from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
-from pyrung.core import Bool, Int, Program, Rung, all_of, any_of
+from pyrung.core import And, Bool, Int, Or, Program, Rung
 from pyrung.core.program import out
 from pyrung.core.tag import TagType
 
@@ -30,10 +30,10 @@ from pyrung.core.tag import TagType
 
 @st.composite
 def _condition_tree(draw, *, n_ors_range=(1, 2), n_prefix_range=(0, 2), n_branches_range=(2, 4)):
-    """Generate a random Bool-only condition tree with any_of/all_of nesting.
+    """Generate a random Bool-only condition tree with Or/And nesting.
 
-    Each any_of has 2-4 branches; each branch is a single contact or
-    all_of(1-3 contacts).  Prefix is 0-2 series contacts, suffix 0-1.
+    Each Or has 2-4 branches; each branch is a single contact or
+    And(1-3 contacts).  Prefix is 0-2 series contacts, suffix 0-1.
 
     Returns ``(conditions, tags)``.
     """
@@ -49,11 +49,11 @@ def _condition_tree(draw, *, n_ors_range=(1, 2), n_prefix_range=(0, 2), n_branch
     def gen_branch():
         n = draw(st.integers(min_value=1, max_value=3))
         leaves = [make_tag() for _ in range(n)]
-        return leaves[0] if n == 1 else all_of(*leaves)
+        return leaves[0] if n == 1 else And(*leaves)
 
     def gen_any():
         n_branches = draw(st.integers(min_value=n_branches_range[0], max_value=n_branches_range[1]))
-        return any_of(*(gen_branch() for _ in range(n_branches)))
+        return Or(*(gen_branch() for _ in range(n_branches)))
 
     n_prefix = draw(st.integers(min_value=n_prefix_range[0], max_value=n_prefix_range[1]))
     n_ors = draw(st.integers(min_value=n_ors_range[0], max_value=n_ors_range[1]))
@@ -68,18 +68,18 @@ def _condition_tree(draw, *, n_ors_range=(1, 2), n_prefix_range=(0, 2), n_branch
 
 
 def single_or_tree():
-    """Condition tree with exactly one any_of block including col-0 ORs."""
+    """Condition tree with exactly one Or block including col-0 ORs."""
     return _condition_tree(n_ors_range=(1, 1))
 
 
 def multi_or_tree():
-    """Condition tree with 1-3 any_of blocks (tests wider structural space)."""
+    """Condition tree with 1-3 Or blocks (tests wider structural space)."""
     return _condition_tree(n_ors_range=(1, 3))
 
 
 @st.composite
 def single_or_tree_with_compare(draw):
-    """Single any_of block mixing Bool and Int-compare conditions.
+    """Single Or block mixing Bool and Int-compare conditions.
 
     Exercises the ``T:DS1>100`` token form — the same code path as the
     original ``T:TXT1=="s"`` bug.
@@ -112,7 +112,7 @@ def single_or_tree_with_compare(draw):
     def gen_branch():
         n = draw(st.integers(min_value=1, max_value=3))
         leaves = [gen_leaf() for _ in range(n)]
-        return leaves[0] if n == 1 else all_of(*leaves)
+        return leaves[0] if n == 1 else And(*leaves)
 
     # Require ≥1 prefix so T: is exercised (start_cursor > 0).
     n_prefix = draw(st.integers(min_value=1, max_value=2))
@@ -121,7 +121,7 @@ def single_or_tree_with_compare(draw):
 
     conditions = (
         [gen_leaf() for _ in range(n_prefix)]
-        + [any_of(*(gen_branch() for _ in range(n_branches)))]
+        + [Or(*(gen_branch() for _ in range(n_branches)))]
         + [gen_leaf() for _ in range(n_suffix)]
     )
     return conditions, tags
@@ -264,7 +264,7 @@ def _format_rows(rows: tuple[tuple[str, ...], ...]) -> str:
 def test_or_topology_structural_invariants(tree):
     """Structural invariants hold for any generated OR/AND condition tree.
 
-    Covers single and series any_of blocks with 1-3 OR groups,
+    Covers single and series Or blocks with 1-3 OR groups,
     0-2 prefix contacts, and 2-4 branches per OR.
     """
     conditions, tags = tree
@@ -295,7 +295,7 @@ def test_or_topology_round_trip(tree):
 def test_or_topology_round_trip_multi(tree):
     """Exported CSV survives parse → re-export for series OR trees.
 
-    Exercises 1-3 sequential any_of blocks with asymmetric branch
+    Exercises 1-3 sequential Or blocks with asymmetric branch
     lengths — the case that triggered the frozen-row merge wire bug.
     """
     conditions, tags = tree

@@ -40,10 +40,10 @@ class Subroutine:
         self._strict = strict
 
     def __enter__(self) -> Subroutine:
-        prog = Program.current()
+        prog = Program._current()
         if prog is None:
             raise RuntimeError("subroutine() must be used inside a Program context")
-        prog.start_subroutine(self._name)
+        prog._start_subroutine(self._name)
         return self
 
     def __call__(self, fn: Callable[[], None]) -> SubroutineFunc:
@@ -64,9 +64,9 @@ class Subroutine:
         return SubroutineFunc(self._name, fn)
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        prog = Program.current()
+        prog = Program._current()
         if prog is not None:
-            prog.end_subroutine()
+            prog._end_subroutine()
 
 
 class SubroutineFunc:
@@ -97,9 +97,9 @@ class SubroutineFunc:
 
     def _register(self, prog: Program) -> None:
         """Register this subroutine's rungs with a Program."""
-        prog.start_subroutine(self._name)
+        prog._start_subroutine(self._name)
         self._fn()
-        prog.end_subroutine()
+        prog._end_subroutine()
 
 
 def subroutine(name: str, *, strict: bool = True) -> Subroutine:

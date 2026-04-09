@@ -22,32 +22,32 @@ Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSen
 Remember the doubled name from [Lesson 2](tags.md) — `ConveyorSpeed = Int("ConveyorSpeed")`? It's gone. pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
-from pyrung import udt, Bool, Int, Dint, Program, Rung, PLCRunner, out, rise, count_up
+from pyrung import udt, Bool, Counter, Program, Rung, PLC, out, rise, count_up
 
 @udt(count=2)
 class Bin:
     Sensor: Bool
-    Done: Bool
-    Acc: Dint
     Full: Bool
 
-CountReset = Bool("CountReset")
+BinACounter = Counter.named(1, "BinACounter")
+BinBCounter = Counter.named(2, "BinBCounter")
+CountReset  = Bool("CountReset")
 
 with Program() as logic:
     with Rung(rise(Bin[1].Sensor)):
-        count_up(Bin[1].Done, Bin[1].Acc, preset=10) \
+        count_up(BinACounter, preset=10) \
             .reset(CountReset)
     with Rung(rise(Bin[2].Sensor)):
-        count_up(Bin[2].Done, Bin[2].Acc, preset=10) \
+        count_up(BinBCounter, preset=10) \
             .reset(CountReset)
 
-    with Rung(Bin[1].Done):
+    with Rung(BinACounter.Done):
         out(Bin[1].Full)
-    with Rung(Bin[2].Done):
+    with Rung(BinBCounter.Done):
         out(Bin[2].Full)
 ```
 
-`@udt(count=2)` creates two instances, accessed by index. `Bin[1].Sensor` and `Bin[2].Sensor` are distinct tags, but they share the same structure. This maps directly to how real plants are organized: identical equipment, replicated logic, consistent naming.
+`@udt(count=2)` creates two instances, accessed by index. `Bin[1].Sensor` and `Bin[2].Sensor` are distinct tags, but they share the same structure. Counters are separate — `Counter` is a built-in UDT, so you don't embed its fields in yours. This maps directly to how real plants are organized: identical equipment, replicated logic, consistent naming.
 
 Yes, the `Bin[1]` and `Bin[2]` rungs look nearly identical. Your Python instinct says "loop." Resist it. Each rung is independently editable, grep-able, and visible in the ladder editor. When Bin 2 needs a different preset or an extra condition, you edit one rung — you don't fight a loop. Duplication in ladder logic is a feature, not a smell.
 
@@ -56,12 +56,12 @@ That said, Python `for` loops work fine at build time — `for i in (1, 2): with
 A singleton UDT (`count` omitted or `count=1`) generates compact names with no instance number: `Motor_Running`, `Motor_Speed`. With `count > 1` you get numbered names: `Pump1_Running`, `Pump2_Running`. If your naming convention wants `Motor1_Running` even for a singleton (so future expansion doesn't rename everything), pass `always_number=True`.
 
 ```
-  Bin (UDT, count=2)          SortLog (Block, Int, 1-5)
-  +-- .Sensor : Bool          +-- [1] : Int
-  +-- .Done   : Bool          +-- [2] : Int
-  +-- .Acc    : Dint          +-- [3] : Int
-  +-- .Full   : Bool          +-- [4] : Int
-                              +-- [5] : Int
+  Bin (UDT, count=2)          Counter (built-in)        SortLog (Block, Int, 1-5)
+  +-- .Sensor : Bool          +-- .Done : Bool          +-- [1] : Int
+  +-- .Full   : Bool          +-- .Acc  : Dint          +-- [2] : Int
+                                                        +-- [3] : Int
+                                                        +-- [4] : Int
+                                                        +-- [5] : Int
 ```
 
 !!! warning "PLC arrays start at 1"
@@ -97,26 +97,25 @@ Why `.select(1, 4)` instead of `[1:4]`? Python's `list[1:4]` is `[1, 2, 3]` — 
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-with runner.active():
+with PLC(logic) as plc:
     # 3 boxes into Bin 1
     for _ in range(3):
         Bin[1].Sensor.value = True
-        runner.step()
+        plc.step()
         Bin[1].Sensor.value = False
-        runner.step()
+        plc.step()
 
-    assert Bin[1].Acc.value == 3
-    assert Bin[2].Acc.value == 0    # Bin 2 untouched
+    assert BinACounter.Acc.value == 3
+    assert BinBCounter.Acc.value == 0    # Bin 2 untouched
     assert Bin[1].Full.value is False
 
     # Log 3 box sizes
     for size in [150, 80, 200]:
         BoxSize.value = size
         NewBox.value = True
-        runner.step()
+        plc.step()
         NewBox.value = False
-        runner.step()
+        plc.step()
 
     # Newest first
     assert SortLog[1].value == 200

@@ -7,7 +7,7 @@ Demonstrates the full pyrung -> Click workflow:
   4. Auto/manual mode with branch-based diverter control
   5. Edge-triggered bin counters
   6. TagMap linking logical tags to Click hardware addresses
-  7. Simulation with PLCRunner in FIXED_STEP mode
+  7. Simulation with PLC in FIXED_STEP mode
 
 This is the completed version of the conveyor built across the
 "Know Python? Learn Ladder Logic" tutorial.  See ``devtools/build_release_assets.py``.
@@ -17,14 +17,14 @@ import os
 
 from pyrung import (
     Bool,
-    Dint,
+    Counter,
     Int,
-    PLCRunner,
+    PLC,
     Rung,
-    TimeMode,
-    Tms,
-    all_of,
-    any_of,
+    Timer,
+
+    And,
+    Or,
     branch,
     comment,
     copy,
@@ -77,16 +77,12 @@ SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
-DetDone = Bool("DetDone")  # T001
-DetAcc = Int("DetAcc")  # TD001
-HoldDone = Bool("HoldDone")  # T002
-HoldAcc = Int("HoldAcc")  # TD002
+DetTimer = Timer.named(1, "DetTimer")    # T001 / TD001
+HoldTimer = Timer.named(2, "HoldTimer")  # T002 / TD002
 
 # Counters — per bin
-BinADone = Bool("BinADone")  # CT001
-BinAAcc = Dint("BinAAcc")  # CTD001
-BinBDone = Bool("BinBDone")  # CT002
-BinBAcc = Dint("BinBAcc")  # CTD002
+BinACounter = Counter.named(1, "BinACounter")  # CT001 / CTD001
+BinBCounter = Counter.named(2, "BinBCounter")  # CT002 / CTD002
 
 # ---------------------------------------------------------------------------
 # Click hardware mapping
@@ -121,15 +117,15 @@ mapping = TagMap(
         SizeReading.map_to(ds[6]),
         SizeThreshold.map_to(ds[7]),
         # Timers
-        DetDone.map_to(t[1]),
-        DetAcc.map_to(td[1]),
-        HoldDone.map_to(t[2]),
-        HoldAcc.map_to(td[2]),
+        DetTimer.Done.map_to(t[1]),
+        DetTimer.Acc.map_to(td[1]),
+        HoldTimer.Done.map_to(t[2]),
+        HoldTimer.Acc.map_to(td[2]),
         # Counters
-        BinADone.map_to(ct[1]),
-        BinAAcc.map_to(ctd[1]),
-        BinBDone.map_to(ct[2]),
-        BinBAcc.map_to(ctd[2]),
+        BinACounter.Done.map_to(ct[1]),
+        BinACounter.Acc.map_to(ctd[1]),
+        BinBCounter.Done.map_to(ct[2]),
+        BinBCounter.Acc.map_to(ctd[2]),
     ],
     include_system=False,
 )
@@ -142,7 +138,7 @@ mapping = TagMap(
 @program
 def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
-    with Rung(StartBtn, any_of(Auto, Manual)):
+    with Rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with Rung(~StopBtn):
         reset(Running)
@@ -162,16 +158,16 @@ def logic():
 
     comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == DETECTING):
-        on_delay(DetDone, DetAcc, preset=500, unit=Tms)
+        on_delay(DetTimer, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetDone):
+    with Rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
-        on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
-    with Rung(HoldDone):
+        on_delay(HoldTimer, preset=2000, unit="Tms")
+    with Rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
@@ -182,32 +178,30 @@ def logic():
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
         EstopOK,
-        any_of(
-            all_of(State == SORTING, IsLarge, Auto),
-            all_of(Manual, DiverterBtn),
+        Or(
+            And(State == SORTING, IsLarge, Auto),
+            And(Manual, DiverterBtn),
         ),
     ):
         out(DiverterCmd)
 
     comment("Bin counters")
     with Rung(rise(BinASensor)):
-        count_up(BinADone, BinAAcc, preset=9999).reset(CountReset)
+        count_up(BinACounter, preset=9999).reset(CountReset)
     with Rung(rise(BinBSensor)):
-        count_up(BinBDone, BinBAcc, preset=9999).reset(CountReset)
+        count_up(BinBCounter, preset=9999).reset(CountReset)
 
 
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner = PLC(logic, dt=0.010)
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
-    # NC inputs: force True to simulate healthy wiring
-    runner.add_force(StopBtn, True)
-    runner.add_force(EstopOK, True)
-
-    with runner.active():
+    with runner:
+        # NC inputs: True simulates healthy wiring
+        StopBtn.value = True
+        EstopOK.value = True
         Auto.value = True
         SizeThreshold.value = 100
 
@@ -217,18 +211,18 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
         StartBtn.value = False
 
     # Simulate a large box arriving
-    runner.add_force(EntrySensor, True)
-    runner.add_force(SizeReading, 150)
+    runner.force(EntrySensor, True)
+    runner.force(SizeReading, 150)
     runner.run(cycles=300)  # Through detection + sorting
-    runner.remove_force(EntrySensor)
-    runner.remove_force(SizeReading)
+    runner.unforce(EntrySensor)
+    runner.unforce(SizeReading)
     runner.run(cycles=10)
 
     # Report
-    with runner.active():
+    with runner:
         print(f"Motor     : {'ON' if ConveyorMotor.value else 'OFF'}")
         print(f"State     : {State.value!r}")
         print(f"Diverter  : {'EXTENDED' if DiverterCmd.value else 'retracted'}")
         print(f"IsLarge   : {IsLarge.value}")
-        print(f"Bin A     : {BinAAcc.value} boxes")
-        print(f"Bin B     : {BinBAcc.value} boxes")
+        print(f"Bin A     : {BinACounter.Acc.value} boxes")
+        print(f"Bin B     : {BinBCounter.Acc.value} boxes")

@@ -1,4 +1,4 @@
-"""Patch/force override state for PLCRunner."""
+"""Patch/force override state for PLC."""
 
 from __future__ import annotations
 

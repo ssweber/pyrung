@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from pyrung.core import PLCRunner
+from pyrung.core import PLC
 from pyrung.core.instruction import CallInstruction, Instruction
 from pyrung.core.rung import Rung
 from pyrung.core.state import SystemState
@@ -61,12 +61,12 @@ class BreakpointManager:
     ) -> None:
         self.source_breakpoints_by_file[source_path] = breakpoints
 
-    def rebuild_index(self, runner: PLCRunner) -> None:
+    def rebuild_index(self, runner: PLC) -> None:
         self.breakpoint_rung_map = {}
         self.subroutine_source_map = {}
         visited_rungs: set[int] = set()
         visited_programs: set[int] = set()
-        for rung in runner.iter_top_level_rungs():
+        for rung in runner.debug.iter_top_level_rungs():
             self._index_rung_lines(
                 rung=rung, visited_rungs=visited_rungs, visited_programs=visited_programs
             )
@@ -76,7 +76,7 @@ class BreakpointManager:
         *,
         current_rung: Rung | None,
         current_scan_id: int | None,
-        runner: PLCRunner | None,
+        runner: PLC | None,
         on_logpoint_hit: Callable[[SourceBreakpoint, SystemState, int | None], None],
     ) -> bool:
         if current_rung is None:
@@ -125,7 +125,7 @@ class BreakpointManager:
         *,
         current_rung: Rung | None,
         current_scan_id: int | None,
-        runner: PLCRunner | None,
+        runner: PLC | None,
         on_logpoint_hit: Callable[[SourceBreakpoint, SystemState, int | None], None],
     ) -> None:
         if current_rung is None:

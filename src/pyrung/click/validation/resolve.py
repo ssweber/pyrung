@@ -107,7 +107,7 @@ def _resolve_direct_tag(tag: Tag, tag_map: TagMap) -> _ResolvedSlot | None:
 
 
 def _resolve_block_memory_type(block_name: str, tag_map: TagMap) -> str | None:
-    entry = tag_map.block_entry_by_name(block_name)
+    entry = tag_map._block_entry_by_name(block_name)
     if entry is not None and entry.hardware_addresses:
         hardware_slot = entry.hardware.block[entry.hardware_addresses[0]]
         try:

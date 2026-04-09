@@ -6,7 +6,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType
 from pyrung.core.instruction.send_receive import ModbusTcpTarget
 
 _TARGET = ModbusTcpTarget("test", "127.0.0.1", port=502, device_id=1)
@@ -44,7 +44,7 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
                 exception_response=ExCode,
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Source": 123})
     runner.step()
 
@@ -110,7 +110,7 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
                 exception_response=ExCode,
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Source": 1})
     runner.step()
     assert runner.current_state.tags["Sending"] is True
@@ -163,7 +163,7 @@ def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch
                 exception_response=ExCode,
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True})
     runner.step()
     assert runner.current_state.tags["Receiving"] is True
@@ -210,7 +210,7 @@ def test_receive_error_sets_exception_code(monkeypatch: pytest.MonkeyPatch):
                 exception_response=ExCode,
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True})
     runner.step()
 

@@ -141,13 +141,13 @@ def advance_one_step_locked(adapter: Any) -> bool:
         return False
 
     if adapter._scan_gen is None:
-        adapter._scan_gen = runner.scan_steps_debug()
+        adapter._scan_gen = runner.debug.scan_steps_debug()
         adapter._current_scan_id = runner.current_state.scan_id + 1
 
     try:
         step = next(adapter._scan_gen)
     except StopIteration:
-        adapter._scan_gen = runner.scan_steps_debug()
+        adapter._scan_gen = runner.debug.scan_steps_debug()
         adapter._current_scan_id = runner.current_state.scan_id + 1
         step = next(adapter._scan_gen)
 

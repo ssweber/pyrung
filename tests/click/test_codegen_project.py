@@ -21,13 +21,12 @@ from pyrung.click import (
 from pyrung.core import (
     Block,
     Bool,
-    Dint,
-    Int,
+    Counter,
+    Or,
     Program,
     Rung,
     TagType,
-    Tms,
-    any_of,
+    Timer,
 )
 from pyrung.core.program import (
     call,
@@ -525,14 +524,14 @@ class TestPerFileImports:
         assert len(from_tags_line) == 1
         assert "mapping" in from_tags_line[0]
 
-    def test_main_omits_any_of_for_two_way_bool_or(self, tmp_path: Path):
-        """Two-way BOOL OR renders with | and does not import any_of."""
+    def test_main_uses_or_for_two_way_bool_or(self, tmp_path: Path):
+        """Two-way BOOL OR renders with Or() and imports Or."""
         A = Bool("A")
         B = Bool("B")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B)):
+            with Rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -540,8 +539,7 @@ class TestPerFileImports:
 
         main_py = files["main.py"]
         assert "with Rung(" in main_py
-        assert " | " in main_py
-        assert "any_of" not in main_py
+        assert "Or(" in main_py
 
     def test_subroutine_imports_click_block_for_raw_range(self, tmp_path: Path):
         """Subroutine using reset(c.select(...)) must import c from pyrung.click."""
@@ -740,15 +738,13 @@ class TestTimerCounterInstructions:
     def test_timer_round_trip(self, tmp_path: Path):
         """Timer instructions produce correct project output."""
         Enable = Bool("Enable")
-        Done = Bool("Done")
-        Acc = Int("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=1000, unit=Tms)
+                on_delay(Timer[1], preset=1000, unit="Tms")
 
         mapping = TagMap(
-            {Enable: x[1], Done: t[1], Acc: td[1]},
+            {Enable: x[1], Timer[1].Done: t[1], Timer[1].Acc: td[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)
@@ -762,15 +758,13 @@ class TestTimerCounterInstructions:
         """Counter instructions produce correct project output."""
         Enable = Bool("Enable")
         ResetCond = Bool("ResetCond")
-        Done = Bool("Done")
-        Acc = Dint("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                count_up(Done, Acc, preset=10).reset(ResetCond)
+                count_up(Counter[1], preset=10).reset(ResetCond)
 
         mapping = TagMap(
-            {Enable: x[1], ResetCond: x[2], Done: ct[1], Acc: ctd[1]},
+            {Enable: x[1], ResetCond: x[2], Counter[1].Done: ct[1], Counter[1].Acc: ctd[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)

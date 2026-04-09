@@ -11,10 +11,10 @@ import os
 from pyrung import (
     Bool,
     Int,
-    PLCRunner,
+    PLC,
     Rung,
-    TimeMode,
-    Ts,
+    Timer,
+
     branch,
     calc,
     call,
@@ -34,10 +34,9 @@ class Task:
     Active: Int
     Step: Int
     Advance: Int
-    StepTime: Int
 
 
-TimerDone = Bool("TimerDone")
+StepTimer = Timer.named(1, "StepTimer")
 Valve1 = Bool("Valve1")
 
 
@@ -48,13 +47,13 @@ def task_logic() -> None:
 
     # Everything under this rung auto-resets when Active drops to 0.
     with Rung(Task.Active == 1):
-        on_delay(TimerDone, Task.StepTime, preset=9999, unit=Ts)
+        on_delay(StepTimer, preset=9999, unit="Ts")
 
         # Step 1: open valve for 5 seconds then advance.
         with branch(Task.Step == 1):
             out(Valve1)
 
-        with branch(Task.Step == 1, Task.StepTime >= 5):
+        with branch(Task.Step == 1, StepTimer.Acc >= 5):
             copy(1, Task.Advance)
 
     # Reset all task state when call is cleared.
@@ -62,13 +61,13 @@ def task_logic() -> None:
         copy(0, Task.Active)
         copy(0, Task.Step)
         copy(0, Task.Advance)
-        copy(0, Task.StepTime)
+        copy(0, StepTimer.Acc)
 
     # Consume advance: increment step, reset step timer.
     with Rung(Task.Advance == 1):
         calc(Task.Step + 1, Task.Step)
         copy(0, Task.Advance)
-        copy(0, Task.StepTime)
+        copy(0, StepTimer.Acc)
 
 
 @program
@@ -84,17 +83,16 @@ def logic():
         task_logic()
 
 
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+runner = PLC(logic, dt=0.010)
 
-with runner.active():
+with runner:
     Task.Call.value = 1
 
 
 def print_row(current_time: float) -> None:
-    with runner.active():
+    with runner:
         step = Task.Step.value
-        timer = Task.StepTime.value
+        timer = StepTimer.Acc.value
         valve = Valve1.value
     print(f"{current_time:<10.2f} | {step:<5} | {timer:<10} | {valve}")
 

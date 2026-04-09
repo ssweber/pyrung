@@ -51,13 +51,13 @@ from pyrung.core.memory_block import (
     SlotView,
 )
 from pyrung.core.program import (
+    And,
     ForbiddenControlFlowError,
     ForLoop,
+    Or,
     Program,
     Rung,
     SubroutineFunc,
-    all_of,
-    any_of,
     blockcopy,
     branch,
     calc,
@@ -90,9 +90,18 @@ from pyrung.core.program import (
     unpack_to_bits,
     unpack_to_words,
 )
-from pyrung.core.runner import PLCRunner
+from pyrung.core.runner import PLC
 from pyrung.core.state import SystemState
-from pyrung.core.structure import AutoDefault, Field, InstanceView, auto, named_array, udt
+from pyrung.core.structure import (
+    AutoDefault,
+    Counter,
+    Field,
+    InstanceView,
+    Timer,
+    auto,
+    named_array,
+    udt,
+)
 from pyrung.core.system_points import system
 from pyrung.core.tag import (
     Bool,
@@ -108,29 +117,19 @@ from pyrung.core.tag import (
     Word,
     immediate,
 )
-from pyrung.core.time_mode import TimeMode, TimeUnit
-
-# Time unit aliases for DSL ergonomics
-Tms = TimeUnit.Tms
-Ts = TimeUnit.Ts
-Tm = TimeUnit.Tm
-Th = TimeUnit.Th
-Td = TimeUnit.Td
+from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not in __all__)
+    TimeMode,
+    TimeUnit,
+)
 
 __all__ = [
-    "PLCRunner",
+    "PLC",
     "ScanContext",
     "SystemState",
     "RungTrace",
     "RungTraceEvent",
     "system",
-    "TimeMode",
     "TimeUnit",
-    "Tms",
-    "Ts",
-    "Tm",
-    "Th",
-    "Td",
     # Structured factories
     "Field",
     "AutoDefault",
@@ -138,6 +137,8 @@ __all__ = [
     "udt",
     "named_array",
     "InstanceView",
+    "Timer",
+    "Counter",
     # Tags (IEC 61131-3 names)
     "Tag",
     "TagType",
@@ -208,8 +209,8 @@ __all__ = [
     # Conditions
     "rise",
     "fall",
-    "all_of",
-    "any_of",
+    "And",
+    "Or",
     # Copy converters
     "to_value",
     "to_ascii",

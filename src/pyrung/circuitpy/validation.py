@@ -437,5 +437,4 @@ __all__ = [
     "CircuitPyValidationReport",
     "FindingSeverity",
     "ValidationMode",
-    "validate_circuitpy_program",
 ]

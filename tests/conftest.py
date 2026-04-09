@@ -81,5 +81,5 @@ def evaluate_program(program: ProgramLogic, state: SystemState, *, dt: float = 0
     """
     ctx = ScanContext(state)
     ctx.set_memory("_dt", dt)  # For timer instructions
-    program.evaluate(ctx)
+    program._evaluate(ctx)
     return ctx.commit(dt=dt)

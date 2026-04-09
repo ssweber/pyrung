@@ -14,7 +14,6 @@ from pyrung.click.codegen.constants import (
     _INSTRUCTION_NAMES,
     _OPERAND_RE,
     _RANGE_RE,
-    _TIME_UNITS,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -22,6 +21,7 @@ from pyrung.click.codegen.models import (
     _BlockSlotDecl,
     _FieldHw,
     _FileRefs,
+    _NamedTimerCounterDecl,
     _OperandCollection,
     _PlainBlockDecl,
     _RangeDecl,
@@ -58,55 +58,19 @@ def _walk_tree_labels(node: SPNode | None) -> Iterator[str]:
             yield from _walk_tree_labels(child)
 
 
-def _is_bool_operand_token(token: str, collection: _OperandCollection) -> bool:
-    """Return True when a raw operand token resolves to a BOOL-style contact."""
-    token = token.strip()
-    if not token:
-        return False
-    tag_decl = collection.tags.get(token)
-    if tag_decl is not None:
-        return tag_decl.tag_type == "Bool"
-    parsed = _parse_operand_prefix(token)
-    return parsed is not None and parsed[1] == "Bool"
-
-
-def _is_pipe_safe_or_token(token: str, collection: _OperandCollection) -> bool:
-    """Return True when a condition token can be emitted safely with ``|``."""
-    token = token.strip()
-    if not token or _COMPARE_RE.match(token):
-        return False
-    if token.startswith("~"):
-        return _is_pipe_safe_or_token(token[1:], collection)
-    match = _FUNC_RE.match(token)
-    if match:
-        func_name = match.group(2)
-        args_str = (match.group(3) or "").strip()
-        return func_name in _CONDITION_WRAPPERS and _is_bool_operand_token(args_str, collection)
-    return _is_bool_operand_token(token, collection)
-
-
-def _parallel_renders_with_pipe(node: Parallel, collection: _OperandCollection) -> bool:
-    """Return True when a parallel group should emit as ``a | b`` instead of ``any_of``."""
-    return len(node.children) == 2 and all(
-        isinstance(child, Leaf) and _is_pipe_safe_or_token(child.label, collection)
-        for child in node.children
-    )
-
-
-def _tree_uses_any_of(node: SPNode | None, collection: _OperandCollection) -> bool:
-    """Check if tree requires an ``any_of(...)`` helper in emitted code."""
+def _tree_uses_Or(node: SPNode | None) -> bool:
+    """Check if tree requires an ``Or(...)`` helper in emitted code."""
     if node is None:
         return False
     if isinstance(node, Leaf):
         return False
     if isinstance(node, Series):
-        return any(_tree_uses_any_of(c, collection) for c in node.children)
-    if _parallel_renders_with_pipe(node, collection):
-        return any(_tree_uses_any_of(c, collection) for c in node.children)
+        return any(_tree_uses_Or(c) for c in node.children)
+    # Any Parallel node now always emits as Or(...)
     return True
 
 
-def _tree_has_all_of(node: SPNode | None) -> bool:
+def _tree_has_And(node: SPNode | None) -> bool:
     """Check if tree has a multi-child Series inside a Parallel."""
     if node is None:
         return False
@@ -114,10 +78,10 @@ def _tree_has_all_of(node: SPNode | None) -> bool:
         for child in node.children:
             if isinstance(child, Series) and len(child.children) > 1:
                 return True
-            if _tree_has_all_of(child):
+            if _tree_has_And(child):
                 return True
     if isinstance(node, Series):
-        return any(_tree_has_all_of(c) for c in node.children)
+        return any(_tree_has_And(c) for c in node.children)
     return False
 
 
@@ -136,10 +100,10 @@ def _collect_operands(
     collection = _OperandCollection()
 
     for rung in rungs:
-        if _tree_uses_any_of(rung.condition_tree, collection):
-            collection.has_any_of = True
-        if _tree_has_all_of(rung.condition_tree):
-            collection.has_all_of = True
+        if _tree_uses_Or(rung.condition_tree):
+            collection.has_Or = True
+        if _tree_has_And(rung.condition_tree):
+            collection.has_And = True
 
         if rung.comment:
             collection.has_comment = True
@@ -155,20 +119,20 @@ def _collect_operands(
             _scan_af_token(instr.af_token, collection, nicknames)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _scan_token_for_operands(cond, collection, nicknames)
-            if _tree_uses_any_of(instr.branch_tree, collection):
-                collection.has_any_of = True
-            if _tree_has_all_of(instr.branch_tree):
-                collection.has_all_of = True
+            if _tree_uses_Or(instr.branch_tree):
+                collection.has_Or = True
+            if _tree_has_And(instr.branch_tree):
+                collection.has_And = True
             if instr.branch_tree is not None:
                 collection.has_branch = True
             for pin in instr.pins:
                 if pin.condition_tree is not None:
                     for cond in _walk_tree_labels(pin.condition_tree):
                         _scan_token_for_operands(cond, collection, nicknames)
-                    if _tree_uses_any_of(pin.condition_tree, collection):
-                        collection.has_any_of = True
-                    if _tree_has_all_of(pin.condition_tree):
-                        collection.has_all_of = True
+                    if _tree_uses_Or(pin.condition_tree):
+                        collection.has_Or = True
+                    if _tree_has_And(pin.condition_tree):
+                        collection.has_And = True
                 else:
                     for cond in pin.conditions:
                         _scan_token_for_operands(cond, collection, nicknames)
@@ -327,7 +291,7 @@ def _enrich_with_ownership(
         if existing is not None:
             return existing
 
-        entry = structured_map.block_entry_by_name(block_name)
+        entry = structured_map._block_entry_by_name(block_name)
         if entry is None or not entry.hardware_addresses:
             return None
 
@@ -373,7 +337,7 @@ def _enrich_with_ownership(
         return decl
 
     for operand in list(collection.tags):
-        owner = structured_map.owner_of(operand)
+        owner = structured_map._owner_of(operand)
         if owner is None:
             continue
         if owner.structure_type in ("named_array", "udt"):
@@ -422,10 +386,10 @@ def _enrich_with_ownership(
         )
 
     for range_str, range_decl in collection.ranges.items():
-        start_owner = structured_map.owner_of(
+        start_owner = structured_map._owner_of(
             format_address_display(range_decl.prefix, range_decl.start)
         )
-        end_owner = structured_map.owner_of(
+        end_owner = structured_map._owner_of(
             format_address_display(range_decl.prefix, range_decl.end)
         )
         if start_owner is None:
@@ -559,6 +523,66 @@ def _scan_token_for_operands(
     _register_operands_from_text(token, collection, nicknames)
 
 
+# Suffixes to strip from timer/counter nicknames so that
+# Timer.named(1, "OvenTimer") doesn't produce OvenTimer_Done_Done.
+_TC_NICK_SUFFIXES = ("_Done", "_Acc")
+
+
+def _register_named_timer_counter(
+    done_operand: str,
+    acc_operand: str,
+    nick: str,
+    func_name: str,
+    collection: _OperandCollection,
+) -> None:
+    """Register a Timer.named() / Counter.named() declaration from a nickname."""
+    # Strip _Done / _Acc suffix if present
+    for suffix in _TC_NICK_SUFFIXES:
+        if nick.endswith(suffix) and len(nick) > len(suffix):
+            nick = nick[: -len(suffix)]
+            break
+
+    parsed = _parse_operand_prefix(done_operand)
+    if parsed is None:
+        return
+    prefix, _, _, index = parsed
+    kind = "Timer" if prefix == "T" else "Counter"
+
+    # Avoid duplicate declarations for the same timer/counter
+    if any(d.done_operand == done_operand for d in collection.named_timer_counters):
+        return
+
+    used_var_names = (
+        {decl.var_name for decl in collection.tags.values()}
+        | {decl.var_name for decl in collection.ranges.values()}
+        | {d.var_name for d in collection.named_timer_counters}
+    )
+    slug = _make_safe_identifier(nick, used_names=used_var_names)
+
+    collection.named_timer_counters.append(
+        _NamedTimerCounterDecl(
+            var_name=slug,
+            kind=kind,
+            index=index,
+            slug=slug,
+            done_operand=done_operand,
+            acc_operand=acc_operand,
+        )
+    )
+    # Register semantic operands so condition references resolve:
+    # T1 → OvenTimer.Done, TD1 → OvenTimer.Acc
+    collection.semantic_operands[done_operand] = _SemanticRender(
+        expr=f"{slug}.Done",
+        import_kind="named_tc",
+        import_name=slug,
+    )
+    collection.semantic_operands[acc_operand] = _SemanticRender(
+        expr=f"{slug}.Acc",
+        import_kind="named_tc",
+        import_name=slug,
+    )
+
+
 def _scan_af_token(
     token: str,
     collection: _OperandCollection,
@@ -582,6 +606,25 @@ def _scan_af_token(
     if func_name in _INSTRUCTION_NAMES:
         collection.used_instructions.add(func_name)
 
+    # Track timer/counter done_bit + accumulator operands so they can be
+    # suppressed from tag declarations and TagMap (they resolve automatically
+    # via the built-in Timer/Counter UDTs).
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"}:
+        from pyrung.click.codegen.utils import _parse_af_args
+
+        tc_args, _ = _parse_af_args(args_str)
+        if len(tc_args) >= 2:
+            collection.timer_counter_operands.add(tc_args[0])
+            collection.timer_counter_operands.add(tc_args[1])
+
+            # Named timer/counter: use done-bit nickname as Timer.named() slug
+            if nicknames:
+                nick = nicknames.get(tc_args[0])
+                if nick:
+                    _register_named_timer_counter(
+                        tc_args[0], tc_args[1], nick, func_name, collection
+                    )
+
     if func_name in {"send", "receive"}:
         if "ModbusTcpTarget(" in args_str:
             collection.has_modbus_target = True
@@ -604,11 +647,6 @@ def _scan_af_token(
     for cw in _CONDITION_WRAPPERS:
         if cw + "(" in clean_args:
             collection.used_conditions.add(cw)
-
-    # Check for time units
-    for tu in _TIME_UNITS:
-        if tu in clean_args:
-            collection.used_time_units.add(tu)
 
     # Check for copy converters
     for cc in _COPY_CONVERTERS:
@@ -726,10 +764,10 @@ def _scan_file_refs(
     refs = _FileRefs()
 
     for rung in rungs:
-        if _tree_uses_any_of(rung.condition_tree, collection):
-            refs.has_any_of = True
-        if _tree_has_all_of(rung.condition_tree):
-            refs.has_all_of = True
+        if _tree_uses_Or(rung.condition_tree):
+            refs.has_Or = True
+        if _tree_has_And(rung.condition_tree):
+            refs.has_And = True
         if rung.comment:
             refs.has_comment = True
         if rung.role is RungRole.FORLOOP_START:
@@ -742,20 +780,20 @@ def _scan_file_refs(
             _ref_af_token(instr.af_token, collection, refs, call_func_map=call_func_map)
             for cond in _walk_tree_labels(instr.branch_tree):
                 _ref_token(cond, collection, refs)
-            if _tree_uses_any_of(instr.branch_tree, collection):
-                refs.has_any_of = True
-            if _tree_has_all_of(instr.branch_tree):
-                refs.has_all_of = True
+            if _tree_uses_Or(instr.branch_tree):
+                refs.has_Or = True
+            if _tree_has_And(instr.branch_tree):
+                refs.has_And = True
             if instr.branch_tree is not None:
                 refs.has_branch = True
             for pin in instr.pins:
                 if pin.condition_tree is not None:
                     for cond in _walk_tree_labels(pin.condition_tree):
                         _ref_token(cond, collection, refs)
-                    if _tree_uses_any_of(pin.condition_tree, collection):
-                        refs.has_any_of = True
-                    if _tree_has_all_of(pin.condition_tree):
-                        refs.has_all_of = True
+                    if _tree_uses_Or(pin.condition_tree):
+                        refs.has_Or = True
+                    if _tree_has_And(pin.condition_tree):
+                        refs.has_And = True
                 else:
                     for cond in pin.conditions:
                         _ref_token(cond, collection, refs)
@@ -840,15 +878,28 @@ def _ref_af_token(
     if func_name == "raw":
         return
 
+    # For timer/counter instructions, strip the done_bit + accumulator args
+    # from the text before scanning refs — they're rendered as Timer[n]/Counter[n]
+    # and don't need tag-level imports.
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"}:
+        from pyrung.click.codegen.utils import _parse_af_args
+
+        tc_args, tc_kwargs = _parse_af_args(args_str)
+        if len(tc_args) >= 2:
+            # Track named_tc ref for project-mode imports
+            done_operand = tc_args[0]
+            render = collection.semantic_operands.get(done_operand)
+            if render is not None and render.import_kind == "named_tc":
+                refs.named_tc_var_names.add(render.import_name)
+            # Rebuild args_str without the first two positional args
+            remaining = [f"{k}={v}" for k, v in tc_kwargs]
+            args_str = ",".join(remaining)
+
     clean_args = _strip_quoted_strings(args_str)
 
     for cw in _CONDITION_WRAPPERS:
         if cw + "(" in clean_args:
             refs.used_conditions.add(cw)
-
-    for tu in _TIME_UNITS:
-        if tu in clean_args:
-            refs.used_time_units.add(tu)
 
     for cc in _COPY_CONVERTERS:
         if f"convert={cc}" in clean_args:
@@ -871,6 +922,8 @@ def _ref_operands_in_text(
             refs.block_var_names.add(render.import_name)
         elif render.import_kind == "structure":
             refs.structure_names.add(render.import_name)
+        elif render.import_kind == "named_tc":
+            refs.named_tc_var_names.add(render.import_name)
 
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):

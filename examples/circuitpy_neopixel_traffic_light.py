@@ -1,32 +1,29 @@
 """Zero-slot CircuitPython traffic light using the onboard NeoPixel."""
 
-from pyrung import Bool, Char, Int, Program, Rung, Tms, copy, on_delay
+from pyrung import Char, Program, Rung, Timer, copy, on_delay
 from pyrung.circuitpy import P1AM, board, generate_circuitpy
 
 State = Char("State", default="r")  # r=red, g=green, y=yellow
 
-RedDone = Bool("RedDone")
-RedAcc = Int("RedAcc")
-GreenDone = Bool("GreenDone")
-GreenAcc = Int("GreenAcc")
-YellowDone = Bool("YellowDone")
-YellowAcc = Int("YellowAcc")
+RedTimer = Timer.named(1, "RedTimer")
+GreenTimer = Timer.named(2, "GreenTimer")
+YellowTimer = Timer.named(3, "YellowTimer")
 
 
 with Program() as logic:
     with Rung(State == "r"):
-        on_delay(RedDone, RedAcc, preset=3000, unit=Tms)
-    with Rung(RedDone):
+        on_delay(RedTimer, preset=3000, unit="Tms")
+    with Rung(RedTimer.Done):
         copy("g", State)
 
     with Rung(State == "g"):
-        on_delay(GreenDone, GreenAcc, preset=3000, unit=Tms)
-    with Rung(GreenDone):
+        on_delay(GreenTimer, preset=3000, unit="Tms")
+    with Rung(GreenTimer.Done):
         copy("y", State)
 
     with Rung(State == "y"):
-        on_delay(YellowDone, YellowAcc, preset=1000, unit=Tms)
-    with Rung(YellowDone):
+        on_delay(YellowTimer, preset=1000, unit="Tms")
+    with Rung(YellowTimer.Done):
         copy("r", State)
 
     with Rung(State == "r"):

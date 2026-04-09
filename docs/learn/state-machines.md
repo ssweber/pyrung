@@ -26,7 +26,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 ```
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
+from pyrung import Bool, Int, Timer, Program, Rung, PLC
 from pyrung import comment, on_delay, copy, latch, reset, rise
 
 # State values as tag-constants — initialized once, never written
@@ -43,11 +43,9 @@ SizeReading   = Int("SizeReading")
 SizeThreshold = Int("SizeThreshold")
 
 # Internal
-IsLarge  = Bool("IsLarge")
-DetDone  = Bool("DetDone")
-DetAcc   = Int("DetAcc")
-HoldDone = Bool("HoldDone")
-HoldAcc  = Int("HoldAcc")
+IsLarge   = Bool("IsLarge")
+DetTimer  = Timer.named(1, "DetTimer")
+HoldTimer = Timer.named(2, "HoldTimer")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")
@@ -56,16 +54,16 @@ with Program() as logic:
 
     comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == DETECTING):
-        on_delay(DetDone, DetAcc, preset=500, unit=Tms)
+        on_delay(DetTimer, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetDone):
+    with Rung(DetTimer.Done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
-        on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
-    with Rung(HoldDone):
+        on_delay(HoldTimer, preset=2000, unit="Tms")
+    with Rung(HoldTimer.Done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
@@ -82,16 +80,13 @@ A few things to notice in the code:
 
 - **`rise(EntrySensor)`** — remember [Lesson 4](assignment.md)? Without it, the IDLE→DETECTING transition fires every scan the sensor sees a box, not just the first.
 - **`State == DETECTING` repeats across three rungs.** In Python you'd write one `if` and nest. In ladder, each rung stands alone — independently editable, grep-able, and deletable. The maintenance tech at 3am searching for `DETECTING` finds every rung that participates.
-- **We never reset `DetDone`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets — `DetDone` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
+- **We never reset `DetTimer`.** Once `State` leaves DETECTING, the `on_delay` rung goes false and the TON auto-resets — `DetTimer.Done` clears on its own. That's the [TON behavior from Lesson 5](timers.md).
 - **`IsLarge` crosses states.** It's latched in DETECTING and reset in RESETTING. [Lesson 8](branches.md) reads it in the diverter output rung. Latches outlive rungs — they're how a state machine carries data between states without globals or context objects.
 
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
-
-with runner.active():
+with PLC(logic, dt=0.010) as plc:
     State.value = 0
     SizeThreshold.value = 100
 
@@ -99,16 +94,16 @@ with runner.active():
     EntrySensor.value = True
     SizeReading.value = 150
 
-    runner.step()
+    plc.step()
     assert State.value == 1             # DETECTING
 
     # Wait for detection period (0.5s = 50 scans)
-    runner.run(cycles=50)
+    plc.run(cycles=50)
     assert State.value == 2             # SORTING
     assert IsLarge.value is True        # Classified as large
 
     # Wait for hold period + pass through RESETTING (2s = 200 scans)
-    runner.run(cycles=200)
+    plc.run(cycles=200)
     assert State.value == 0             # Back to IDLE
     assert IsLarge.value is False       # Cleaned up in RESETTING
 ```

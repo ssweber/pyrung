@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _scan_file_refs
 from pyrung.click.codegen.emitter import (
+    _emit_named_tc_declarations,
     _emit_plain_block_declarations,
     _emit_rung_sequence,
     _emit_structure_declarations,
@@ -201,12 +202,12 @@ def _generate_launch_json() -> str:
 
 
 def _generate_run_file() -> str:
-    """Generate run.py: instantiate PLCRunner and step the logic."""
+    """Generate run.py: instantiate PLC and step the logic."""
     return """\
-from pyrung import PLCRunner
+from pyrung import PLC
 from main import logic
 
-runner = PLCRunner(logic)
+runner = PLC(logic)
 runner.step()
 print(f"Scan {runner.current_state.scan_id}: OK")
 """
@@ -248,10 +249,17 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     lines.append("")
 
     # Tag declarations
-    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
+    has_flat_tags = any(
+        op not in collection.semantic_operands and op not in collection.timer_counter_operands
+        for op in collection.tags
+    )
     if has_flat_tags:
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection, suppress_comments=True)
+        lines.append("")
+
+    if collection.named_timer_counters:
+        _emit_named_tc_declarations(lines, collection)
         lines.append("")
 
     if collection.plain_blocks:
@@ -292,6 +300,12 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
         core.append("udt")
     if has_retentive:
         core.append("Field")
+
+    # Built-in Timer/Counter UDTs
+    if collection.used_instructions & {"on_delay", "off_delay"}:
+        core.append("Timer")
+    if collection.used_instructions & {"count_up", "count_down"}:
+        core.append("Counter")
 
     # Tag types
     for tt in sorted(collection.used_types):
@@ -399,6 +413,7 @@ def _generate_main_file(
         block_var_names=set(refs.block_var_names),
         range_var_names=set(refs.range_var_names),
         structure_names=set(refs.structure_names),
+        named_tc_var_names=set(refs.named_tc_var_names),
     )
     _emit_tags_import_line(lines, refs_with_mapping, include_mapping=True)
 
@@ -454,11 +469,17 @@ def _emit_logic_imports(
     if is_subroutine:
         parts.append("subroutine")
 
+    # Built-in Timer/Counter UDTs
+    if refs.used_instructions & {"on_delay", "off_delay"}:
+        parts.append("Timer")
+    if refs.used_instructions & {"count_up", "count_down"}:
+        parts.append("Counter")
+
     # Conditions
-    if refs.has_any_of:
-        parts.append("any_of")
-    if refs.has_all_of:
-        parts.append("all_of")
+    if refs.has_Or:
+        parts.append("Or")
+    if refs.has_And:
+        parts.append("And")
     for cw in sorted(refs.used_conditions):
         parts.append(cw)
 
@@ -497,10 +518,6 @@ def _emit_logic_imports(
         parts.append("comment")
     if refs.has_forloop:
         parts.append("forloop")
-
-    # Time units
-    for tu in sorted(refs.used_time_units):
-        parts.append(tu)
 
     # Copy converters
     for cc in sorted(refs.used_copy_converters):
@@ -548,6 +565,7 @@ def _emit_tags_import_line(
     names.extend(sorted(refs.block_var_names))
     names.extend(sorted(refs.range_var_names))
     names.extend(sorted(refs.structure_names))
+    names.extend(sorted(refs.named_tc_var_names))
 
     if names:
         lines.append(f"from tags import {', '.join(names)}")

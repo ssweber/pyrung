@@ -2,18 +2,35 @@
 
 For an introduction to the DSL vocabulary, see [Core Concepts](../getting-started/concepts.md).
 
-## Timers
+## Timer and Counter types
 
-Timers use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`INT`).
+`Timer` and `Counter` are built-in structured types. Each has a `.Done` bit (Bool) and an `.Acc` accumulator (Int for timers, Dint for counters).
+
+```python
+from pyrung import Timer, Counter
+
+# Named instances — the 95% case for real programs
+OvenTimer   = Timer.named(1, "OvenTimer")
+CycleTimer  = Timer.named(2, "CycleTimer")
+PartCounter = Counter.named(1, "PartCounter")
+
+# Anonymous instances — fine for throwaway simulation tests
+t = Timer[1]
+c = Counter[1]
+```
+
+Use `Timer.named(n, "Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
+
+## Timers
 
 ### On-delay timer (TON / RTON)
 
 ```python
 # TON: auto-reset when rung goes False
-on_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
+on_delay(OvenTimer, preset=100, unit="Tms")
 
 # RTON: hold accumulator when rung goes False (manual reset required)
-on_delay(TimerDone, accumulator=TimerAcc, preset=100) \
+on_delay(OvenTimer, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -31,7 +48,7 @@ on_delay(TimerDone, accumulator=TimerAcc, preset=100) \
 ### Off-delay timer (TOF)
 
 ```python
-off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
+off_delay(CoolDown, preset=100, unit="Tms")
 ```
 
 **TOF behavior:**
@@ -44,24 +61,39 @@ TOF is non-terminal — instructions can follow it in the same rung.
 
 | Symbol | Unit |
 |--------|------|
-| `Tms` | Milliseconds (default) |
-| `Ts` | Seconds |
-| `Tm` | Minutes |
-| `Th` | Hours |
-| `Td` | Days |
+| `"Tms"` | Milliseconds (default) |
+| `"Ts"` | Seconds |
+| `"Tm"` | Minutes |
+| `"Th"` | Hours |
+| `"Td"` | Days |
 
 The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
+### Example: traffic light
+
+```python
+GreenTimer  = Timer.named(1, "GreenTimer")
+YellowTimer = Timer.named(2, "YellowTimer")
+RedTimer    = Timer.named(3, "RedTimer")
+
+with Rung(State == "g"):
+    on_delay(GreenTimer, preset=3000, unit="Tms")
+with Rung(State == "y"):
+    on_delay(YellowTimer, preset=1000, unit="Tms")
+```
+
+See [Structured Tags](../learn/structured-tags.md) for the full UDT pattern.
+
 ## Counters
 
-Counters use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`DINT`).
+Counters use a `.Done` bit (Bool) and a `.Acc` accumulator (Dint).
 
 Counters count **every scan** while the condition is True — they are not edge-triggered. Use `rise()` on the rung condition if you want one increment per leading edge.
 
 ### Count up (CTU)
 
 ```python
-count_up(CountDone, accumulator=CountAcc, preset=100) \
+count_up(PartCounter, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -73,7 +105,7 @@ count_up(CountDone, accumulator=CountAcc, preset=100) \
 ### Count down (CTD)
 
 ```python
-count_down(CountDone, accumulator=CountAcc, preset=100) \
+count_down(Dispense, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -85,7 +117,7 @@ count_down(CountDone, accumulator=CountAcc, preset=100) \
 ### Bidirectional counter
 
 ```python
-count_up(CountDone, accumulator=CountAcc, preset=100) \
+count_up(ZoneCounter, preset=100) \
     .down(DownCondition) \
     .reset(ResetButton)
 ```
@@ -98,7 +130,7 @@ To count edges instead of scans, wrap the condition with `rise()`:
 
 ```python
 with Rung(rise(Sensor)):
-    count_up(CountDone, CountAcc, preset=9999) \
+    count_up(PartCounter, preset=9999) \
         .reset(CountReset)
 ```
 

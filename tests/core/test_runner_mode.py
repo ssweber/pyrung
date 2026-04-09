@@ -7,10 +7,10 @@ from datetime import datetime
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     Tag,
@@ -22,14 +22,14 @@ from pyrung.core import (
 )
 
 
-def _resolved(runner: PLCRunner, tag_name: str):
-    found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
+def _resolved(runner: PLC, tag_name: str):
+    found, value = runner.debug.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
     return value
 
 
 def test_stop_sets_mode_off_and_is_idempotent():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     assert _resolved(runner, system.sys.mode_run.name) is True
 
     runner.stop()
@@ -50,12 +50,12 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
         with Rung():
             copy(system.sys.first_scan, first_scan_latched)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
     runner.patch({retentive_tag: 7, non_retentive_tag: True, "UnknownAdHoc": 1})
     runner.step()
 
     runner.patch({retentive_tag: 9})
-    runner.add_force(non_retentive_tag, False)
+    runner.force(non_retentive_tag, False)
     runner._state = runner._state.with_memory({"user.custom.memory": 123})
 
     runner.stop()
@@ -63,7 +63,7 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
 
     assert _resolved(runner, system.sys.mode_run.name) is True
     assert runner.current_state.scan_id == 1
-    assert runner.current_state.timestamp == pytest.approx(0.1)
+    assert runner.current_state.timestamp == pytest.approx(0.010)
     assert runner.current_state.tags[retentive_tag.name] == 7
     assert runner.current_state.tags[non_retentive_tag.name] is False
     assert runner.current_state.tags[first_scan_latched.name] is True
@@ -82,8 +82,8 @@ def test_step_after_stop_performs_stop_to_run_transition_and_resets_runtime_scop
         ("step", lambda r: r.step()),
         ("run", lambda r: r.run(1)),
         ("run_for", lambda r: r.run_for(0.01)),
-        ("run_until", lambda r: r.run_until_fn(lambda s: s.scan_id >= 1, max_cycles=1)),
-        ("scan_steps", lambda r: list(r.scan_steps())),
+        ("run_until", lambda r: r.run_until(lambda s: s.scan_id >= 1, max_cycles=1)),
+        ("scan_steps", lambda r: list(r.debug.scan_steps())),
     ],
 )
 def test_all_execution_methods_auto_restart_from_stop(
@@ -94,7 +94,7 @@ def test_all_execution_methods_auto_restart_from_stop(
     retentive_tag = Int("AutoRestartRet")
     non_retentive_tag = Bool("AutoRestartNonRet", retentive=False)
 
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.patch({retentive_tag: 21, non_retentive_tag: True})
     runner.step()
     runner.stop()
@@ -108,11 +108,10 @@ def test_all_execution_methods_auto_restart_from_stop(
 
 
 def test_stop_restart_preserves_time_mode_and_debug_registrations():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner = PLC(logic=[], dt=0.25)
 
     monitor = runner.monitor("WatchedTag", lambda current, previous: None)
-    breakpoint_handle = runner.when_fn(lambda _state: False).pause()
+    breakpoint_handle = runner.when(lambda _state: False).pause()
 
     runner.stop()
     runner.step()
@@ -124,15 +123,14 @@ def test_stop_restart_preserves_time_mode_and_debug_registrations():
 
 
 def test_stop_restart_preserves_rtc_continuity():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner = PLC(logic=[], dt=0.25)
     runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
     runner.run(cycles=4)
-    before_stop_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    before_stop_rtc = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     runner.stop()
     runner.step()
-    after_restart_rtc = runner.system_runtime._rtc_now(runner.current_state)
+    after_restart_rtc = runner.debug.system_runtime._rtc_now(runner.current_state)
 
     assert (after_restart_rtc - before_stop_rtc).total_seconds() == pytest.approx(0.25)
 
@@ -142,7 +140,7 @@ def test_cmd_mode_stop_written_in_scan_transitions_runner_to_stop():
         with Rung(system.sys.first_scan):
             out(system.sys.cmd_mode_stop)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
 
     runner.step()
     assert _resolved(runner, system.sys.mode_run.name) is True
@@ -157,7 +155,7 @@ def test_stop_restart_mixed_block_slot_retentive_and_default_policy():
     regs.slot(1, retentive=False, default=111)
     regs.slot(2, retentive=True, default=222)
 
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.patch({regs[1]: 5, regs[2]: 6})
     runner.step()
 
@@ -169,7 +167,7 @@ def test_stop_restart_mixed_block_slot_retentive_and_default_policy():
 
 
 def test_register_known_tag_conflict_on_same_name_raises():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     first = Tag("DupMeta", TagType.INT, retentive=True, default=0)
     second = Tag("DupMeta", TagType.INT, retentive=False, default=0)
 

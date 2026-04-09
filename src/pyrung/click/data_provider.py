@@ -11,7 +11,7 @@ from pyclickplc.server import DataProvider, MemoryDataProvider, PlcValue
 from pyclickplc.validation import assert_runtime_value
 
 from pyrung.click.tag_map import TagMap
-from pyrung.core.runner import PLCRunner
+from pyrung.core.runner import PLC
 from pyrung.core.system_points import system
 
 
@@ -38,7 +38,7 @@ _MIRRORED_WORD_BANKS: dict[str, str] = {"XD": "X", "YD": "Y"}
 
 
 class ClickDataProvider:
-    """Bridges ``PLCRunner`` state to the ``pyclickplc`` ``DataProvider`` protocol.
+    """Bridges ``PLC`` state to the ``pyclickplc`` ``DataProvider`` protocol.
 
     Implements the ``DataProvider`` interface so pyrung can act as a soft PLC
     accessible over Modbus TCP via ``pyclickplc.server.ClickServer``.
@@ -57,7 +57,7 @@ class ClickDataProvider:
     - ``XD*`` writes are rejected (read-only).
 
     Args:
-        runner: The active ``PLCRunner`` whose state is served.
+        runner: The active ``PLC`` whose state is served.
         tag_map: Mapping from logical tag names to Click hardware addresses.
         fallback: Optional provider for unmapped addresses.
             Defaults to an in-memory provider.
@@ -74,7 +74,7 @@ class ClickDataProvider:
 
     def __init__(
         self,
-        runner: PLCRunner,
+        runner: PLC,
         tag_map: TagMap,
         fallback: DataProvider | None = None,
     ) -> None:
@@ -125,7 +125,7 @@ class ClickDataProvider:
         if mapped is None:
             return self._fallback.read(normalized)
         if mapped.source == "system":
-            found, value = self._runner.system_runtime.resolve(
+            found, value = self._runner._system_runtime.resolve(
                 mapped.logical_name, self._runner.current_state
             )
             if found:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, TimeMode, event_drum, out, time_drum
+from pyrung.core import PLC, Bool, Int, Program, Rung, event_drum, out, time_drum
 
 
 def test_event_drum_requires_reset_builder() -> None:
@@ -91,7 +91,7 @@ def test_event_drum_pause_reset_and_disabled_jump_jog_behavior() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=1).jog(jog)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {"Enable": True, "Reset": False, "Jump": False, "Jog": False, "E1": False, "E2": False}
     )
@@ -145,7 +145,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry() -> None:
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Reset": False, "E1": False, "E2": True, "E3": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -196,7 +196,7 @@ def test_time_drum_precedence_auto_reset_jump_jog() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=3).jog(jog)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": False, "Reset": False, "Jump": False, "Jog": False})
     runner.step()
 
@@ -228,7 +228,7 @@ def test_time_drum_ignores_jump_target_out_of_range() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=99)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Reset": False, "Jump": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -258,7 +258,7 @@ def test_event_drum_completion_sticky_until_reset() -> None:
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Reset": False, "E1": False, "E2": False})
     runner.step()
     runner.patch({"E1": True})
@@ -298,8 +298,7 @@ def test_time_drum_accumulates_and_resets_accumulator_on_step_transition() -> No
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLCRunner(logic)
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+    runner = PLC(logic, dt=0.010)
     runner.patch({"Enable": True, "Reset": False})
 
     for _ in range(4):

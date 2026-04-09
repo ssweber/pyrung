@@ -4,7 +4,7 @@ Forces override tag values independently of logic — the simulation equivalent 
 
 ## Force vs patch
 
-| | `patch()` | `add_force()` |
+| | `patch()` | `force()` |
 |---|---|---|
 | Duration | One scan | Until explicitly removed |
 | Applied | Pre-logic, once | Pre-logic AND post-logic, every scan |
@@ -13,32 +13,32 @@ Forces override tag values independently of logic — the simulation equivalent 
 ## Adding and removing forces
 
 ```python
-runner.add_force(Button, True)
-runner.add_force(Temperature, 75.5)
+plc.force(Button, True)
+plc.force(Temperature, 75.5)
 
-runner.remove_force(Button)
-runner.clear_forces()           # remove all
+plc.unforce(Button)
+plc.clear_forces()           # remove all
 ```
 
-> Forces also accept string keys (`runner.add_force("Button", True)`).
+> Forces also accept string keys (`plc.force("Button", True)`).
 
-## `force()` context manager
+## `forced()` context manager
 
 Scoped forces that restore automatically on exit:
 
 ```python
-with runner.force({Button: True, Fault: False}):
-    runner.run(cycles=5)
+with plc.forced({Button: True, Fault: False}):
+    plc.run(cycles=5)
 # Forces restored to pre-context state
 ```
 
 Safe to nest — inner blocks add to (and restore from) the outer block's forces:
 
 ```python
-with runner.force({AutoMode: True}):
-    runner.run(cycles=3)
-    with runner.force({Fault: True}):   # adds Fault while AutoMode stays forced
-        runner.run(cycles=2)
+with plc.forced({AutoMode: True}):
+    plc.run(cycles=3)
+    with plc.forced({Fault: True}):   # adds Fault while AutoMode stays forced
+        plc.run(cycles=2)
     # Fault removed; AutoMode still True
 # AutoMode removed
 ```
@@ -48,7 +48,7 @@ See [Testing — Forces as fixtures](testing.md#using-forces-as-test-fixtures) f
 ## Inspecting active forces
 
 ```python
-runner.forces   # read-only Mapping[str, value]
+plc.forces   # read-only Mapping[str, value]
 ```
 
 ## How forces work in the scan cycle

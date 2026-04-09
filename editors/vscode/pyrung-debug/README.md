@@ -10,7 +10,7 @@ Debug pyrung ladder logic programs directly in VS Code using the Debug Adapter P
 - Monitor values in the Variables panel under `PLC Monitors`
 - Trace decorations and inline condition annotations
 - Rapid auto-step mode (`next` / `stepIn` / `scan`) for live Watch and inline updates
-- Debug Console force commands (`force`, `remove_force`, `clear_forces`)
+- Debug Console force commands (`force`, `unforce`, `clear_forces`)
 
 ## Requirements
 
@@ -23,7 +23,7 @@ Debug pyrung ladder logic programs directly in VS Code using the Debug Adapter P
 ## Getting Started
 
 1. Install the extension.
-2. Open a Python file that constructs a pyrung `Program` or `PLCRunner`.
+2. Open a Python file that constructs a pyrung `Program` or `PLC`.
 3. Press **F5** — the extension provides a default launch configuration.
 
 Or add one manually to `.vscode/launch.json`:
@@ -82,7 +82,6 @@ Status bar shows `R:...` when active. Manual debug controls stop rapid mode auto
 
 ```
 force TagName value
-remove_force TagName
 unforce TagName
 clear_forces
 ```

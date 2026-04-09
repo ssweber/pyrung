@@ -18,6 +18,7 @@ from .findings import (
     CLK_DRUM_JUMP_STEP_TAG_REQUIRED,
     CLK_DRUM_TIME_PRESET_LITERAL_REQUIRED,
     CLK_PACK_TEXT_BANK_INCOMPATIBLE,
+    CLK_TIMER_PRESET_OVERFLOW,
     ClickFinding,
     ValidationMode,
     _build_suggestion,
@@ -485,3 +486,42 @@ def _evaluate_drums(
         )
 
     return findings
+
+
+_INT16_MAX = 32_767
+
+_TIMER_INSTRUCTION_TYPES = frozenset({"OnDelayInstruction", "OffDelayInstruction"})
+
+
+def _evaluate_timer_preset_overflow(
+    instruction: Any,
+    base_location: ProgramLocation,
+    tag_map: TagMap,
+    mode: ValidationMode,
+) -> list[ClickFinding]:
+    instruction_type = type(instruction).__name__
+    if instruction_type not in _TIMER_INSTRUCTION_TYPES:
+        return []
+
+    preset = getattr(instruction, "preset", None)
+    if isinstance(preset, Tag) or preset is None:
+        return []
+
+    if preset <= _INT16_MAX:
+        return []
+
+    location = _instruction_location(base_location, "instruction.preset")
+    location_text = _format_location(location)
+    suggestion = _build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map)
+    return [
+        ClickFinding(
+            code=CLK_TIMER_PRESET_OVERFLOW,
+            severity=_route_severity(CLK_TIMER_PRESET_OVERFLOW, mode),
+            message=(
+                f"Timer preset {preset} exceeds Click INT range (max {_INT16_MAX}) "
+                f"at {location_text}."
+            ),
+            location=location_text,
+            suggestion=suggestion,
+        )
+    ]

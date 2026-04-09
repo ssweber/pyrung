@@ -25,7 +25,7 @@ Because a PLC controls physical things. A conveyor belt doesn't stop needing ins
 ## The ladder logic way
 
 ```python
-from pyrung import Bool, Program, Rung, PLCRunner, out
+from pyrung import Bool, Program, Rung, PLC, out
 
 RunButton     = Bool("RunButton")
 ConveyorMotor = Bool("ConveyorMotor")
@@ -49,14 +49,13 @@ The left rail is power. `[ ]` is a contact (condition). `( )` is a coil (output)
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-with runner.active():
+with PLC(logic) as plc:
     RunButton.value = True
-    runner.step()               # One scan
+    plc.step()               # One scan
     assert ConveyorMotor.value is True
 
     RunButton.value = False
-    runner.step()               # Next scan
+    plc.step()               # Next scan
     assert ConveyorMotor.value is False  # Motor follows button, every scan
 ```
 

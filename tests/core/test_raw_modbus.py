@@ -7,7 +7,7 @@ from concurrent.futures import Future
 
 import pytest
 
-from pyrung.core import Block, Bool, Dint, Int, PLCRunner, Program, Rung, TagType
+from pyrung.core import PLC, Block, Bool, Dint, Int, Program, Rung, TagType
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -338,7 +338,7 @@ class TestDslConstruction:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 42})
         runner.step()
 
@@ -446,7 +446,7 @@ class TestDslConstruction:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Receiving"] is True
@@ -474,7 +474,7 @@ class TestDslConstruction:
                 )
 
         # Inert mode: no I/O, no status changes
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True})
         runner.step()
         # Receiving should not be set since instruction is inert
@@ -511,7 +511,7 @@ class TestDslConstruction:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 65538})
         runner.step()
 
@@ -559,7 +559,7 @@ class TestRawExecuteStateMachine:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 42})
         runner.step()
 
@@ -611,7 +611,7 @@ class TestRawExecuteStateMachine:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Receiving"] is True
@@ -657,7 +657,7 @@ class TestRawExecuteStateMachine:
                     word_swap=True,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True})
         runner.step()
 
@@ -700,7 +700,7 @@ class TestRawExecuteStateMachine:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 1})
         runner.step()
 
@@ -740,7 +740,7 @@ class TestRawExecuteStateMachine:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 1})
         runner.step()
         assert runner.current_state.tags["Sending"] is True
@@ -783,7 +783,7 @@ class TestRawExecuteStateMachine:
                     exception_response=ExCode,
                 )
 
-        runner = PLCRunner(logic=logic)
+        runner = PLC(logic=logic)
         runner.patch({"Enable": True, "Source": 99})
         runner.step()
 

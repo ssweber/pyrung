@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag, TagType
-from pyrung.core.time_mode import TimeUnit
+from pyrung.core.time_mode import _parse_time_unit
 
 from .base import Instruction
 from .utils import to_condition
@@ -304,7 +304,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         self,
         outputs: Sequence[Tag],
         presets: Sequence[Tag | int],
-        unit: TimeUnit,
+        unit: str,
         pattern: Sequence[Sequence[bool | int]],
         current_step: Tag,
         accumulator: Tag,
@@ -348,9 +348,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
                 f"time_drum accumulator must be INT or DINT, got {accumulator.type.name}"
             )
         self.accumulator = accumulator
-        if not isinstance(unit, TimeUnit):
-            raise TypeError(f"time_drum unit must be TimeUnit, got {type(unit).__name__}")
-        self.unit = unit
+        self.unit = _parse_time_unit(unit)
         self._frac_key = f"_drum_time_frac:{id(self)}"
 
     def _acc_max(self) -> int:
