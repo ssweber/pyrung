@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New features
+
+- **Conflicting output target validation** — `validate_conflicting_outputs(program)` detects when multiple `INERT_WHEN_DISABLED=False` instructions (`out`, timers, counters, drums, shift registers) write to the same tag from non-mutually-exclusive execution paths. The only safe pattern is different subroutines whose callers have provably exclusive conditions (e.g., `State == 1` vs `State == 2`); same-scope duplicates are always flagged because the disabled instruction actively resets the target every scan. Supports `CompareEq` different-constant, `BitCondition`/`NormallyClosedCondition` complement, `CompareEq`/`CompareNe` complement, and range-complement (`Lt`/`Ge`, `Le`/`Gt`) detection on caller conditions.
+
 ## v0.3.1
 
 ### Bug fixes
