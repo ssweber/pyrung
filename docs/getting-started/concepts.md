@@ -178,7 +178,7 @@ def logic():
         reset(Running)
 ```
 
-Both forms produce the same thing — a `Program` you pass to `PLCRunner`.
+Both forms produce the same thing — a `Program` you pass to `PLC`.
 
 ## Structured tags (UDTs)
 
@@ -242,10 +242,10 @@ blockcopy(ds.select(1, 4), ds.select(2, 5))  # Shift DS1..DS4 into DS2..DS5
 
 ## Reading and writing values
 
-Inside a `runner.active()` block, you can read and write tag values directly:
+Inside a `with runner:` block, you can read and write tag values directly:
 
 ```python
-with runner.active():
+with runner:
     State.value = "g"           # Write (one-shot, consumed after one scan)
     print(State.value)          # Read
     runner.step()               # Step with current values

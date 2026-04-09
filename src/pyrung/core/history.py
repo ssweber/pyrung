@@ -1,4 +1,4 @@
-"""Historical SystemState storage for PLCRunner debug APIs."""
+"""Historical SystemState storage for PLC debug APIs."""
 
 from __future__ import annotations
 

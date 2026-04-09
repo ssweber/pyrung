@@ -21,12 +21,12 @@ def simple_task(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
 def test_call_activates_and_enters_step_1(simple_task: ModuleType) -> None:
     runner = simple_task.runner
 
-    with runner.active():
+    with runner:
         simple_task.Task.Call.value = 1
 
     runner.step()
 
-    with runner.active():
+    with runner:
         assert simple_task.Task.Active.value == 1
         assert simple_task.Task.Step.value == 1
 
@@ -34,13 +34,13 @@ def test_call_activates_and_enters_step_1(simple_task: ModuleType) -> None:
 def test_step_timer_reaches_5s_and_advances_to_step_2(simple_task: ModuleType) -> None:
     runner = simple_task.runner
 
-    with runner.active():
+    with runner:
         simple_task.Task.Call.value = 1
 
     runner.step()  # Enter step 1 and set Active.
     runner.run_until(simple_task.Task.Step == 2, max_cycles=700)
 
-    with runner.active():
+    with runner:
         assert simple_task.Task.Step.value == 2
         assert simple_task.Task.StepTime.value == 0
 
@@ -48,13 +48,13 @@ def test_step_timer_reaches_5s_and_advances_to_step_2(simple_task: ModuleType) -
 def test_auto_reset_when_call_cleared(simple_task: ModuleType) -> None:
     runner = simple_task.runner
 
-    with runner.active():
+    with runner:
         simple_task.Task.Call.value = 1
 
     runner.step()
     runner.run(cycles=200)
 
-    with runner.active():
+    with runner:
         assert simple_task.Task.Active.value == 1
         assert simple_task.Task.Step.value == 1
         assert simple_task.Valve1.value is True
@@ -63,7 +63,7 @@ def test_auto_reset_when_call_cleared(simple_task: ModuleType) -> None:
     runner.step()  # Reset rung clears Step/Active/Advance/StepTime.
     runner.step()  # out(Valve1) branch sees Step!=1 and auto-resets.
 
-    with runner.active():
+    with runner:
         assert simple_task.Task.Active.value == 0
         assert simple_task.Task.Step.value == 0
         assert simple_task.Task.Advance.value == 0
@@ -74,11 +74,11 @@ def test_auto_reset_when_call_cleared(simple_task: ModuleType) -> None:
 def test_valve_energized_during_step_1(simple_task: ModuleType) -> None:
     runner = simple_task.runner
 
-    with runner.active():
+    with runner:
         simple_task.Task.Call.value = 1
 
     runner.step()
     runner.step()
 
-    with runner.active():
+    with runner:
         assert simple_task.Valve1.value is True

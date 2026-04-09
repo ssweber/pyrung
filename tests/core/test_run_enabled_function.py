@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, run_enabled_function
+from pyrung.core import PLC, Bool, Int, Program, Rung, run_enabled_function
 
 
 def test_run_enabled_function_invoked_every_scan_with_enabled_transitions():
@@ -21,7 +21,7 @@ def test_run_enabled_function_invoked_every_scan_with_enabled_transitions():
         with Rung(Enable):
             run_enabled_function(callback, outs={"calls": Calls, "enabled": EnabledSeen})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": False, "Calls": 0, "EnabledSeen": False})
     runner.step()
     runner.patch({"Enable": True})
@@ -49,7 +49,7 @@ def test_run_enabled_function_receives_resolved_kwargs():
         with Rung(Enable):
             run_enabled_function(callback, ins={"a": A, "b": B}, outs={"sum": Sum})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "A": 12, "B": 30, "Sum": 0})
     runner.step()
     assert runner.current_state.tags["Sum"] == 42
@@ -66,7 +66,7 @@ def test_run_enabled_function_runs_when_rung_false():
         with Rung(Enable):
             run_enabled_function(callback, outs={"calls": Calls})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": False, "Calls": 0})
     runner.step()
 
@@ -93,7 +93,7 @@ def test_run_enabled_function_class_state_persists_across_scans():
         with Rung(Enable):
             run_enabled_function(acc, ins={"value": Value}, outs={"total": Total})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Value": 2, "Total": 0})
     runner.step()
     assert runner.current_state.tags["Total"] == 2
@@ -123,7 +123,7 @@ def test_run_enabled_function_writes_multiple_output_tags():
                 outs={"sending": Sending, "success": Success, "error": Error},
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": False, "Sending": False, "Success": False, "Error": False})
     runner.step()
 

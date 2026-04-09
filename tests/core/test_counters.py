@@ -26,9 +26,9 @@ class TestCountUpInstruction:
             with Rung(PartSensor):
                 count_up(PartCount_done, PartCount_acc, preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"PartSensor": False, "ResetBtn": False})
         runner.step()
 
@@ -59,9 +59,9 @@ class TestCountUpInstruction:
             with Rung(Trigger):
                 count_up(Counter_done, Counter_acc, preset=3).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -90,9 +90,9 @@ class TestCountUpInstruction:
             with Rung(Trigger):
                 count_up(Counter_done, Counter_acc, preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -122,9 +122,9 @@ class TestCountUpInstruction:
             with Rung(rise(Enter)):
                 count_up(Zone_done, Zone_acc, preset=10).down(rise(Exit)).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Enter": False, "Exit": False, "ResetBtn": False})
         runner.step()
 
@@ -171,9 +171,9 @@ class TestCountDownInstruction:
             with Rung(Dispense):
                 count_down(Remaining_done, Remaining_acc, preset=5).reset(Reload)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Dispense": False, "Reload": False})
         runner.step()
 
@@ -215,9 +215,9 @@ class TestCountDownInstruction:
             with Rung(Trigger):
                 count_down(Counter_done, Counter_acc, preset=3).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -262,9 +262,9 @@ class TestCountDownInstruction:
             with Rung(Trigger):
                 count_down(Counter_done, Counter_acc, preset=10).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -299,9 +299,9 @@ class TestCounterAccumulatorClamp:
             with Rung(Trigger):
                 count_up(Counter_done, Counter_acc, preset=2147483647).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -327,9 +327,9 @@ class TestCounterAccumulatorClamp:
             with Rung(Trigger):
                 count_down(Counter_done, Counter_acc, preset=1).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -356,9 +356,9 @@ class TestCounterAccumulatorClamp:
             with Rung(Enable):
                 count_up(Counter_done, Counter_acc, preset=2147483647).down(Down).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Enable": False, "Down": False, "ResetBtn": False})
         runner.step()
 
@@ -413,9 +413,9 @@ class TestCounterIntegration:
             with Rung(DataTest == 1):
                 copy(2, DataTest)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"DataTest": 1, "ResetBtn": False})
 
         # Execute 1 scan
@@ -481,9 +481,9 @@ class TestCounterIntegration:
             with Rung(Counter_acc == 2):
                 latch(SawCounterAt2)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -532,9 +532,9 @@ class TestCounterIntegration:
             with Rung(PartCount_acc >= 50):
                 out(HalfwayLight)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch(
             {
                 "PartSensor": False,
@@ -582,9 +582,9 @@ class TestCounterIntegration:
                 with branch(AutoMode):
                     count_up(Counter_done, Counter_acc, preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Step": 0, "AutoMode": False, "ResetBtn": False})
         runner.step()
 
@@ -624,9 +624,9 @@ class TestCounterIntegration:
                 with branch(Mode):
                     count_down(Counter_done, Counter_acc, preset=10).reset(ResetBtn)
 
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Enable": False, "Mode": False, "ResetBtn": False})
         runner.step()
 
@@ -659,7 +659,7 @@ class TestDynamicpresets:
 
     def test_ctu_with_dynamic_preset(self):
         """CTU supports Tag preset that can change at runtime."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -671,7 +671,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_up(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 5})
         runner.step()
 
@@ -701,7 +701,7 @@ class TestDynamicpresets:
 
     def test_ctd_with_dynamic_preset(self):
         """CTD supports Tag preset that can change at runtime."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -713,7 +713,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_down(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 3})
         runner.step()
 
@@ -748,7 +748,7 @@ class TestDynamicpresets:
 
     def test_preset_decrease_affects_done_immediately(self):
         """When preset decreases below acc, done bit changes immediately."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -760,7 +760,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_up(Counter_done, Counter_acc, preset=preset).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 100})
         runner.step()
 

@@ -482,7 +482,7 @@ _CODEGEN_RESERVED_IDENTIFIERS: frozenset[str] = frozenset(
         "logic",
         "mapping",
         "system",
-        "PLCRunner",
+        "PLC",
     }
 )
 

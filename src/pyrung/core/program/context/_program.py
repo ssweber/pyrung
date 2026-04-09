@@ -31,8 +31,8 @@ class Program:
             with Rung(Button):
                 out(Light)
 
-    Also works with PLCRunner:
-        runner = PLCRunner(logic)
+    Also works with PLC:
+        runner = PLC(logic)
     """
 
     _current: Program | None = None

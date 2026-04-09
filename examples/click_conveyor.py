@@ -7,7 +7,7 @@ Demonstrates the full pyrung -> Click workflow:
   4. Auto/manual mode with branch-based diverter control
   5. Edge-triggered bin counters
   6. TagMap linking logical tags to Click hardware addresses
-  7. Simulation with PLCRunner in FIXED_STEP mode
+  7. Simulation with PLC in FIXED_STEP mode
 
 This is the completed version of the conveyor built across the
 "Know Python? Learn Ladder Logic" tutorial.  See ``devtools/build_release_assets.py``.
@@ -19,9 +19,8 @@ from pyrung import (
     Bool,
     Dint,
     Int,
-    PLCRunner,
+    PLC,
     Rung,
-    TimeMode,
     Tms,
     all_of,
     any_of,
@@ -199,15 +198,14 @@ def logic():
 # ---------------------------------------------------------------------------
 # Simulation
 # ---------------------------------------------------------------------------
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner = PLC(logic, dt=0.010)
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     # NC inputs: force True to simulate healthy wiring
     runner.add_force(StopBtn, True)
     runner.add_force(EstopOK, True)
 
-    with runner.active():
+    with runner:
         Auto.value = True
         SizeThreshold.value = 100
 
@@ -225,7 +223,7 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
     runner.run(cycles=10)
 
     # Report
-    with runner.active():
+    with runner:
         print(f"Motor     : {'ON' if ConveyorMotor.value else 'OFF'}")
         print(f"State     : {State.value!r}")
         print(f"Diverter  : {'EXTENDED' if DiverterCmd.value else 'retracted'}")

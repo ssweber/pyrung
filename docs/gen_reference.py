@@ -122,7 +122,7 @@ PAGES: tuple[ReferencePage, ...] = (
         tier="Stable Core",
         summary="Runner lifecycle, system points, and timebase helpers.",
         symbols=(
-            "pyrung.PLCRunner",
+            "pyrung.PLC",
             "pyrung.system",
             "pyrung.TimeMode",
             "pyrung.TimeUnit",

@@ -1,4 +1,4 @@
-"""PLCRunner - Generator-driven PLC execution engine.
+"""PLC - Generator-driven PLC execution engine.
 
 The runner orchestrates scan cycle execution with inversion of control.
 The consumer drives execution via step(), allowing input injection,
@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
+from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
@@ -117,7 +118,7 @@ class _BreakpointBuilder:
 
     __slots__ = ("_runner", "_predicate")
 
-    def __init__(self, runner: PLCRunner, predicate: Callable[[SystemState], bool]) -> None:
+    def __init__(self, runner: PLC, predicate: Callable[[SystemState], bool]) -> None:
         self._runner = runner
         self._predicate = predicate
 
@@ -180,7 +181,7 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
     return tuple(found_by_name.values())
 
 
-class PLCRunner:
+class PLC:
     """Generator-driven PLC execution engine.
 
     Executes PLC logic as pure functions: Logic(state) -> new_state.
@@ -201,16 +202,26 @@ class PLCRunner:
         logic: list[Any] | Any = None,
         initial_state: SystemState | None = None,
         *,
+        dt: float | None = None,
+        realtime: bool = False,
         history_limit: int | None = None,
     ) -> None:
-        """Create a new PLCRunner.
+        """Create a new PLC.
 
         Args:
             logic: Program, list of rungs, or None for empty logic.
             initial_state: Starting state. Defaults to SystemState().
+            dt: Time delta per scan in seconds (default 0.010).
+                Only used in fixed-step mode.
+            realtime: Use wall-clock timing instead of fixed step.
+                Mutually exclusive with dt.
             history_limit: Max retained snapshots including initial state.
                 Use None for unbounded history.
         """
+        if realtime and dt is not None:
+            raise ValueError("Cannot specify dt= with realtime=True")
+        if dt is None:
+            dt = 0.010
         if history_limit is not None and history_limit < 1:
             raise ValueError("history_limit must be >= 1 or None")
 
@@ -244,9 +255,13 @@ class PLCRunner:
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
         self._latest_committed_trace_event: tuple[int, int, RungTraceEvent] | None = None
         self._playhead = self._state.scan_id
-        self._time_mode = TimeMode.FIXED_STEP
-        self._dt = 0.1  # Default: 100ms per scan
-        self._last_step_time: float | None = None  # For REALTIME mode
+        self._dt = dt
+        self._last_step_time: float | None = None
+        if realtime:
+            self._time_mode = TimeMode.REALTIME
+            self._last_step_time = time.perf_counter()
+        else:
+            self._time_mode = TimeMode.FIXED_STEP
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -265,6 +280,7 @@ class PLCRunner:
         self._monitors_by_id: dict[int, _MonitorRegistration] = {}
         self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
         self._pause_requested_this_scan = False
+        self._active_tokens: list[Token[PLC | None]] = []
         self._known_tags_by_name: dict[str, Tag] = {}
         self._refresh_known_tags_from_logic()
         # Seed initial state with tag defaults (skip tags already in state).
@@ -381,7 +397,7 @@ class PLCRunner:
         self._latest_committed_trace_event = (scan_id, rung_id, latest_event)
         return self._latest_committed_trace_event
 
-    def fork(self, scan_id: int | None = None) -> PLCRunner:
+    def fork(self, scan_id: int | None = None) -> PLC:
         """Create an independent runner from retained historical state.
 
         Args:
@@ -389,17 +405,17 @@ class PLCRunner:
         """
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
         historical_state = self.history.at(target_scan_id)
-        fork = PLCRunner(
+        fork = PLC(
             logic=list(self._logic),
             initial_state=historical_state,
             history_limit=self._history_limit,
         )
-        fork.set_time_mode(self._time_mode, dt=self._dt)
+        fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self.system_runtime._rtc_now(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         return fork
 
-    def fork_from(self, scan_id: int) -> PLCRunner:
+    def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
 
@@ -429,8 +445,13 @@ class PLCRunner:
             battery_present=self._battery_present,
         )
 
-    def set_battery_present(self, value: bool) -> None:
-        """Configure simulated backup battery presence."""
+    @property
+    def battery_present(self) -> bool:
+        """Simulated backup battery presence."""
+        return self._battery_present
+
+    @battery_present.setter
+    def battery_present(self, value: bool) -> None:
         self._battery_present = bool(value)
         self._state = self._apply_runtime_memory_flags(
             self._state,
@@ -456,13 +477,8 @@ class PLCRunner:
         """Set the current RTC value for the runner."""
         self._set_rtc_internal(self._normalize_rtc_datetime(value), self._state.timestamp)
 
-    def set_time_mode(self, mode: TimeMode, *, dt: float = 0.1) -> None:
-        """Set the time mode for simulation.
-
-        Args:
-            mode: TimeMode.FIXED_STEP or TimeMode.REALTIME.
-            dt: Time delta per scan (only used for FIXED_STEP mode).
-        """
+    def _set_time_mode(self, mode: TimeMode, *, dt: float = 0.010) -> None:
+        """Set the time mode (internal, used by fork)."""
         self._time_mode = mode
         self._dt = dt
         if mode == TimeMode.REALTIME:
@@ -607,14 +623,14 @@ class PLCRunner:
             self._state.memory.get(_BATTERY_PRESENT_KEY, self._battery_present)
         )
 
-    @contextmanager
-    def active(self) -> Iterator[PLCRunner]:
+    def __enter__(self) -> PLC:
         """Bind this runner as active for live Tag.value access."""
-        token = set_active_runner(self)
-        try:
-            yield self
-        finally:
-            reset_active_runner(token)
+        self._active_tokens.append(set_active_runner(self))
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._active_tokens:
+            reset_active_runner(self._active_tokens.pop())
 
     def patch(
         self,
@@ -685,7 +701,7 @@ class PLCRunner:
         overrides: Mapping[str, bool | int | float | str]
         | Mapping[Tag, bool | int | float | str]
         | Mapping[str | Tag, bool | int | float | str],
-    ) -> Iterator[PLCRunner]:
+    ) -> Iterator[PLC]:
         """Temporarily apply forces for the duration of the context.
 
         On entry, saves the current force map and adds the given overrides.

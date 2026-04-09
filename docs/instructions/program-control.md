@@ -19,7 +19,7 @@ def logic():
         latch(Running)
 ```
 
-Both produce a `Program` you pass to `PLCRunner`. See [Core Concepts — Programs](../getting-started/concepts.md#programs) for details.
+Both produce a `Program` you pass to `PLC`. See [Core Concepts — Programs](../getting-started/concepts.md#programs) for details.
 
 ## Subroutines
 

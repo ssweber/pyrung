@@ -6,7 +6,7 @@ Provides DSL syntax for building PLC programs:
         with Rung(Button):
             out(Light)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
 """
 
 from .builders import (

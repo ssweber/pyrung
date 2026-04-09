@@ -1,16 +1,16 @@
-"""Tests for live tag proxies bound via PLCRunner.active()."""
+"""Tests for live tag proxies bound via PLC."""
 
 from __future__ import annotations
 
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     InputBlock,
     Int,
     OutputBlock,
-    PLCRunner,
     SystemState,
     TagType,
     named_array,
@@ -22,18 +22,18 @@ from pyrung.core import (
 def test_live_value_requires_active_runner_scope() -> None:
     flag = Bool("Flag")
 
-    with pytest.raises(RuntimeError, match="runner.active"):
+    with pytest.raises(RuntimeError, match="active runner"):
         _ = flag.value
 
-    with pytest.raises(RuntimeError, match="runner.active"):
+    with pytest.raises(RuntimeError, match="active runner"):
         flag.value = True  # ty: ignore[invalid-assignment]
 
 
 def test_live_value_reads_pending_write_until_next_step() -> None:
     count = Int("Count")
-    runner = PLCRunner(logic=[], initial_state=SystemState().with_tags({"Count": 7}))
+    runner = PLC(logic=[], initial_state=SystemState().with_tags({"Count": 7}))
 
-    with runner.active():
+    with runner:
         assert count.value == 7
         count.value = 9  # ty: ignore[invalid-assignment]
         assert count.value == 9
@@ -46,9 +46,9 @@ def test_live_value_reads_pending_write_until_next_step() -> None:
 
 def test_live_value_uses_tag_default_when_absent() -> None:
     count = Int("Count")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
-    with runner.active():
+    with runner:
         assert count.value == 0
 
 
@@ -56,9 +56,9 @@ def test_live_value_supports_block_input_and_output_tags() -> None:
     ds = Block("DS", TagType.INT, 1, 10)
     x = InputBlock("X", TagType.BOOL, 1, 10)
     y = OutputBlock("Y", TagType.BOOL, 1, 10)
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
-    with runner.active():
+    with runner:
         ds[1].value = 123  # ty: ignore[invalid-assignment]
         x[1].value = True  # ty: ignore[invalid-assignment]
         y[1].value = True  # ty: ignore[invalid-assignment]
@@ -86,9 +86,9 @@ def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
 
     sub_name = SubName
 
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
-    with runner.active():
+    with runner:
         alarm_1 = alarms[1]  # ty: ignore[not-subscriptable]
         sub_name_1 = sub_name[1]  # ty: ignore[not-subscriptable]
         alarm_1.id.value = 42
@@ -105,27 +105,27 @@ def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
 
 
 def test_live_value_supports_system_tags_and_enforces_read_only() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
-    with runner.active():
+    with runner:
         assert system.sys.always_on.value is True
         system.rtc.apply_time.value = True  # ty: ignore[invalid-assignment]
         assert system.rtc.apply_time.value is True
 
     with pytest.raises(ValueError, match="read-only system point"):
-        with runner.active():
+        with runner:
             system.sys.always_on.value = False  # ty: ignore[invalid-assignment]
 
 
 def test_active_scope_is_context_local_and_supports_nesting() -> None:
     value = Int("Value")
-    runner_a = PLCRunner(logic=[])
-    runner_b = PLCRunner(logic=[])
+    runner_a = PLC(logic=[])
+    runner_b = PLC(logic=[])
 
-    with runner_a.active():
+    with runner_a:
         value.value = 1  # ty: ignore[invalid-assignment]
         assert value.value == 1
-        with runner_b.active():
+        with runner_b:
             value.value = 2  # ty: ignore[invalid-assignment]
             assert value.value == 2
         assert value.value == 1
@@ -137,7 +137,7 @@ def test_active_scope_is_context_local_and_supports_nesting() -> None:
 def test_patch_accepts_tag_keys_string_keys_and_mixed_keys() -> None:
     flag = Bool("Flag")
     count = Int("Count")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     runner.patch({flag: True})
     runner.patch({"Count": 2})
@@ -150,7 +150,7 @@ def test_patch_accepts_tag_keys_string_keys_and_mixed_keys() -> None:
 
 
 def test_patch_rejects_invalid_key_types() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     with pytest.raises(TypeError, match="str or Tag"):
         runner.patch({1: True})  # ty: ignore[invalid-argument-type]

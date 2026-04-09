@@ -8,7 +8,7 @@ Quick reference for writing pyrung programs targeting AutomationDirect Click PLC
 from pyrung import (
     Bool, Int, Dint, Real, Word, Char,         # tag types
     named_array, Field, auto,                    # structures
-    Program, Rung, PLCRunner, TimeMode,         # structure
+    Program, Rung, PLC,         # structure
     rise, fall, all_of, any_of, system,         # conditions
     out, latch, reset,                          # coils
     copy, blockcopy, fill,                      # data movement

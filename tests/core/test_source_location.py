@@ -8,10 +8,10 @@ from types import FrameType
 from typing import cast
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -246,7 +246,7 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
     assert instruction.source_line == count_up_line
     assert instruction.end_line == count_up_end_line
 
-    runner = PLCRunner(prog)
+    runner = PLC(prog)
     runner.patch({"Enable": True, "Reset": False})
     scan_gen = runner.scan_steps_debug()
     rung_step = next(scan_gen)
@@ -419,7 +419,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
         time_jog_line,
     ]
 
-    runner = PLCRunner(prog)
+    runner = PLC(prog)
     runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
     instruction_steps = [step for step in runner.scan_steps_debug() if step.kind == "instruction"]
     assert [step.source_line for step in instruction_steps] == [

@@ -7,7 +7,7 @@ Write a motor start/stop circuit, test it, map it to Click hardware addresses, e
 A sealed motor circuit: press Start to latch the motor on, press Stop to reset it off. A speed input copies through only while the motor runs.
 
 ```python
-from pyrung import Bool, Real, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung import Bool, Real, PLC, Program, Rung, copy, latch, reset, rise
 from pyrung.click import x, y, ds, df, TagMap
 
 # Semantic tags — no hardware addresses yet
@@ -34,37 +34,36 @@ with Program() as logic:
 
 ```python
 def test_motor_start_stop():
-    runner = PLCRunner(logic)
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner = PLC(logic, dt=0.1)
 
     # Start the motor
     runner.patch({StartButton: True})
     runner.step()
-    with runner.active():
+    with runner:
         assert MotorRunning.value is True
 
     # Release button — motor stays latched
     runner.run(cycles=5)
-    with runner.active():
+    with runner:
         assert MotorRunning.value is True
 
     # Stop the motor
     runner.patch({StopButton: True})
     runner.step()
-    with runner.active():
+    with runner:
         assert MotorRunning.value is False
 
     # Speed only copies while running
     runner.patch({StartButton: True, Speed: 75.0})
     runner.step()
-    with runner.active():
+    with runner:
         assert DisplaySpeed.value == 75.0
 
     runner.patch({StopButton: True})
     runner.step()
     runner.patch({Speed: 99.0})
     runner.step()
-    with runner.active():
+    with runner:
         assert DisplaySpeed.value == 75.0  # Didn't update — motor is off
 ```
 

@@ -22,7 +22,7 @@ Up to now, each bin had its own separate tags: `BinASensor`, `BinAAcc`, `BinBSen
 Remember the doubled name from [Lesson 2](tags.md) — `ConveyorSpeed = Int("ConveyorSpeed")`? It's gone. pyrung generates the flat identity from the structure: `Bin[1].Sensor` is the Python access path to a tag whose real identity is `Bin1_Sensor`. On Click that's a flat nickname; on Rockwell it's a real UDT member. Your Python stays the same either way.
 
 ```python
-from pyrung import udt, Bool, Int, Dint, Program, Rung, PLCRunner, out, rise, count_up
+from pyrung import udt, Bool, Int, Dint, Program, Rung, PLC, out, rise, count_up
 
 @udt(count=2)
 class Bin:
@@ -97,8 +97,8 @@ Why `.select(1, 4)` instead of `[1:4]`? Python's `list[1:4]` is `[1, 2, 3]` — 
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-with runner.active():
+runner = PLC(logic)
+with runner:
     # 3 boxes into Bin 1
     for _ in range(3):
         Bin[1].Sensor.value = True

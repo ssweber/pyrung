@@ -52,19 +52,18 @@ Read it like a ladder diagram: `with Rung(State == "g")` is the condition on the
 ## Run it
 
 ```python
-from pyrung import PLCRunner, TimeMode
+from pyrung import PLC
 
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner = PLC(logic, dt=0.010)
 
 # Initialize to green
-with runner.active():
+with runner:
     State.value = "g"
 
 # Run for 10 seconds (1,000 scans × 10 ms)
 runner.run(cycles=1000)
 
-with runner.active():
+with runner:
     print(f"State: {State.value}")  # Back to green — it's been through a full cycle
 ```
 
@@ -75,32 +74,31 @@ with runner.active():
 This is the point of pyrung. Put the same logic in a pytest file and make assertions:
 
 ```python
-from pyrung import PLCRunner, TimeMode
+from pyrung import PLC
 
 def test_traffic_light_cycle():
-    runner = PLCRunner(logic)
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+    runner = PLC(logic, dt=0.010)
 
-    with runner.active():
+    with runner:
         State.value = "g"
 
     # Green phase lasts 3 seconds = 300 scans
     runner.run(cycles=299)
-    with runner.active():
+    with runner:
         assert State.value == "g"  # Still green
 
     runner.step()
-    with runner.active():
+    with runner:
         assert State.value == "y"  # Just turned yellow
 
     # Yellow lasts 1 second = 100 scans
     runner.run(cycles=100)
-    with runner.active():
+    with runner:
         assert State.value == "r"  # Now red
 
     # Red lasts 3 seconds = 300 scans
     runner.run(cycles=300)
-    with runner.active():
+    with runner:
         assert State.value == "g"  # Full cycle, back to green
 ```
 
@@ -110,7 +108,7 @@ Same logic, deterministic timing, real assertions. If this passes, the logic is 
 
 Each call to `runner.step()` executes one complete scan cycle: evaluate every rung top to bottom, update all outputs, produce an immutable state snapshot. `runner.run(cycles=N)` just calls `step()` N times.
 
-State snapshots are immutable — the runner keeps a history you can inspect, diff, or rewind to. Tags like `State.value` read from the runner's current state when inside a `runner.active()` block.
+State snapshots are immutable — the runner keeps a history you can inspect, diff, or rewind to. Tags like `State.value` read from the runner's current state when inside a `with runner:` block.
 
 Timers accumulate across scans. `on_delay` with a 3000 ms preset and a 10 ms scan step needs 300 scans to fire. That's why the math is exact and the tests are deterministic.
 

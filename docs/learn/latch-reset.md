@@ -16,7 +16,7 @@ In the real world, you press a momentary "Start" button. Your finger comes off. 
 ## The ladder logic way
 
 ```python
-from pyrung import Bool, Program, Rung, PLCRunner, latch, reset
+from pyrung import Bool, Program, Rung, PLC, latch, reset
 
 StartBtn = Bool("StartBtn")    # NO momentary contact
 StopBtn  = Bool("StopBtn")     # NC contact: conductive at rest
@@ -51,8 +51,8 @@ Why two rungs? Your Python instinct says "the rung went false, the output should
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-with runner.active():
+runner = PLC(logic)
+with runner:
     StopBtn.value = True             # NC input: True = healthy wiring
 
     StartBtn.value = True

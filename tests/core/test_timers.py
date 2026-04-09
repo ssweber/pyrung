@@ -17,14 +17,13 @@ Hardware-verified behaviors (Click PLC):
 import pytest
 
 from pyrung.core import (
+    PLC,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     Tag,
     TagType,
-    TimeMode,
     copy,
     off_delay,
     on_delay,
@@ -45,8 +44,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -70,8 +68,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=50)  # 50ms preset
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -103,8 +100,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -130,8 +126,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -163,8 +158,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -185,8 +179,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -217,8 +210,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -249,8 +241,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -284,8 +275,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -314,8 +304,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -324,7 +313,7 @@ class TestOnDelayRTON:
             runner.step()
         assert runner.current_state.tags["td.Timer_acc"] == 40
 
-        runner.set_battery_present(False)
+        runner.battery_present = False
         runner.reboot()
 
         # After SRAM loss, tag value is rebuilt from its default.
@@ -349,8 +338,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -378,8 +366,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -405,8 +392,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -436,8 +422,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -479,8 +464,7 @@ class TestTimerIntegration:
             with Rung(Enable):
                 copy(Timer_acc, CapturedAcc)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.002)  # 2ms per scan
+        runner = PLC(logic, dt=0.002)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -513,8 +497,7 @@ class TestTimerIntegration:
                 # Using default Tms - accumulator in milliseconds
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.025)  # 25ms per scan
+        runner = PLC(logic, dt=0.025)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -555,8 +538,7 @@ class TestTimerIntegration:
             with Rung(TON_done, TOF_done):
                 out(MotorOutput)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"StartBtn": False, "Motor": False})
         runner.step()
 
@@ -597,8 +579,7 @@ class TestTimerIntegration:
             with Rung(PumpReady):
                 out(PumpOutput)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=1.0)  # 1 second per scan
+        runner = PLC(logic, dt=1.0)
         runner.patch({"MotorRunning": False})
         runner.step()
 
@@ -637,8 +618,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=preset)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
@@ -686,8 +666,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=preset)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
@@ -727,8 +706,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=preset).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False, "preset": 50})
         runner.step()
 
@@ -773,8 +751,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10ms per scan
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -807,9 +784,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100)
 
-        runner = PLCRunner(logic)
-        # Use large dt (10 seconds per scan = 10000ms) to reach max int quickly
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=10.0)  # 10000ms per scan
+        runner = PLC(logic, dt=10.0)  # 10000ms per scan — reach max int quickly
         runner.patch({"Enable": False})
         runner.step()
 
@@ -846,8 +821,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -871,8 +845,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=10.0)  # 10000ms per scan
+        runner = PLC(logic, dt=10.0)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -907,8 +880,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+        runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -934,8 +906,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 off_delay(Timer_done, Timer_acc, preset=50)
 
-        runner = PLCRunner(logic)
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=10.0)  # 10000ms per scan
+        runner = PLC(logic, dt=10.0)
         runner.patch({"Enable": False})
         runner.step()
 

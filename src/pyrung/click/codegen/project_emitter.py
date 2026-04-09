@@ -201,12 +201,12 @@ def _generate_launch_json() -> str:
 
 
 def _generate_run_file() -> str:
-    """Generate run.py: instantiate PLCRunner and step the logic."""
+    """Generate run.py: instantiate PLC and step the logic."""
     return """\
-from pyrung import PLCRunner
+from pyrung import PLC
 from main import logic
 
-runner = PLCRunner(logic)
+runner = PLC(logic)
 runner.step()
 print(f"Scan {runner.current_state.scan_id}: OK")
 """

@@ -41,7 +41,7 @@ def _make_condition(
 def rise(tag: Tag | ImmediateRef) -> RisingEdgeCondition:
     """Rising edge contact (RE).
 
-    True only on 0->1 transition. Requires PLCRunner to track previous values.
+    True only on 0->1 transition. Requires PLC to track previous values.
 
     Example:
         with Rung(rise(Button)):
@@ -53,7 +53,7 @@ def rise(tag: Tag | ImmediateRef) -> RisingEdgeCondition:
 def fall(tag: Tag | ImmediateRef) -> FallingEdgeCondition:
     """Falling edge contact (FE).
 
-    True only on 1->0 transition. Requires PLCRunner to track previous values.
+    True only on 1->0 transition. Requires PLC to track previous values.
 
     Example:
         with Rung(fall(Button)):

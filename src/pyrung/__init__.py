@@ -2,10 +2,11 @@
 
 Import user-facing DSL symbols from this module:
 
-    from pyrung import Bool, Program, Rung, PLCRunner
+    from pyrung import Bool, Program, Rung, PLC
 """
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Char,
@@ -17,7 +18,6 @@ from pyrung.core import (
     ModbusRtuTarget,
     ModbusTcpTarget,
     OutputBlock,
-    PLCRunner,
     Program,
     RangeComparison,
     RangeSlotView,
@@ -28,7 +28,6 @@ from pyrung.core import (
     TagType,
     Td,
     Th,
-    TimeMode,
     TimeUnit,
     Tm,
     Tms,
@@ -82,9 +81,8 @@ from pyrung.core import (
 )
 
 __all__ = [
-    "PLCRunner",
+    "PLC",
     "system",
-    "TimeMode",
     "TimeUnit",
     "Tms",
     "Ts",

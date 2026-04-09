@@ -197,12 +197,11 @@ class Tag:
         the next `step()`.
 
         Raises:
-            RuntimeError: If called outside `with runner.active(): ...`.
+            RuntimeError: If called outside a ``with PLC(...) as plc:`` block.
 
         Example:
             ```python
-            runner = PLCRunner(logic)
-            with runner.active():
+            with PLC(logic) as plc:
                 print(StartButton.value)    # read current value
                 StartButton.value = True    # queue for next scan
             ```
@@ -439,7 +438,7 @@ def _require_active_runner(tag_name: str):
     runner = get_active_runner()
     if runner is None:
         raise RuntimeError(
-            f"Tag '{tag_name}' is not bound to an active runner. Use: with runner.active(): ..."
+            f"Tag '{tag_name}' is not bound to an active runner. Use: with PLC(...) as plc: ..."
         )
     return runner
 
@@ -454,7 +453,7 @@ class LiveTag(Tag):
 
     Note:
         `.value` requires an active runner scope. Access outside
-        `with runner.active(): ...` raises `RuntimeError`.
+        a ``with PLC(...) as plc:`` block raises `RuntimeError`.
     """
 
 

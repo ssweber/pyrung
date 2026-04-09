@@ -49,10 +49,10 @@ Bool tags are non-retentive by default: your outputs start in a known safe state
 
 ## Setting values from outside the program
 
-The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with runner.active()` — inside it, you read and write tag values and call `runner.step()` or `runner.run()` to execute scans.
+The program (your rungs) reads and writes tags through instructions. But you also need to set values from *outside* the program, the way an operator would type a setpoint into an HMI. In pyrung, that's `with runner:` — inside it, you read and write tag values and call `runner.step()` or `runner.run()` to execute scans.
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, out
+from pyrung import Bool, Int, Program, Rung, PLC, out
 
 ConveyorSpeed = Int("ConveyorSpeed")
 SpeedLimit    = Int("SpeedLimit")
@@ -62,8 +62,8 @@ with Program() as logic:
     with Rung(ConveyorSpeed > SpeedLimit):
         out(OverSpeed)
 
-runner = PLCRunner(logic)
-with runner.active():
+runner = PLC(logic)
+with runner:
     SpeedLimit.value = 500             # Like typing into a dataview
     ConveyorSpeed.value = 300
     runner.step()

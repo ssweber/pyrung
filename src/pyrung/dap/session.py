@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from dataclasses import dataclass
 
-from pyrung.core import PLCRunner
+from pyrung.core import PLC
 from pyrung.core.context import ScanContext
 from pyrung.core.rung import Rung
 from pyrung.core.runner import ScanStep
@@ -13,7 +13,7 @@ from pyrung.core.runner import ScanStep
 
 @dataclass
 class DebugSession:
-    runner: PLCRunner | None = None
+    runner: PLC | None = None
     scan_gen: Generator[ScanStep, None, None] | None = None
     current_scan_id: int | None = None
     current_step: ScanStep | None = None

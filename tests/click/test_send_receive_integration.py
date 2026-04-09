@@ -25,18 +25,17 @@ from pyrung.click import (
     txt,
 )
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Char,
     Dint,
     Int,
-    PLCRunner,
     Program,
     Real,
     Rung,
     Tag,
     TagType,
-    TimeMode,
     Word,
 )
 
@@ -472,10 +471,8 @@ async def _run_two_node_exchange() -> list[str]:
     node_a = _build_node_a(port_b)
     node_b = _build_node_b(port_a)
 
-    runner_a = PLCRunner(logic=node_a.program)
-    runner_b = PLCRunner(logic=node_b.program)
-    runner_a.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
-    runner_b.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
+    runner_a = PLC(logic=node_a.program, dt=0.01)
+    runner_b = PLC(logic=node_b.program, dt=0.01)
 
     server_a = ClickServer(
         ClickDataProvider(runner=runner_a, tag_map=node_a.mapping),
@@ -637,10 +634,8 @@ async def _run_transient_peer_outage_auto_recovery() -> list[str]:
     node_a = _build_outage_node_a(port_b)
     node_b = _build_outage_node_b()
 
-    runner_a = PLCRunner(logic=node_a.program)
-    runner_a.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
-    runner_b = PLCRunner(logic=node_b.program)
-    runner_b.set_time_mode(TimeMode.FIXED_STEP, dt=0.01)
+    runner_a = PLC(logic=node_a.program, dt=0.01)
+    runner_b = PLC(logic=node_b.program, dt=0.01)
 
     logs: list[str] = [f"node A started with B offline on port {port_b}"]
     scan = 0

@@ -7,10 +7,10 @@ from datetime import datetime
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -24,7 +24,7 @@ from pyrung.core import (
 )
 
 
-def _resolved(runner: PLCRunner, tag_name: str):
+def _resolved(runner: PLC, tag_name: str):
     found, value = runner.system_runtime.resolve(tag_name, runner.current_state)
     assert found is True
     return value
@@ -46,7 +46,7 @@ def test_system_namespace_shape_and_names():
 
 
 def test_storage_sd_status_defaults():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     assert _resolved(runner, system.storage.sd.ready.name) is True
     assert _resolved(runner, system.storage.sd.write_status.name) is False
@@ -61,7 +61,7 @@ def test_storage_sd_status_defaults():
 
 
 def test_battery_present_is_read_only_and_defaults_true():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     assert _resolved(runner, system.sys.battery_present.name) is True
 
@@ -70,12 +70,12 @@ def test_battery_present_is_read_only_and_defaults_true():
 
 
 def test_set_battery_present_updates_resolved_value():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
-    runner.set_battery_present(False)
+    runner.battery_present = False
     assert _resolved(runner, system.sys.battery_present.name) is False
 
-    runner.set_battery_present(True)
+    runner.battery_present = True
     assert _resolved(runner, system.sys.battery_present.name) is True
 
 
@@ -92,7 +92,7 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode():
         with Rung():
             copy(system.sys.fixed_scan_mode, fixed_mode_value)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
 
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is True
@@ -105,15 +105,14 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode():
 
 
 def test_scan_counter_and_scan_min_max_stats_update():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner = PLC(logic=[], dt=0.1)
 
     runner.step()
     assert runner.current_state.tags["sys.scan_counter"] == 1
     assert runner.current_state.tags["sys.scan_time_min_ms"] == 100
     assert runner.current_state.tags["sys.scan_time_max_ms"] == 100
 
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
+    runner._set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
     runner.step()
     assert runner.current_state.tags["sys.scan_counter"] == 2
     assert runner.current_state.tags["sys.scan_time_min_ms"] == 100
@@ -122,7 +121,7 @@ def test_scan_counter_and_scan_min_max_stats_update():
 
 
 def test_rtc_fields_derive_from_set_rtc_anchor():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.set_rtc(datetime(2026, 3, 5, 6, 7, 8))
 
     assert _resolved(runner, system.rtc.year4.name) == 2026
@@ -135,8 +134,7 @@ def test_rtc_fields_derive_from_set_rtc_anchor():
 
 
 def test_rtc_fixed_step_advances_deterministically_with_simulation_time():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.001)
+    runner = PLC(logic=[], dt=0.001)
     base = datetime(2026, 3, 5, 6, 7, 8)
     runner.set_rtc(base)
 
@@ -146,10 +144,9 @@ def test_rtc_fixed_step_advances_deterministically_with_simulation_time():
     assert (rtc_now - base).total_seconds() == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("mode", [TimeMode.FIXED_STEP, TimeMode.REALTIME])
-def test_rtc_apply_date_updates_current_date_in_all_time_modes(mode: TimeMode):
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(mode, dt=0.1)
+@pytest.mark.parametrize("kw", [{"dt": 0.1}, {"realtime": True}])
+def test_rtc_apply_date_updates_current_date_in_all_time_modes(kw: dict):
+    runner = PLC(logic=[], **kw)
     runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
 
     runner.patch(
@@ -170,10 +167,9 @@ def test_rtc_apply_date_updates_current_date_in_all_time_modes(mode: TimeMode):
     assert runner.current_state.tags[system.rtc.apply_date_error.name] is False
 
 
-@pytest.mark.parametrize("mode", [TimeMode.FIXED_STEP, TimeMode.REALTIME])
-def test_rtc_apply_time_updates_current_time_in_all_time_modes(mode: TimeMode):
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(mode, dt=0.1)
+@pytest.mark.parametrize("kw", [{"dt": 0.1}, {"realtime": True}])
+def test_rtc_apply_time_updates_current_time_in_all_time_modes(kw: dict):
+    runner = PLC(logic=[], **kw)
     runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
 
     runner.patch(
@@ -195,7 +191,7 @@ def test_rtc_apply_time_updates_current_time_in_all_time_modes(mode: TimeMode):
 
 
 def test_rtc_invalid_date_sets_error_status_for_single_scan():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
     runner.patch(
         {
@@ -215,8 +211,7 @@ def test_rtc_invalid_date_sets_error_status_for_single_scan():
 
 
 def test_rtc_shift_changeover_example_at_fixed_step():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner = PLC(logic=[], dt=0.1)
     runner.set_rtc(datetime(2026, 3, 5, 6, 59, 50))
 
     runner.run(cycles=100)
@@ -227,8 +222,7 @@ def test_rtc_shift_changeover_example_at_fixed_step():
 
 
 def test_rtc_values_are_not_stored_in_state_memory():
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner = PLC(logic=[], dt=0.1)
     runner.set_rtc(datetime(2026, 1, 15, 10, 20, 30))
     runner.patch(
         {
@@ -248,7 +242,7 @@ def test_read_only_system_points_reject_logic_and_patch_writes():
     with Program() as program:
         with Rung():
             out(system.sys.always_on)
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.step()
@@ -261,7 +255,7 @@ def test_storage_sd_read_only_status_points_reject_logic_patch_and_force():
     with Program() as program:
         with Rung():
             out(system.storage.sd.ready)
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.step()
@@ -283,7 +277,7 @@ def test_storage_sd_read_only_status_points_reject_logic_patch_and_force():
 
 
 def test_storage_sd_commands_auto_clear_and_pulse_write_status():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.patch(
         {
             system.storage.sd.eject_cmd.name: True,
@@ -315,7 +309,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             calc(A / B, Result, oneshot=True)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
     runner.patch({"Enable": True, "A": 100, "B": 0})
     runner.step()
     assert runner.current_state.tags["Result"] == 0
@@ -335,7 +329,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
         with Rung(Enable):
             calc(A + B, Result, oneshot=True)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
     runner.patch({"Enable": True, "A": 30000, "B": 30000})
     runner.step()
     assert runner.current_state.tags["Result"] == -5536
@@ -354,7 +348,7 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             copy(CH[1], Dest, oneshot=True, convert=to_value)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
     runner.patch({"Enable": True, "CH1": "A"})
     runner.step()
     assert runner.current_state.tags[system.fault.out_of_range.name] is True
@@ -373,7 +367,7 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
-    runner = PLCRunner(logic=program)
+    runner = PLC(logic=program)
     runner.patch({"Enable": True, "Pointer": 999})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is True

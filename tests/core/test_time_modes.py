@@ -29,18 +29,17 @@ class TestFixedStepMode:
 
     def test_default_is_fixed_step(self):
         """Runner defaults to FIXED_STEP mode."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC, TimeMode
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         assert runner.time_mode == TimeMode.FIXED_STEP
 
     def test_set_fixed_step_with_dt(self):
         """Can set FIXED_STEP mode with specific dt."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.05)  # 50ms
+        runner = PLC(logic=[], dt=0.05)
 
         runner.step()
 
@@ -48,10 +47,9 @@ class TestFixedStepMode:
 
     def test_fixed_step_accumulates(self):
         """Fixed step time accumulates predictably."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+        runner = PLC(logic=[], dt=0.1)
 
         runner.run(cycles=10)
 
@@ -59,10 +57,9 @@ class TestFixedStepMode:
 
     def test_fixed_step_ignores_wall_clock(self):
         """Fixed step doesn't care about actual elapsed time."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.001)  # 1ms
+        runner = PLC(logic=[], dt=0.001)
 
         # Even if wall clock is slower, simulation time is deterministic
         runner.run(cycles=1000)
@@ -75,19 +72,17 @@ class TestRealtimeMode:
 
     def test_set_realtime_mode(self):
         """Can set REALTIME mode."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC, TimeMode
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.REALTIME)
+        runner = PLC(logic=[], realtime=True)
 
         assert runner.time_mode == TimeMode.REALTIME
 
     def test_realtime_tracks_wall_clock(self):
         """REALTIME mode uses actual elapsed time."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.REALTIME)
+        runner = PLC(logic=[], realtime=True)
 
         start = time.perf_counter()
         time.sleep(0.05)  # Sleep 50ms
@@ -100,15 +95,33 @@ class TestRealtimeMode:
         assert runner.simulation_time <= elapsed + 0.01
 
 
+class TestTimeModeValidation:
+    """Test dt=/realtime= mutual exclusion."""
+
+    def test_dt_and_realtime_raises(self):
+        """Cannot specify both dt= and realtime=True."""
+        from pyrung.core import PLC
+
+        with pytest.raises(ValueError, match="Cannot specify dt="):
+            PLC(logic=[], dt=0.05, realtime=True)
+
+    def test_default_dt_is_10ms(self):
+        """Default dt is 0.010 (10 ms)."""
+        from pyrung.core import PLC
+
+        runner = PLC(logic=[])
+        runner.step()
+        assert runner.simulation_time == pytest.approx(0.010)
+
+
 class TestRunFor:
     """Test run_for() - run until simulation time advances."""
 
     def test_run_for_seconds_fixed_step(self):
         """run_for() runs until simulation clock advances at least N seconds."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+        runner = PLC(logic=[], dt=0.1)
 
         runner.run_for(seconds=1.0)
 
@@ -119,10 +132,9 @@ class TestRunFor:
 
     def test_run_for_partial_cycle(self):
         """run_for() stops at cycle boundary, may overshoot slightly."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.3)
+        runner = PLC(logic=[], dt=0.3)
 
         runner.run_for(seconds=1.0)
 
@@ -136,10 +148,9 @@ class TestRunUntil:
 
     def test_run_until_predicate_true(self):
         """run_until_fn() stops when predicate returns True."""
-        from pyrung.core import PLCRunner, TimeMode
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
-        runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+        runner = PLC(logic=[], dt=0.1)
 
         # Run until scan_id reaches 5
         runner.run_until_fn(lambda s: s.scan_id >= 5)
@@ -148,9 +159,9 @@ class TestRunUntil:
 
     def test_run_until_with_max_cycles(self):
         """run_until_fn() respects max_cycles limit."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         # Predicate never true, but max_cycles prevents infinite loop
         runner.run_until_fn(lambda s: False, max_cycles=10)
@@ -159,9 +170,9 @@ class TestRunUntil:
 
     def test_run_until_returns_matched_state(self):
         """run_until_fn() returns state that matched predicate."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         result = runner.run_until_fn(lambda s: s.scan_id == 3)
 

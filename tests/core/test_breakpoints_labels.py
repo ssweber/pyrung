@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, TimeMode
+from pyrung.core import PLC, Bool, Int
 from pyrung.core.state import SystemState
 
 
@@ -15,7 +15,7 @@ def _scan_ids(states: list[SystemState]) -> list[int]:
 
 
 def test_pause_breakpoint_stops_run_on_trigger_scan() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id >= 3).pause()
 
     runner.run(cycles=10)
@@ -24,8 +24,7 @@ def test_pause_breakpoint_stops_run_on_trigger_scan() -> None:
 
 
 def test_pause_breakpoint_halts_run_for() -> None:
-    runner = PLCRunner(logic=[])
-    runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+    runner = PLC(logic=[], dt=0.1)
     runner.when_fn(lambda state: state.scan_id >= 3).pause()
 
     runner.run_for(seconds=10.0)
@@ -35,7 +34,7 @@ def test_pause_breakpoint_halts_run_for() -> None:
 
 
 def test_pause_breakpoint_halts_run_until_even_when_predicate_is_false() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id >= 2).pause()
 
     runner.run_until_fn(lambda state: state.scan_id >= 10, max_cycles=20)
@@ -44,7 +43,7 @@ def test_pause_breakpoint_halts_run_until_even_when_predicate_is_false() -> None
 
 
 def test_snapshot_breakpoint_labels_history_and_run_continues() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id > 0 and state.scan_id % 2 == 0).snapshot("even")
 
     runner.run(cycles=5)
@@ -57,7 +56,7 @@ def test_snapshot_breakpoint_labels_history_and_run_continues() -> None:
 
 
 def test_snapshot_and_pause_can_fire_together_on_same_scan() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id == 2).snapshot("hit")
     runner.when_fn(lambda state: state.scan_id == 2).pause()
 
@@ -71,7 +70,7 @@ def test_snapshot_and_pause_can_fire_together_on_same_scan() -> None:
 
 
 def test_snapshot_labels_deduplicate_same_label_on_same_scan() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id == 2).snapshot("dup")
     runner.when_fn(lambda state: state.scan_id == 2).snapshot("dup")
 
@@ -81,7 +80,7 @@ def test_snapshot_labels_deduplicate_same_label_on_same_scan() -> None:
 
 
 def test_snapshot_labels_are_evicted_with_history() -> None:
-    runner = PLCRunner(logic=[], history_limit=3)
+    runner = PLC(logic=[], history_limit=3)
     runner.when_fn(lambda state: state.scan_id in {1, 3}).snapshot("milestone")
 
     runner.run(cycles=4)  # retained scans [2, 3, 4]
@@ -93,7 +92,7 @@ def test_snapshot_labels_are_evicted_with_history() -> None:
 
 
 def test_snapshot_breakpoint_captures_rtc_metadata() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[], dt=0.1)
     runner.set_rtc(datetime(2026, 2, 24, 12, 34, 56))
     runner.when_fn(lambda state: state.scan_id == 1).snapshot("tick")
 
@@ -107,7 +106,7 @@ def test_snapshot_breakpoint_captures_rtc_metadata() -> None:
 
 
 def test_breakpoint_handle_disable_enable_and_remove() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     handle = runner.when_fn(lambda state: state.scan_id >= 2).pause()
 
     handle.disable()
@@ -127,7 +126,7 @@ def test_breakpoint_handle_disable_enable_and_remove() -> None:
 
 
 def test_breakpoint_predicate_exceptions_propagate() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     def _boom(_state: SystemState) -> bool:
         raise RuntimeError("predicate boom")
@@ -138,7 +137,7 @@ def test_breakpoint_predicate_exceptions_propagate() -> None:
 
 
 def test_pause_request_is_consumed_by_single_step() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when_fn(lambda state: state.scan_id == 1).pause()
 
     runner.step()
@@ -149,7 +148,7 @@ def test_pause_request_is_consumed_by_single_step() -> None:
 
 def test_expression_pause_breakpoint_accepts_tag_conditions() -> None:
     fault = Bool("Fault")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when(fault).pause()
 
     runner.patch({"Fault": True})
@@ -160,7 +159,7 @@ def test_expression_pause_breakpoint_accepts_tag_conditions() -> None:
 
 def test_expression_snapshot_breakpoint_accepts_inverted_tag_conditions() -> None:
     fault = Bool("Fault")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when(~fault).snapshot("fault_clear")
 
     runner.step()
@@ -172,7 +171,7 @@ def test_expression_snapshot_breakpoint_accepts_inverted_tag_conditions() -> Non
 
 def test_run_until_expression_supports_inverted_bool_tag() -> None:
     motor = Bool("Motor")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     result = runner.run_until(~motor, max_cycles=10)
 
@@ -181,7 +180,7 @@ def test_run_until_expression_supports_inverted_bool_tag() -> None:
 
 def test_run_until_expression_supports_comparisons() -> None:
     step = Int("Step")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.patch({"Step": 2})
 
     result = runner.run_until(step >= 2, max_cycles=10)
@@ -190,14 +189,14 @@ def test_run_until_expression_supports_comparisons() -> None:
 
 
 def test_when_rejects_callable_with_migration_hint() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     with pytest.raises(TypeError, match="when_fn\\(\\.\\.\\.\\)"):
         runner.when(lambda state: state.scan_id >= 1).pause()  # ty: ignore[invalid-argument-type]
 
 
 def test_run_until_rejects_callable_with_migration_hint() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     with pytest.raises(TypeError, match="run_until_fn\\(\\.\\.\\.\\)"):
         runner.run_until(lambda state: state.scan_id >= 1, max_cycles=1)  # ty: ignore[invalid-argument-type]

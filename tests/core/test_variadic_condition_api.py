@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Dint,
     Int,
-    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -31,7 +31,7 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
         with Rung(enable):
             count_up(done, acc, preset=10).down(down_a, down_b).reset(reset_a, reset_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -70,7 +70,7 @@ def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
         with Rung(data):
             shift(bits.select(1, 3)).clock(clock_a, clock_b).reset(reset_a, reset_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Data": True,
@@ -112,7 +112,7 @@ def test_on_delay_reset_accepts_variadic_conditions() -> None:
         with Rung(enable):
             on_delay(done, acc, preset=100).reset(reset_a, reset_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic, dt=0.1)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
     runner.step()
     assert runner.current_state.tags["TimerAcc"] == 100
@@ -138,7 +138,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
         with Rung(enable):
             count_down(done, acc, preset=5).reset(reset_a, reset_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
     runner.step()
     assert runner.current_state.tags["Acc"] == -1
@@ -176,7 +176,7 @@ def test_event_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 completion_flag=done,
             ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -231,7 +231,7 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 completion_flag=done,
             ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -283,7 +283,7 @@ def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump_a, jump_b, step=2)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -328,7 +328,7 @@ def test_time_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump_a, jump_b, step=2)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,
@@ -354,7 +354,7 @@ def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
     b = Bool("B")
     c = Bool("C")
 
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     runner.when((a, b), c).pause()
     runner.patch({"A": True, "B": True, "C": False})
     runner.run(cycles=3)
@@ -364,7 +364,7 @@ def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
     runner.run(cycles=5)
     assert runner.current_state.scan_id == 4
 
-    runner2 = PLCRunner(logic=[])
+    runner2 = PLC(logic=[])
     runner2.patch({"A": True, "B": False, "C": True})
     result = runner2.run_until((a, b), c, max_cycles=3)
     assert result.scan_id == 3
@@ -385,17 +385,17 @@ def test_single_condition_forms_remain_supported() -> None:
         with Rung(enable):
             count_down(done, acc, preset=5).reset(reset)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Reset": False})
     runner.step()
     assert runner.current_state.tags["Acc"] == -1
 
-    runner2 = PLCRunner(logic=[])
+    runner2 = PLC(logic=[])
     runner2.when(fault).pause()
     runner2.patch({"Fault": True})
     runner2.run(cycles=3)
     assert runner2.current_state.scan_id == 1
 
-    runner3 = PLCRunner(logic=[])
+    runner3 = PLC(logic=[])
     result = runner3.run_until(~fault, max_cycles=1)
     assert result.scan_id == 1

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pyrung.core import PLCRunner, Program
+from pyrung.core import PLC, Program
 
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
@@ -88,22 +88,22 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
 
-def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLCRunner:
+def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
     named_runner = namespace.get("runner")
-    if isinstance(named_runner, PLCRunner):
+    if isinstance(named_runner, PLC):
         return named_runner
 
-    runners = adapter._unique_instances(namespace.values(), PLCRunner)
+    runners = adapter._unique_instances(namespace.values(), PLC)
     if len(runners) == 1:
         return runners[0]
 
     programs = adapter._unique_instances(namespace.values(), Program)
     if len(programs) == 1:
-        return PLCRunner(programs[0])
+        return PLC(programs[0])
 
     raise adapter.DAPAdapterError(
-        "Launch script must provide 'runner' as PLCRunner, or define exactly one PLCRunner "
-        f"or exactly one Program. Found {len(runners)} PLCRunner(s), {len(programs)} Program(s)."
+        "Launch script must provide 'runner' as PLC, or define exactly one PLC "
+        f"or exactly one Program. Found {len(runners)} PLC(s), {len(programs)} Program(s)."
     )
 
 

@@ -7,7 +7,7 @@ from datetime import datetime
 import pytest
 
 from pyrung.click import ClickDataProvider, TagMap, sc
-from pyrung.core import Bool, PLCRunner, system
+from pyrung.core import PLC, Bool, system
 
 
 class _FrozenDateTime(datetime):
@@ -76,7 +76,7 @@ def test_reserved_system_logical_names_are_rejected():
 
 
 def test_provider_reads_system_slots_from_runtime_and_blocks_read_only_writes():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     provider = ClickDataProvider(runner, TagMap())
 
     assert provider.read("SC2") is True
@@ -107,7 +107,7 @@ def test_provider_write_to_writable_system_slots_succeeds(monkeypatch):
     _FrozenDateTime.fixed_now = datetime(2026, 1, 15, 10, 20, 30)
     monkeypatch.setattr("pyrung.core.system_points.datetime", _FrozenDateTime)
 
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     provider = ClickDataProvider(runner, TagMap())
 
     provider.write("SD29", 2030)
@@ -128,7 +128,7 @@ def test_provider_write_to_writable_system_slots_succeeds(monkeypatch):
 
 
 def test_provider_write_to_writable_command_bits_routes_through_patch():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     provider = ClickDataProvider(runner, TagMap())
 
     provider.write("SC55", True)
@@ -142,7 +142,7 @@ def test_provider_write_to_writable_command_bits_routes_through_patch():
 
 
 def test_provider_write_sc50_stops_runner_immediately():
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     provider = ClickDataProvider(runner, TagMap())
 
     provider.write("SC50", True)

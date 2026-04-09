@@ -6,12 +6,11 @@ This is where pyrung pays for itself. Everything you've built -- the motor contr
 
 ```python
 import pytest
-from pyrung import PLCRunner, TimeMode
+from pyrung import PLC
 
 @pytest.fixture
 def runner():
-    r = PLCRunner(logic)
-    r.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+    r = PLC(logic, dt=0.010)
     r.add_force(StopBtn, True)        # NC inputs: healthy wiring
     r.add_force(EstopOK, True)
     r.add_force(Auto, True)           # Default to auto mode
@@ -20,11 +19,11 @@ def runner():
 
 Remember the `FIXED_STEP` determinism from [Lesson 5](timers.md)? This is what it was for. Every test in this lesson runs in deterministic, reproducible scan time -- no flaky tests, no timing race conditions, no "works on my machine." One scan, one tick, every time.
 
-Each test gets its own `PLCRunner` because pytest's default scope is `function` -- no state accumulates between tests. All tag I/O and stepping happens inside `with runner.active()`:
+Each test gets its own `PLC` because pytest's default scope is `function` -- no state accumulates between tests. All tag I/O and stepping happens inside `with runner:`:
 
 ```python
 def test_start_stop(runner):
-    with runner.active():
+    with runner:
         StartBtn.value = True
         runner.step()
         StartBtn.value = False
@@ -35,7 +34,7 @@ def test_start_stop(runner):
 def test_estop_overrides_start(runner):
     """Safety: E-stop kills everything, even if Start is held."""
     runner.remove_force(EstopOK)
-    with runner.active():
+    with runner:
         EstopOK.value = False
         StartBtn.value = True
         runner.step()
@@ -68,7 +67,7 @@ Test two outcomes from the same starting point without resetting:
 ```python
 def test_small_vs_large_box(runner):
     """Same setup, two outcomes."""
-    with runner.active():
+    with runner:
         SizeThreshold.value = 100
         StartBtn.value = True
         runner.step()
@@ -79,7 +78,7 @@ def test_small_vs_large_box(runner):
     large = runner.fork()
     large.add_force(SizeReading, 150)
     large.run(cycles=50)
-    with large.active():
+    with large:
         assert State.value == 2              # SORTING
         assert DiverterCmd.value is True
 
@@ -87,7 +86,7 @@ def test_small_vs_large_box(runner):
     small = runner.fork()
     small.add_force(SizeReading, 50)
     small.run(cycles=50)
-    with small.active():
+    with small:
         assert State.value == 2
         assert DiverterCmd.value is False
 ```
@@ -103,7 +102,7 @@ def test_small_vs_large_box(runner):
     (101, True),    # boundary, just over
 ])
 def test_box_classification(runner, box_size, expected_diverter):
-    with runner.active():
+    with runner:
         SizeThreshold.value = 100
         StartBtn.value = True
         runner.step()
@@ -111,7 +110,7 @@ def test_box_classification(runner, box_size, expected_diverter):
     runner.add_force(EntrySensor, True)
     runner.add_force(SizeReading, box_size)
     runner.run(cycles=55)                    # Past detection, mid-sorting
-    with runner.active():
+    with runner:
         assert DiverterCmd.value is expected_diverter
 ```
 
@@ -125,7 +124,7 @@ The kind of boundary testing that's agonizing on real hardware -- load 5 specifi
 
 ```python
 runner.run(cycles=100)
-with runner.active():
+with runner:
     assert JamAlarm.value is True
 
 # Why did the jam fire? Walk back through scans:
@@ -140,7 +139,7 @@ Three ways to set a tag's value, each with different persistence:
 
 | Mechanism | Persistence | Use case |
 |---|---|---|
-| `tag.value = X` (inside `with runner.active()`) | one scan | Setting an initial value, simulating a one-shot input |
+| `tag.value = X` (inside `with runner:`) | one scan | Setting an initial value, simulating a one-shot input |
 | `runner.add_force(tag, X)` | persistent until removed | Holding a sensor on across many scans |
 | `runner.remove_force(tag)` | releases the force | Letting the logic see the computed value again |
 
@@ -149,7 +148,7 @@ Forces are how the sorting test above keeps `EntrySensor` on across 55+ scans wi
 ```python
 def test_sorting_sequence(runner):
     """Full auto sort: box arrives, gets classified, exits to correct bin."""
-    with runner.active():
+    with runner:
         SizeThreshold.value = 100
         StartBtn.value = True
         runner.step()
@@ -159,12 +158,12 @@ def test_sorting_sequence(runner):
 
     # Run past detection period into sorting
     runner.run(cycles=55)
-    with runner.active():
+    with runner:
         assert DiverterCmd.value is True     # Extended for large box
 
     runner.remove_force(EntrySensor)
     runner.run(cycles=250)                   # Past hold period
-    with runner.active():
+    with runner:
         assert DiverterCmd.value is False    # Retracted after sort
         assert State.value == 0              # Back to idle
 ```

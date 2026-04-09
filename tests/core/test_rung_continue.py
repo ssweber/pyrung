@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, SystemState, branch, copy, out
+from pyrung.core import PLC, Bool, Int, Program, Rung, SystemState, branch, copy, out
 from tests.conftest import evaluate_program
 
 
@@ -203,7 +203,7 @@ class TestContinueSubroutineBoundary:
                 # which is valid structurally. But the snapshot should come
                 # from the subroutine's own first rung, not the caller.
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "X": False, "Y": False})
         runner.step()
 
@@ -232,7 +232,7 @@ class TestContinueSubroutineBoundary:
                 with Rung(Counter == 0).continued():
                     out(Y)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({"A": True, "Counter": 0, "X": False, "Y": False})
         runner.step()
 

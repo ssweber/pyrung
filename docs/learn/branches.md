@@ -112,10 +112,10 @@ with Rung(~StopBtn):
 ## Try it
 
 ```python
-from pyrung import PLCRunner
+from pyrung import PLC
 
-runner = PLCRunner(logic)
-with runner.active():
+runner = PLC(logic)
+with runner:
     StopBtn.value = True             # NC inputs: True = healthy
     EstopOK.value = True
 

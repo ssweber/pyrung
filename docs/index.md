@@ -3,7 +3,7 @@
 **Ladder logic in Python that reads like ladder, scans like a PLC, and deploys to real hardware.**
 
 ```python
-from pyrung import Bool, PLCRunner, Program, Rung, out
+from pyrung import Bool, PLC, Program, Rung, out
 
 Button = Bool("Button")
 Light  = Bool("Light")
@@ -12,8 +12,8 @@ with Program() as logic:
     with Rung(Button):
         out(Light)
 
-runner = PLCRunner(logic)
-with runner.active():
+runner = PLC(logic)
+with runner:
     Button.value = True
     runner.step()
     assert Light.value is True

@@ -29,7 +29,7 @@ Timers **accumulate** across scans: every scan where the rung is true, the timer
 The diverter gate needs to stay open for 2 seconds while a box passes through. Here's how:
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms, on_delay, out
+from pyrung import Bool, Int, Program, Rung, PLC, Tms, on_delay, out
 
 EntrySensor = Bool("EntrySensor")
 DiverterCmd = Bool("DiverterCmd")
@@ -54,18 +54,17 @@ Two tags, not one — `HoldDone` and `HoldAcc` are separate because that's how t
 ## Test it deterministically
 
 ```python
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
+runner = PLC(logic, dt=0.010)
 
-with runner.active():
+with runner:
     EntrySensor.value = True
 
 runner.run(cycles=199)                        # 1.99 seconds
-with runner.active():
+with runner:
     assert DiverterCmd.value is True          # Diverter still held open
 
 runner.step()                                 # 2.00 seconds
-with runner.active():
+with runner:
     assert DiverterCmd.value is False         # Released -- box has passed
 ```
 

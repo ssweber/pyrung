@@ -28,10 +28,10 @@
 
 ```python
 from importlib.metadata import version
-from pyrung import PLCRunner, Program
+from pyrung import PLC, Program
 
 print("pyrung", version("pyrung"))
-print("imports ok:", PLCRunner, Program)
+print("imports ok:", PLC, Program)
 ```
 
 ## Optional: Click dialect

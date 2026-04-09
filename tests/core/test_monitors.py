@@ -1,14 +1,14 @@
-"""Tests for PLCRunner monitor registrations."""
+"""Tests for PLC monitor registrations."""
 
 from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, PLCRunner
+from pyrung.core import PLC, Bool
 
 
 def test_monitor_fires_only_on_committed_value_change() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     events: list[tuple[object, object]] = []
     runner.monitor("A", lambda current, previous: events.append((current, previous)))
 
@@ -24,7 +24,7 @@ def test_monitor_fires_only_on_committed_value_change() -> None:
 
 def test_monitor_accepts_tag_objects() -> None:
     button = Bool("Button")
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     events: list[tuple[object, object]] = []
     runner.monitor(button, lambda current, previous: events.append((current, previous)))
 
@@ -35,7 +35,7 @@ def test_monitor_accepts_tag_objects() -> None:
 
 
 def test_multiple_monitors_on_same_tag_fire_in_registration_order() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     fired: list[str] = []
     first = runner.monitor("A", lambda _current, _previous: fired.append("first"))
     second = runner.monitor("A", lambda _current, _previous: fired.append("second"))
@@ -49,7 +49,7 @@ def test_multiple_monitors_on_same_tag_fire_in_registration_order() -> None:
 
 
 def test_monitor_handle_disable_enable_and_remove() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     events: list[tuple[object, object]] = []
     handle = runner.monitor("A", lambda current, previous: events.append((current, previous)))
 
@@ -75,7 +75,7 @@ def test_monitor_handle_disable_enable_and_remove() -> None:
 
 
 def test_monitor_callback_exceptions_propagate() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
 
     def _boom(_current: object, _previous: object) -> None:
         raise RuntimeError("monitor boom")
@@ -88,7 +88,7 @@ def test_monitor_callback_exceptions_propagate() -> None:
 
 
 def test_monitor_callback_receives_current_then_previous() -> None:
-    runner = PLCRunner(logic=[])
+    runner = PLC(logic=[])
     captured: list[tuple[object, object]] = []
     runner.monitor("A", lambda current, previous: captured.append((current, previous)))
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung.core import Bool, Int, PLCRunner, Program, Rung, call, forloop, out, subroutine
+from pyrung.core import PLC, Bool, Int, Program, Rung, call, forloop, out, subroutine
 from pyrung.core.debug_handlers import (
     CallInstructionDebugHandler,
     ForLoopInstructionDebugHandler,
@@ -75,7 +75,7 @@ def test_call_handler_preserves_subroutine_context_and_call_stack() -> None:
             call("work")
             out(done)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     steps = list(runner.scan_steps_debug())
 
     sub_instruction_steps = [
@@ -95,7 +95,7 @@ def test_forloop_handler_emits_nested_child_instruction_steps() -> None:
             with forloop(2):
                 out(pulse)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     steps = list(runner.scan_steps_debug())
 
     instruction_steps = [step for step in steps if step.kind == "instruction"]
@@ -112,11 +112,11 @@ def test_debugger_accepts_protocol_runner_wrapper_without_private_api() -> None:
         with Rung(enable):
             out(light)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
     class RunnerFacade:
-        def __init__(self, inner: PLCRunner) -> None:
+        def __init__(self, inner: PLC) -> None:
             self._inner = inner
 
         def prepare_scan(self) -> tuple[Any, float]:

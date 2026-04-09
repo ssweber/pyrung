@@ -2,11 +2,11 @@
 
 These tests verify:
 1. rise()/fall() create proper conditions
-2. PLCRunner auto-tracks _prev:* values in memory
+2. PLC auto-tracks _prev:* values in memory
 3. Edge detection works correctly across scan cycles
 """
 
-from pyrung.core import Bool, PLCRunner, Program, Rung, latch, out, reset
+from pyrung.core import PLC, Bool, Program, Rung, latch, out, reset
 
 
 class TestRiseDSL:
@@ -34,7 +34,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Initial state: Button=False, Light=False
         runner.patch({"Button": False, "Light": False})
@@ -65,7 +65,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 latch(Counter)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Start with Button already True
         runner.patch({"Button": True, "Counter": False})
@@ -92,7 +92,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 latch(PulseCount)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # First rising edge
         runner.patch({"Button": False, "PulseCount": False})
@@ -141,7 +141,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Initial state: Button=True, Light=False
         runner.patch({"Button": True, "Light": False})
@@ -173,7 +173,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 latch(Counter)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Start with Button already False
         runner.patch({"Button": False, "Counter": False})
@@ -196,7 +196,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 latch(PulseCount)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Setup: Button on
         runner.patch({"Button": True, "PulseCount": False})
@@ -224,7 +224,7 @@ class TestFallDSL:
 
 
 class TestPrevValueTracking:
-    """Test that PLCRunner properly tracks _prev:* values in memory."""
+    """Test that PLC properly tracks _prev:* values in memory."""
 
     def test_runner_updates_prev_values_after_scan(self):
         """Runner should update _prev:* in memory after each scan."""
@@ -235,7 +235,7 @@ class TestPrevValueTracking:
             with Rung(Button):
                 out(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Set initial value
         runner.patch({"Button": True})
@@ -261,7 +261,7 @@ class TestPrevValueTracking:
             with Rung(A, B):
                 out(Out)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         runner.patch({"A": True, "B": False})
         runner.step()
@@ -291,7 +291,7 @@ class TestEdgeCombinations:
             with Rung(rise(Button), Enable):  # Both must be true
                 latch(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         # Rising edge but Enable is False
         runner.patch({"Button": False, "Enable": False, "Light": False})
@@ -324,7 +324,7 @@ class TestEdgeCombinations:
             with Rung(fall(Button)):
                 reset(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
 
         runner.patch({"Button": False, "Light": False})
         runner.step()

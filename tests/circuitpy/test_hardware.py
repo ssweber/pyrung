@@ -5,9 +5,9 @@ import pytest
 from pyrung.circuitpy import MAX_SLOTS, P1AM, RunStopConfig, board
 from pyrung.circuitpy.catalog import MODULE_CATALOG, ModuleDirection
 from pyrung.core import (
+    PLC,
     InputBlock,
     OutputBlock,
-    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -333,7 +333,7 @@ def test_every_catalog_module_can_be_slotted(part: str):
 
 
 # ---------------------------------------------------------------------------
-# Integration: PLCRunner with P1AM blocks
+# Integration: PLC with P1AM blocks
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +350,7 @@ class TestIntegration:
             with Rung(Button):
                 out(Light)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({Button.name: True})
         runner.step()
         assert runner.current_state.tags[Light.name] is True
@@ -377,7 +377,7 @@ class TestIntegration:
             with Rung(Switch):
                 out(Relay)
 
-        runner = PLCRunner(logic)
+        runner = PLC(logic)
         runner.patch({Switch.name: True})
         runner.step()
         assert runner.current_state.tags[Relay.name] is True

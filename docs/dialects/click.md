@@ -13,7 +13,7 @@ pip install pyrung
 ## Imports
 
 ```python
-from pyrung import Bool, Int, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung import Bool, Int, PLC, Program, Rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, TagMap
 ```
 
@@ -114,7 +114,7 @@ The CSV ladder export uses Click-facing token names: `calc` emits as `math(...)`
 ## Writing a Click program
 
 ```python
-from pyrung import Bool, Real, PLCRunner, Program, Rung, TimeMode, copy, latch, reset, rise
+from pyrung import Bool, Real, PLC, Program, Rung, copy, latch, reset, rise
 from pyrung.click import x, y, c, ds, df, TagMap
 
 # Define semantic tags (hardware-agnostic)
@@ -136,10 +136,9 @@ with Program() as logic:
         copy(RawSpeed, Speed)
 
 # Simulate — no mapping needed
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.1)
+runner = PLC(logic, dt=0.1)
 
-with runner.active():
+with runner:
     StartButton.value = True
     runner.step()
 ```
@@ -372,11 +371,11 @@ Use Click Programming Software's **Data > Read Data from PLC** to dump the live 
 
 ```python
 from pyclickplc import read_plc_data
-from pyrung.core import PLCRunner, SystemState
+from pyrung.core import PLC, SystemState
 
 data = read_plc_data("data.csv", skip_default=True)
 tags = mapping.tags_from_plc_data(data)
-runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 ```
 
 `read_plc_data` (from `pyclickplc`) parses the CSV and returns `{hardware_address: value}`. `tags_from_plc_data` translates the hardware keys to logical tag names using the TagMap, silently skipping any addresses that aren't mapped. The result is ready for `SystemState.with_tags()` or `runner.patch()`.

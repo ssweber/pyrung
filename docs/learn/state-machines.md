@@ -26,7 +26,7 @@ Here's the full sorting sequence: a box arrives, the system reads its size, posi
 ```
 
 ```python
-from pyrung import Bool, Int, Program, Rung, PLCRunner, TimeMode, Tms
+from pyrung import Bool, Int, Program, Rung, PLC, Tms
 from pyrung import comment, on_delay, copy, latch, reset, rise
 
 # State values as tag-constants — initialized once, never written
@@ -88,10 +88,9 @@ A few things to notice in the code:
 ## Try it
 
 ```python
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+runner = PLC(logic, dt=0.010)
 
-with runner.active():
+with runner:
     State.value = 0
     SizeThreshold.value = 100
 

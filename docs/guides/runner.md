@@ -1,13 +1,13 @@
 # Runner
 
-`PLCRunner` is the execution engine. It takes a program, holds the current state, and exposes methods to drive execution scan by scan.
+`PLC` is the execution engine. It takes a program, holds the current state, and exposes methods to drive execution scan by scan.
 
 ## Creating a runner
 
 ```python
-from pyrung import PLCRunner
+from pyrung import PLC
 
-runner = PLCRunner(logic)
+runner = PLC(logic)
 ```
 
 The constructor accepts:
@@ -24,10 +24,8 @@ Optional keyword arguments:
 ## Time modes
 
 ```python
-from pyrung import TimeMode
-
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)  # 10 ms per scan
-runner.set_time_mode(TimeMode.REALTIME)                # wall-clock
+runner = PLC(logic, dt=0.010)        # fixed-step, 10 ms per scan (default)
+runner = PLC(logic, realtime=True)   # wall-clock
 ```
 
 | Mode | Behavior | Use case |
@@ -118,10 +116,10 @@ Values are applied at the start of the next `step()` and then discarded. Multipl
 
 ### `.value` via `active()`
 
-Inside `with runner.active():`, tag `.value` reads and writes go through the runner's current state:
+Inside `with runner:`, tag `.value` reads and writes go through the runner's current state:
 
 ```python
-with runner.active():
+with runner:
     Button.value = True       # queues a patch
     print(Step.value)         # reads current value
     runner.step()             # executes with the queued patch
@@ -164,7 +162,7 @@ Simulates a power cycle. Tag behavior depends on battery:
 Runtime scope resets the same as STOP→RUN. Runner returns in RUN mode.
 
 ```python
-runner.set_battery_present(False)
+runner.battery_present = False
 runner.reboot()  # all tags reset
 ```
 
@@ -193,7 +191,7 @@ Both `scan_id` and `timestamp` reset to 0 on STOP→RUN transition or `reboot()`
 Enable history retention to keep immutable state snapshots:
 
 ```python
-runner = PLCRunner(logic, history_limit=1000)  # keep latest 1000
+runner = PLC(logic, history_limit=1000)  # keep latest 1000
 
 runner.history.at(5)          # snapshot at scan 5
 runner.history.range(3, 7)    # [scan 3, 4, 5, 6] if retained

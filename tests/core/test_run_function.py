@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Block, Bool, Int, PLCRunner, Program, Rung, TagType, run_function
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, TagType, run_function
 
 
 def test_run_function_copy_in_execute_copy_out():
@@ -24,7 +24,7 @@ def test_run_function_copy_in_execute_copy_out():
                 outs={"result": Average},
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "SensorA": 10, "SensorB": 6, "Average": 0})
     runner.step()
 
@@ -42,7 +42,7 @@ def test_run_function_skipped_when_rung_false():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": False, "Output": 3})
     runner.step()
 
@@ -60,7 +60,7 @@ def test_run_function_accepts_literal_inputs():
         with Rung(Enable):
             run_function(callback, ins={"a": 10, "b": 32}, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
     runner.step()
 
@@ -79,7 +79,7 @@ def test_run_function_accepts_mixed_tag_and_literal_inputs():
         with Rung(Enable):
             run_function(callback, ins={"a": A, "b": 5}, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "A": 7, "Output": 0})
     runner.step()
 
@@ -100,7 +100,7 @@ def test_run_function_oneshot_fires_once_per_activation():
         with Rung(Enable):
             run_function(callback, outs={"out": Output}, oneshot=True)
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
     runner.step()
     assert runner.current_state.tags["Output"] == 1
@@ -129,7 +129,7 @@ def test_run_function_ins_none_for_noarg_function():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
     runner.step()
 
@@ -148,7 +148,7 @@ def test_run_function_outs_none_discards_return_value():
             run_function(callback)
             run_function(lambda: {"calls": 1}, outs={"calls": Calls})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Calls": 0})
     runner.step()
 
@@ -166,7 +166,7 @@ def test_run_function_output_type_coercion_clamps_int():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
     runner.step()
 
@@ -184,7 +184,7 @@ def test_run_function_missing_output_key_raises_key_error():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
 
     with pytest.raises(KeyError, match="run_function"):
@@ -202,7 +202,7 @@ def test_run_function_extra_output_keys_are_ignored():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
     runner.step()
 
@@ -220,7 +220,7 @@ def test_run_function_returning_none_with_outs_raises_type_error():
         with Rung(Enable):
             run_function(callback, outs={"out": Output})
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Output": 0})
 
     with pytest.raises(TypeError, match="run_function"):
@@ -301,7 +301,7 @@ def test_run_function_supports_expression_and_indirectref_in_inputs():
                 outs={"out": Output},
             )
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True, "Index": 2, "DS1": 3, "DS2": 10, "Output": 0})
     runner.step()
 
@@ -318,7 +318,7 @@ def test_run_function_function_exception_propagates():
         with Rung(Enable):
             run_function(callback)
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True})
 
     with pytest.raises(ValueError, match="boom"):

@@ -3,10 +3,10 @@
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     SystemState,
@@ -119,7 +119,7 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot():
                 out(light)
                 copy(counter + 1, counter, oneshot=True)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Light": False, "Counter": 0})
 
     runner.step()

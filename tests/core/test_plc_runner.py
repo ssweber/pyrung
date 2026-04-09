@@ -1,4 +1,4 @@
-"""Tests for PLCRunner - the generator-driven execution engine.
+"""Tests for PLC - the generator-driven execution engine.
 
 TDD: Write tests first, then implement to pass.
 """
@@ -6,35 +6,35 @@ TDD: Write tests first, then implement to pass.
 from pyrung.core import SystemState
 
 
-class TestPLCRunnerCreation:
-    """Test PLCRunner construction."""
+class TestPLCCreation:
+    """Test PLC construction."""
 
     def test_create_with_empty_logic(self):
         """Can create runner with no logic (empty program)."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[], initial_state=SystemState())
+        runner = PLC(logic=[], initial_state=SystemState())
 
         assert runner.current_state.scan_id == 0
 
     def test_create_with_default_initial_state(self):
         """Can create runner without explicit initial state."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         assert runner.current_state.scan_id == 0
         assert runner.current_state.timestamp == 0.0
 
 
-class TestPLCRunnerStep:
+class TestPLCStep:
     """Test step() - the core execution primitive."""
 
     def test_step_advances_scan_id(self):
         """step() increments scan_id by 1."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.step()
 
@@ -42,9 +42,9 @@ class TestPLCRunnerStep:
 
     def test_step_returns_new_state(self):
         """step() returns the new SystemState."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         new_state = runner.step()
 
@@ -53,9 +53,9 @@ class TestPLCRunnerStep:
 
     def test_multiple_steps(self):
         """Multiple step() calls accumulate."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.step()
         runner.step()
@@ -65,10 +65,10 @@ class TestPLCRunnerStep:
 
     def test_step_preserves_tags(self):
         """step() preserves existing tag values."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
         initial = SystemState().with_tags({"Motor": True, "Speed": 100})
-        runner = PLCRunner(logic=[], initial_state=initial)
+        runner = PLC(logic=[], initial_state=initial)
 
         runner.step()
 
@@ -76,14 +76,14 @@ class TestPLCRunnerStep:
         assert runner.current_state.tags["Speed"] == 100
 
 
-class TestPLCRunnerRun:
+class TestPLCRun:
     """Test run() - batch execution."""
 
     def test_run_cycles(self):
         """run(cycles=N) executes N scans."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.run(cycles=10)
 
@@ -91,9 +91,9 @@ class TestPLCRunnerRun:
 
     def test_run_returns_final_state(self):
         """run() returns the final state after all cycles."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         final = runner.run(cycles=5)
 
@@ -101,14 +101,14 @@ class TestPLCRunnerRun:
         assert final is runner.current_state
 
 
-class TestPLCRunnerPatch:
+class TestPLCPatch:
     """Test patch() - one-shot input injection."""
 
     def test_patch_applies_to_next_scan(self):
         """patch() applies tag values at start of next scan."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch(tags={"Button": True})
         runner.step()
@@ -117,9 +117,9 @@ class TestPLCRunnerPatch:
 
     def test_patch_is_one_shot(self):
         """patch() values are released after one scan (not sticky)."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch(tags={"Button": True})
         runner.step()  # Button=True applied
@@ -130,9 +130,9 @@ class TestPLCRunnerPatch:
 
     def test_multiple_patches_merge(self):
         """Multiple patch() calls before step() merge together."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch(tags={"A": 1})
         runner.patch(tags={"B": 2})
@@ -143,9 +143,9 @@ class TestPLCRunnerPatch:
 
     def test_patch_overwrites_previous(self):
         """Later patch() overwrites earlier patch() for same tag."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch(tags={"X": 1})
         runner.patch(tags={"X": 99})
@@ -155,9 +155,9 @@ class TestPLCRunnerPatch:
 
     def test_patch_accepts_string_values(self):
         """patch() supports CHAR-like string values."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch(tags={"TXT1": "B"})
         runner.step()
@@ -165,35 +165,35 @@ class TestPLCRunnerPatch:
         assert runner.current_state.tags["TXT1"] == "B"
 
 
-class TestPLCRunnerSimulationTime:
+class TestPLCSimulationTime:
     """Test simulation_time property."""
 
     def test_simulation_time_starts_at_zero(self):
         """simulation_time is 0.0 initially."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         assert runner.simulation_time == 0.0
 
     def test_simulation_time_equals_timestamp(self):
         """simulation_time returns current_state.timestamp."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
         runner.step()
 
         assert runner.simulation_time == runner.current_state.timestamp
 
 
-class TestPLCRunnerEdgeHistory:
+class TestPLCEdgeHistory:
     """Regression coverage for _prev:* memory capture behavior."""
 
     def test_prev_memory_captures_existing_tags(self):
         """Existing tags should be mirrored into _prev:* each scan."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[], initial_state=SystemState().with_tags({"Existing": 42}))
+        runner = PLC(logic=[], initial_state=SystemState().with_tags({"Existing": 42}))
 
         runner.step()
 
@@ -201,9 +201,9 @@ class TestPLCRunnerEdgeHistory:
 
     def test_prev_memory_captures_newly_pending_tags(self):
         """New tags introduced via patch() should get _prev:* entries."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.patch({"LateBound": 7})
         runner.step()
@@ -213,9 +213,9 @@ class TestPLCRunnerEdgeHistory:
 
     def test_prev_memory_preserves_missing_and_default_value_behavior(self):
         """Missing tags stay absent; explicit default-valued tags are captured."""
-        from pyrung.core import PLCRunner
+        from pyrung.core import PLC
 
-        runner = PLCRunner(logic=[])
+        runner = PLC(logic=[])
 
         runner.step()
         assert "_prev:NeverSeen" not in runner.current_state.memory

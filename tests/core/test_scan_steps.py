@@ -1,14 +1,14 @@
-"""Tests for PLCRunner.scan_steps rung-level stepping."""
+"""Tests for PLC.scan_steps rung-level stepping."""
 
 from __future__ import annotations
 
 import pytest
 
 from pyrung.core import (
+    PLC,
     Block,
     Bool,
     Int,
-    PLCRunner,
     Program,
     Rung,
     TagType,
@@ -38,7 +38,7 @@ def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
         with Rung(light1):
             out(light2)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Start": True})
 
     scan_gen = runner.scan_steps()
@@ -75,7 +75,7 @@ def test_scan_steps_partial_consumption_does_not_commit_state():
         with Rung(enable):
             out(output)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
     scan_gen = runner.scan_steps()
@@ -103,7 +103,7 @@ def test_scan_steps_debug_partial_consumption_does_not_commit_state():
         with Rung(enable):
             out(output)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True})
 
     scan_gen = runner.scan_steps_debug()
@@ -139,8 +139,8 @@ def test_step_and_scan_steps_have_equivalent_results():
         with Rung(enable):
             out(light)
 
-    via_step = PLCRunner(logic)
-    via_scan_steps = PLCRunner(logic)
+    via_step = PLC(logic)
+    via_scan_steps = PLC(logic)
 
     via_step.patch({"Enable": True})
     via_scan_steps.patch({"Enable": True})
@@ -168,7 +168,7 @@ def test_scan_steps_debug_yields_subroutine_branch_and_top_rung():
                 out(branch_light)
             out(top_light)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     steps = list(runner.scan_steps_debug())
 
     boundary_steps = [step for step in steps if step.kind != "instruction"]
@@ -202,7 +202,7 @@ def test_scan_steps_debug_handles_return_early_and_skips_later_subroutine_rungs(
             call("work")
             out(done)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     steps = list(runner.scan_steps_debug())
 
     sub_steps = [step for step in steps if step.kind == "subroutine"]
@@ -224,7 +224,7 @@ def test_scan_steps_debug_does_not_yield_unpowered_branch():
                 out(branch_out)
             out(top_out)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": False})
     steps = list(runner.scan_steps_debug())
 
@@ -250,7 +250,7 @@ def test_scan_steps_debug_emits_branch_then_subroutine_then_rung():
                 copy(1, step, oneshot=True)
             call("sub")
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Step": 0, "Auto": True, "BranchDone": False, "SubLight": False})
     steps = list(runner.scan_steps_debug())
 
@@ -272,7 +272,7 @@ def test_scan_steps_debug_uses_precomputed_branch_enable():
             with branch(mode):
                 out(branch_out)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch({"Enable": True, "Mode": False, "BranchOut": False})
     steps = list(runner.scan_steps_debug())
 
@@ -337,7 +337,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
                 completion_flag=drum_done,
             ).reset(reset).jump(jump, step=drum_step).jog(jog)
 
-    runner = PLCRunner(logic)
+    runner = PLC(logic)
     runner.patch(
         {
             "Enable": True,

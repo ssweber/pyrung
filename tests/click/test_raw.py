@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung.click.raw import RawInstruction, raw
-from pyrung.core import Bool, PLCRunner, Program, Rung
+from pyrung.core import PLC, Bool, Program, Rung
 
 
 def test_raw_attaches_instruction_and_is_noop():
@@ -15,7 +15,7 @@ def test_raw_attaches_instruction_and_is_noop():
         with Rung(Enable):
             raw("Copy", "0x2711,1,6066=Y001,3218=8193,0000=")
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": True})
     runner.step()
 
@@ -36,7 +36,7 @@ def test_raw_disabled_is_noop():
         with Rung(Enable):
             raw("Cnt", "0x2719,1,6068=CT1,3218=8300,0000=")
 
-    runner = PLCRunner(logic=logic)
+    runner = PLC(logic=logic)
     runner.patch({"Enable": False})
     runner.step()  # should not crash
 

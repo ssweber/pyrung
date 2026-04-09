@@ -1,21 +1,21 @@
-"""Tests for PLCRunner.inspect rung-trace retention API."""
+"""Tests for PLC.inspect rung-trace retention API."""
 
 from __future__ import annotations
 
 import pytest
 
-from pyrung.core import Bool, PLCRunner, Program, Rung, out
+from pyrung.core import PLC, Bool, Program, Rung, out
 
 
-def _runner_with_single_rung(*, history_limit: int | None = None) -> PLCRunner:
+def _runner_with_single_rung(*, history_limit: int | None = None) -> PLC:
     light = Bool("Light")
     with Program(strict=False) as logic:
         with Rung():
             out(light)
-    return PLCRunner(logic, history_limit=history_limit)
+    return PLC(logic, history_limit=history_limit)
 
 
-def _run_debug_scan(runner: PLCRunner) -> int:
+def _run_debug_scan(runner: PLC) -> int:
     for _ in runner.scan_steps_debug():
         pass
     return runner.current_state.scan_id

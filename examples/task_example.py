@@ -12,9 +12,8 @@ import os
 from pyrung import (
     Bool,
     Int,
-    PLCRunner,
+    PLC,
     Rung,
-    TimeMode,
     Ts,
     calc,
     call,
@@ -105,15 +104,14 @@ def logic():
         task_logic()
 
 
-runner = PLCRunner(logic)
-runner.set_time_mode(TimeMode.FIXED_STEP, dt=0.010)
+runner = PLC(logic, dt=0.010)
 
-with runner.active():
+with runner:
     Task.Call.value = 1
 
 
 def print_row(current_time: float) -> None:
-    with runner.active():
+    with runner:
         step = Task.Step.value
         timer = Task.StepTime.value
         valve = Valve1.value

@@ -387,7 +387,7 @@ class TagMap:
 
             data = read_plc_data("data.csv", skip_default=True)
             tags = mapping.tags_from_plc_data(data)
-            runner = PLCRunner(logic, initial_state=SystemState().with_tags(tags))
+            runner = PLC(logic, initial_state=SystemState().with_tags(tags))
 
         Args:
             data: ``{hardware_address: value}`` dict — keys are normalised
