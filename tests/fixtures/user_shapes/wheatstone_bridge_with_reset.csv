@@ -1,7 +1,7 @@
 marker,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD,AE,AF
 #,"with Rung(Or(And(X005, Or(X001, X002), Or(X003, X004)), And(X001, X003), And(X002, X004))):"
 #,    out(Y001)
-#,"    on_delay(T1, TD1, preset=1, unit=""Tms"").reset(Or(And(X005, Or(X001, X002), Or(X003, X004)), And(X001, X003), And(X002, X004)))"
+#,"    on_delay(Timer[1], preset=1, unit=""Tms"").reset(Or(And(X005, Or(X001, X002), Or(X003, X004)), And(X001, X003), And(X002, X004)))"
 R,X001,T,X003,T,T,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,out(Y001)
 ,,X005,|,|,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,"on_delay(T1,TD1,preset=1,unit=Tms)"
 ,X002,-,X004,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,.reset()

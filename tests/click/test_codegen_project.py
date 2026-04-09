@@ -21,12 +21,12 @@ from pyrung.click import (
 from pyrung.core import (
     Block,
     Bool,
-    Dint,
-    Int,
+    Counter,
     Or,
     Program,
     Rung,
     TagType,
+    Timer,
 )
 from pyrung.core.program import (
     call,
@@ -738,15 +738,13 @@ class TestTimerCounterInstructions:
     def test_timer_round_trip(self, tmp_path: Path):
         """Timer instructions produce correct project output."""
         Enable = Bool("Enable")
-        Done = Bool("Done")
-        Acc = Int("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=1000, unit="Tms")
+                on_delay(Timer[1], preset=1000, unit="Tms")
 
         mapping = TagMap(
-            {Enable: x[1], Done: t[1], Acc: td[1]},
+            {Enable: x[1], Timer[1].done: t[1], Timer[1].acc: td[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)
@@ -760,15 +758,13 @@ class TestTimerCounterInstructions:
         """Counter instructions produce correct project output."""
         Enable = Bool("Enable")
         ResetCond = Bool("ResetCond")
-        Done = Bool("Done")
-        Acc = Dint("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                count_up(Done, Acc, preset=10).reset(ResetCond)
+                count_up(Counter[1], preset=10).reset(ResetCond)
 
         mapping = TagMap(
-            {Enable: x[1], ResetCond: x[2], Done: ct[1], Acc: ctd[1]},
+            {Enable: x[1], ResetCond: x[2], Counter[1].done: ct[1], Counter[1].acc: ctd[1]},
             include_system=False,
         )
         files = _project_from_program(logic, mapping, tmp_path)

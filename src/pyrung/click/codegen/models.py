@@ -197,6 +197,7 @@ class _OperandCollection:
     semantic_operands: dict[str, _SemanticRender] = field(default_factory=dict)
     semantic_ranges: dict[str, _SemanticRender] = field(default_factory=dict)
     range_comments: dict[str, str] = field(default_factory=dict)
+    timer_counter_operands: set[str] = field(default_factory=set)
 
 
 # ---------------------------------------------------------------------------

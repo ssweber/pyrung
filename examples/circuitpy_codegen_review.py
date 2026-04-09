@@ -14,11 +14,13 @@ inspect one generated file that includes:
 from pyrung import (
     Block,
     Bool,
+    Counter,
     Dint,
     Int,
     Program,
     Rung,
     TagType,
+    Timer,
     And,
     Or,
     blockcopy,
@@ -66,15 +68,11 @@ Running = Bool("Running")
 StepDone = Bool("StepDone")
 Found = Bool("Found")
 
-# Timer/counter tags
-RTonDone = Bool("RTonDone")
-RTonAcc = Int("RTonAcc")
-TofDone = Bool("TofDone")
-TofAcc = Int("TofAcc")
-CtuDone = Bool("CtuDone")
-CtuAcc = Dint("CtuAcc")
-CtdDone = Bool("CtdDone")
-CtdAcc = Dint("CtdAcc")
+# Timer/counter instances
+RTon = Timer.named(1, "RTon")
+Tof = Timer.named(2, "Tof")
+Ctu = Counter.named(1, "Ctu")
+Ctd = Counter.named(2, "Ctd")
 
 # Data tags
 Idx = Int("Idx", default=1)
@@ -126,16 +124,16 @@ with Program(strict=False) as logic:
 
     # Timers + counters.
     with Rung(Running):
-        on_delay(RTonDone, RTonAcc, preset=250).reset(ShiftReset)
+        on_delay(RTon, preset=250).reset(ShiftReset)
     with Rung(Running):
-        off_delay(TofDone, TofAcc, preset=100)
+        off_delay(Tof, preset=100)
     with Rung(Running):
-        count_up(CtuDone, CtuAcc, preset=50).reset(Stop)
+        count_up(Ctu, preset=50).reset(Stop)
     with Rung(Running):
-        count_down(CtdDone, CtdAcc, preset=5).reset(ShiftReset)
+        count_down(Ctd, preset=5).reset(ShiftReset)
 
     # Inline expressions + inline pointer refs + block range operations.
-    with Rung(Running, RTonDone):
+    with Rung(Running, RTon.done):
         copy(120, Source)
         calc((Source * 2) + (Idx << 1) - 3, CalcOut, mode="decimal")
         copy(DS[Idx], DD[Idx + 1])
@@ -207,7 +205,7 @@ with Program(strict=False) as logic:
         copy(Idx, DS[14])
         with branch(AutoMode):
             copy(FnOut, DS[12])
-        with branch(Found, CtuDone):
+        with branch(Found, Ctu.done):
             copy(FoundAddr + 1, DS[13])
         copy(Span + Idx, DS[15])
 

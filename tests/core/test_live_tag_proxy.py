@@ -89,8 +89,8 @@ def test_live_value_supports_udt_and_named_array_instance_fields() -> None:
     runner = PLC(logic=[])
 
     with runner:
-        alarm_1 = alarms[1]  # ty: ignore[not-subscriptable]
-        sub_name_1 = sub_name[1]  # ty: ignore[not-subscriptable]
+        alarm_1 = alarms[1]
+        sub_name_1 = sub_name[1]
         alarm_1.id.value = 42
         alarm_1.on.value = True
         sub_name_1.xCall.value = 1

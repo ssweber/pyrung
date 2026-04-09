@@ -1,6 +1,6 @@
 from pyrung.core import (
-    Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_early, 
-    call, TimeUnit, TagType, PackedStruct, Field, Bool, PLCRunner, TimeMode
+    Program, subroutine, Rung, out, on_delay, copy, calc, reset, return_early,
+    call, TimeUnit, TagType, PackedStruct, Field, Bool, PLCRunner, TimeMode, Timer
 )
 from pyrung.click import c, ds, t, td
 
@@ -34,8 +34,17 @@ task = TaskDs[1]
 
 # Internal Flags (These are Bools, so they don't need == 1)
 Step1_Event = Bool("Step1_Event")
-Tmr_Dn = Bool("Tmr_Dn")
 Valve1 = Bool("Valve1")
+
+# Timers — one per unit for global and step timing
+GlobalTmrTh = Timer.named(1, "GlobalTmrTh")
+GlobalTmrTm = Timer.named(2, "GlobalTmrTm")
+GlobalTmrTs = Timer.named(3, "GlobalTmrTs")
+GlobalTmrTms = Timer.named(4, "GlobalTmrTms")
+StepTmrTh = Timer.named(5, "StepTmrTh")
+StepTmrTm = Timer.named(6, "StepTmrTm")
+StepTmrTs = Timer.named(7, "StepTmrTs")
+StepTmrTms = Timer.named(8, "StepTmrTms")
 
 # ==============================================================================
 # SUBROUTINE LOGIC
@@ -43,15 +52,15 @@ Valve1 = Bool("Valve1")
 def task_logic():
     # 1. GLOBAL & STEP TIMERS
     with Rung(task.Active == 1):
-        on_delay(Tmr_Dn, task.Tmr_Th, 9999, TimeUnit.Th)
-        on_delay(Tmr_Dn, task.Tmr_Tm, 9999, TimeUnit.Tm)
-        on_delay(Tmr_Dn, task.Tmr_Ts, 9999, TimeUnit.Ts)
-        on_delay(Tmr_Dn, task.Tmr_Tms, 9999, TimeUnit.Tms)
+        on_delay(GlobalTmrTh, preset=9999, unit=TimeUnit.Th)
+        on_delay(GlobalTmrTm, preset=9999, unit=TimeUnit.Tm)
+        on_delay(GlobalTmrTs, preset=9999, unit=TimeUnit.Ts)
+        on_delay(GlobalTmrTms, preset=9999, unit=TimeUnit.Tms)
 
-        on_delay(Tmr_Dn, task.Step_Th, 9999, TimeUnit.Th)
-        on_delay(Tmr_Dn, task.Step_Tm, 9999, TimeUnit.Tm)
-        on_delay(Tmr_Dn, task.Step_Ts, 9999, TimeUnit.Ts)
-        on_delay(Tmr_Dn, task.Step_Tms, 9999, TimeUnit.Tms)
+        on_delay(StepTmrTh, preset=9999, unit=TimeUnit.Th)
+        on_delay(StepTmrTm, preset=9999, unit=TimeUnit.Tm)
+        on_delay(StepTmrTs, preset=9999, unit=TimeUnit.Ts)
+        on_delay(StepTmrTms, preset=9999, unit=TimeUnit.Tms)
 
     # 2. STEP LOGIC (Odd Numbers Only)
     
@@ -62,7 +71,7 @@ def task_logic():
     with Rung(Step1_Event):
         out(Valve1)
 
-    with Rung(Step1_Event, task.Step_Ts >= 5):
+    with Rung(Step1_Event, StepTmrTs.acc >= 5):
         copy(1, task.Trans)
 
     # --- Step 3 ---
@@ -80,10 +89,10 @@ def task_logic():
         copy(0, task.Trans)
         
         # Clear timers
-        copy(0, task.Tmr_Th); copy(0, task.Step_Th)
-        copy(0, task.Tmr_Tm); copy(0, task.Step_Tm)
-        copy(0, task.Tmr_Ts); copy(0, task.Step_Ts)
-        copy(0, task.Tmr_Tms); copy(0, task.Step_Tms)
+        copy(0, GlobalTmrTh.acc); copy(0, StepTmrTh.acc)
+        copy(0, GlobalTmrTm.acc); copy(0, StepTmrTm.acc)
+        copy(0, GlobalTmrTs.acc); copy(0, StepTmrTs.acc)
+        copy(0, GlobalTmrTms.acc); copy(0, StepTmrTms.acc)
         
         reset(Valve1)
         reset(Step1_Event)
@@ -99,11 +108,11 @@ def task_logic():
     with Rung(task.Trans == 1):
         calc(task.CurStep + 1, task.CurStep)
         copy(0, task.Trans)
-        
-        copy(0, task.Step_Th)
-        copy(0, task.Step_Tm)
-        copy(0, task.Step_Ts)
-        copy(0, task.Step_Tms)
+
+        copy(0, StepTmrTh.acc)
+        copy(0, StepTmrTm.acc)
+        copy(0, StepTmrTs.acc)
+        copy(0, StepTmrTms.acc)
 
 # ==============================================================================
 # MAIN PROGRAM
@@ -143,7 +152,7 @@ def run_simulation_formatted():
         
         # Extract values using the tag names from the state dictionary
         step = state.tags.get('Task1_CurStep', 0)
-        timer = state.tags.get('Task1_Step_Ts', 0)
+        timer = state.tags.get('StepTmrTs_acc', 0)
         valve = state.tags.get('Valve1', False)
         
         # Format: Time with 2 decimals, Step/Timer left aligned

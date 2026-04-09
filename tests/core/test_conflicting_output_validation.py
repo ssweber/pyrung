@@ -7,12 +7,13 @@ detection for out(), timers, counters, drums, and shift registers.
 from pyrung.core import (
     Block,
     Bool,
-    Dint,
+    Counter,
     Int,
     OutputBlock,
     Program,
     Rung,
     TagType,
+    Timer,
     branch,
     call,
     count_down,
@@ -44,16 +45,6 @@ ButtonC = Bool("ButtonC")
 Flag = Bool("Flag")
 State = Int("State")
 ResetBtn = Bool("ResetBtn")
-
-T_done = Bool("T_done")
-T_acc = Int("T_acc")
-T_done2 = Bool("T_done2")
-T_acc2 = Int("T_acc2")
-
-CT_done = Bool("CT_done")
-CT_acc = Dint("CT_acc")
-CT_done2 = Bool("CT_done2")
-CT_acc2 = Dint("CT_acc2")
 
 
 # ---------------------------------------------------------------------------
@@ -417,22 +408,22 @@ class TestTimerConflict:
     def test_shared_done_bit(self):
         with Program() as prog:
             with Rung(ButtonA):
-                on_delay(T_done, T_acc, preset=1000)
+                on_delay(Timer[1], preset=1000)
             with Rung(ButtonB):
-                on_delay(T_done, T_acc2, preset=2000)
+                on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "T_done" for f in report.findings)
+        assert any(f.target_name == "Timer1_done" for f in report.findings)
 
     def test_shared_accumulator(self):
         with Program() as prog:
             with Rung(ButtonA):
-                on_delay(T_done, T_acc, preset=1000)
+                on_delay(Timer[1], preset=1000)
             with Rung(ButtonB):
-                on_delay(T_done2, T_acc, preset=2000)
+                on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "T_acc" for f in report.findings)
+        assert any(f.target_name == "Timer1_acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -444,12 +435,12 @@ class TestCounterConflict:
     def test_shared_accumulator(self):
         with Program() as prog:
             with Rung(ButtonA):
-                count_up(CT_done, CT_acc, preset=10).reset(ResetBtn)
+                count_up(Counter[1], preset=10).reset(ResetBtn)
             with Rung(ButtonB):
-                count_up(CT_done2, CT_acc, preset=20).reset(ResetBtn)
+                count_up(Counter[1], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "CT_acc" for f in report.findings)
+        assert any(f.target_name == "Counter1_acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -461,12 +452,12 @@ class TestTimerOutConflict:
     def test_timer_done_bit_vs_out(self):
         with Program() as prog:
             with Rung(ButtonA):
-                on_delay(T_done, T_acc, preset=1000)
+                on_delay(Timer[2], preset=1000)
             with Rung(ButtonB):
-                out(T_done)
+                out(Timer[2].done)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "T_done" for f in report.findings)
+        assert any(f.target_name == "Timer2_done" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -617,34 +608,34 @@ class TestEdgeCases:
     def test_off_delay_conflict(self):
         with Program() as prog:
             with Rung(ButtonA):
-                off_delay(T_done, T_acc, preset=1000)
+                off_delay(Timer[3], preset=1000)
             with Rung(ButtonB):
-                off_delay(T_done, T_acc2, preset=2000)
+                off_delay(Timer[3], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "T_done" for f in report.findings)
+        assert any(f.target_name == "Timer3_done" for f in report.findings)
 
     def test_count_down_conflict(self):
         with Program() as prog:
             with Rung(ButtonA):
-                count_down(CT_done, CT_acc, preset=10).reset(ResetBtn)
+                count_down(Counter[2], preset=10).reset(ResetBtn)
             with Rung(ButtonB):
-                count_down(CT_done, CT_acc2, preset=20).reset(ResetBtn)
+                count_down(Counter[2], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "CT_done" for f in report.findings)
+        assert any(f.target_name == "Counter2_done" for f in report.findings)
 
     def test_exclusive_conditions_same_scope_still_conflict(self):
         """Timers in same scope always execute — conditions don't help."""
         with Program() as prog:
             with Rung(State == 1):
-                on_delay(T_done, T_acc, preset=1000)
+                on_delay(Timer[4], preset=1000)
             with Rung(State == 2):
-                on_delay(T_done, T_acc, preset=2000)
+                on_delay(Timer[4], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "T_done" for f in report.findings)
-        assert any(f.target_name == "T_acc" for f in report.findings)
+        assert any(f.target_name == "Timer4_done" for f in report.findings)
+        assert any(f.target_name == "Timer4_acc" for f in report.findings)
 
     def test_exclusive_timers_in_subroutines(self):
         """Timers in different subroutines with exclusive callers are safe."""
@@ -655,10 +646,10 @@ class TestEdgeCases:
                 call("timer_b")
             with subroutine("timer_a"):
                 with Rung():
-                    on_delay(T_done, T_acc, preset=1000)
+                    on_delay(Timer[5], preset=1000)
             with subroutine("timer_b"):
                 with Rung():
-                    on_delay(T_done, T_acc, preset=2000)
+                    on_delay(Timer[5], preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 0

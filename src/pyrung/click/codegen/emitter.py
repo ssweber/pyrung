@@ -39,6 +39,7 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
+    _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
 )
@@ -174,6 +175,12 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     if has_retentive_field:
         core_imports.append("Field")
 
+    # Built-in Timer/Counter UDTs
+    if collection.used_instructions & {"on_delay", "off_delay"}:
+        core_imports.append("Timer")
+    if collection.used_instructions & {"count_up", "count_down"}:
+        core_imports.append("Counter")
+
     # Tag types
     for tt in sorted(collection.used_types):
         if tt not in core_imports:
@@ -275,6 +282,8 @@ def _emit_tag_declarations(
     )
     for decl in sorted_tags:
         if decl.operand in collection.semantic_operands:
+            continue
+        if decl.operand in collection.timer_counter_operands:
             continue
         line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
         if decl.comment and not suppress_comments:
@@ -829,6 +838,22 @@ def _render_search_token(
     return f"search({', '.join([comparison, *rest])})"
 
 
+def _merge_timer_counter_args(func_name: str, done_bit_operand: str) -> str | None:
+    """Merge done_bit + accumulator operands into a Timer[n] or Counter[n] reference.
+
+    Returns the merged reference string, or None if the operand can't be parsed.
+    """
+    parsed = _parse_operand_prefix(done_bit_operand)
+    if parsed is None:
+        return None
+    prefix, _, _, index = parsed
+    if func_name in {"on_delay", "off_delay"} and prefix == "T":
+        return f"Timer[{index}]"
+    if func_name in {"count_up", "count_down"} and prefix == "CT":
+        return f"Counter[{index}]"
+    return None
+
+
 def _render_af_token(
     token: str,
     collection: _OperandCollection,
@@ -882,7 +907,19 @@ def _render_af_token(
     if func_name == "search":
         return _render_search_token(args, kwargs, collection, nicknames, structured_map)
 
-    rendered_parts: list[str] = []
+    # Timer/counter instructions: merge done_bit + accumulator into Timer[n]/Counter[n]
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"} and len(args) >= 2:
+        udt_ref = _merge_timer_counter_args(func_name, args[0])
+        if udt_ref is not None:
+            rendered_parts: list[str] = [udt_ref]
+            for key, value in kwargs:
+                if key in _DROP_KWARGS:
+                    continue
+                rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+                rendered_parts.append(f"{key}={rendered_v}")
+            return f"{py_func}({', '.join(rendered_parts)})"
+
+    rendered_parts = []
     for arg in args:
         rendered_parts.append(_sub_operand(arg, collection, nicknames, structured_map))
     for key, value in kwargs:
@@ -984,6 +1021,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         for decl in sorted_tags:
             if decl.operand in collection.semantic_operands:
                 continue
+            if decl.operand in collection.timer_counter_operands:
+                continue
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         lines.append("])")
     else:
@@ -993,6 +1032,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             )
         for decl in sorted_tags:
             if decl.operand in collection.semantic_operands:
+                continue
+            if decl.operand in collection.timer_counter_operands:
                 continue
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 

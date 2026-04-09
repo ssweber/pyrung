@@ -16,6 +16,7 @@ from pyrung.core import (
     Program,
     Rung,
     TimeMode,
+    Timer,
     TimeUnit,
     any_of,
     call,
@@ -113,12 +114,9 @@ class SubNameDs:
 sub = SubNameDs[1]
 
 SubName_x = Bool("SubName_x")
-SubName_tmr = Bool("SubName_tmr")
-SubName_CurStep_tmr = Bool("SubName_CurStep_tmr")
-step3_timer = Bool("step3_timer")
-SubName_t = Int("SubName_t")
-SubName_CurStep_t = Int("SubName_CurStep_t")
-step3_timer_acc = Int("step3_timer_acc")
+SubNameTmr = Timer.named(1, "SubNameTmr")
+SubNameCurStepTmr = Timer.named(2, "SubNameCurStepTmr")
+Step3Tmr = Timer.named(3, "Step3Tmr")
 
 
 def main() -> Program:
@@ -169,8 +167,8 @@ def subRoutine1() -> None:
     # Shared Resets for Init and Pause.
     with Rung(any_of(sub.SubName_xInit == 1, sub.SubName_xReset == 1)):
         copy(0, sub.SubName_init)  # Reset init flag
-        copy(0, SubName_t)  # Reset timer value
-        copy(0, SubName_CurStep_t)  # Reset timer value
+        copy(0, SubNameTmr.acc)  # Reset timer value
+        copy(0, SubNameCurStepTmr.acc)  # Reset timer value
         # Set initial step to 1 (first odd number)
         copy(1, sub.SubName_CurStep)
         copy(1, sub.SubName_StoredStep)
@@ -178,10 +176,9 @@ def subRoutine1() -> None:
     # Built-in timer for step timeout detection.
     with Rung(sub.SubName_xCall == 1):
         on_delay(
-            SubName_tmr,
-            SubName_t,
-            setpoint=sub.SubName_Limit_Ts,
-            time_unit=TimeUnit.Ts,
+            SubNameTmr,
+            preset=sub.SubName_Limit_Ts,
+            unit=TimeUnit.Ts,
         ).reset(sub.SubName_ResetTmr == 1)
 
     # Reset the timer reset flag after it's been processed.
@@ -189,7 +186,7 @@ def subRoutine1() -> None:
         copy(0, sub.SubName_ResetTmr)
 
     # Error detection - If step exceeds time limit.
-    with Rung(SubName_t >= sub.SubName_Limit_Ts, sub.SubName_EnableLimit == 1):
+    with Rung(SubNameTmr.acc >= sub.SubName_Limit_Ts, sub.SubName_EnableLimit == 1):
         copy(1, sub.SubName_Error)  # Set Error flag
         copy(sub.SubName_CurStep, sub.SubName_ErrorStep)  # Store step where error occurred
 
@@ -250,14 +247,14 @@ def subRoutine1() -> None:
     # Step 3: Example step with one-shot timer (second odd step).
     with Rung(sub.SubName_CurStep == 3):
         # Start a one-shot timer.
-        on_delay(step3_timer, step3_timer_acc, setpoint=2000, time_unit=TimeUnit.Tms)
+        on_delay(Step3Tmr, preset=2000, unit=TimeUnit.Tms)
         # This timer will be automatically reset if:
         # 1. We transition normally to step 5 (via step 4)
         # 2. We manually set CurStep to 2 during troubleshooting
         # Other step 3 logic here.
 
     # Transition 3→5: Move to next step when timer completes.
-    with Rung(step3_timer):
+    with Rung(Step3Tmr.done):
         copy(1, sub.SubName_Trans)  # Will advance to step 5
 
     # Step 5: Example step with one-time operation.
@@ -297,8 +294,8 @@ def subRoutine1() -> None:
         copy(0, sub.SubName_init)
         copy(0, sub.SubName_Error)
         copy(0, sub.SubName_ErrorStep)
-        copy(0, SubName_t)  # Reset timer
-        copy(0, SubName_CurStep_t)  # Reset timer
+        copy(0, SubNameTmr.acc)  # Reset timer
+        copy(0, SubNameCurStepTmr.acc)  # Reset timer
         copy(0, sub.SubName_ResetTmr)
         copy(0, sub.SubName_Trans)
         copy(0, sub.SubName_CurStep)
@@ -343,10 +340,9 @@ def subRoutine1() -> None:
     # Built-in timer for step duration tracking.
     with Rung(sub.SubName_CurStep == sub.SubName_StoredStep):
         on_delay(
-            SubName_CurStep_tmr,
-            SubName_CurStep_t,
-            setpoint=0,
-            time_unit=TimeUnit.Ts,
+            SubNameCurStepTmr,
+            preset=0,
+            unit=TimeUnit.Ts,
         )
 
     # Mark initialization complete after first step.
@@ -364,12 +360,12 @@ def build_mapping() -> TagMap:
         [
             *SubNameDs.map_to(ds.select(3001, 3017)),
             SubName_x.map_to(c[1501]),
-            SubName_tmr.map_to(t[301]),
-            SubName_CurStep_tmr.map_to(t[302]),
-            step3_timer.map_to(t[303]),
-            SubName_t.map_to(td[301]),
-            SubName_CurStep_t.map_to(td[302]),
-            step3_timer_acc.map_to(td[303]),
+            SubNameTmr.done.map_to(t[301]),
+            SubNameCurStepTmr.done.map_to(t[302]),
+            Step3Tmr.done.map_to(t[303]),
+            SubNameTmr.acc.map_to(td[301]),
+            SubNameCurStepTmr.acc.map_to(td[302]),
+            Step3Tmr.acc.map_to(td[303]),
         ]
     )
 

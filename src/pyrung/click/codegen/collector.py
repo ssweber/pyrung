@@ -545,6 +545,17 @@ def _scan_af_token(
     if func_name in _INSTRUCTION_NAMES:
         collection.used_instructions.add(func_name)
 
+    # Track timer/counter done_bit + accumulator operands so they can be
+    # suppressed from tag declarations and TagMap (they resolve automatically
+    # via the built-in Timer/Counter UDTs).
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"}:
+        from pyrung.click.codegen.utils import _parse_af_args
+
+        tc_args, _ = _parse_af_args(args_str)
+        if len(tc_args) >= 2:
+            collection.timer_counter_operands.add(tc_args[0])
+            collection.timer_counter_operands.add(tc_args[1])
+
     if func_name in {"send", "receive"}:
         if "ModbusTcpTarget(" in args_str:
             collection.has_modbus_target = True
@@ -797,6 +808,18 @@ def _ref_af_token(
 
     if func_name == "raw":
         return
+
+    # For timer/counter instructions, strip the done_bit + accumulator args
+    # from the text before scanning refs — they're rendered as Timer[n]/Counter[n]
+    # and don't need tag-level imports.
+    if func_name in {"on_delay", "off_delay", "count_up", "count_down"}:
+        from pyrung.click.codegen.utils import _parse_af_args
+
+        tc_args, tc_kwargs = _parse_af_args(args_str)
+        if len(tc_args) >= 2:
+            # Rebuild args_str without the first two positional args
+            remaining = [f"{k}={v}" for k, v in tc_kwargs]
+            args_str = ",".join(remaining)
 
     clean_args = _strip_quoted_strings(args_str)
 

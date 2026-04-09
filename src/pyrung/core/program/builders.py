@@ -22,12 +22,32 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
 )
 from pyrung.core.memory_block import BlockRange
+from pyrung.core.structure import InstanceView
 from pyrung.core.tag import Tag
 
 from .context import _require_rung_context
 
 if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange
+
+
+def _extract_done_acc(instance: InstanceView, func_name: str) -> tuple[Tag, Tag]:
+    """Extract ``done`` and ``acc`` tags from a Timer/Counter InstanceView."""
+    try:
+        done_bit = instance.done
+    except AttributeError:
+        raise TypeError(
+            f"{func_name}() requires a Timer/Counter instance with a 'done' field, "
+            f"got {instance!r}."
+        ) from None
+    try:
+        accumulator = instance.acc
+    except AttributeError:
+        raise TypeError(
+            f"{func_name}() requires a Timer/Counter instance with an 'acc' field, "
+            f"got {instance!r}."
+        ) from None
+    return done_bit, accumulator
 
 
 def _capture_rung_condition_and_source(
@@ -492,11 +512,11 @@ def time_drum(
 
 
 class CountUpBuilder(_BuilderBase):
-    """Builder for count_up instruction with chaining API (Click-style).
+    """Builder for count_up instruction with chaining API.
 
     Supports optional .down() and required .reset() chaining:
-        count_up(done, acc, preset=100).reset(reset_tag)
-        count_up(done, acc, preset=50).down(down_cond).reset(reset_tag)
+        count_up(Counter[1], preset=100).reset(reset_tag)
+        count_up(Counter[1], preset=50).down(down_cond).reset(reset_tag)
     """
 
     def __init__(
@@ -606,10 +626,10 @@ class CountUpBuilder(_BuilderBase):
 
 
 class CountDownBuilder(_BuilderBase):
-    """Builder for count_down instruction with chaining API (Click-style).
+    """Builder for count_down instruction with chaining API.
 
     Supports required .reset() chaining:
-        count_down(done, acc, preset=25).reset(reset_tag)
+        count_down(Counter[1], preset=25).reset(reset_tag)
     """
 
     def __init__(
@@ -683,30 +703,29 @@ class CountDownBuilder(_BuilderBase):
 
 
 def count_up(
-    done_bit: Tag,
-    accumulator: Tag,
+    counter: InstanceView,
     *,
     preset: Tag | int,
 ) -> CountUpBuilder:
-    """Count Up instruction (CTU) - Click-style.
+    """Count Up instruction (CTU).
 
     Creates a counter that increments every scan while the rung condition is True.
     Use `rise()` on the condition for edge-triggered counting.
 
     Example:
         with Rung(rise(PartSensor)):
-            count_up(done_bit, acc, preset=100).reset(ResetBtn)
+            count_up(Counter[1], preset=100).reset(ResetBtn)
 
     This is a terminal instruction. Requires .reset() chaining.
 
     Args:
-        done_bit: Tag to set when accumulator >= preset.
-        accumulator: Tag to increment while rung condition is True.
+        counter: Counter instance (must have ``done`` and ``acc`` fields).
         preset: Target value (Tag or int).
 
     Returns:
         Builder for chaining .down() and .reset().
     """
+    done_bit, accumulator = _extract_done_acc(counter, "count_up")
     up_condition, source_file, source_line = _capture_rung_condition_and_source("count_up")
     return CountUpBuilder(
         done_bit,
@@ -719,30 +738,29 @@ def count_up(
 
 
 def count_down(
-    done_bit: Tag,
-    accumulator: Tag,
+    counter: InstanceView,
     *,
     preset: Tag | int,
 ) -> CountDownBuilder:
-    """Count Down instruction (CTD) - Click-style.
+    """Count Down instruction (CTD).
 
     Creates a counter that decrements every scan while the rung condition is True.
     Use `rise()` on the condition for edge-triggered counting.
 
     Example:
         with Rung(rise(Dispense)):
-            count_down(done_bit, acc, preset=25).reset(Reload)
+            count_down(Counter[1], preset=25).reset(Reload)
 
     This is a terminal instruction. Requires .reset() chaining.
 
     Args:
-        done_bit: Tag to set when accumulator <= -preset.
-        accumulator: Tag to decrement while rung condition is True.
+        counter: Counter instance (must have ``done`` and ``acc`` fields).
         preset: Target value (Tag or int).
 
     Returns:
         Builder for chaining .reset().
     """
+    done_bit, accumulator = _extract_done_acc(counter, "count_down")
     down_condition, source_file, source_line = _capture_rung_condition_and_source("count_down")
     return CountDownBuilder(
         done_bit,
@@ -880,33 +898,32 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
 
 
 def on_delay(
-    done_bit: Tag,
-    accumulator: Tag,
+    timer: InstanceView,
     *,
     preset: Tag | int,
     unit: str = "Tms",
 ) -> OnDelayBuilder:
-    """On-Delay Timer instruction (TON/RTON) - Click-style.
+    """On-Delay Timer instruction (TON/RTON).
 
     Accumulates time while rung is true.
 
     Example:
         with Rung(MotorRunning):
-            on_delay(done_bit, acc, preset=5000)                 # TON
-            on_delay(done_bit, acc, preset=5000).reset(ResetBtn) # RTON
+            on_delay(Timer[1], preset=5000)                 # TON
+            on_delay(Timer[1], preset=5000).reset(ResetBtn) # RTON
 
     Without .reset(), this is TON and remains composable in-rung.
     With .reset(), this is RTON and becomes terminal in the current flow.
 
     Args:
-        done_bit: Tag to set when accumulator >= preset.
-        accumulator: Tag to increment while enabled.
+        timer: Timer instance (must have ``done`` and ``acc`` fields).
         preset: Target value in time units (Tag or int).
         unit: Time unit for accumulator (default: Tms).
 
     Returns:
         Builder for optional .reset() chaining.
     """
+    done_bit, accumulator = _extract_done_acc(timer, "on_delay")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
         done_bit,
@@ -920,32 +937,31 @@ def on_delay(
 
 
 def off_delay(
-    done_bit: Tag,
-    accumulator: Tag,
+    timer: InstanceView,
     *,
     preset: Tag | int,
     unit: str = "Tms",
 ) -> OffDelayBuilder:
-    """Off-Delay Timer instruction (TOF) - Click-style.
+    """Off-Delay Timer instruction (TOF).
 
     Done bit is True while enabled. After disable, counts until preset,
     then done bit goes False. Auto-resets when re-enabled.
 
     Example:
         with Rung(MotorCommand):
-            off_delay(done_bit, acc, preset=10000)
+            off_delay(Timer[2], preset=10000)
 
     Off-delay timers are composable in-rung (not terminal).
 
     Args:
-        done_bit: Tag that stays True for preset time after rung goes false.
-        accumulator: Tag to increment while disabled.
+        timer: Timer instance (must have ``done`` and ``acc`` fields).
         preset: Delay time in time units (Tag or int).
         unit: Time unit for accumulator (default: Tms).
 
     Returns:
         Builder for the off_delay instruction.
     """
+    done_bit, accumulator = _extract_done_acc(timer, "off_delay")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
         done_bit,

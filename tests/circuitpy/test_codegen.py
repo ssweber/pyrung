@@ -22,7 +22,7 @@ from pyrung.core import (
     Block,
     Bool,
     Char,
-    Dint,
+    Counter,
     InputBlock,
     Int,
     OutputBlock,
@@ -30,6 +30,7 @@ from pyrung.core import (
     Real,
     Rung,
     TagType,
+    Timer,
     blockcopy,
     branch,
     calc,
@@ -413,8 +414,6 @@ class TestGenerateCircuitPyAPI:
     def test_strict_validation_keeps_advisories_non_blocking(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
-        done = Bool("Done")
-        acc = Int("Acc")
         dest = Int("Dest")
 
         def fn():
@@ -422,7 +421,7 @@ class TestGenerateCircuitPyAPI:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=5, unit="Tms")
+                on_delay(Timer[1], preset=5, unit="Tms")
                 run_function(fn, outs={"result": dest})
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -544,14 +543,6 @@ class TestInstructionCoverage:
     def test_timers_counters_copy_calc_and_block_ops_emit(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")
-        done_ton = Bool("DoneTON")
-        acc_ton = Int("AccTON")
-        done_tof = Bool("DoneTOF")
-        acc_tof = Int("AccTOF")
-        done_up = Bool("DoneUp")
-        acc_up = Dint("AccUp")
-        done_dn = Bool("DoneDn")
-        acc_dn = Dint("AccDn")
         source = Int("Source")
         calc_out = Int("CalcOut")
         reset_tag = Bool("Reset")
@@ -561,13 +552,13 @@ class TestInstructionCoverage:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                on_delay(done_ton, acc_ton, preset=5).reset(reset_tag)
+                on_delay(Timer[1], preset=5).reset(reset_tag)
             with Rung(Bool("Enable")):
-                off_delay(done_tof, acc_tof, preset=5)
+                off_delay(Timer[2], preset=5)
             with Rung(Bool("Enable")):
-                count_up(done_up, acc_up, preset=2).reset(reset_tag)
+                count_up(Counter[1], preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
-                count_down(done_dn, acc_dn, preset=2).reset(reset_tag)
+                count_down(Counter[2], preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
                 copy(40000, source)
                 calc(source + 1, calc_out)
@@ -1455,24 +1446,25 @@ class TestRuntimeSplit:
         from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
         State = Char("State", default="r")
-        RedDone, GreenDone, YellowDone = Bool("RedDone"), Bool("GreenDone"), Bool("YellowDone")
-        RedAcc, GreenAcc, YellowAcc = Int("RedAcc"), Int("GreenAcc"), Int("YellowAcc")
+        RedTimer = Timer.named(1, "RedTimer")
+        GreenTimer = Timer.named(2, "GreenTimer")
+        YellowTimer = Timer.named(3, "YellowTimer")
         WalkRequest = Bool("WalkRequest")
         RxBusy, RxOk, RxErr = Bool("RxBusy"), Bool("RxOk"), Bool("RxErr")
         RxExCode = Int("RxExCode")
 
         with Program(strict=False) as prog:
             with Rung(State == "r"):
-                on_delay(RedDone, RedAcc, preset=5000, unit="Tms")
-            with Rung(RedDone):
+                on_delay(RedTimer, preset=5000, unit="Tms")
+            with Rung(RedTimer.done):
                 copy("g", State)
             with Rung(State == "g"):
-                on_delay(GreenDone, GreenAcc, preset=4000, unit="Tms")
-            with Rung(GreenDone):
+                on_delay(GreenTimer, preset=4000, unit="Tms")
+            with Rung(GreenTimer.done):
                 copy("y", State)
             with Rung(State == "y"):
-                on_delay(YellowDone, YellowAcc, preset=1500, unit="Tms")
-            with Rung(YellowDone):
+                on_delay(YellowTimer, preset=1500, unit="Tms")
+            with Rung(YellowTimer.done):
                 copy("r", State)
             with Rung():
                 receive(
@@ -1491,12 +1483,12 @@ class TestRuntimeSplit:
         mapping = TagMap(
             {
                 State: txt[1],
-                RedDone: t[1],
-                RedAcc: td[1],
-                GreenDone: t[2],
-                GreenAcc: td[2],
-                YellowDone: t[3],
-                YellowAcc: td[3],
+                RedTimer.done: t[1],
+                RedTimer.acc: td[1],
+                GreenTimer.done: t[2],
+                GreenTimer.acc: td[2],
+                YellowTimer.done: t[3],
+                YellowTimer.acc: td[3],
                 WalkRequest: c[1],
                 RxBusy: c[2],
                 RxOk: c[3],
@@ -1532,13 +1524,11 @@ class TestRuntimeSplit:
     def test_non_modbus_program_produces_empty_runtime(self):
         """Neopixel-style program (no Modbus, no slots): runtime is empty."""
         State = Char("State", default="r")
-        RedDone = Bool("RedDone")
-        RedAcc = Int("RedAcc")
 
         with Program(strict=False) as prog:
             with Rung(State == "r"):
-                on_delay(RedDone, RedAcc, preset=3000, unit="Tms")
-            with Rung(RedDone):
+                on_delay(Timer[4], preset=3000, unit="Tms")
+            with Rung(Timer[4].done):
                 copy("g", State)
             with Rung(State == "g"):
                 copy(0, board.neopixel.r)

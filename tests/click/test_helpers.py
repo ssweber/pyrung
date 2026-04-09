@@ -33,7 +33,7 @@ class TestBuildProgram:
         logic, mapping = build_program("""
             with Program() as p:
                 with Rung(X1):
-                    on_delay(T1, TD1, preset=100).reset(X2)
+                    on_delay(Timer[1], preset=100).reset(X2)
         """)
         bundle = pyrung_to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]
@@ -44,7 +44,7 @@ class TestBuildProgram:
         logic, mapping = build_program("""
             with Program() as p:
                 with Rung(C1):
-                    count_up(CT1, CTD1, preset=5).reset(C2)
+                    count_up(Counter[1], preset=5).reset(C2)
         """)
         bundle = pyrung_to_ladder(logic, mapping)
         tokens = [row[-1] for row in bundle.main_rows[1:] if row[-1]]

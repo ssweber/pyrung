@@ -36,6 +36,7 @@ from pyrung.core import (
     Block,
     BlockRange,
     Bool,
+    Counter,
     Dint,
     Int,
     Or,
@@ -43,6 +44,7 @@ from pyrung.core import (
     Rung,
     Tag,
     TagType,
+    Timer,
     immediate,
 )
 from pyrung.core.program import (
@@ -137,7 +139,7 @@ def test_export_roundtrip_guard_rejects_missing_pin_row():
     logic, mapping = build_program(
         """
         with Rung(X1):
-            on_delay(T1, TD1, preset=100, unit="Tms").reset(X2)
+            on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
         """
     )
 
@@ -400,7 +402,7 @@ def test_builder_pin_rows_are_independent_continuations():
         """
         with Program() as p:
             with Rung(X1):
-                count_up(CT1, CTD1, preset=5).down(X2).reset(X3)
+                count_up(Counter[1], preset=5).down(X2).reset(X3)
         """,
         """
         R,X001,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,-,count_up(CT1,CTD1,preset=5)
@@ -784,14 +786,8 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
     Words = Block("Words", TagType.INT, 1, 2)
     DWord = Dint("DWord")
 
-    TonDone = Bool("TonDone")
-    TonAcc = Int("TonAcc")
     TonReset = Bool("TonReset")
-    TofDone = Bool("TofDone")
-    TofAcc = Int("TofAcc")
 
-    CdDone = Bool("CdDone")
-    CdAcc = Dint("CdAcc")
     CdReset = Bool("CdReset")
 
     ShiftClock = Bool("ShiftClock")
@@ -833,11 +829,11 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         with Rung(Enable):
             unpack_to_words(DWord, Words.select(1, 2), oneshot=True)
         with Rung(Enable):
-            on_delay(TonDone, TonAcc, preset=100).reset(TonReset)
+            on_delay(Timer[1], preset=100).reset(TonReset)
         with Rung(Enable):
-            off_delay(TofDone, TofAcc, preset=50)
+            off_delay(Timer[2], preset=50)
         with Rung(Enable):
-            count_down(CdDone, CdAcc, preset=9).reset(CdReset)
+            count_down(Counter[3], preset=9).reset(CdReset)
         with Rung(Enable):
             shift(Bits.select(1, 8)).clock(ShiftClock).reset(ShiftReset)
         with Rung(Enable):
@@ -886,13 +882,13 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
             Bits: c.select(10, 41),
             Words: ds.select(300, 301),
             DWord: dd[1],
-            TonDone: t[1],
-            TonAcc: td[1],
+            Timer[1].done: t[1],
+            Timer[1].acc: td[1],
             TonReset: x[2],
-            TofDone: t[2],
-            TofAcc: td[2],
-            CdDone: ct[3],
-            CdAcc: ctd[3],
+            Timer[2].done: t[2],
+            Timer[2].acc: td[2],
+            Counter[3].done: ct[3],
+            Counter[3].acc: ctd[3],
             CdReset: x[3],
             ShiftClock: x[4],
             ShiftReset: x[5],

@@ -248,7 +248,10 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     lines.append("")
 
     # Tag declarations
-    has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
+    has_flat_tags = any(
+        op not in collection.semantic_operands and op not in collection.timer_counter_operands
+        for op in collection.tags
+    )
     if has_flat_tags:
         lines.append("# --- Tags ---")
         _emit_tag_declarations(lines, collection, suppress_comments=True)
@@ -292,6 +295,12 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
         core.append("udt")
     if has_retentive:
         core.append("Field")
+
+    # Built-in Timer/Counter UDTs
+    if collection.used_instructions & {"on_delay", "off_delay"}:
+        core.append("Timer")
+    if collection.used_instructions & {"count_up", "count_down"}:
+        core.append("Counter")
 
     # Tag types
     for tt in sorted(collection.used_types):
@@ -453,6 +462,12 @@ def _emit_logic_imports(
         parts.append("call")
     if is_subroutine:
         parts.append("subroutine")
+
+    # Built-in Timer/Counter UDTs
+    if refs.used_instructions & {"on_delay", "off_delay"}:
+        parts.append("Timer")
+    if refs.used_instructions & {"count_up", "count_down"}:
+        parts.append("Counter")
 
     # Conditions
     if refs.has_Or:

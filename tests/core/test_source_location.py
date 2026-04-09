@@ -12,11 +12,13 @@ from pyrung.core import (
     And,
     Block,
     Bool,
+    Counter,
     Int,
     Or,
     Program,
     Rung,
     TagType,
+    Timer,
     branch,
     copy,
     count_down,
@@ -100,12 +102,6 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
     branch_out = Bool("BranchOut")
     forloop_counter = Int("ForLoopCounter")
     reset_cond = Bool("Reset")
-    cu_done = Bool("CountUpDone")
-    cu_acc = Int("CountUpAcc")
-    cd_done = Bool("CountDownDone")
-    cd_acc = Int("CountDownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -131,15 +127,15 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
 
         with Rung(enable):
             count_up_line = _line_no() + 1
-            count_up(cu_done, cu_acc, preset=5).reset(reset_cond)
+            count_up(Counter[1], preset=5).reset(reset_cond)
 
         with Rung(enable):
             count_down_line = _line_no() + 1
-            count_down(cd_done, cd_acc, preset=5).reset(reset_cond)
+            count_down(Counter[2], preset=5).reset(reset_cond)
 
         with Rung(enable):
             on_delay_line = _line_no() + 1
-            on_delay(timer_done, timer_acc, preset=50).reset(reset_cond)
+            on_delay(Timer[1], preset=50).reset(reset_cond)
 
         with Rung(enable):
             shift_line = _line_no() + 1
@@ -222,16 +218,13 @@ def test_multiline_rung_direct_tag_condition_uses_argument_line_number():
 
 def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_line():
     enable = Bool("Enable")
-    done = Bool("Done")
-    acc = Int("Acc")
     reset_cond = Bool("Reset")
 
     with Program(strict=False) as prog:
         with Rung(enable):
             count_up_line = _line_no() + 1
             count_up(
-                done,
-                acc,
+                Counter[3],
                 preset=5,
             ).reset(reset_cond)
             count_up_end_line = _line_no() - 1
@@ -256,12 +249,6 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     down = Bool("Down")
     reset_cond = Bool("Reset")
     clock = Bool("Clock")
-    up_done = Bool("UpDone")
-    up_acc = Int("UpAcc")
-    down_done = Bool("DownDone")
-    down_acc = Int("DownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -276,7 +263,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     with Program(strict=False) as prog:
         with Rung(enable):
             cu_line = _line_no() + 1
-            cu_builder = count_up(up_done, up_acc, preset=5)
+            cu_builder = count_up(Counter[4], preset=5)
             cu_down_line = _line_no() + 1
             cu_builder = cu_builder.down(down)
             cu_reset_line = _line_no() + 1
@@ -284,13 +271,13 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
 
         with Rung(enable):
             cd_line = _line_no() + 1
-            cd_builder = count_down(down_done, down_acc, preset=5)
+            cd_builder = count_down(Counter[5], preset=5)
             cd_reset_line = _line_no() + 1
             cd_builder.reset(reset_cond)
 
         with Rung(enable):
             timer_line = _line_no() + 1
-            timer_builder = on_delay(timer_done, timer_acc, preset=50)
+            timer_builder = on_delay(Timer[2], preset=50)
             timer_reset_line = _line_no() + 1
             timer_builder.reset(reset_cond)
 

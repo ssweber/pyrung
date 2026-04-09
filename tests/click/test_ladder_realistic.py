@@ -38,12 +38,14 @@ from pyrung.core import (
     And,
     Block,
     Bool,
+    Counter,
     Dint,
     Int,
     Or,
     Program,
     Rung,
     TagType,
+    Timer,
     fall,
     rise,
 )
@@ -90,16 +92,6 @@ def _build_program_and_mapping():
     Running = Bool("Running")
     StepDone = Bool("StepDone")
     Found = Bool("Found")
-
-    # ── Timer / counter tags ─────────────────────────────────────────────
-    RTonDone = Bool("RTonDone")
-    RTonAcc = Int("RTonAcc")
-    TofDone = Bool("TofDone")
-    TofAcc = Int("TofAcc")
-    CtuDone = Bool("CtuDone")
-    CtuAcc = Dint("CtuAcc")
-    CtdDone = Bool("CtdDone")
-    CtdAcc = Dint("CtdAcc")
 
     # ── Data tags ────────────────────────────────────────────────────────
     Idx = Int("Idx", default=1)
@@ -152,22 +144,22 @@ def _build_program_and_mapping():
 
         # R3: Retentive on-delay with reset pin
         with Rung(Running):
-            on_delay(RTonDone, RTonAcc, preset=250).reset(ShiftReset)
+            on_delay(Timer[1], preset=250).reset(ShiftReset)
 
         # R4: Off-delay
         with Rung(Running):
-            off_delay(TofDone, TofAcc, preset=100)
+            off_delay(Timer[2], preset=100)
 
         # R5: Count-up with reset pin
         with Rung(Running):
-            count_up(CtuDone, CtuAcc, preset=50).reset(Stop)
+            count_up(Counter[1], preset=50).reset(Stop)
 
         # R6: Count-down with reset pin
         with Rung(Running):
-            count_down(CtdDone, CtdAcc, preset=5).reset(ShiftReset)
+            count_down(Counter[2], preset=5).reset(ShiftReset)
 
         # R7: copy + calc + indirect copy + blockcopy + fill
-        with Rung(Running, RTonDone):
+        with Rung(Running, Timer[1].done):
             copy(120, Source)
             calc((Source * 2) + (Idx * 2) - 3, CalcOut)
             copy(SrcBlk[Idx], DstBlk[Idx])
@@ -244,7 +236,7 @@ def _build_program_and_mapping():
             copy(Idx, DstBlk[4])
             with branch(AutoMode):
                 copy(CalcOut, DstBlk[1])
-            with branch(Found, CtuDone):
+            with branch(Found, Counter[1].done):
                 copy(FoundAddr, DstBlk[2])
             copy(Source, DstBlk[5])
 
@@ -304,15 +296,15 @@ def _build_program_and_mapping():
             # Internal bits (C)
             Found: c[1],
             # Timers
-            RTonDone: t[1],
-            RTonAcc: td[1],
-            TofDone: t[2],
-            TofAcc: td[2],
+            Timer[1].done: t[1],
+            Timer[1].acc: td[1],
+            Timer[2].done: t[2],
+            Timer[2].acc: td[2],
             # Counters
-            CtuDone: ct[1],
-            CtuAcc: ctd[1],
-            CtdDone: ct[2],
-            CtdAcc: ctd[2],
+            Counter[1].done: ct[1],
+            Counter[1].acc: ctd[1],
+            Counter[2].done: ct[2],
+            Counter[2].acc: ctd[2],
             # Data (DS)
             Idx: ds[1],
             Source: ds[2],

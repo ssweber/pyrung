@@ -36,6 +36,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    Timer,
 )
 from pyrung.core.program import (
     branch,
@@ -327,15 +328,13 @@ class TestTopologyAnalysis:
         """Timer with .reset() pin."""
         Enable = Bool("Enable")
         Reset = Bool("Reset")
-        Done = Bool("Done")
-        Acc = Int("Acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit="Tms").reset(Reset)
+                on_delay(Timer[1], preset=100, unit="Tms").reset(Reset)
 
         mapping = TagMap(
-            {Enable: x[1], Reset: x[2], Done: t[1], Acc: td[1]},
+            {Enable: x[1], Reset: x[2], Timer[1].done: t[1], Timer[1].acc: td[1]},
             include_system=False,
         )
         csv_path = _export_csv(logic, mapping, tmp_path)
@@ -1354,11 +1353,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    on_delay(T1, TD1, preset=100, unit="Tms").reset(X2)
+                    on_delay(Timer[1], preset=100, unit="Tms").reset(X2)
             """,
             """
             with Rung(X001):
-                on_delay(T1, TD1, preset=100, unit="Tms").reset(X002)
+                on_delay(Timer[1], preset=100, unit="Tms").reset(X002)
             """,
         )
 
@@ -1368,11 +1367,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    count_up(CT1, CTD1, preset=10).down(X2).reset(X3)
+                    count_up(Counter[1], preset=10).down(X2).reset(X3)
             """,
             """
             with Rung(X001):
-                count_up(CT1, CTD1, preset=10).down(X002).reset(X003)
+                count_up(Counter[1], preset=10).down(X002).reset(X003)
             """,
         )
 

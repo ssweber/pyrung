@@ -42,7 +42,7 @@ def test_step_timer_reaches_5s_and_advances_to_step_2(simple_task: ModuleType) -
 
     with runner:
         assert simple_task.Task.Step.value == 2
-        assert simple_task.Task.StepTime.value == 0
+        assert simple_task.StepTimer.acc.value == 0
 
 
 def test_auto_reset_when_call_cleared(simple_task: ModuleType) -> None:
@@ -67,7 +67,7 @@ def test_auto_reset_when_call_cleared(simple_task: ModuleType) -> None:
         assert simple_task.Task.Active.value == 0
         assert simple_task.Task.Step.value == 0
         assert simple_task.Task.Advance.value == 0
-        assert simple_task.Task.StepTime.value == 0
+        assert simple_task.StepTimer.acc.value == 0
         assert simple_task.Valve1.value is False
 
 

@@ -25,7 +25,7 @@ from pyrung.click.validation import (
     ClickValidationReport,
     validate_click_program,
 )
-from pyrung.core import Block, Bool, Int, Tag, TagType, immediate, to_value
+from pyrung.core import Block, Bool, Int, Tag, TagType, Timer, immediate, to_value
 from pyrung.core.program import (
     Program,
     Rung,
@@ -1240,32 +1240,26 @@ class TestImmediateValidation:
 
 class TestTimerPresetOverflow:
     def test_preset_within_range_no_finding(self):
-        Done = Bool("Done")
-        Acc = Int("Acc")
-
         def logic():
             with Rung():
-                on_delay(Done, Acc, preset=32767, unit="Tms")
+                on_delay(Timer[1], preset=32767, unit="Tms")
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Done.map_to(c[1]), Acc.map_to(ds[1])],
+            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
         assert CLK_TIMER_PRESET_OVERFLOW not in _finding_codes(report)
 
     def test_preset_exceeds_int_range(self):
-        Done = Bool("Done")
-        Acc = Int("Acc")
-
         def logic():
             with Rung():
-                on_delay(Done, Acc, preset=60000, unit="Tms")
+                on_delay(Timer[1], preset=60000, unit="Tms")
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Done.map_to(c[1]), Acc.map_to(ds[1])],
+            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")
@@ -1273,17 +1267,15 @@ class TestTimerPresetOverflow:
 
     def test_preset_tag_skipped(self):
         """Dynamic preset via Tag should not trigger overflow check."""
-        Done = Bool("Done")
-        Acc = Int("Acc")
         Preset = Int("Preset")
 
         def logic():
             with Rung():
-                on_delay(Done, Acc, preset=Preset, unit="Tms")
+                on_delay(Timer[1], preset=Preset, unit="Tms")
 
         prog = _build_program(logic)
         tag_map = TagMap(
-            [Done.map_to(c[1]), Acc.map_to(ds[1]), Preset.map_to(ds[2])],
+            [Timer[1].done.map_to(c[1]), Timer[1].acc.map_to(ds[1]), Preset.map_to(ds[2])],
             include_system=False,
         )
         report = validate_click_program(prog, tag_map, mode="warn")

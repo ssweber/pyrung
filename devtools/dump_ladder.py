@@ -10,7 +10,7 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from pyrung.click import TagMap, c, ct, ctd, pyrung_to_ladder, x, y
-from pyrung.core import Bool, Dint, Or, Program, Rung
+from pyrung.core import Bool, Counter, Or, Program, Rung
 from pyrung.core.program import And, branch, count_up, latch, out
 
 OUT = Path(tempfile.mkdtemp(prefix="ladder_"))
@@ -165,18 +165,16 @@ mapping = TagMap({**base_map}, include_system=False)
 _dump("Case 11: A, Or(~B, C, ~D)", pyrung_to_ladder(logic, mapping))
 
 # ── Case 12: branch with pin rows ──
-Done = Bool("Done")
-Acc = Dint("Acc")
 ResetCond = Bool("ResetCond")
 
 with Program() as logic:
     with Rung(A, B):
         out(Y1)
         with branch(Mode):
-            count_up(Done, Acc, preset=10).reset(ResetCond)
+            count_up(Counter[1], preset=10).reset(ResetCond)
 
 mapping = TagMap(
-    {**base_map, Done: ct[1], Acc: ctd[1], ResetCond: x[8]},
+    {**base_map, Counter[1].done: ct[1], Counter[1].acc: ctd[1], ResetCond: x[8]},
     include_system=False,
 )
 _dump("Case 12: A,B out + branch(Mode) count_up.reset", pyrung_to_ladder(logic, mapping))

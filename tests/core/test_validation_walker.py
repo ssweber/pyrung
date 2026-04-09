@@ -13,6 +13,7 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
+    Timer,
     branch,
     calc,
     copy,
@@ -405,12 +406,9 @@ class TestMissingFieldsCaptured:
     def test_on_delay_time_unit_captured(self):
         from pyrung.core.program import on_delay
 
-        done = Bool("T1")
-        acc = Int("TD1")
-
         with Program() as prog:
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=100, unit="Ts")
+                on_delay(Timer[1], preset=100, unit="Ts")
 
         facts = walk_program(prog)
         tu_facts = _facts_at(facts, "instruction.unit")
@@ -421,12 +419,9 @@ class TestMissingFieldsCaptured:
     def test_off_delay_time_unit_captured(self):
         from pyrung.core.program import off_delay
 
-        done = Bool("T2")
-        acc = Int("TD2")
-
         with Program() as prog:
             with Rung(Bool("Enable2")):
-                off_delay(done, acc, preset=100, unit="Tm")
+                off_delay(Timer[2], preset=100, unit="Tm")
 
         facts = walk_program(prog)
         tu_facts = _facts_at(facts, "instruction.unit")

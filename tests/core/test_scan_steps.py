@@ -8,10 +8,12 @@ from pyrung.core import (
     PLC,
     Block,
     Bool,
+    Counter,
     Int,
     Program,
     Rung,
     TagType,
+    Timer,
     branch,
     call,
     copy,
@@ -288,12 +290,6 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
     down = Bool("Down")
     reset = Bool("Reset")
     clock = Bool("Clock")
-    up_done = Bool("UpDone")
-    up_acc = Int("UpAcc")
-    down_done = Bool("DownDone")
-    down_acc = Int("DownAcc")
-    timer_done = Bool("TimerDone")
-    timer_acc = Int("TimerAcc")
     drum_step = Int("DrumStep")
     drum_acc = Int("DrumAcc")
     drum_done = Bool("DrumDone")
@@ -307,13 +303,13 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
 
     with Program(strict=False) as logic:
         with Rung(enable):
-            count_up(up_done, up_acc, preset=5).down(down).reset(reset)
+            count_up(Counter[1], preset=5).down(down).reset(reset)
 
         with Rung(enable):
-            count_down(down_done, down_acc, preset=5).reset(reset)
+            count_down(Counter[2], preset=5).reset(reset)
 
         with Rung(enable):
-            on_delay(timer_done, timer_acc, preset=50).reset(reset)
+            on_delay(Timer[1], preset=50).reset(reset)
 
         with Rung(enable):
             shift(bits.select(1, 4)).clock(clock).reset(reset)

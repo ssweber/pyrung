@@ -145,8 +145,8 @@ def test_bin_counter(click_conveyor: ModuleType) -> None:
             click_conveyor.BinASensor.value = False
             runner.step()
 
-        assert click_conveyor.BinAAcc.value == 3
-        assert click_conveyor.BinBAcc.value == 0
+        assert click_conveyor.BinACounter.acc.value == 3
+        assert click_conveyor.BinBCounter.acc.value == 0
 
 
 def test_round_trip_to_csv(click_conveyor: ModuleType) -> None:

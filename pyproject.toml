@@ -155,6 +155,7 @@ exclude = [
 # Note: unresolved-import is ignored because ty has issues with src-layout
 # projects and relative imports. The code runs correctly with Python.
 unresolved-import = "ignore"
+not-subscriptable = "ignore"  # Timer[n] / Counter[n] — @udt() makes these subscriptable at runtime
 unused-ignore-comment = "error"
 
 

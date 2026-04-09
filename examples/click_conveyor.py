@@ -17,10 +17,11 @@ import os
 
 from pyrung import (
     Bool,
-    Dint,
+    Counter,
     Int,
     PLC,
     Rung,
+    Timer,
 
     And,
     Or,
@@ -76,16 +77,12 @@ SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
-DetDone = Bool("DetDone")  # T001
-DetAcc = Int("DetAcc")  # TD001
-HoldDone = Bool("HoldDone")  # T002
-HoldAcc = Int("HoldAcc")  # TD002
+DetTimer = Timer.named(1, "DetTimer")    # T001 / TD001
+HoldTimer = Timer.named(2, "HoldTimer")  # T002 / TD002
 
 # Counters — per bin
-BinADone = Bool("BinADone")  # CT001
-BinAAcc = Dint("BinAAcc")  # CTD001
-BinBDone = Bool("BinBDone")  # CT002
-BinBAcc = Dint("BinBAcc")  # CTD002
+BinACounter = Counter.named(1, "BinACounter")  # CT001 / CTD001
+BinBCounter = Counter.named(2, "BinBCounter")  # CT002 / CTD002
 
 # ---------------------------------------------------------------------------
 # Click hardware mapping
@@ -120,15 +117,15 @@ mapping = TagMap(
         SizeReading.map_to(ds[6]),
         SizeThreshold.map_to(ds[7]),
         # Timers
-        DetDone.map_to(t[1]),
-        DetAcc.map_to(td[1]),
-        HoldDone.map_to(t[2]),
-        HoldAcc.map_to(td[2]),
+        DetTimer.done.map_to(t[1]),
+        DetTimer.acc.map_to(td[1]),
+        HoldTimer.done.map_to(t[2]),
+        HoldTimer.acc.map_to(td[2]),
         # Counters
-        BinADone.map_to(ct[1]),
-        BinAAcc.map_to(ctd[1]),
-        BinBDone.map_to(ct[2]),
-        BinBAcc.map_to(ctd[2]),
+        BinACounter.done.map_to(ct[1]),
+        BinACounter.acc.map_to(ctd[1]),
+        BinBCounter.done.map_to(ct[2]),
+        BinBCounter.acc.map_to(ctd[2]),
     ],
     include_system=False,
 )
@@ -161,16 +158,16 @@ def logic():
 
     comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == DETECTING):
-        on_delay(DetDone, DetAcc, preset=500, unit="Tms")
+        on_delay(DetTimer, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
-    with Rung(DetDone):
+    with Rung(DetTimer.done):
         copy(SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
-        on_delay(HoldDone, HoldAcc, preset=2000, unit="Tms")
-    with Rung(HoldDone):
+        on_delay(HoldTimer, preset=2000, unit="Tms")
+    with Rung(HoldTimer.done):
         copy(RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
@@ -190,9 +187,9 @@ def logic():
 
     comment("Bin counters")
     with Rung(rise(BinASensor)):
-        count_up(BinADone, BinAAcc, preset=9999).reset(CountReset)
+        count_up(BinACounter, preset=9999).reset(CountReset)
     with Rung(rise(BinBSensor)):
-        count_up(BinBDone, BinBAcc, preset=9999).reset(CountReset)
+        count_up(BinBCounter, preset=9999).reset(CountReset)
 
 
 # ---------------------------------------------------------------------------
@@ -227,5 +224,5 @@ if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
         print(f"State     : {State.value!r}")
         print(f"Diverter  : {'EXTENDED' if DiverterCmd.value else 'retracted'}")
         print(f"IsLarge   : {IsLarge.value}")
-        print(f"Bin A     : {BinAAcc.value} boxes")
-        print(f"Bin B     : {BinBAcc.value} boxes")
+        print(f"Bin A     : {BinACounter.acc.value} boxes")
+        print(f"Bin B     : {BinBCounter.acc.value} boxes")

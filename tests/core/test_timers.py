@@ -14,20 +14,23 @@ Hardware-verified behaviors (Click PLC):
 - First scan includes current scan's dt (not 0 on first enable)
 """
 
+from typing import Any, cast
+
 import pytest
 
 from pyrung.core import (
     PLC,
     Bool,
+    Field,
     Int,
     Program,
     Rung,
-    Tag,
-    TagType,
+    Timer,
     copy,
     off_delay,
     on_delay,
     out,
+    udt,
 )
 
 
@@ -37,12 +40,10 @@ class TestOnDelayTON:
     def test_ton_accumulates_time_while_enabled(self):
         """TON accumulates elapsed time each scan while rung is true."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -54,19 +55,17 @@ class TestOnDelayTON:
             runner.step()
             # Each scan adds 10ms = 10 units (assuming Tms)
             expected = (i + 1) * 10
-            assert runner.current_state.tags["td.Timer_acc"] == expected, (
+            assert runner.current_state.tags["Timer1_acc"] == expected, (
                 f"After {i + 1} scans, acc should be {expected}"
             )
 
     def test_ton_done_bit_when_preset_reached(self):
         """TON done bit turns ON when accumulator >= preset."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=50)  # 50ms preset
+                on_delay(Timer[1], preset=50)  # 50ms preset
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -77,28 +76,26 @@ class TestOnDelayTON:
         # Run 4 scans (40ms) - not done yet
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 40
-        assert runner.current_state.tags["t.Timer"] is False
+        assert runner.current_state.tags["Timer1_acc"] == 40
+        assert runner.current_state.tags["Timer1_done"] is False
 
         # Run 1 more scan (50ms) - should be done
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 50
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # Continue - done stays true, acc keeps counting
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 60
+        assert runner.current_state.tags["Timer1_done"] is True
 
     def test_ton_resets_immediately_when_disabled(self):
         """TON resets acc and done to 0/False immediately when rung goes false."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -108,23 +105,21 @@ class TestOnDelayTON:
         runner.patch({"Enable": True})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
         # Disable - should reset immediately
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 0
-        assert runner.current_state.tags["t.Timer"] is False
+        assert runner.current_state.tags["Timer1_acc"] == 0
+        assert runner.current_state.tags["Timer1_done"] is False
 
     def test_ton_restarts_fresh_when_re_enabled(self):
         """TON starts from 0 when re-enabled after being disabled."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -136,12 +131,12 @@ class TestOnDelayTON:
             runner.step()
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 0
+        assert runner.current_state.tags["Timer1_acc"] == 0
 
         # Re-enable - should start fresh
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 10  # First scan's dt
+        assert runner.current_state.tags["Timer1_acc"] == 10  # First scan's dt
 
 
 class TestOnDelayRTON:
@@ -151,12 +146,10 @@ class TestOnDelayRTON:
         """RTON accumulates elapsed time each scan while rung is true."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -166,18 +159,16 @@ class TestOnDelayRTON:
         for i in range(5):
             runner.step()
             expected = (i + 1) * 10
-            assert runner.current_state.tags["td.Timer_acc"] == expected
+            assert runner.current_state.tags["Timer1_acc"] == expected
 
     def test_rton_holds_value_when_disabled(self):
         """RTON retains accumulated time when rung goes false."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -187,28 +178,26 @@ class TestOnDelayRTON:
         runner.patch({"Enable": True})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
         # Disable - acc should HOLD (not reset)
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30  # Still 30!
+        assert runner.current_state.tags["Timer1_acc"] == 30  # Still 30!
 
         # Multiple scans while disabled - still holds
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
     def test_rton_continues_from_held_value_when_re_enabled(self):
         """RTON continues accumulating from held value when re-enabled."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -220,26 +209,24 @@ class TestOnDelayRTON:
             runner.step()
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
         # Re-enable - should continue from 30
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 40  # 30 + 10
+        assert runner.current_state.tags["Timer1_acc"] == 40  # 30 + 10
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50  # 40 + 10
+        assert runner.current_state.tags["Timer1_acc"] == 50  # 40 + 10
 
     def test_rton_only_resets_via_reset_condition(self):
         """RTON only resets when reset condition is true."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
+                on_delay(Timer[1], preset=50).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -249,31 +236,29 @@ class TestOnDelayRTON:
         runner.patch({"Enable": True})
         for _ in range(6):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 60
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # Disable - should hold
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60
-        assert runner.current_state.tags["t.Timer"] is True  # Done also holds
+        assert runner.current_state.tags["Timer1_acc"] == 60
+        assert runner.current_state.tags["Timer1_done"] is True  # Done also holds
 
         # Activate reset - should clear
         runner.patch({"ResetBtn": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 0
-        assert runner.current_state.tags["t.Timer"] is False
+        assert runner.current_state.tags["Timer1_acc"] == 0
+        assert runner.current_state.tags["Timer1_done"] is False
 
     def test_rton_retentive_accumulator_survives_stop_to_run_transition(self):
         """RTON accumulator preserves value across STOP->RUN when retentive."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc", retentive=True)
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -282,27 +267,30 @@ class TestOnDelayRTON:
         runner.patch({"Enable": True})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
         runner.stop()
         runner.step()  # auto STOP->RUN transition + first scan
 
-        assert runner.current_state.tags["td.Timer_acc"] == 30
+        assert runner.current_state.tags["Timer1_acc"] == 30
 
     def test_rton_non_retentive_accumulator_uses_default_after_batteryless_reboot(self):
         """Batteryless reboot resets non-retentive RTON acc to tag default."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Tag("td.Timer_acc", TagType.INT, retentive=False, default=10)
+
+        @udt(count=1)
+        class NRTimer:
+            done: Bool  # noqa: F821
+            acc: Int = cast(Any, Field(retentive=False, default=10))  # noqa: F821
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(NRTimer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -311,18 +299,18 @@ class TestOnDelayRTON:
         runner.patch({"Enable": True})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 40
+        assert runner.current_state.tags["NRTimer_acc"] == 40
 
         runner.battery_present = False
         runner.reboot()
 
         # After SRAM loss, tag value is rebuilt from its default.
-        assert runner.current_state.tags["td.Timer_acc"] == 10
+        assert runner.current_state.tags["NRTimer_acc"] == 10
 
         # First enabled scan continues counting from default seed.
         runner.patch({"Enable": True, "ResetBtn": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 20
+        assert runner.current_state.tags["NRTimer_acc"] == 20
 
 
 class TestOffDelayTOF:
@@ -331,12 +319,10 @@ class TestOffDelayTOF:
     def test_tof_done_true_while_enabled(self):
         """TOF done bit is True while rung is true, acc stays at 0."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -347,24 +333,22 @@ class TestOffDelayTOF:
         runner.step()
 
         # Done should be True, acc should be 0
-        assert runner.current_state.tags["t.Timer"] is True
-        assert runner.current_state.tags["td.Timer_acc"] == 0
+        assert runner.current_state.tags["Timer1_done"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 0
 
         # Multiple scans while enabled - done stays True, acc stays 0
         for _ in range(5):
             runner.step()
-        assert runner.current_state.tags["t.Timer"] is True
-        assert runner.current_state.tags["td.Timer_acc"] == 0
+        assert runner.current_state.tags["Timer1_done"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 0
 
     def test_tof_counts_after_disable_done_stays_true(self):
         """TOF counts up after disable, done stays True until preset."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -379,18 +363,16 @@ class TestOffDelayTOF:
         for i in range(4):
             runner.step()
             expected = (i + 1) * 10
-            assert runner.current_state.tags["td.Timer_acc"] == expected
-            assert runner.current_state.tags["t.Timer"] is True  # Still True
+            assert runner.current_state.tags["Timer1_acc"] == expected
+            assert runner.current_state.tags["Timer1_done"] is True  # Still True
 
     def test_tof_done_false_when_preset_reached(self):
         """TOF done goes False when acc >= preset after disable."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -404,23 +386,21 @@ class TestOffDelayTOF:
         # Count to just before preset (40ms)
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 40
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 40
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # One more scan to reach preset (50ms)
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50
-        assert runner.current_state.tags["t.Timer"] is False  # Done goes False
+        assert runner.current_state.tags["Timer1_acc"] == 50
+        assert runner.current_state.tags["Timer1_done"] is False  # Done goes False
 
     def test_tof_auto_resets_when_re_enabled(self):
         """TOF auto-resets (done=True, acc=0) when re-enabled."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -432,14 +412,14 @@ class TestOffDelayTOF:
         runner.patch({"Enable": False})
         for _ in range(3):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 30
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # Re-enable - should reset
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 0
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 0
+        assert runner.current_state.tags["Timer1_done"] is True
 
 
 class TestTimerIntegration:
@@ -453,16 +433,14 @@ class TestTimerIntegration:
         """
 
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
         CapturedAcc = Int("CapturedAcc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=1000)
+                on_delay(Timer[1], preset=1000)
 
             with Rung(Enable):
-                copy(Timer_acc, CapturedAcc)
+                copy(Timer[1].acc, CapturedAcc)
 
         runner = PLC(logic, dt=0.002)
         runner.patch({"Enable": False})
@@ -489,13 +467,11 @@ class TestTimerIntegration:
         Other units (Ts, Tm, Th, Td) scale accordingly.
         """
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
                 # Using default Tms - accumulator in milliseconds
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=0.025)
         runner.patch({"Enable": False})
@@ -503,39 +479,35 @@ class TestTimerIntegration:
 
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 25
+        assert runner.current_state.tags["Timer1_acc"] == 25
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50
+        assert runner.current_state.tags["Timer1_acc"] == 50
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 75
+        assert runner.current_state.tags["Timer1_acc"] == 75
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is True  # Done at preset
+        assert runner.current_state.tags["Timer1_acc"] == 100
+        assert runner.current_state.tags["Timer1_done"] is True  # Done at preset
 
     def test_ton_and_tof_in_same_program(self):
         """TON and TOF can coexist in the same program."""
 
         Motor = Bool("Motor")
-        TON_done = Bool("t.StartDelay")
-        TON_acc = Int("td.StartDelay_acc")
-        TOF_done = Bool("t.StopDelay")
-        TOF_acc = Int("td.StopDelay_acc")
         MotorOutput = Bool("MotorOutput")
 
         with Program() as logic:
             # Start delay: Motor must be on for 50ms before output
             with Rung(Motor):
-                on_delay(TON_done, TON_acc, preset=50)
+                on_delay(Timer[1], preset=50)
 
             # Stop delay: Output stays on 50ms after motor stops
             with Rung(Motor):
-                off_delay(TOF_done, TOF_acc, preset=50)
+                off_delay(Timer[2], preset=50)
 
             # Output logic: TON done AND TOF done
-            with Rung(TON_done, TOF_done):
+            with Rung(Timer[1].done, Timer[2].done):
                 out(MotorOutput)
 
         runner = PLC(logic, dt=0.010)
@@ -549,8 +521,8 @@ class TestTimerIntegration:
         for _ in range(5):
             runner.step()
 
-        assert runner.current_state.tags["t.StartDelay"] is True  # TON done
-        assert runner.current_state.tags["t.StopDelay"] is True  # TOF done (enabled)
+        assert runner.current_state.tags["Timer1_done"] is True  # TON done
+        assert runner.current_state.tags["Timer2_done"] is True  # TOF done (enabled)
         assert runner.current_state.tags["MotorOutput"] is True
 
         # Stop motor - TOF starts counting, output should stay on
@@ -558,25 +530,23 @@ class TestTimerIntegration:
         runner.step()
 
         # TON resets immediately
-        assert runner.current_state.tags["t.StartDelay"] is False
+        assert runner.current_state.tags["Timer1_done"] is False
         # TOF still true (off-delay)
-        assert runner.current_state.tags["t.StopDelay"] is True
+        assert runner.current_state.tags["Timer2_done"] is True
         # Output goes off because TON is false
         assert runner.current_state.tags["MotorOutput"] is False
 
     def test_pump_delay_scenario(self):
         """Real-world scenario: Pump runs 5 minutes after motor starts."""
         MotorRunning = Bool("MotorRunning")
-        PumpReady = Bool("t.PumpTmr")
-        PumpTmr_acc = Int("td.PumpTmr_acc")
         PumpOutput = Bool("PumpOutput")
 
         with Program() as logic:
             with Rung(MotorRunning):
                 # 5000ms = 5 seconds (scaled down from 5 minutes for test)
-                on_delay(PumpReady, PumpTmr_acc, preset=5000)
+                on_delay(Timer[1], preset=5000)
 
-            with Rung(PumpReady):
+            with Rung(Timer[1].done):
                 out(PumpOutput)
 
         runner = PLC(logic, dt=1.0)
@@ -588,19 +558,19 @@ class TestTimerIntegration:
         # After 4 seconds - not ready yet
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.PumpTmr_acc"] == 4000
+        assert runner.current_state.tags["Timer1_acc"] == 4000
         assert runner.current_state.tags["PumpOutput"] is False
 
         # After 5 seconds - ready
         runner.step()
-        assert runner.current_state.tags["td.PumpTmr_acc"] == 5000
-        assert runner.current_state.tags["t.PumpTmr"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 5000
+        assert runner.current_state.tags["Timer1_done"] is True
         assert runner.current_state.tags["PumpOutput"] is True
 
         # Motor stops - timer and output reset
         runner.patch({"MotorRunning": False})
         runner.step()
-        assert runner.current_state.tags["td.PumpTmr_acc"] == 0
+        assert runner.current_state.tags["Timer1_acc"] == 0
         assert runner.current_state.tags["PumpOutput"] is False
 
 
@@ -610,13 +580,11 @@ class TestDynamicpresets:
     def test_ton_with_dynamic_preset(self):
         """TON supports Tag preset that can change at runtime."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
         preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=preset)
+                on_delay(Timer[1], preset=preset)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
@@ -628,25 +596,25 @@ class TestDynamicpresets:
         # Run 4 scans (40ms) - not done yet with preset=50
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 40
-        assert runner.current_state.tags["t.Timer"] is False
+        assert runner.current_state.tags["Timer1_acc"] == 40
+        assert runner.current_state.tags["Timer1_done"] is False
 
         # Run 1 more scan (50ms) - done
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 50
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # Change preset to 100 - done should go back to False
         runner.patch({"preset": 100})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60
-        assert runner.current_state.tags["t.Timer"] is False  # Now not done
+        assert runner.current_state.tags["Timer1_acc"] == 60
+        assert runner.current_state.tags["Timer1_done"] is False  # Now not done
 
         # Continue until new preset
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is True  # Done again
+        assert runner.current_state.tags["Timer1_acc"] == 100
+        assert runner.current_state.tags["Timer1_done"] is True  # Done again
 
     def test_tof_preset_increase_after_timeout_re_enables_done(self):
         """TOF: If preset increases past acc after timeout, done goes True.
@@ -658,13 +626,11 @@ class TestDynamicpresets:
         preset value is reached."
         """
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
         preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=preset)
+                off_delay(Timer[1], preset=preset)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
@@ -673,38 +639,36 @@ class TestDynamicpresets:
         # Enable then disable
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_done"] is True
         runner.patch({"Enable": False})
 
         # Count to preset (50ms = 5 scans)
         for _ in range(5):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 50
-        assert runner.current_state.tags["t.Timer"] is False  # Timed out
+        assert runner.current_state.tags["Timer1_acc"] == 50
+        assert runner.current_state.tags["Timer1_done"] is False  # Timed out
 
         # Increase preset to 100 - done should go back to True
         runner.patch({"preset": 100})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60  # Resumed counting
-        assert runner.current_state.tags["t.Timer"] is True  # Re-enabled!
+        assert runner.current_state.tags["Timer1_acc"] == 60  # Resumed counting
+        assert runner.current_state.tags["Timer1_done"] is True  # Re-enabled!
 
         # Continue counting to new preset
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is False  # Timed out again
+        assert runner.current_state.tags["Timer1_acc"] == 100
+        assert runner.current_state.tags["Timer1_done"] is False  # Timed out again
 
     def test_rton_with_dynamic_preset(self):
         """RTON supports Tag preset."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
         preset = Int("preset")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=preset).reset(ResetBtn)
+                on_delay(Timer[1], preset=preset).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False, "preset": 50})
@@ -714,19 +678,19 @@ class TestDynamicpresets:
         runner.patch({"Enable": True})
         for _ in range(5):
             runner.step()
-        assert runner.current_state.tags["t.Timer"] is True  # Done at 50
+        assert runner.current_state.tags["Timer1_done"] is True  # Done at 50
 
         # Change preset to 100 while still enabled
         runner.patch({"preset": 100})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 60
-        assert runner.current_state.tags["t.Timer"] is False  # Not done anymore
+        assert runner.current_state.tags["Timer1_acc"] == 60
+        assert runner.current_state.tags["Timer1_done"] is False  # Not done anymore
 
         # Continue to new preset
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is True  # Done again
+        assert runner.current_state.tags["Timer1_acc"] == 100
+        assert runner.current_state.tags["Timer1_done"] is True  # Done again
 
 
 class TestTimerAccumulatorOverflow:
@@ -744,12 +708,10 @@ class TestTimerAccumulatorOverflow:
     def test_ton_accumulates_past_preset(self):
         """TON accumulator continues past preset towards max int."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -761,15 +723,15 @@ class TestTimerAccumulatorOverflow:
         for _ in range(15):
             runner.step()
 
-        assert runner.current_state.tags["td.Timer_acc"] == 150
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 150
+        assert runner.current_state.tags["Timer1_done"] is True
 
         # Continue - accumulator keeps going past preset
         for _ in range(10):
             runner.step()
 
-        assert runner.current_state.tags["td.Timer_acc"] == 250
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 250
+        assert runner.current_state.tags["Timer1_done"] is True
 
     def test_ton_accumulator_clamps_at_max_int(self):
         """TON accumulator clamps at max int value (32767).
@@ -777,12 +739,10 @@ class TestTimerAccumulatorOverflow:
         Uses large dt to reach max int quickly.
         """
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100)
+                on_delay(Timer[1], preset=100)
 
         runner = PLC(logic, dt=10.0)  # 10000ms per scan — reach max int quickly
         runner.patch({"Enable": False})
@@ -792,34 +752,32 @@ class TestTimerAccumulatorOverflow:
 
         # First scan adds 10000
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 10000
+        assert runner.current_state.tags["Timer1_acc"] == 10000
 
         # Second scan adds another 10000
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 20000
+        assert runner.current_state.tags["Timer1_acc"] == 20000
 
         # Third scan adds 10000 more
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30000
+        assert runner.current_state.tags["Timer1_acc"] == 30000
 
         # Fourth scan would go past 32767 - clamps at max
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 32767
+        assert runner.current_state.tags["Timer1_acc"] == 32767
 
         # Further scans stay clamped at max
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 32767
+        assert runner.current_state.tags["Timer1_acc"] == 32767
 
     def test_rton_accumulator_continues_past_preset(self):
         """RTON accumulator continues past preset when enabled."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=50).reset(ResetBtn)
+                on_delay(Timer[1], preset=50).reset(ResetBtn)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -831,19 +789,17 @@ class TestTimerAccumulatorOverflow:
         for _ in range(20):
             runner.step()
 
-        assert runner.current_state.tags["td.Timer_acc"] == 200
-        assert runner.current_state.tags["t.Timer"] is True
+        assert runner.current_state.tags["Timer1_acc"] == 200
+        assert runner.current_state.tags["Timer1_done"] is True
 
     def test_rton_accumulator_clamps_at_max_int(self):
         """RTON clamps at max int when re-enabled and continuing."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Timer_done, Timer_acc, preset=100).reset(ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
 
         runner = PLC(logic, dt=10.0)
         runner.patch({"Enable": False, "ResetBtn": False})
@@ -852,33 +808,31 @@ class TestTimerAccumulatorOverflow:
         # Enable, accumulate, disable (holds)
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 10000
+        assert runner.current_state.tags["Timer1_acc"] == 10000
 
         runner.patch({"Enable": False})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 10000  # Held
+        assert runner.current_state.tags["Timer1_acc"] == 10000  # Held
 
         # Re-enable - continues from held value
         runner.patch({"Enable": True})
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 20000
+        assert runner.current_state.tags["Timer1_acc"] == 20000
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30000
+        assert runner.current_state.tags["Timer1_acc"] == 30000
 
         # Next scan would exceed 32767 - clamps at max
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 32767
+        assert runner.current_state.tags["Timer1_acc"] == 32767
 
     def test_tof_accumulator_continues_past_preset(self):
         """TOF accumulator continues counting past preset while disabled."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=0.010)
         runner.patch({"Enable": False})
@@ -893,18 +847,16 @@ class TestTimerAccumulatorOverflow:
         for _ in range(10):
             runner.step()
 
-        assert runner.current_state.tags["td.Timer_acc"] == 100
-        assert runner.current_state.tags["t.Timer"] is False
+        assert runner.current_state.tags["Timer1_acc"] == 100
+        assert runner.current_state.tags["Timer1_done"] is False
 
     def test_tof_accumulator_clamps_at_max_int(self):
         """TOF accumulator clamps at max int value (32767) while disabled."""
         Enable = Bool("Enable")
-        Timer_done = Bool("t.Timer")
-        Timer_acc = Int("td.Timer_acc")
 
         with Program() as logic:
             with Rung(Enable):
-                off_delay(Timer_done, Timer_acc, preset=50)
+                off_delay(Timer[1], preset=50)
 
         runner = PLC(logic, dt=10.0)
         runner.patch({"Enable": False})
@@ -917,22 +869,22 @@ class TestTimerAccumulatorOverflow:
 
         # Accumulate large values
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 10000
-        assert runner.current_state.tags["t.Timer"] is False  # Past preset
+        assert runner.current_state.tags["Timer1_acc"] == 10000
+        assert runner.current_state.tags["Timer1_done"] is False  # Past preset
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 20000
+        assert runner.current_state.tags["Timer1_acc"] == 20000
 
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 30000
+        assert runner.current_state.tags["Timer1_acc"] == 30000
 
         # Next scan would exceed 32767 - clamps at max
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 32767
+        assert runner.current_state.tags["Timer1_acc"] == 32767
 
         # Further scans stay clamped
         runner.step()
-        assert runner.current_state.tags["td.Timer_acc"] == 32767
+        assert runner.current_state.tags["Timer1_acc"] == 32767
 
 
 class TestTimerConditionTypeGuards:
@@ -940,11 +892,9 @@ class TestTimerConditionTypeGuards:
 
     def test_on_delay_reset_rejects_int_tag(self):
         Enable = Bool("Enable")
-        Done = Bool("t.Done")
-        Acc = Int("td.Acc")
         ResetValue = Int("ResetValue")
 
         with Program():
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
-                    on_delay(Done, Acc, preset=100).reset(ResetValue)
+                    on_delay(Timer[1], preset=100).reset(ResetValue)

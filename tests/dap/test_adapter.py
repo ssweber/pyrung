@@ -406,32 +406,26 @@ def _nested_debug_script() -> str:
 
 def _chained_builder_debug_script() -> str:
     return (
-        "from pyrung.core import Block, Bool, Dint, Int, PLC, Program, Rung, TagType, count_down, count_up, on_delay, shift\n"
+        "from pyrung.core import Block, Bool, Counter, PLC, Program, Rung, TagType, Timer, count_down, count_up, on_delay, shift\n"
         "\n"
         "Enable = Bool('Enable')\n"
         "Down = Bool('Down')\n"
         "Reset = Bool('Reset')\n"
         "Clock = Bool('Clock')\n"
-        "DoneUp = Bool('DoneUp')\n"
-        "AccUp = Dint('AccUp')\n"
-        "DoneDown = Bool('DoneDown')\n"
-        "AccDown = Dint('AccDown')\n"
-        "TimerDone = Bool('TimerDone')\n"
-        "TimerAcc = Int('TimerAcc')\n"
         "C = Block('C', TagType.BOOL, 1, 8)\n"
         "\n"
         "with Program(strict=False) as prog:\n"
         "    with Rung(Enable):\n"
-        "        cu_builder = count_up(DoneUp, AccUp, preset=5)\n"
+        "        cu_builder = count_up(Counter[1], preset=5)\n"
         "        cu_builder = cu_builder.down(Down)\n"
         "        cu_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        cd_builder = count_down(DoneDown, AccDown, preset=5)\n"
+        "        cd_builder = count_down(Counter[2], preset=5)\n"
         "        cd_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        timer_builder = on_delay(TimerDone, TimerAcc, preset=50)\n"
+        "        timer_builder = on_delay(Timer[1], preset=50)\n"
         "        timer_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
@@ -1026,17 +1020,17 @@ def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_li
     expected_path = os.path.normcase(os.path.normpath(os.path.abspath(str(script))))
 
     expected = [
-        ("Count Up", _line_number(script, "cu_builder = count_up(DoneUp, AccUp, preset=5)")),
+        ("Count Up", _line_number(script, "cu_builder = count_up(Counter[1], preset=5)")),
         ("Count Down", _line_number(script, "cu_builder = cu_builder.down(Down)")),
         ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
         (
             "Count Down",
-            _line_number(script, "cd_builder = count_down(DoneDown, AccDown, preset=5)"),
+            _line_number(script, "cd_builder = count_down(Counter[2], preset=5)"),
         ),
         ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
         (
             "Enable",
-            _line_number(script, "timer_builder = on_delay(TimerDone, TimerAcc, preset=50)"),
+            _line_number(script, "timer_builder = on_delay(Timer[1], preset=50)"),
         ),
         ("Reset", _line_number(script, "timer_builder.reset(Reset)")),
         ("Data", _line_number(script, "shift_builder = shift(C.select(1, 3))")),

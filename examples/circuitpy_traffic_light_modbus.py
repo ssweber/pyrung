@@ -10,7 +10,7 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Or, Program, Rung, copy, on_delay, out, rise
+from pyrung import Bool, Char, Int, Or, Program, Rung, Timer, copy, on_delay, out, rise
 from pyrung.circuitpy import (
     ModbusClientConfig,
     ModbusServerConfig,
@@ -35,12 +35,9 @@ GreenLight = outputs[3]
 # ── Tags ──────────────────────────────────────────────────────────────────
 State = Char("State", default="r")  # r=red, g=green, y=yellow
 
-RedDone = Bool("RedDone")
-RedAcc = Int("RedAcc")
-GreenDone = Bool("GreenDone")
-GreenAcc = Int("GreenAcc")
-YellowDone = Bool("YellowDone")
-YellowAcc = Int("YellowAcc")
+RedTimer = Timer.named(1, "RedTimer")
+GreenTimer = Timer.named(2, "GreenTimer")
+YellowTimer = Timer.named(3, "YellowTimer")
 
 # Walk request — received from remote pedestrian panel via Modbus client
 WalkRequest = Bool("WalkRequest")
@@ -56,24 +53,24 @@ RxExCode = Int("RxExCode", retentive=False)
 with Program() as logic:
     # --- State machine (frozen when ManualOverride is ON) ---
     with Rung(State == "r", ~ManualOverride):
-        on_delay(RedDone, RedAcc, preset=5000, unit="Tms")
-    with Rung(RedDone):
+        on_delay(RedTimer, preset=5000, unit="Tms")
+    with Rung(RedTimer.done):
         copy("g", State)
 
     with Rung(State == "g", ~ManualOverride):
-        on_delay(GreenDone, GreenAcc, preset=4000, unit="Tms")
-    with Rung(GreenDone):
+        on_delay(GreenTimer, preset=4000, unit="Tms")
+    with Rung(GreenTimer.done):
         copy("y", State)
 
     with Rung(State == "y", ~ManualOverride):
-        on_delay(YellowDone, YellowAcc, preset=1500, unit="Tms")
-    with Rung(YellowDone):
+        on_delay(YellowTimer, preset=1500, unit="Tms")
+    with Rung(YellowTimer.done):
         copy("r", State)
 
     # --- Walk request: latch on rising edge, clear after green phase ---
     with Rung(Or(rise(WalkRequest), rise(LocalPedButton))):
         out(WalkActive)
-    with Rung(GreenDone):
+    with Rung(GreenTimer.done):
         copy(False, WalkActive)
 
     # --- Drive relay outputs ---
@@ -104,12 +101,12 @@ mapping = TagMap({
     WalkActive: c[1],       # C1 = walk active flag
     WalkRequest: c[2],      # C2 = walk request (received from remote)
     # Timers — done bits (T) and accumulators (TD)
-    RedDone: t[1],
-    RedAcc: td[1],
-    GreenDone: t[2],
-    GreenAcc: td[2],
-    YellowDone: t[3],
-    YellowAcc: td[3],
+    RedTimer.done: t[1],
+    RedTimer.acc: td[1],
+    GreenTimer.done: t[2],
+    GreenTimer.acc: td[2],
+    YellowTimer.done: t[3],
+    YellowTimer.acc: td[3],
     # Modbus client status
     RxBusy: c[3],
     RxOk: c[4],

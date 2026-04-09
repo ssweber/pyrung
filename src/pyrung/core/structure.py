@@ -23,6 +23,7 @@ _RESERVED_FIELD_NAMES = frozenset(
         "fields",
         "map_to",
         "name",
+        "named",
         "instance",
         "instance_select",
         "stride",
@@ -114,19 +115,47 @@ def resolve_default(spec: object, index: int) -> object:
 
 
 class InstanceView:
-    """1-based indexed view into one structure instance."""
+    """1-based indexed view into one structure instance.
 
-    def __init__(self, owner: _StructRuntime, index: int):
+    When *custom_name* is set (via ``_StructRuntime.named()``), field access
+    produces tags with that name as prefix (e.g. ``OvenTimer_done``) instead
+    of the default ``Timer1_done`` form.
+    """
+
+    def __init__(self, owner: _StructRuntime, index: int, *, custom_name: str | None = None):
         self._owner = owner
         self._index = index
+        self._custom_name = custom_name
+        self._tag_cache: dict[str, Tag] = {}
 
     def __getattr__(self, field_name: str) -> LiveTag:
+        cached = self._tag_cache.get(field_name)
+        if cached is not None:
+            return cached  # ty: ignore[return-type]
         block = self._owner._blocks.get(field_name)
         if block is None:
             raise AttributeError(f"{type(self._owner).__name__!s} has no field {field_name!r}.")
-        return block[self._index]
+        if self._custom_name is None:
+            tag = block[self._index]
+        else:
+            field_spec = self._owner._field_specs[field_name]
+            tag = Tag(
+                f"{self._custom_name}_{field_name}",
+                type=field_spec.type,
+                retentive=field_spec.retentive,
+            )
+            # Attach structure metadata so TagMap can trace back to the block.
+            object.__setattr__(tag, "_pyrung_structure_runtime", self._owner)
+            object.__setattr__(tag, "_pyrung_structure_kind", self._owner._structure_kind)
+            object.__setattr__(tag, "_pyrung_structure_name", self._custom_name)
+            object.__setattr__(tag, "_pyrung_structure_field", field_name)
+            object.__setattr__(tag, "_pyrung_structure_index", self._index)
+        self._tag_cache[field_name] = tag
+        return tag  # ty: ignore[return-type]
 
     def __repr__(self) -> str:
+        if self._custom_name is not None:
+            return f"InstanceView({self._custom_name})"
         return f"InstanceView({self._owner.name}[{self._index}])"
 
 
@@ -251,6 +280,22 @@ class _StructRuntime:
             always_number=self.always_number,
             kind=self._structure_kind,
         )
+
+    def named(self, index: int, name: str) -> InstanceView:
+        """Create a named instance whose tags use *name* as prefix.
+
+        ``Timer.named(1, "OvenTimer")`` produces tags ``OvenTimer_done``
+        and ``OvenTimer_acc`` instead of the default ``Timer1_done`` form.
+        The underlying block index is preserved for TagMap resolution.
+        """
+        if not isinstance(index, int):
+            raise TypeError(f"{type(self).__name__}.named() index must be an int.")
+        if index < 1 or index > self.count:
+            raise IndexError(
+                f"{type(self).__name__}.named() index {index} out of range 1..{self.count}."
+            )
+        _validate_name(name)
+        return InstanceView(self, index, custom_name=name)
 
     @property
     def fields(self) -> dict[str, Field]:
@@ -621,3 +666,23 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
             f"Field {field_name!r} uses auto() but type {type.name} is not numeric. "
             "Supported types: INT, DINT, WORD."
         )
+
+
+# ---------------------------------------------------------------------------
+# Built-in Timer / Counter UDTs
+# ---------------------------------------------------------------------------
+# Counts match Click PLC bank sizes (T1–T500, CT1–CT250) so TagMap mapping
+# is 1-to-1 by index.  Use ``Timer.named(n, "...")`` for production code;
+# ``Timer[n]`` for throwaway simulation.
+
+
+@udt(count=500)
+class Timer:
+    done: Bool  # noqa: F821
+    acc: Int  # noqa: F821
+
+
+@udt(count=250)
+class Counter:
+    done: Bool  # noqa: F821
+    acc: Dint  # noqa: F821
