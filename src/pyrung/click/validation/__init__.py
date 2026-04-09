@@ -148,7 +148,7 @@ def validate_click_program(
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
-        findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, mode))
+        findings.extend(_evaluate_timer_preset_overflow(instruction, base_location, tag_map, mode))
 
     active_profile = profile if profile is not None else _load_default_profile()
 

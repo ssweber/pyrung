@@ -496,6 +496,7 @@ _TIMER_INSTRUCTION_TYPES = frozenset({"OnDelayInstruction", "OffDelayInstruction
 def _evaluate_timer_preset_overflow(
     instruction: Any,
     base_location: ProgramLocation,
+    tag_map: TagMap,
     mode: ValidationMode,
 ) -> list[ClickFinding]:
     instruction_type = type(instruction).__name__
@@ -511,7 +512,7 @@ def _evaluate_timer_preset_overflow(
 
     location = _instruction_location(base_location, "instruction.preset")
     location_text = _format_location(location)
-    suggestion = _build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, None)  # type: ignore[arg-type]
+    suggestion = _build_suggestion(CLK_TIMER_PRESET_OVERFLOW, None, tag_map)
     return [
         ClickFinding(
             code=CLK_TIMER_PRESET_OVERFLOW,
