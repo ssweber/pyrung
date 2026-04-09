@@ -135,7 +135,7 @@ with Program(strict=False) as logic:
     # Inline expressions + inline pointer refs + block range operations.
     with Rung(Running, RTon.Done):
         copy(120, Source)
-        calc((Source * 2) + (Idx << 1) - 3, CalcOut, mode="decimal")
+        calc((Source * 2) + (Idx << 1) - 3, CalcOut)
         copy(DS[Idx], DD[Idx + 1])
         copy(CalcOut // 2, DS[Idx + Span])
         blockcopy(DS.select(1, 4), DS.select(2, 5))
