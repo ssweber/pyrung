@@ -178,6 +178,30 @@ mapping = TagMap({
 
 Built-in `Timer` and `Counter` UDTs are automatically resolved to their Click hardware banks — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, `Counter[n].Done` → CT*n*, `Counter[n].Acc` → CTD*n*. No explicit TagMap entries are needed for these.
 
+#### Named timers/counters from nicknames
+
+When importing ladder CSV with nicknames (via `nicknames=` dict or `nickname_csv=`), a nickname on a T or CT address promotes the anonymous `Timer[n]` / `Counter[n]` to a named instance:
+
+```python
+# Without nickname: Timer[1]
+on_delay(Timer[1], preset=100, unit="Tms")
+
+# With nickname {"T1": "OvenTimer"}: Timer.named()
+OvenTimer = Timer.named(1, "OvenTimer")
+on_delay(OvenTimer, preset=100, unit="Tms")
+```
+
+The T (done-bit) nickname drives the name — any nickname on the matching TD/CTD address is silently overridden. This keeps `.Done` and `.Acc` fields under a single consistent prefix.
+
+If the nickname already ends with `_Done` or `_Acc` (common in Click projects where users name the done-bit address directly), the suffix is stripped automatically — `"OvenTimer_Done"` becomes `Timer.named(1, "OvenTimer")`, not `Timer.named(1, "OvenTimer_Done")`.
+
+Condition references resolve through the named instance too. A rung conditioned on T1 renders as `OvenTimer.Done`:
+
+```python
+with Rung(OvenTimer.Done):
+    out(AlarmLight)
+```
+
 ### Type validation at map time
 
 `TagMap` validates that logical and hardware data types match:
