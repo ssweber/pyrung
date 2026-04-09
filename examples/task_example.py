@@ -14,7 +14,7 @@ from pyrung import (
     Int,
     PLC,
     Rung,
-    Ts,
+
     calc,
     call,
     copy,
@@ -49,8 +49,8 @@ def task_logic() -> None:
     # 1) Global and step timers run while task is active.
     #    Add other units to suit (e.g., StepTime_Min with unit=Tm).
     with Rung(Task.Active == 1):
-        on_delay(TimerDone, Task.Elapsed, preset=9999, unit=Ts)
-        on_delay(TimerDone, Task.StepTime, preset=9999, unit=Ts)
+        on_delay(TimerDone, Task.Elapsed, preset=9999, unit="Ts")
+        on_delay(TimerDone, Task.StepTime, preset=9999, unit="Ts")
 
     # 2) Step logic (odd numbered active steps).
     with Rung(Task.Step == 1):

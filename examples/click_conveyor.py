@@ -21,7 +21,7 @@ from pyrung import (
     Int,
     PLC,
     Rung,
-    Tms,
+
     all_of,
     any_of,
     branch,
@@ -161,7 +161,7 @@ def logic():
 
     comment("DETECTING: read size for 0.5 seconds")
     with Rung(State == DETECTING):
-        on_delay(DetDone, DetAcc, preset=500, unit=Tms)
+        on_delay(DetDone, DetAcc, preset=500, unit="Tms")
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetDone):
@@ -169,7 +169,7 @@ def logic():
 
     comment("SORTING: hold diverter for 2 seconds")
     with Rung(State == SORTING):
-        on_delay(HoldDone, HoldAcc, preset=2000, unit=Tms)
+        on_delay(HoldDone, HoldAcc, preset=2000, unit="Tms")
     with Rung(HoldDone):
         copy(RESETTING, State)
 
@@ -201,11 +201,10 @@ def logic():
 runner = PLC(logic, dt=0.010)
 
 if os.getenv("PYRUNG_DAP_ACTIVE") != "1":
-    # NC inputs: force True to simulate healthy wiring
-    runner.force(StopBtn, True)
-    runner.force(EstopOK, True)
-
     with runner:
+        # NC inputs: True simulates healthy wiring
+        StopBtn.value = True
+        EstopOK.value = True
         Auto.value = True
         SizeThreshold.value = 100
 
