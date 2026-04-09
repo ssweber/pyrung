@@ -14,7 +14,6 @@ from pyrung.click.codegen.constants import (
     _INSTRUCTION_NAMES,
     _OPERAND_RE,
     _RANGE_RE,
-    _TIME_UNITS,
 )
 from pyrung.click.codegen.models import (
     RungRole,
@@ -605,11 +604,6 @@ def _scan_af_token(
         if cw + "(" in clean_args:
             collection.used_conditions.add(cw)
 
-    # Check for time units
-    for tu in _TIME_UNITS:
-        if tu in clean_args:
-            collection.used_time_units.add(tu)
-
     # Check for copy converters
     for cc in _COPY_CONVERTERS:
         if f"convert={cc}" in clean_args:
@@ -845,10 +839,6 @@ def _ref_af_token(
     for cw in _CONDITION_WRAPPERS:
         if cw + "(" in clean_args:
             refs.used_conditions.add(cw)
-
-    for tu in _TIME_UNITS:
-        if tu in clean_args:
-            refs.used_time_units.add(tu)
 
     for cc in _COPY_CONVERTERS:
         if f"convert={cc}" in clean_args:

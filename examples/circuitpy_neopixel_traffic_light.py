@@ -1,6 +1,6 @@
 """Zero-slot CircuitPython traffic light using the onboard NeoPixel."""
 
-from pyrung import Bool, Char, Int, Program, Rung, Tms, copy, on_delay
+from pyrung import Bool, Char, Int, Program, Rung, copy, on_delay
 from pyrung.circuitpy import P1AM, board, generate_circuitpy
 
 State = Char("State", default="r")  # r=red, g=green, y=yellow
@@ -15,17 +15,17 @@ YellowAcc = Int("YellowAcc")
 
 with Program() as logic:
     with Rung(State == "r"):
-        on_delay(RedDone, RedAcc, preset=3000, unit=Tms)
+        on_delay(RedDone, RedAcc, preset=3000, unit="Tms")
     with Rung(RedDone):
         copy("g", State)
 
     with Rung(State == "g"):
-        on_delay(GreenDone, GreenAcc, preset=3000, unit=Tms)
+        on_delay(GreenDone, GreenAcc, preset=3000, unit="Tms")
     with Rung(GreenDone):
         copy("y", State)
 
     with Rung(State == "y"):
-        on_delay(YellowDone, YellowAcc, preset=1000, unit=Tms)
+        on_delay(YellowDone, YellowAcc, preset=1000, unit="Tms")
     with Rung(YellowDone):
         copy("r", State)
 

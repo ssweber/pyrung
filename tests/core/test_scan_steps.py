@@ -350,7 +350,9 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
             "Jog": False,
         }
     )
-    instruction_steps = [step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [
+        step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"
+    ]
 
     assert [step.instruction_kind for step in instruction_steps] == [
         "Count Up",

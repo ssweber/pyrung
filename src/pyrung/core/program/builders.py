@@ -23,7 +23,6 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.tag import Tag
-from pyrung.core.time_mode import TimeUnit
 
 from .context import _require_rung_context
 
@@ -371,7 +370,7 @@ class TimeDrumBuilder(_DrumBuilderBase):
         self,
         outputs: Sequence[Tag],
         presets: Sequence[Tag | int],
-        unit: TimeUnit,
+        unit: str,
         pattern: Sequence[Sequence[bool | int]],
         current_step: Tag,
         accumulator: Tag,
@@ -471,7 +470,7 @@ def time_drum(
     *,
     outputs: Sequence[Tag],
     presets: Sequence[Tag | int],
-    unit: TimeUnit = TimeUnit.Tms,
+    unit: str = "Tms",
     pattern: Sequence[Sequence[bool | int]],
     current_step: Tag,
     accumulator: Tag,
@@ -768,7 +767,7 @@ class OnDelayBuilder(_AutoFinalizeBuilderBase):
         accumulator: Tag,
         preset: Tag | int,
         enable_condition: Any,
-        unit: TimeUnit,
+        unit: str,
         source_file: str | None = None,
         source_line: int | None = None,
     ):
@@ -852,7 +851,7 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
         accumulator: Tag,
         preset: Tag | int,
         enable_condition: Any,
-        unit: TimeUnit,
+        unit: str,
         source_file: str | None = None,
         source_line: int | None = None,
     ):
@@ -885,7 +884,7 @@ def on_delay(
     accumulator: Tag,
     *,
     preset: Tag | int,
-    unit: TimeUnit = TimeUnit.Tms,
+    unit: str = "Tms",
 ) -> OnDelayBuilder:
     """On-Delay Timer instruction (TON/RTON) - Click-style.
 
@@ -925,7 +924,7 @@ def off_delay(
     accumulator: Tag,
     *,
     preset: Tag | int,
-    unit: TimeUnit = TimeUnit.Tms,
+    unit: str = "Tms",
 ) -> OffDelayBuilder:
     """Off-Delay Timer instruction (TOF) - Click-style.
 

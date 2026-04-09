@@ -113,13 +113,6 @@ from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not i
     TimeUnit,
 )
 
-# Time unit aliases for DSL ergonomics
-Tms = TimeUnit.Tms
-Ts = TimeUnit.Ts
-Tm = TimeUnit.Tm
-Th = TimeUnit.Th
-Td = TimeUnit.Td
-
 __all__ = [
     "PLC",
     "ScanContext",
@@ -128,11 +121,6 @@ __all__ = [
     "RungTraceEvent",
     "system",
     "TimeUnit",
-    "Tms",
-    "Ts",
-    "Tm",
-    "Th",
-    "Td",
     # Structured factories
     "Field",
     "AutoDefault",

@@ -10,7 +10,7 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Program, Rung, Tms, copy, on_delay, out, rise
+from pyrung import Bool, Char, Int, Program, Rung, copy, on_delay, out, rise
 from pyrung.circuitpy import (
     ModbusClientConfig,
     ModbusServerConfig,
@@ -56,17 +56,17 @@ RxExCode = Int("RxExCode", retentive=False)
 with Program() as logic:
     # --- State machine (frozen when ManualOverride is ON) ---
     with Rung(State == "r", ~ManualOverride):
-        on_delay(RedDone, RedAcc, preset=5000, unit=Tms)
+        on_delay(RedDone, RedAcc, preset=5000, unit="Tms")
     with Rung(RedDone):
         copy("g", State)
 
     with Rung(State == "g", ~ManualOverride):
-        on_delay(GreenDone, GreenAcc, preset=4000, unit=Tms)
+        on_delay(GreenDone, GreenAcc, preset=4000, unit="Tms")
     with Rung(GreenDone):
         copy("y", State)
 
     with Rung(State == "y", ~ManualOverride):
-        on_delay(YellowDone, YellowAcc, preset=1500, unit=Tms)
+        on_delay(YellowDone, YellowAcc, preset=1500, unit="Tms")
     with Rung(YellowDone):
         copy("r", State)
 

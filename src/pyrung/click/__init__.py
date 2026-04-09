@@ -248,7 +248,6 @@ __all__ = [
     "LadderBundle",
     "LadderExportError",
     "ClickDataProvider",
-    "validate_click_program",
     "ModbusAddress",
     "ModbusReceiveInstruction",
     "ModbusRtuTarget",

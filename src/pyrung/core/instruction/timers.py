@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
-from pyrung.core.time_mode import TimeUnit
+from pyrung.core.time_mode import _parse_time_unit
 
 from .base import Instruction
 from .utils import (
@@ -39,7 +39,7 @@ class OnDelayInstruction(Instruction):
         preset: Target value (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Optional condition to reset acc+done (creates RTON).
-        unit: Time unit for accumulator. Default `Tms` (milliseconds).
+        unit: Time unit for accumulator. Default ``"Tms"`` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -52,12 +52,12 @@ class OnDelayInstruction(Instruction):
         preset: Tag | int,
         enable_condition: Any,
         reset_condition: Any = None,
-        unit: TimeUnit = TimeUnit.Tms,
+        unit: str = "Tms",
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
-        self.unit = unit
+        self.unit = _parse_time_unit(unit)
         self.has_reset = reset_condition is not None
 
         # Convert Tags to Conditions if needed
@@ -130,7 +130,7 @@ class OffDelayInstruction(Instruction):
         accumulator: INT tag storing elapsed off-time in `unit` ticks.
         preset: Delay duration (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
-        unit: Time unit for accumulator. Default `Tms` (milliseconds).
+        unit: Time unit for accumulator. Default ``"Tms"`` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -142,12 +142,12 @@ class OffDelayInstruction(Instruction):
         accumulator: Tag,
         preset: Tag | int,
         enable_condition: Any,
-        unit: TimeUnit = TimeUnit.Tms,
+        unit: str = "Tms",
     ):
         self.done_bit = done_bit
         self.accumulator = accumulator
         self.preset = preset
-        self.unit = unit
+        self.unit = _parse_time_unit(unit)
 
         # Convert Tags to Conditions if needed
         self.enable_condition = to_condition(enable_condition)

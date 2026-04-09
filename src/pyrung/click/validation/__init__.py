@@ -228,5 +228,4 @@ __all__ = [
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "ClickFinding",
     "ClickValidationReport",
-    "validate_click_program",
 ]

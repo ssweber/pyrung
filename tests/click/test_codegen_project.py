@@ -26,7 +26,6 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    Tms,
     any_of,
 )
 from pyrung.core.program import (
@@ -745,7 +744,7 @@ class TestTimerCounterInstructions:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=1000, unit=Tms)
+                on_delay(Done, Acc, preset=1000, unit="Tms")
 
         mapping = TagMap(
             {Enable: x[1], Done: t[1], Acc: td[1]},

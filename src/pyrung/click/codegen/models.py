@@ -180,7 +180,6 @@ class _OperandCollection:
     used_blocks: set[str] = field(default_factory=set)  # block vars used
     used_instructions: set[str] = field(default_factory=set)  # instruction names
     used_conditions: set[str] = field(default_factory=set)  # rise, fall, immediate
-    used_time_units: set[str] = field(default_factory=set)  # Tms, Ts, etc.
     used_copy_converters: set[str] = field(default_factory=set)  # to_value, to_text, etc.
     used_expr_funcs: set[str] = field(default_factory=set)  # sqrt, lsh, etc.
     has_any_of: bool = False
@@ -215,7 +214,6 @@ class _FileRefs:
     structure_names: set[str] = field(default_factory=set)
     used_instructions: set[str] = field(default_factory=set)
     used_conditions: set[str] = field(default_factory=set)
-    used_time_units: set[str] = field(default_factory=set)
     used_copy_converters: set[str] = field(default_factory=set)
     used_expr_funcs: set[str] = field(default_factory=set)
     used_click_blocks: set[str] = field(default_factory=set)

@@ -43,7 +43,6 @@ from pyrung.core import (
     Real,
     Rung,
     TagType,
-    Tms,
     Word,
     all_of,
     any_of,
@@ -142,7 +141,6 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "Char": Char,
     "Block": Block,
     "TagType": TagType,
-    "Tms": Tms,
     # Condition combinators
     "any_of": any_of,
     "all_of": all_of,

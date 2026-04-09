@@ -19,8 +19,6 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    Tms,
-    Ts,
     branch,
     off_delay,
     on_delay,
@@ -168,7 +166,7 @@ class TestTimerMillisecond:
 
         def logic():
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=10, unit=Tms).reset(reset_tag)
+                on_delay(done, acc, preset=10, unit="Tms").reset(reset_tag)
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
@@ -185,7 +183,7 @@ class TestTimerSeconds:
 
         def logic():
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=10, unit=Ts).reset(reset_tag)
+                on_delay(done, acc, preset=10, unit="Ts").reset(reset_tag)
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
@@ -201,7 +199,7 @@ class TestOffDelayTimer:
 
         def logic():
             with Rung(Bool("Enable")):
-                off_delay(done, acc, preset=10, unit=Tms)
+                off_delay(done, acc, preset=10, unit="Tms")
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
@@ -223,7 +221,7 @@ class TestNoHardware:
             with Rung(Bool("Enable")):
                 out(remote_light)
                 run_function(fn)
-                on_delay(done, acc, preset=10, unit=Tms).reset(Bool("Reset"))
+                on_delay(done, acc, preset=10, unit="Tms").reset(Bool("Reset"))
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=None, mode="warn")
@@ -250,6 +248,22 @@ class TestDialectRegistration:
         via_program = prog.validate("circuitpy", hw=hw, mode="warn")
 
         assert _finding_codes(direct) == _finding_codes(via_program)
+
+    def test_hw_validate_convenience_matches_direct(self):
+        hw = P1AM()
+
+        def fn():
+            return {}
+
+        def logic():
+            with Rung():
+                run_function(fn)
+
+        prog = _build_program(logic)
+        direct = validate_circuitpy_program(prog, hw=hw, mode="warn")
+        via_hw = hw.validate(prog, mode="warn")
+
+        assert _finding_codes(direct) == _finding_codes(via_hw)
 
     def test_program_validate_rejects_bad_hw_type(self):
         prog = Program(strict=False)
@@ -351,7 +365,7 @@ class TestSuggestionContent:
 
         def logic():
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=5, unit=Tms).reset(Bool("Reset"))
+                on_delay(done, acc, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
         finding = [f for f in report.hints if f.code == CPY_TIMER_RESOLUTION][0]
@@ -405,7 +419,7 @@ class TestStrictMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
-                on_delay(done, acc, preset=5, unit=Tms).reset(Bool("Reset"))
+                on_delay(done, acc, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="strict")
         codes = set(_finding_codes(report))
@@ -432,7 +446,7 @@ class TestWarnMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
-                on_delay(done, acc, preset=5, unit=Tms).reset(Bool("Reset"))
+                on_delay(done, acc, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
         codes = set(_finding_codes(report))

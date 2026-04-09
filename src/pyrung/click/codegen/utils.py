@@ -10,7 +10,6 @@ from pyrung.click.codegen.constants import (
     _OPERAND_RE,
     _RANGE_RE,
     _STRING_KWARGS,
-    _TIME_UNITS,
 )
 from pyrung.click.codegen.models import _OperandCollection
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
@@ -223,10 +222,6 @@ def _sub_operand(
     if text in collection.ranges:
         r = collection.ranges[text]
         return _render_inline_range(r.prefix, r.start, r.end)
-
-    # Check for time units
-    if text in _TIME_UNITS:
-        return text
 
     # Check for quoted strings — pass through
     if text.startswith('"') and text.endswith('"'):

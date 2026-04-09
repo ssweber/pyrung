@@ -8,7 +8,11 @@ pyrung :class:`~pyrung.core.memory_block.InputBlock` and
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Final, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, overload
+
+if TYPE_CHECKING:
+    from pyrung.circuitpy.validation import CircuitPyValidationReport, ValidationMode
+    from pyrung.core.program import Program
 
 from pyrung.circuitpy.catalog import (
     MODULE_CATALOG,
@@ -243,6 +247,24 @@ class P1AM:
         # (every module in the catalog has at least one group).
         assert outputs is not None  # noqa: S101
         return outputs
+
+    def validate(
+        self,
+        program: Program,
+        mode: ValidationMode = "warn",
+    ) -> CircuitPyValidationReport:
+        """Validate a Program against CircuitPy portability rules.
+
+        Args:
+            program: The Program to validate.
+            mode: ``"warn"`` (findings as hints) or ``"strict"`` (findings as errors).
+
+        Returns:
+            CircuitPyValidationReport with categorized findings.
+        """
+        from pyrung.circuitpy.validation import validate_circuitpy_program
+
+        return validate_circuitpy_program(program, hw=self, mode=mode)
 
     def __repr__(self) -> str:
         if not self._slots:

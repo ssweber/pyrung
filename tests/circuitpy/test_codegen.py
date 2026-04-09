@@ -29,7 +29,6 @@ from pyrung.core import (
     Real,
     Rung,
     TagType,
-    Tms,
     all_of,
     blockcopy,
     branch,
@@ -423,7 +422,7 @@ class TestGenerateCircuitPyAPI:
 
         with Program(strict=False) as prog:
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=5, unit=Tms)
+                on_delay(done, acc, preset=5, unit="Tms")
                 run_function(fn, outs={"result": dest})
 
         source_code = generate_circuitpy(prog, hw, target_scan_ms=10.0).code
@@ -1464,15 +1463,15 @@ class TestRuntimeSplit:
 
         with Program(strict=False) as prog:
             with Rung(State == "r"):
-                on_delay(RedDone, RedAcc, preset=5000, unit=Tms)
+                on_delay(RedDone, RedAcc, preset=5000, unit="Tms")
             with Rung(RedDone):
                 copy("g", State)
             with Rung(State == "g"):
-                on_delay(GreenDone, GreenAcc, preset=4000, unit=Tms)
+                on_delay(GreenDone, GreenAcc, preset=4000, unit="Tms")
             with Rung(GreenDone):
                 copy("y", State)
             with Rung(State == "y"):
-                on_delay(YellowDone, YellowAcc, preset=1500, unit=Tms)
+                on_delay(YellowDone, YellowAcc, preset=1500, unit="Tms")
             with Rung(YellowDone):
                 copy("r", State)
             with Rung():
@@ -1538,7 +1537,7 @@ class TestRuntimeSplit:
 
         with Program(strict=False) as prog:
             with Rung(State == "r"):
-                on_delay(RedDone, RedAcc, preset=3000, unit=Tms)
+                on_delay(RedDone, RedAcc, preset=3000, unit="Tms")
             with Rung(RedDone):
                 copy("g", State)
             with Rung(State == "g"):

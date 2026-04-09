@@ -35,7 +35,6 @@ from pyrung.core import (
     Program,
     Rung,
     TagType,
-    Tms,
     any_of,
 )
 from pyrung.core.program import (
@@ -333,7 +332,7 @@ class TestTopologyAnalysis:
 
         with Program() as logic:
             with Rung(Enable):
-                on_delay(Done, Acc, preset=100, unit=Tms).reset(Reset)
+                on_delay(Done, Acc, preset=100, unit="Tms").reset(Reset)
 
         mapping = TagMap(
             {Enable: x[1], Reset: x[2], Done: t[1], Acc: td[1]},
@@ -1355,11 +1354,11 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    on_delay(T1, TD1, preset=100, unit=Tms).reset(X2)
+                    on_delay(T1, TD1, preset=100, unit="Tms").reset(X2)
             """,
             """
             with Rung(X001):
-                on_delay(T1, TD1, preset=100, unit=Tms).reset(X002)
+                on_delay(T1, TD1, preset=100, unit="Tms").reset(X002)
             """,
         )
 
@@ -1895,7 +1894,7 @@ class TestRoundTrip:
                     time_drum(
                         outputs=[Y1, Y2],
                         presets=[100, 200],
-                        unit=Tms,
+                        unit="Tms",
                         pattern=[[1, 0], [0, 1]],
                         current_step=DS1,
                         accumulator=TD1,
@@ -1904,7 +1903,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit=Tms, pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
+                time_drum(outputs=[Y001, Y002], presets=[100, 200], unit="Tms", pattern=[[1, 0], [0, 1]], current_step=DS1, accumulator=TD1, completion_flag=C1).reset(X002)
             """,
         )
 

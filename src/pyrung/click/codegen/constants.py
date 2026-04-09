@@ -49,9 +49,6 @@ _COMPARE_RE = re.compile(r"^(.+?)(==|!=|<=|>=|<|>)(.+)$")
 # Matches a pin row like .reset() or .jump(5)
 _PIN_RE = re.compile(r"^\.(\w+)\((.*)\)$")
 
-# Time unit names that should be imported from pyrung
-_TIME_UNITS = {"Tms", "Ts", "Tm", "Th", "Td"}
-
 # Condition wrappers
 _CONDITION_WRAPPERS = {"rise", "fall", "immediate"}
 
@@ -114,7 +111,7 @@ _ADJACENCY: dict[str, tuple[str, ...]] = {
 
 # Kwargs whose values are string enums (not operands/numbers).
 
-_STRING_KWARGS = {"condition"}
+_STRING_KWARGS = {"condition", "unit"}
 
 # Kwargs to drop entirely from the generated code (informational in CSV).
 

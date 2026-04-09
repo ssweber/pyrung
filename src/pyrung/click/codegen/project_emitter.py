@@ -498,10 +498,6 @@ def _emit_logic_imports(
     if refs.has_forloop:
         parts.append("forloop")
 
-    # Time units
-    for tu in sorted(refs.used_time_units):
-        parts.append(tu)
-
     # Copy converters
     for cc in sorted(refs.used_copy_converters):
         parts.append(cc)

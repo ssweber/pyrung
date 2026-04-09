@@ -20,7 +20,6 @@ from pyrung import (
     PLC,
     Rung,
     TagType,
-    Tms,
     blockcopy,
     copy,
     count_up,
@@ -72,21 +71,21 @@ def logic():
 
     # Green phase: 3 000 ms then transition to yellow
     with Rung(State == "g"):
-        on_delay(Tmr.GreenDone, Tmr.GreenAcc, preset=3000, unit=Tms)
+        on_delay(Tmr.GreenDone, Tmr.GreenAcc, preset=3000, unit="Tms")
 
     with Rung(Tmr.GreenDone):
         copy("y", State)
 
     # Yellow phase: 1 000 ms then transition to red
     with Rung(State == "y"):
-        on_delay(Tmr.YellowDone, Tmr.YellowAcc, preset=1000, unit=Tms)
+        on_delay(Tmr.YellowDone, Tmr.YellowAcc, preset=1000, unit="Tms")
 
     with Rung(Tmr.YellowDone):
         copy("r", State)
 
     # Red phase: 3 000 ms then transition to green
     with Rung(State == "r"):
-        on_delay(Tmr.RedDone, Tmr.RedAcc, preset=3000, unit=Tms)
+        on_delay(Tmr.RedDone, Tmr.RedAcc, preset=3000, unit="Tms")
 
     with Rung(Tmr.RedDone):
         copy("g", State)

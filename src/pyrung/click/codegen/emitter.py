@@ -227,10 +227,6 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     if collection.has_subroutine:
         core_imports.append("subroutine")
 
-    # Time units
-    for tu in sorted(collection.used_time_units):
-        core_imports.append(tu)
-
     # Copy converters
     for cc in sorted(collection.used_copy_converters):
         core_imports.append(cc)

@@ -12,7 +12,6 @@ from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
-    from pyrung.core.state import SystemState
 
     from ..validation import DialectValidator
 

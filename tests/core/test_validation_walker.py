@@ -24,7 +24,6 @@ from pyrung.core import (
 )
 from pyrung.core.condition import Condition
 from pyrung.core.instruction import Instruction
-from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import (
     OperandFact,
     ProgramFacts,
@@ -411,7 +410,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung(Bool("Enable")):
-                on_delay(done, acc, preset=100, unit=TimeUnit.Ts)
+                on_delay(done, acc, preset=100, unit="Ts")
 
         facts = walk_program(prog)
         tu_facts = _facts_at(facts, "instruction.unit")
@@ -427,7 +426,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung(Bool("Enable2")):
-                off_delay(done, acc, preset=100, unit=TimeUnit.Tm)
+                off_delay(done, acc, preset=100, unit="Tm")
 
         facts = walk_program(prog)
         tu_facts = _facts_at(facts, "instruction.unit")

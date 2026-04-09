@@ -421,7 +421,9 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
 
     runner = PLC(prog)
     runner.patch({"Enable": True, "Down": True, "Reset": False, "Clock": True})
-    instruction_steps = [step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"]
+    instruction_steps = [
+        step for step in runner.debug.scan_steps_debug() if step.kind == "instruction"
+    ]
     assert [step.source_line for step in instruction_steps] == [
         cu_line,
         cu_down_line,

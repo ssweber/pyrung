@@ -137,7 +137,7 @@ def test_export_roundtrip_guard_rejects_missing_pin_row():
     logic, mapping = build_program(
         """
         with Rung(X1):
-            on_delay(T1, TD1, preset=100, unit=Tms).reset(X2)
+            on_delay(T1, TD1, preset=100, unit="Tms").reset(X2)
         """
     )
 
