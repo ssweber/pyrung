@@ -325,6 +325,26 @@ Common findings:
 | Pointer in `copy` source | Any block, arithmetic | DS only, no arithmetic |
 | Inline expression in condition | `(A + B) > 100` | Must use `calc()` first |
 
+### Timer preset limits
+
+Click timer accumulators are 16-bit signed INT (max 32,767). A literal preset exceeding this range silently clamps at runtime. The validator reports `CLK_TIMER_PRESET_OVERFLOW` for out-of-range presets — use a larger time unit instead.
+
+| Unit | Max preset | Max duration |
+|------|-----------|--------------|
+| `Tms` | 32,767 | 32.7 seconds |
+| `Ts` | 32,767 | 9.1 hours |
+| `Tm` | 32,767 | 22.7 days |
+| `Th` | 32,767 | 3.7 years |
+| `Td` | 32,767 | 89 years |
+
+```python
+# Wrong — clamps silently to 32.7 seconds
+on_delay(Done, Acc, preset=60000, unit="Tms")
+
+# Right — use seconds
+on_delay(Done, Acc, preset=60, unit="Ts")
+```
+
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.
 
 ## Ladder CSV export

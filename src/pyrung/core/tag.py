@@ -381,6 +381,12 @@ class Tag:
                     if child.source_line is None:
                         child.source_line = cond.source_line
                 return cond
+            if isinstance(other, (int, float)):
+                raise TypeError(
+                    f"Cannot use bitwise & between {other!r} and Bool tag {self.name!r}. "
+                    "This is usually a precedence mistake — "
+                    "add parentheses: (Speed > 50) & Ready"
+                )
 
         return other & TagExpr(self)
 

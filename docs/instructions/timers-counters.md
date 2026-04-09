@@ -10,10 +10,10 @@ Timers use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`INT`).
 
 ```python
 # TON: auto-reset when rung goes False
-on_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
+on_delay(TimerDone, TimerAcc, preset=100, unit=Tms)
 
 # RTON: hold accumulator when rung goes False (manual reset required)
-on_delay(TimerDone, accumulator=TimerAcc, preset=100) \
+on_delay(TimerDone, TimerAcc, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -31,7 +31,7 @@ on_delay(TimerDone, accumulator=TimerAcc, preset=100) \
 ### Off-delay timer (TOF)
 
 ```python
-off_delay(TimerDone, accumulator=TimerAcc, preset=100, unit=Tms)
+off_delay(TimerDone, TimerAcc, preset=100, unit=Tms)
 ```
 
 **TOF behavior:**
@@ -52,6 +52,28 @@ TOF is non-terminal — instructions can follow it in the same rung.
 
 The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
+### Structured timers
+
+For production code with multiple timers, group the done bit and accumulator into a `@udt` to avoid flat-tag proliferation:
+
+```python
+@udt(count=3)
+class Timer:
+    Done: Bool
+    Acc: Int
+
+Green  = Timer[1]
+Yellow = Timer[2]
+Red    = Timer[3]
+
+with Rung(State == "g"):
+    on_delay(Green.Done, Green.Acc, preset=3000, unit=Tms)
+with Rung(State == "y"):
+    on_delay(Yellow.Done, Yellow.Acc, preset=1000, unit=Tms)
+```
+
+See [Structured Tags](../learn/structured-tags.md) for the full pattern.
+
 ## Counters
 
 Counters use a **two-tag model**: a done-bit (`BOOL`) and an accumulator (`DINT`).
@@ -61,7 +83,7 @@ Counters count **every scan** while the condition is True — they are not edge-
 ### Count up (CTU)
 
 ```python
-count_up(CountDone, accumulator=CountAcc, preset=100) \
+count_up(CountDone, CountAcc, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -73,7 +95,7 @@ count_up(CountDone, accumulator=CountAcc, preset=100) \
 ### Count down (CTD)
 
 ```python
-count_down(CountDone, accumulator=CountAcc, preset=100) \
+count_down(CountDone, CountAcc, preset=100) \
     .reset(ResetButton)
 ```
 
@@ -85,7 +107,7 @@ count_down(CountDone, accumulator=CountAcc, preset=100) \
 ### Bidirectional counter
 
 ```python
-count_up(CountDone, accumulator=CountAcc, preset=100) \
+count_up(CountDone, CountAcc, preset=100) \
     .down(DownCondition) \
     .reset(ResetButton)
 ```

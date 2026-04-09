@@ -260,6 +260,28 @@ runner.step()   # Still True
 runner.remove_force("Button")
 ```
 
+## System points
+
+The PLC exposes built-in status and control through the `system` namespace. Import it with `from pyrung import system`.
+
+**`system.sys`** — scan-level status: `always_on`, `first_scan`, clock toggles (`clock_10ms` through `clock_1h`), `mode_run`, `scan_counter`. Use `first_scan` for one-time initialization:
+
+```python
+with Rung(system.sys.first_scan):
+    copy("g", State)
+```
+
+**`system.fault`** — math and runtime fault flags: `division_error`, `out_of_range`, `math_operation_error`, `address_error`, `plc_error`, and `code` (the most recent fault code as an integer). Fault flags are auto-cleared at the start of each scan.
+
+```python
+with Rung(system.fault.division_error):
+    latch(MathFaultSeen)
+```
+
+**`system.rtc`** — real-time clock: `year4`, `month`, `day`, `hour`, `minute`, `second` (read-only). Writable counterparts (`new_hour`, etc.) with `apply_date`/`apply_time` triggers. Use for time-of-day logic like shift changes.
+
+The [Click cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
+
 ## Next steps
 
 - [Quickstart](quickstart.md) — build and test a traffic light

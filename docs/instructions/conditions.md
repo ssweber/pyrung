@@ -99,6 +99,28 @@ with Rung(any_of(Step, AlarmCode)):
     out(AnyActive)
 ```
 
+!!! warning "Operator precedence with `&` and comparisons"
+
+    Python's `>`, `<`, `==`, etc. bind **tighter** than `&` and `|`. This means `Fault & MotorTemp > 100` silently parses as `Fault & (MotorTemp > 100)` — which happens to be correct — but `MotorTemp > 100 & Fault` parses as `MotorTemp > (100 & Fault)`, which is wrong.
+
+    Always parenthesize comparisons when mixing with `&` or `|`:
+
+    ```python
+    # Wrong — parses as Speed > (50 & Ready)
+    with Rung(Speed > 50 & Ready):
+        ...
+
+    # Right
+    with Rung((Speed > 50) & Ready):
+        ...
+
+    # Better — comma syntax avoids the trap entirely
+    with Rung(Speed > 50, Ready):
+        ...
+    ```
+
+    The comma form has no precedence issues because commas separate independent conditions. Prefer it for AND unless you specifically need `&` for readability.
+
 ## Inline expressions
 
 ```python

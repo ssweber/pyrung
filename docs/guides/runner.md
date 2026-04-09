@@ -37,7 +37,7 @@ runner = PLC(logic, realtime=True)   # wall-clock
 
 ## Real-time clock
 
-Logic that depends on time of day (shift changes, scheduled events) uses the RTC system points (`rtc.year4`, `rtc.month`, `rtc.hour`, etc.). By default, these track wall-clock time.
+Logic that depends on time of day (shift changes, scheduled events) uses the RTC system points (`system.rtc.year4`, `system.rtc.month`, `system.rtc.hour`, etc.). By default, these track wall-clock time. See [System points](../getting-started/concepts.md#system-points) for the full namespace overview.
 
 `set_rtc` pins the RTC to a specific datetime:
 

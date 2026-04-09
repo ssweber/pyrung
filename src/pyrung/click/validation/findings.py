@@ -43,6 +43,7 @@ CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED = "CLK_IMMEDIATE_CONTEXT_NOT_ALLOWED"
 CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED = "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED"
 CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y = "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y"
 CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS = "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS"
+CLK_TIMER_PRESET_OVERFLOW = "CLK_TIMER_PRESET_OVERFLOW"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,9 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
     if code == CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS:
         return "Map immediate-wrapped coil ranges to contiguous Y addresses (Ynnn..Ymmm)."
 
+    if code == CLK_TIMER_PRESET_OVERFLOW:
+        return "Use a larger time unit to keep the preset within INT range (max 32,767)."
+
     return ""
 
 
@@ -254,6 +258,7 @@ __all__ = [
     "CLK_IMMEDIATE_EDGE_CONTACT_NOT_ALLOWED",
     "CLK_IMMEDIATE_COIL_TARGET_MUST_BE_Y",
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
+    "CLK_TIMER_PRESET_OVERFLOW",
     "ClickFinding",
     "ClickValidationReport",
 ]
