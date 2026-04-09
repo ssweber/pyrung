@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core import Block, Bool, Int, TagType, all_of, any_of
+from pyrung.core import And, Block, Bool, Int, Or, TagType
 from pyrung.core.condition import (
     BitCondition,
     Condition,
@@ -146,7 +146,7 @@ def test_condition_trace_engine_short_circuit_terms_and_composite_expressions() 
     step = Int("Step")
     auto_mode = Bool("AutoMode")
 
-    all_cond = all_of(step == 1, auto_mode)
+    all_cond = And(step == 1, auto_mode)
     all_value, all_details = engine.evaluate(all_cond, _ctx({"Step": 0, "AutoMode": True}))
     assert all_value is False
     all_terms = str(_detail_map(all_details)["terms"])
@@ -154,7 +154,7 @@ def test_condition_trace_engine_short_circuit_terms_and_composite_expressions() 
     assert "AutoMode(skipped)" in all_terms
     assert engine.expression(all_cond) == "(Step == 1 & AutoMode)"
 
-    any_cond = any_of(step == 0, auto_mode)
+    any_cond = Or(step == 0, auto_mode)
     any_value, any_details = engine.evaluate(any_cond, _ctx({"Step": 0, "AutoMode": False}))
     assert any_value is True
     any_terms = str(_detail_map(any_details)["terms"])

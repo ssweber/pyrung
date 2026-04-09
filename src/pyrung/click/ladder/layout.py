@@ -448,7 +448,7 @@ class _LayoutMixin:
         if len(local_rows) != 1:
             self._raise_issue(
                 path=f"{path}.condition",
-                message="branch(...) local any_of() export is not supported in Click ladder v1.",
+                message="branch(...) local Or() export is not supported in Click ladder v1.",
                 source=None,
             )
 
@@ -571,7 +571,7 @@ class _LayoutMixin:
         if not condition.conditions:
             self._raise_issue(
                 path=path,
-                message="any_of() cannot be empty.",
+                message="Or() cannot be empty.",
                 source=condition,
             )
 

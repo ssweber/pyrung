@@ -22,6 +22,7 @@ from pyrung import (
     Char,
     Dint,
     Int,
+    Or,
     Program,
     RangeComparison,
     Real,
@@ -29,7 +30,6 @@ from pyrung import (
     TagType,
     Tms,
     Word,
-    any_of,
     as_ascii,
     as_binary,
     as_text,
@@ -207,7 +207,7 @@ CONDITIONS: list[tuple[str, Any]] = [
     ("gt",        lambda a: (a.int_() > 0,)),
     ("le",        lambda a: (a.int_() <= 50,)),
     ("ge",        lambda a: (a.int_() >= 10,)),
-    ("or",        lambda a: (any_of(a.bool(), a.bool()),)),
+    ("or",        lambda a: (Or(a.bool(), a.bool()),)),
     ("and",       lambda a: (a.bool(), a.bool())),
 ]
 

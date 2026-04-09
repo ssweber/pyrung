@@ -162,7 +162,7 @@ def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:
         value = adapter._parse_literal(raw_value)
         runner.force(tag, value)
         return f"Forced {tag}={value!r}"
-    if command in {"remove_force", "unforce"}:
+    if command == "unforce":
         if len(parts) != 2:
             raise adapter.DAPAdapterError("Usage: unforce <tag>")
         tag = parts[1]
@@ -172,7 +172,7 @@ def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:
         runner.clear_forces()
         return "Cleared all forces"
     raise adapter.DAPAdapterError(
-        "Unsupported Debug Console command. Use force/remove_force/unforce/clear_forces. "
+        "Unsupported Debug Console command. Use force/unforce/clear_forces. "
         "Use Watch for predicate expressions."
     )
 

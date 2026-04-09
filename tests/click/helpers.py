@@ -34,18 +34,18 @@ from pyrung.click import (
 from pyrung.click.codegen.constants import _OPERAND_RE
 from pyrung.click.codegen.utils import _parse_operand_prefix, _strip_quoted_strings
 from pyrung.core import (
+    And,
     Block,
     Bool,
     Char,
     Dint,
     Int,
+    Or,
     Program,
     Real,
     Rung,
     TagType,
     Word,
-    all_of,
-    any_of,
     fall,
     immediate,
     rise,
@@ -142,8 +142,8 @@ _EXEC_NAMESPACE: dict[str, object] = {
     "Block": Block,
     "TagType": TagType,
     # Condition combinators
-    "any_of": any_of,
-    "all_of": all_of,
+    "Or": Or,
+    "And": And,
     "rise": rise,
     "fall": fall,
     "immediate": immediate,

@@ -19,8 +19,8 @@ from pyrung import (
     Program,
     Rung,
     TagType,
-    all_of,
-    any_of,
+    And,
+    Or,
     blockcopy,
     branch,
     calc,
@@ -119,9 +119,9 @@ def gated_scale(enabled, value, factor):
 
 with Program(strict=False) as logic:
     # Basic run-latch handling plus edge conditions for _prev coverage.
-    with Rung(any_of(Enable, rise(Start), fall(Stop))):
+    with Rung(Or(Enable, rise(Start), fall(Stop))):
         latch(Running)
-    with Rung(any_of(Stop, Abort)):
+    with Rung(Or(Stop, Abort)):
         reset(Running)
 
     # Timers + counters.
@@ -214,7 +214,7 @@ with Program(strict=False) as logic:
     # Indirect compare condition and SD command points.
     with Rung(DD[Idx] > 0):
         out(StepDone)
-    with Rung(AutoMode | Found):
+    with Rung(Or(AutoMode, Found)):
         out(board.save_memory_cmd)
     with Rung(Abort):
         out(system.storage.sd.delete_all_cmd)
@@ -224,6 +224,6 @@ with Program(strict=False) as logic:
     with subroutine("service"):
         with Rung(Abort):
             return_early()
-        with Rung(all_of(Running, Found)):
+        with Rung(And(Running, Found)):
             copy(DD[Idx], DS[10])
             copy(FnOut + 1, DS[11])

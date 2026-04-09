@@ -9,14 +9,14 @@ from typing import cast
 
 from pyrung.core import (
     PLC,
+    And,
     Block,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    all_of,
-    any_of,
     branch,
     copy,
     count_down,
@@ -71,33 +71,27 @@ def test_condition_helpers_and_operators_capture_source_lines():
     line_rise = _line_no() + 1
     cond_rise = rise(b)
     line_any = _line_no() + 1
-    cond_any = any_of(a, b)
+    cond_any = Or(a, b)
     line_all = _line_no() + 1
-    cond_all = all_of(a, c)
-    line_or = _line_no() + 1
-    cond_or = a | b
-    line_and = _line_no() + 1
-    cond_and = a & b
+    cond_all = And(a, c)
     line_cmp = _line_no() + 1
     cond_cmp = step == 10
     line_expr_cmp = _line_no() + 1
     cond_expr_cmp = (step + 1) > 0
     line_chain = _line_no() + 1
-    cond_chain = (a | b) | (step > 1)
+    cond_chain = Or(Or(a, b), step > 1)
 
     assert cond_nc.source_line == line_nc
     assert cond_rise.source_line == line_rise
     assert cond_any.source_line == line_any
     assert cond_all.source_line == line_all
-    assert cond_or.source_line == line_or
-    assert cond_and.source_line == line_and
     assert cond_cmp.source_line == line_cmp
     assert cond_expr_cmp.source_line == line_expr_cmp
     assert cond_chain.source_line == line_chain
 
     # Direct-Tag children get inherited source metadata when they are wrapped.
-    assert cond_or.conditions[0].source_line == line_or
-    assert cond_or.conditions[1].source_line == line_or
+    assert cond_any.conditions[0].source_line == line_any
+    assert cond_any.conditions[1].source_line == line_any
 
 
 def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_instructions():

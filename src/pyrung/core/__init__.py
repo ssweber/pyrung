@@ -51,13 +51,13 @@ from pyrung.core.memory_block import (
     SlotView,
 )
 from pyrung.core.program import (
+    And,
     ForbiddenControlFlowError,
     ForLoop,
+    Or,
     Program,
     Rung,
     SubroutineFunc,
-    all_of,
-    any_of,
     blockcopy,
     branch,
     calc,
@@ -198,8 +198,8 @@ __all__ = [
     # Conditions
     "rise",
     "fall",
-    "all_of",
-    "any_of",
+    "And",
+    "Or",
     # Copy converters
     "to_value",
     "to_ascii",

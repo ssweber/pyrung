@@ -18,6 +18,7 @@ from pyrung.circuitpy.codegen import (
 )
 from pyrung.click import TagMap, c
 from pyrung.core import (
+    And,
     Block,
     Bool,
     Char,
@@ -29,7 +30,6 @@ from pyrung.core import (
     Real,
     Rung,
     TagType,
-    all_of,
     blockcopy,
     branch,
     calc,
@@ -778,7 +778,7 @@ class TestPersistenceWatchdogAndDiagnostics:
         step = Int("Step")
 
         with Program(strict=False) as prog:
-            with Rung(all_of(Bool("Enable"), system.storage.sd.ready)):
+            with Rung(And(Bool("Enable"), system.storage.sd.ready)):
                 copy(5, step)
                 out(board.save_memory_cmd)
                 out(system.storage.sd.eject_cmd)

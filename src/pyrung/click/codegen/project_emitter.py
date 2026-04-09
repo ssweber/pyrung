@@ -455,10 +455,10 @@ def _emit_logic_imports(
         parts.append("subroutine")
 
     # Conditions
-    if refs.has_any_of:
-        parts.append("any_of")
-    if refs.has_all_of:
-        parts.append("all_of")
+    if refs.has_Or:
+        parts.append("Or")
+    if refs.has_And:
+        parts.append("And")
     for cw in sorted(refs.used_conditions):
         parts.append(cw)
 

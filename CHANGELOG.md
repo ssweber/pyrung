@@ -2,9 +2,51 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`PLCRunner` renamed to `PLC`** — `.active()` removed; `PLC` is now a context manager directly (`with PLC(logic) as plc:`). `dt=` (default `0.010`) and `realtime=True` kwargs replace `set_time_mode()`. `dt=` and `realtime=True` are mutually exclusive. `TimeMode` removed from public exports.
+- **`set_battery_present()` replaced by property** — use `plc.battery_present = False`.
+- **`plc.debug.*` namespace** — 11 debugger-internal methods moved off `PLC` into `plc.debug`: `scan_steps`, `scan_steps_debug`, `rung_trace` (was `inspect`), `last_event` (was `inspect_event`), `prepare_scan`, `commit_scan`, etc. `system_runtime` accessible via `plc.debug.system_runtime`.
+- **Force API renamed** — `add_force()` → `force()`, `remove_force()` → `unforce()`, `with plc.force(...)` → `with plc.forced(...)`. DAP debug console commands updated to match (`remove_force` alias removed).
+- **`_fn` variants dropped** — `run_until_fn` merged into `run_until`, `when_fn` merged into `when`. Both now accept Tag/Condition expressions or callable predicates directly.
+- **`Program` internals privatized** — `add_rung`, `start_subroutine`, `end_subroutine`, `evaluate`, `current` → private. Legacy `call_subroutine` removed.
+- **`TagMap` internals privatized** — `offset_for`, `block_entry_by_name`, `owner_of` → private.
+- **Time units as strings** — `Tms`, `Ts`, `Tm`, `Th`, `Td` removed from public imports. Use `unit="Tms"` string form. `TimeUnit` enum stays internal.
+- **Validation entry points consolidated** — `validate_click_program` and `validate_circuitpy_program` removed from public exports. Use `logic.validate(dialect=...)` or `mapping.validate(logic)` / `P1AM.validate(logic)`.
+- **`Tag.__rand__` precedence guard** — `int & tag` and `BoolTag & tag` now raise `TypeError` with guidance to reorder operands, preventing the Python operator precedence trap where `2 & tag` silently evaluates wrong.
+
 ### New features
 
 - **Conflicting output target validation** — `validate_conflicting_outputs(program)` detects when multiple `INERT_WHEN_DISABLED=False` instructions (`out`, timers, counters, drums, shift registers) write to the same tag from non-mutually-exclusive execution paths. The only safe pattern is different subroutines whose callers have provably exclusive conditions (e.g., `State == 1` vs `State == 2`); same-scope duplicates are always flagged because the disabled instruction actively resets the target every scan. Supports `CompareEq` different-constant, `BitCondition`/`NormallyClosedCondition` complement, `CompareEq`/`CompareNe` complement, and range-complement (`Lt`/`Ge`, `Le`/`Gt`) detection on caller conditions.
+- **Click timer preset overflow validation** — `CLK_TIMER_PRESET_OVERFLOW` finding warns when a timer preset exceeds the INT range for its time base (e.g., >32767 for `Tms`). Click silently clamps overflows.
+- **`P1AM.validate()` convenience method** — mirrors `TagMap.validate()` for CircuitPython programs.
+
+### Bug fixes
+
+- **Click bypassed imported contacts** — codegen now warns on contacts that were bypassed during import.
+
+### Docs
+
+- System namespace section added to concepts (`system.sys.*`, `system.fault.*`, `system.rtc.*`).
+- Operator precedence trap callout added to conditions reference.
+- Structured timer (`@udt`) note added to timers/counters reference.
+- Click timer preset INT cap table added to Click dialect docs.
+- Counter/timer accumulator switched to positional form in reference.
+- Fault flags named explicitly in math reference.
+- `ScanContext` section rewritten without internal type name.
+- System points cross-referenced from runner guide.
+
+### Migration
+
+- Replace `PLCRunner` with `PLC` everywhere. Replace `runner = PLCRunner(logic); ctx = runner.active()` with `with PLC(logic) as plc:`.
+- Replace `runner.set_time_mode(TimeMode.REALTIME)` with `PLC(logic, realtime=True)`.
+- Replace `plc.set_battery_present(False)` with `plc.battery_present = False`.
+- Replace `plc.inspect(rung_id)` with `plc.debug.rung_trace(rung_id)`.
+- Replace `plc.add_force(...)` with `plc.force(...)`, `plc.remove_force(...)` with `plc.unforce(...)`, `with plc.force(...)` with `with plc.forced(...)`.
+- Replace `plc.run_until_fn(fn)` with `plc.run_until(fn)`, `plc.when_fn(fn)` with `plc.when(fn)`.
+- Replace `on_delay(..., unit=Tms)` with `on_delay(..., unit="Tms")`. Same for `Ts`, `Tm`, `Th`, `Td`.
+- Replace `validate_click_program(logic)` with `logic.validate(dialect="click")` or `mapping.validate(logic)`.
+- Replace `validate_circuitpy_program(logic, hw)` with `logic.validate(dialect="circuitpy")` or `hw.validate(logic)`.
 
 ## v0.3.1
 

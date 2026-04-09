@@ -131,7 +131,7 @@ class Rung:
         )
 ```
 
-Conditions (`rise()`, `fall()`, `any_of()`, `all_of()`, tag/expression comparisons, `|`/`&` combinations) and instruction emitters (`out()`, `latch()`, `copy()`, `run_function()`, `search()`, `call()`, etc.) capture source at construction time.
+Conditions (`rise()`, `fall()`, `Or()`, `And()`, tag/expression comparisons) and instruction emitters (`out()`, `latch()`, `copy()`, `run_function()`, `search()`, `call()`, etc.) capture source at construction time.
 
 Builder flows also preserve original callsite metadata:
 

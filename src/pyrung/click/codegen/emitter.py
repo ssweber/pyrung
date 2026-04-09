@@ -4,7 +4,6 @@ import re
 from typing import TYPE_CHECKING
 
 from pyrung.click._topology import Leaf, Parallel, Series, SPNode, factor_outputs, make_compound
-from pyrung.click.codegen.collector import _parallel_renders_with_pipe
 
 # Type name → default retentive (mirrors _TYPE_DEFAULT_RETENTIVE in core).
 _TYPE_NAME_DEFAULT_RETENTIVE: dict[str, bool] = {
@@ -181,10 +180,10 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
             core_imports.append(tt)
 
     # Condition helpers
-    if collection.has_any_of:
-        core_imports.append("any_of")
-    if collection.has_all_of:
-        core_imports.append("all_of")
+    if collection.has_Or:
+        core_imports.append("Or")
+    if collection.has_And:
+        core_imports.append("And")
     for cw in sorted(collection.used_conditions):
         core_imports.append(cw)
 
@@ -700,21 +699,16 @@ def _render_sp_node(
         )
 
     if isinstance(node, Parallel):
-        if _parallel_renders_with_pipe(node, collection):
-            return " | ".join(
-                _render_sp_node(child, collection, nicknames, structured_map)
-                for child in node.children
-            )
         parts: list[str] = []
         for child in node.children:
             rendered = _render_sp_node(child, collection, nicknames, structured_map)
             if isinstance(child, Series) and len(child.children) > 1:
-                parts.append(f"all_of({rendered})")
+                parts.append(f"And({rendered})")
             else:
                 parts.append(rendered)
         if len(parts) == 1:
             return parts[0]
-        return f"any_of({', '.join(parts)})"
+        return f"Or({', '.join(parts)})"
 
     raise ValueError(f"Unsupported topology node for codegen: {type(node).__name__}")
 

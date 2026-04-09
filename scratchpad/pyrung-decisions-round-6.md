@@ -3,10 +3,10 @@
 ## Checklist
 
 - [x] 1. Conditions: `And` / `Or`, drop `&` / `|`
-- [ ] 2. Ship built-in `Timer` and `Counter` udts
-- [ ] 3. `Timer.name(n, "Name")` for named instances
-- [ ] 4. Single-argument timer/counter signatures
-- [ ] 5. Tag naming guidance in docs
+- [x] 2. Ship built-in `Timer` and `Counter` udts
+- [x] 3. `Timer.name(n, "Name")` for named instances
+- [x] 4. Single-argument timer/counter signatures
+- [ ] 5. Tag naming guidance in docs (separate task)
 
 ## 1. Conditions: `And` / `Or`, drop `&` / `|`
 

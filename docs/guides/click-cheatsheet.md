@@ -9,7 +9,7 @@ from pyrung import (
     Bool, Int, Dint, Real, Word, Char,         # tag types
     named_array, Field, auto,                    # structures
     Program, Rung, PLC,         # structure
-    rise, fall, all_of, any_of, system,         # conditions
+    rise, fall, And, Or, system,         # conditions
     out, latch, reset,                          # coils
     copy, blockcopy, fill,                      # data movement
     calc,                                       # math
@@ -111,10 +111,9 @@ with Rung(rise(Tag)):                     # rising edge (one scan)
 with Rung(fall(Tag)):                     # falling edge (one scan)
 with Rung(Temp > 100):                    # comparison (==  !=  <  <=  >  >=)
 with Rung(A, B, C):                       # AND (comma = all must be True)
-with Rung(all_of(A, B, C)):              # AND (explicit)
-with Rung(any_of(A, B)):                 # OR
-with Rung(A | B):                         # OR (operator)
-with Rung(any_of(Start, all_of(Auto, Ready))):  # nested AND/OR
+with Rung(And(A, B, C)):                  # AND (explicit)
+with Rung(Or(A, B)):                      # OR
+with Rung(Or(Start, And(Auto, Ready))):   # nested AND/OR
 ```
 
 Click requires explicit comparisons for INT tags — use `Step != 0` instead of bare `Step`.

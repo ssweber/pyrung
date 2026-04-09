@@ -32,17 +32,17 @@ from pyrung.click import (
     y,
 )
 from pyrung.core import (
+    And,
     Block,
     BlockRange,
     Bool,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     Tag,
     TagType,
-    all_of,
-    any_of,
     immediate,
 )
 from pyrung.core.program import (
@@ -171,7 +171,7 @@ def test_or_expansion_with_trailing_and_golden():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(any_of(X1, X2), C1):
+            with Rung(Or(X1, X2), C1):
                 out(Y1)
         """,
         """
@@ -240,7 +240,7 @@ def test_branch_local_or_expands_with_click_topology():
         with Program() as p:
             with Rung(X1):
                 out(Y1)
-                with branch(any_of(X2, X3)):
+                with branch(Or(X2, X3)):
                     out(Y2)
         """,
         """
@@ -257,7 +257,7 @@ def test_branch_local_or_with_series_suffix_stays_mechanical():
         with Program() as p:
             with Rung(X1):
                 out(Y1)
-                with branch(any_of(X2, X3), X4):
+                with branch(Or(X2, X3), X4):
                     out(Y2)
         """,
         """
@@ -274,7 +274,7 @@ def test_branch_local_or_with_series_suffix_pushes_post_branch_siblings_down():
         with Program() as p:
             with Rung(X1):
                 out(Y1)
-                with branch(any_of(X2, X3), X4):
+                with branch(Or(X2, X3), X4):
                     out(Y2)
                 out(Y3)
         """,
@@ -292,7 +292,7 @@ def test_branch_with_series_then_local_or_keeps_click_merge_topology():
         """
         with Program() as p:
             with Rung(X1):
-                with branch(X2, any_of(X3, X4)):
+                with branch(X2, Or(X3, X4)):
                     out(Y1)
                 out(Y2)
         """,
@@ -309,7 +309,7 @@ def test_branch_with_series_then_three_way_local_or_keeps_parent_continuation_vi
         """
         with Program() as p:
             with Rung(X1):
-                with branch(X2, any_of(X3, X4, X5)):
+                with branch(X2, Or(X3, X4, X5)):
                     out(Y1)
                 out(Y2)
         """,
@@ -384,7 +384,7 @@ def test_vertical_wire_stack_for_three_or_branches():
     _assert_export_main_rows(
         """
         with Program() as p:
-            with Rung(any_of(X1, X2, X3), C1):
+            with Rung(Or(X1, X2, X3), C1):
                 out(Y1)
         """,
         """
@@ -1220,7 +1220,7 @@ def test_native_pattern_1_mid_rung_or():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(X001, any_of(X002, C1)):
+        with Rung(X001, Or(X002, C1)):
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], Y001: y[1]}, include_system=False)
@@ -1240,7 +1240,7 @@ def test_native_pattern_2_series_ors():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(any_of(X001, X002), any_of(C1, C2)):
+        with Rung(Or(X001, X002), Or(C1, C2)):
             out(Y001)
 
     mapping = TagMap({X001: x[1], X002: x[2], C1: c[1], C2: c[2], Y001: y[1]}, include_system=False)
@@ -1260,7 +1260,7 @@ def test_native_pattern_3_or_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(X001, X002)):
+        with Rung(Or(X001, X002)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1286,7 +1286,7 @@ def test_native_pattern_4_three_way_or_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(X001, X002, X003)):
+        with Rung(Or(X001, X002, X003)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1315,7 +1315,7 @@ def test_native_pattern_5_combined_or_multi_output_branch():
     Y003 = Bool("Y003")
 
     with Program() as logic:
-        with Rung(X001, any_of(X002, X003, X004)):
+        with Rung(X001, Or(X002, X003, X004)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1353,7 +1353,7 @@ def test_native_pattern_6_mid_rung_or_with_nested_all_of():
     Y001 = Bool("Y001")
 
     with Program() as logic:
-        with Rung(X001, any_of(X002, all_of(C1, C2, C3), X003)):
+        with Rung(X001, Or(X002, And(C1, C2, C3), X003)):
             out(Y001)
 
     mapping = TagMap(
@@ -1379,7 +1379,7 @@ def test_native_pattern_7_or_with_two_branches():
     Y003 = Bool("Y003")
 
     with Program() as logic:
-        with Rung(any_of(X001, X002)):
+        with Rung(Or(X001, X002)):
             out(Y001)
             with branch(C1):
                 out(Y002)
@@ -1409,7 +1409,7 @@ def test_native_pattern_8_series_ors_plus_branch():
     Y002 = Bool("Y002")
 
     with Program() as logic:
-        with Rung(any_of(X001, X002), any_of(C1, C2)):
+        with Rung(Or(X001, X002), Or(C1, C2)):
             out(Y001)
             with branch(X003):
                 out(Y002)

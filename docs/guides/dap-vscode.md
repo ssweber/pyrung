@@ -59,8 +59,8 @@ Condition expressions use the pyrung DSL, for example:
 - `MotorTemp > 100`
 - `Fault, Pump`
 - `Running | (Mode == 1)`
-- `all_of(Fault, Pump)`
-- `any_of(Low, High)`
+- `And(Fault, Pump)`
+- `Or(Low, High)`
 
 When you use `&` or `|` with comparisons, parenthesize the comparison terms:
 

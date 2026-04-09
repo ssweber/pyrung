@@ -11,10 +11,10 @@ elif manual_mode and diverter_button:
 
 ## The ladder logic way
 
-Ladder logic has two ways to combine conditions. For OR-ing two Bool tags together, use `|`:
+Ladder logic has two ways to combine conditions. Commas inside `Rung(...)` are implicit AND. For OR, use `Or()`:
 
 ```python
-from pyrung import Bool, Int, Program, Rung, branch, comment, out, latch, reset, any_of, all_of
+from pyrung import Bool, Int, Program, Rung, branch, comment, out, latch, reset, Or, And
 
 Auto          = Bool("Auto")
 Manual        = Bool("Manual")
@@ -31,15 +31,15 @@ Mode          = Int("Mode")
 
 with Program() as logic:
     # Motor runs in either mode when started
-    with Rung(Auto | Manual):
+    with Rung(Or(Auto, Manual)):
         out(Light)                        # Status light: either mode is active
 
-    # any_of for comparisons or more than two conditions
-    with Rung(any_of(Mode == 1, Mode == 3, Mode == 5)):
+    # Or works with comparisons and any number of conditions
+    with Rung(Or(Mode == 1, Mode == 3, Mode == 5)):
         latch(Running)
 ```
 
-`|` is binary and works on any condition — Bool tags *and* comparisons. The catch is Python's operator precedence: `|` binds tighter than `==`, `<`, `>`, so comparisons need parentheses: `(Mode == 1) | (Mode == 3)`. `any_of` is variadic and skips the paren noise. Reach for `any_of` when the parens get loud or you have more than two terms. Same shape for `&` vs `all_of` — mirrors a familiar Python pattern: `a or b or c` vs `any([a, b, c])`.
+`Or` is variadic — pass any number of conditions. `And` is the explicit form of comma-separated conditions, useful inside `Or` for nested groups. Mirrors a familiar Python pattern: `any([a, b, c])` and `all([a, b, c])`.
 
 ## Branches
 
@@ -56,7 +56,7 @@ Here's the conveyor's motor rung. `EstopOK` gates everything — it's a permissi
 ```python
 with Program() as logic:
     comment("Start/stop — NC stop resets when pressed or wire broken")
-    with Rung(StartBtn, any_of(Auto, Manual)):
+    with Rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with Rung(~StopBtn):
         reset(Running)
@@ -75,17 +75,17 @@ This is the **gate pattern**. The parent rung holds your master condition, and e
 
 The gate pattern is *the* textbook ladder structure for any permission or interlock — guard doors, light curtains, machine-enabled flags. Real fail-safe E-stop wiring lives in [Lesson 11](hardware.md); here, the gate is general-purpose.
 
-## Combining branches and `any_of`
+## Combining branches and `Or`
 
-The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `any_of` with `all_of` — same pattern as `any([all([...]), all([...]])` in Python:
+The diverter needs to fire in two cases: auto mode during sorting, or manual mode with the button pressed. That's `Or` with `And` — same pattern as `any([all([...]), all([...]])` in Python:
 
 ```python
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
         EstopOK,
-        any_of(
-            all_of(State == SORTING, IsLarge, Auto),
-            all_of(Manual, DiverterBtn),
+        Or(
+            And(State == SORTING, IsLarge, Auto),
+            And(Manual, DiverterBtn),
         ),
     ):
         out(DiverterCmd)
@@ -103,7 +103,7 @@ The diverter rung reads `State` and `IsLarge` directly from the state machine in
 
 ```python
 with Rung(~StopBtn):
-    with branch(StartBtn | Running):
+    with branch(Or(StartBtn, Running)):
         out(Running)
 ```
 

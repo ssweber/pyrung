@@ -261,7 +261,7 @@ def _empty_logic_runner_script() -> str:
 
 def _composite_condition_script() -> str:
     return (
-        "from pyrung.core import Bool, PLC, Program, Rung, all_of, any_of, out\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, And, Or, out\n"
         "\n"
         "start = Bool('Start')\n"
         "ready = Bool('Ready')\n"
@@ -269,7 +269,7 @@ def _composite_condition_script() -> str:
         "light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(start, all_of(ready, auto))):\n"
+        "    with Rung(Or(start, And(ready, auto))):\n"
         "        out(light)\n"
         "\n"
         "runner = PLC(prog)\n"
@@ -278,14 +278,14 @@ def _composite_condition_script() -> str:
 
 def _all_of_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, all_of, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, And, out\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(all_of(Step == 1, AutoMode)):\n"
+        "    with Rung(And(Step == 1, AutoMode)):\n"
         "        out(Light)\n"
         "\n"
         "runner = PLC(prog)\n"
@@ -295,14 +295,14 @@ def _all_of_short_circuit_script() -> str:
 
 def _any_of_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, Int, PLC, Program, Rung, any_of, out\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, Or, out\n"
         "\n"
         "Step = Int('Step')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(Step == 0, AutoMode)):\n"
+        "    with Rung(Or(Step == 0, AutoMode)):\n"
         "        out(Light)\n"
         "\n"
         "runner = PLC(prog)\n"
@@ -312,14 +312,14 @@ def _any_of_short_circuit_script() -> str:
 
 def _any_of_rise_short_circuit_script() -> str:
     return (
-        "from pyrung.core import Bool, PLC, Program, Rung, any_of, out, rise\n"
+        "from pyrung.core import Bool, PLC, Program, Rung, Or, out, rise\n"
         "\n"
         "Pulse = Bool('Pulse')\n"
         "AutoMode = Bool('AutoMode')\n"
         "Light = Bool('Light')\n"
         "\n"
         "with Program(strict=False) as prog:\n"
-        "    with Rung(any_of(rise(Pulse), AutoMode)):\n"
+        "    with Rung(Or(rise(Pulse), AutoMode)):\n"
         "        out(Light)\n"
         "\n"
         "runner = PLC(prog)\n"
@@ -1276,8 +1276,8 @@ def test_next_trace_formats_composite_conditions_with_operators(tmp_path: Path):
     expression = str(conditions[0]["expression"])
     assert "|" in expression
     assert "&" in expression
-    assert "any_of" not in expression
-    assert "all_of" not in expression
+    assert "Or" not in expression
+    assert "And" not in expression
     details = {item["name"]: item["value"] for item in conditions[0]["details"]}
     terms = str(details.get("terms", ""))
     assert "(true)" in terms or "(false)" in terms
@@ -1696,7 +1696,7 @@ def test_evaluate_force_commands_mutate_force_map(tmp_path: Path):
         out_stream,
         seq=3,
         command="evaluate",
-        arguments={"expression": "remove_force Button"},
+        arguments={"expression": "unforce Button"},
     )
     assert "Button" not in adapter._runner.forces
 

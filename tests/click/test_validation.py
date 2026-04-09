@@ -263,9 +263,9 @@ class TestIntTruthinessInCondition:
         Start = Bool("Start")
 
         def logic():
-            from pyrung.core import any_of
+            from pyrung.core import Or
 
-            with Rung(any_of(Step, Start)):
+            with Rung(Or(Step, Start)):
                 out(Bool("Light"))
 
         prog = _build_program(logic)

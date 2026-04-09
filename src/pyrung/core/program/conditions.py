@@ -62,7 +62,7 @@ def fall(tag: Tag | ImmediateRef) -> FallingEdgeCondition:
     return _make_condition(FallingEdgeCondition, tag)
 
 
-def any_of(
+def Or(
     *conditions: Condition | Tag | ImmediateRef,
 ) -> AnyCondition:
     """OR condition - true when any sub-condition is true.
@@ -71,15 +71,11 @@ def any_of(
     Multiple conditions passed directly to Rung() are ANDed together.
 
     Example:
-        with Rung(Step == 1, any_of(Start, CmdStart)):
+        with Rung(Step == 1, Or(Start, CmdStart)):
             out(Light)  # True if Step==1 AND (Start OR CmdStart)
 
-        # Also works with | operator:
-        with Rung(Step == 1, Start | CmdStart):
-            out(Light)
-
         # Grouped AND inside OR (explicit):
-        with Rung(any_of(Start, all_of(AutoMode, Ready), RemoteStart)):
+        with Rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
             out(Light)
 
     Args:
@@ -95,7 +91,7 @@ def any_of(
     )
 
 
-def all_of(
+def And(
     *conditions: Condition
     | Tag
     | ImmediateRef
@@ -105,14 +101,13 @@ def all_of(
     """AND condition - true when all sub-conditions are true.
 
     This is equivalent to comma-separated rung conditions, but useful when building
-    grouped condition trees with any_of() or `&`.
+    grouped condition trees with Or().
 
     Example:
-        with Rung(all_of(Ready, AutoMode)):
+        with Rung(And(Ready, AutoMode)):
             out(StartPermissive)
 
-        # Equivalent operator form:
-        with Rung((Ready & AutoMode) | RemoteStart):
+        with Rung(Or(And(Ready, AutoMode), RemoteStart)):
             out(StartPermissive)
     """
     return _make_condition(

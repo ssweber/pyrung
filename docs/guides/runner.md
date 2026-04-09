@@ -86,7 +86,7 @@ Accepts the same condition expressions used inside `Rung()`. Multiple conditions
 ```python
 runner.run_until(Motor & ~Fault)
 runner.run_until(Temp > 150.0)
-runner.run_until(any_of(AlarmA, AlarmB, AlarmC))
+runner.run_until(Or(AlarmA, AlarmB, AlarmC))
 ```
 
 Stops when the condition is true, a pause breakpoint fires, or `max_cycles` is reached — whichever comes first.

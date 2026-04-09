@@ -26,8 +26,8 @@ from .builders import (
     time_drum,
 )
 from .conditions import (
-    all_of,
-    any_of,
+    And,
+    Or,
     fall,
     rise,
 )
@@ -85,8 +85,8 @@ __all__ = [
     "program",
     "subroutine",
     # Conditions
-    "all_of",
-    "any_of",
+    "And",
+    "Or",
     "fall",
     "rise",
     # Basic Instructions

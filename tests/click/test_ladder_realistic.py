@@ -35,15 +35,15 @@ from pyrung.click import (
     y,
 )
 from pyrung.core import (
+    And,
     Block,
     Bool,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    all_of,
-    any_of,
     fall,
     rise,
 )
@@ -143,11 +143,11 @@ def _build_program_and_mapping():
     # ── Program ──────────────────────────────────────────────────────────
     with Program() as logic:
         # R1: Run-latch — OR with rising/falling edges
-        with Rung(any_of(Enable, rise(Start), fall(Stop))):
+        with Rung(Or(Enable, rise(Start), fall(Stop))):
             latch(Running)
 
         # R2: Stop conditions — simple OR
-        with Rung(any_of(Stop, Abort)):
+        with Rung(Or(Stop, Abort)):
             reset(Running)
 
         # R3: Retentive on-delay with reset pin
@@ -273,7 +273,7 @@ def _build_program_and_mapping():
             )
 
         # R19: OR condition
-        with Rung(AutoMode | Found):
+        with Rung(Or(AutoMode, Found)):
             out(StepDone)
 
         # R20: Compare condition
@@ -284,7 +284,7 @@ def _build_program_and_mapping():
         with subroutine("service"):
             with Rung(Abort):
                 return_early()
-            with Rung(all_of(Running, Found)):
+            with Rung(And(Running, Found)):
                 copy(CalcOut, DstBlk[3])
 
     # ── TagMap ───────────────────────────────────────────────────────────
@@ -470,7 +470,7 @@ def test_realistic_or_condition_expansion():
     logic, mapping = _build_program_and_mapping()
     bundle = pyrung_to_ladder(logic, mapping)
 
-    # R1: any_of(Enable, rise(Start), fall(Stop)) — 3-way OR
+    # R1: Or(Enable, rise(Start), fall(Stop)) — 3-way OR
     # First rung row should have latch(Y001) as AF token.
     r1_idx = None
     for i, row in enumerate(bundle.main_rows):

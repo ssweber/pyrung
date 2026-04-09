@@ -182,8 +182,8 @@ class _OperandCollection:
     used_conditions: set[str] = field(default_factory=set)  # rise, fall, immediate
     used_copy_converters: set[str] = field(default_factory=set)  # to_value, to_text, etc.
     used_expr_funcs: set[str] = field(default_factory=set)  # sqrt, lsh, etc.
-    has_any_of: bool = False
-    has_all_of: bool = False
+    has_Or: bool = False
+    has_And: bool = False
     has_branch: bool = False
     has_comment: bool = False
     has_subroutine: bool = False
@@ -217,8 +217,8 @@ class _FileRefs:
     used_copy_converters: set[str] = field(default_factory=set)
     used_expr_funcs: set[str] = field(default_factory=set)
     used_click_blocks: set[str] = field(default_factory=set)
-    has_any_of: bool = False
-    has_all_of: bool = False
+    has_Or: bool = False
+    has_And: bool = False
     has_branch: bool = False
     has_comment: bool = False
     has_forloop: bool = False

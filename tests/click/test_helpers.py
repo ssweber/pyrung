@@ -70,7 +70,7 @@ class TestBuildProgram:
     def test_or_condition(self):
         logic, mapping = build_program("""
             with Program() as p:
-                with Rung(any_of(X1, X2)):
+                with Rung(Or(X1, X2)):
                     out(Y1)
         """)
         bundle = pyrung_to_ladder(logic, mapping)
@@ -132,7 +132,7 @@ class TestNormalizeCsv:
     def test_strips_trailing_empty_cells(self):
         logic, mapping = build_program("""
             with Program() as p:
-                with Rung(any_of(X1, X2)):
+                with Rung(Or(X1, X2)):
                     out(Y1)
         """)
         bundle = pyrung_to_ladder(logic, mapping)

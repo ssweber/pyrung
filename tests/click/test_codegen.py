@@ -32,10 +32,10 @@ from pyrung.core import (
     Block,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    any_of,
 )
 from pyrung.core.program import (
     branch,
@@ -255,13 +255,13 @@ class TestTopologyAnalysis:
         assert [instruction.af_token for instruction in r.instructions] == ["out(Y001)"]
 
     def test_or_expansion(self, tmp_path: Path):
-        """OR: any_of(A, B) → out(Y)."""
+        """OR: Or(A, B) → out(Y)."""
         A = Bool("A")
         B = Bool("B")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B)):
+            with Rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -276,14 +276,14 @@ class TestTopologyAnalysis:
         assert len(par.children) == 2
 
     def test_or_with_trailing_and(self, tmp_path: Path):
-        """OR + AND: any_of(A, B), Ready → out(Y)."""
+        """OR + AND: Or(A, B), Ready → out(Y)."""
         A = Bool("A")
         B = Bool("B")
         Ready = Bool("Ready")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B), Ready):
+            with Rung(Or(A, B), Ready):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Ready: c[1], Y: y[1]}, include_system=False)
@@ -1184,15 +1184,15 @@ class TestRoundTrip:
         )
 
     def test_or_expansion(self):
-        """OR: any_of(A, B) → out(Y)."""
+        """OR: Or(A, B) → out(Y)."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2)):
+                with Rung(Or(X1, X2)):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002):
+            with Rung(Or(X001, X002)):
                 out(Y001)
             """,
         )
@@ -1202,39 +1202,39 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2), C1):
+                with Rung(Or(X1, X2), C1):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002, C1):
+            with Rung(Or(X001, X002), C1):
                 out(Y001)
             """,
         )
 
     def test_three_way_or(self):
-        """3-branch OR exercises | output-bus marker."""
+        """3-branch OR."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2, C1)):
+                with Rung(Or(X1, X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(any_of(X001, X002, C1)):
+            with Rung(Or(X001, X002, C1)):
                 out(Y001)
             """,
         )
 
-    def test_two_way_comparison_or_stays_any_of(self):
-        """2-way comparison OR stays as any_of(...) for readability and precedence."""
+    def test_two_way_comparison_or(self):
+        """2-way comparison OR emits as Or(...)."""
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(DS1 == 1, DS1 == 2)):
+                with Rung(Or(DS1 == 1, DS1 == 2)):
                     out(Y1)
             """,
             """
-            with Rung(any_of(DS1 == 1, DS1 == 2)):
+            with Rung(Or(DS1 == 1, DS1 == 2)):
                 out(Y001)
             """,
         )
@@ -1244,11 +1244,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(X1, any_of(X2, C1)):
+                with Rung(X1, Or(X2, C1)):
                     out(Y1)
             """,
             """
-            with Rung(X001, X002 | C1):
+            with Rung(X001, Or(X002, C1)):
                 out(Y001)
             """,
         )
@@ -1258,11 +1258,11 @@ class TestRoundTrip:
         _assert_codegen_body(
             """
             with Program() as p:
-                with Rung(any_of(X1, X2), any_of(C1, C2)):
+                with Rung(Or(X1, X2), Or(C1, C2)):
                     out(Y1)
             """,
             """
-            with Rung(X001 | X002, C1 | C2):
+            with Rung(Or(X001, X002), Or(C1, C2)):
                 out(Y001)
             """,
         )
@@ -1409,19 +1409,19 @@ class TestRoundTrip:
         )
 
     def test_branch_local_or(self):
-        """branch(any_of(...)) survives round-trip and stays branch-local."""
+        """branch(Or(...)) survives round-trip and stays branch-local."""
         _assert_codegen_body(
             """
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
-                    with branch(any_of(X2, X3)):
+                    with branch(Or(X2, X3)):
                         out(Y2)
             """,
             """
             with Rung(X001):
                 out(Y001)
-                with branch(X002 | X003):
+                with branch(Or(X002, X003)):
                     out(Y002)
             """,
         )
@@ -1433,14 +1433,14 @@ class TestRoundTrip:
             with Program() as p:
                 with Rung(X1):
                     out(Y1)
-                    with branch(any_of(X2, X3), X4):
+                    with branch(Or(X2, X3), X4):
                         out(Y2)
                     out(Y3)
             """,
             """
             with Rung(X001):
                 out(Y001)
-                with branch(X002 | X003, X004):
+                with branch(Or(X002, X003), X004):
                     out(Y002)
                 out(Y003)
             """,
@@ -1452,13 +1452,13 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    with branch(X2, any_of(X3, X4)):
+                    with branch(X2, Or(X3, X4)):
                         out(Y1)
                     out(Y2)
             """,
             """
             with Rung(X001):
-                with branch(X002, X003 | X004):
+                with branch(X002, Or(X003, X004)):
                     out(Y001)
                 out(Y002)
             """,
@@ -1470,13 +1470,13 @@ class TestRoundTrip:
             """
             with Program() as p:
                 with Rung(X1):
-                    with branch(X2, any_of(X3, X4, X5)):
+                    with branch(X2, Or(X3, X4, X5)):
                         out(Y1)
                     out(Y2)
             """,
             """
             with Rung(X001):
-                with branch(X002, any_of(X003, X004, X005)):
+                with branch(X002, Or(X003, X004, X005)):
                     out(Y001)
                 out(Y002)
             """,
@@ -2170,7 +2170,7 @@ class TestRoundTrip:
         """Regression: rise/fall OR with 3 outputs in one rung round-trips."""
         _assert_codegen_body(
             """
-            with Rung(any_of(rise(C1), fall(C2))):
+            with Rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
@@ -2180,7 +2180,7 @@ class TestRoundTrip:
                     out(C4)
             """,
             """
-            with Rung(rise(C1) | fall(C2)):
+            with Rung(Or(rise(C1), fall(C2))):
                 copy(1, DS1)
                 copy(C2, C4)
                 call("SubName")
@@ -2650,13 +2650,13 @@ class TestContinuedRoundTrip:
                 with Rung(X1):
                     out(Y1)
                 with Rung(X2).continued():
-                    with branch(any_of(X3, X4)):
+                    with branch(Or(X3, X4)):
                         out(Y2)
             """,
             """
             with Rung(X001):
                 out(Y001)
-            with Rung(X002, X003 | X004).continued():
+            with Rung(X002, Or(X003, X004)).continued():
                 out(Y002)
             """,
         )

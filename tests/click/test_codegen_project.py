@@ -23,10 +23,10 @@ from pyrung.core import (
     Bool,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
-    any_of,
 )
 from pyrung.core.program import (
     call,
@@ -524,14 +524,14 @@ class TestPerFileImports:
         assert len(from_tags_line) == 1
         assert "mapping" in from_tags_line[0]
 
-    def test_main_omits_any_of_for_two_way_bool_or(self, tmp_path: Path):
-        """Two-way BOOL OR renders with | and does not import any_of."""
+    def test_main_uses_or_for_two_way_bool_or(self, tmp_path: Path):
+        """Two-way BOOL OR renders with Or() and imports Or."""
         A = Bool("A")
         B = Bool("B")
         Y = Bool("Y")
 
         with Program() as logic:
-            with Rung(any_of(A, B)):
+            with Rung(Or(A, B)):
                 out(Y)
 
         mapping = TagMap({A: x[1], B: x[2], Y: y[1]}, include_system=False)
@@ -539,8 +539,7 @@ class TestPerFileImports:
 
         main_py = files["main.py"]
         assert "with Rung(" in main_py
-        assert " | " in main_py
-        assert "any_of" not in main_py
+        assert "Or(" in main_py
 
     def test_subroutine_imports_click_block_for_raw_range(self, tmp_path: Path):
         """Subroutine using reset(c.select(...)) must import c from pyrung.click."""

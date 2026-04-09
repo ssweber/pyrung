@@ -10,13 +10,9 @@ Fault                          tag is truthy
 MotorTemp > 100                comparison  (==  !=  <  <=  >  >=)
 Fault, Pump                    comma = implicit AND
 Fault, MotorTemp > 100         implicit AND with comparison
-Fault & Pump                   & works for truthy tags
-Running | ~Estop               | and ~ work for truthy tags
-Fault & (MotorTemp > 100)      & with comparison needs parens
-Running | (Mode == 1)          | with comparison needs parens
-Running | ~Estop, Mode == 1    mix commas and operators freely
-all_of(Fault, Pump, Valve)     explicit AND (same as commas)
-any_of(Low, High, Emergency)   explicit OR
+And(Fault, Pump, Valve)        explicit AND (same as commas)
+Or(Low, High, Emergency)       explicit OR
+Or(Start, And(Auto, Ready))    nested AND inside OR
 ```
 
 ## Normally open (examine-on)
@@ -50,27 +46,23 @@ with Rung(fall(Button)):    # True for ONE scan on True→False transition
 with Rung(Button, ~Fault, AutoMode):
     out(Motor)
 
-# all_of() — explicit AND
-with Rung(all_of(Button, ~Fault, AutoMode)):
+# And() — explicit AND
+with Rung(And(Button, ~Fault, AutoMode)):
     out(Motor)
 ```
 
 ## OR conditions
 
 ```python
-# any_of() — at least one must be True
-with Rung(any_of(Start, RemoteStart)):
-    latch(Motor)
-
-# Pipe operator — same as any_of
-with Rung(Start | RemoteStart):
+# Or() — at least one must be True
+with Rung(Or(Start, RemoteStart)):
     latch(Motor)
 ```
 
 ## Nested AND/OR
 
 ```python
-with Rung(any_of(Start, all_of(AutoMode, Ready), RemoteStart)):
+with Rung(Or(Start, And(AutoMode, Ready), RemoteStart)):
     latch(Motor)
 ```
 
@@ -95,31 +87,9 @@ INT tags are True when non-zero:
 with Rung(Step):                    # True if Step != 0
     out(StepActive)
 
-with Rung(any_of(Step, AlarmCode)):
+with Rung(Or(Step, AlarmCode)):
     out(AnyActive)
 ```
-
-!!! warning "Operator precedence with `&` and comparisons"
-
-    Python's `>`, `<`, `==`, etc. bind **tighter** than `&` and `|`. This means `Fault & MotorTemp > 100` silently parses as `Fault & (MotorTemp > 100)` — which happens to be correct — but `MotorTemp > 100 & Fault` parses as `MotorTemp > (100 & Fault)`, which is wrong.
-
-    Always parenthesize comparisons when mixing with `&` or `|`:
-
-    ```python
-    # Wrong — parses as Speed > (50 & Ready)
-    with Rung(Speed > 50 & Ready):
-        ...
-
-    # Right
-    with Rung((Speed > 50) & Ready):
-        ...
-
-    # Better — comma syntax avoids the trap entirely
-    with Rung(Speed > 50, Ready):
-        ...
-    ```
-
-    The comma form has no precedence issues because commas separate independent conditions. Prefer it for AND unless you specifically need `&` for readability.
 
 ## Inline expressions
 

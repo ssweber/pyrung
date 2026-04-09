@@ -22,8 +22,8 @@ from pyrung import (
     PLC,
     Rung,
 
-    all_of,
-    any_of,
+    And,
+    Or,
     branch,
     comment,
     copy,
@@ -141,7 +141,7 @@ mapping = TagMap(
 @program
 def logic():
     comment("Start/stop — NC stop button resets when pressed or wire broken")
-    with Rung(StartBtn, any_of(Auto, Manual)):
+    with Rung(StartBtn, Or(Auto, Manual)):
         latch(Running)
     with Rung(~StopBtn):
         reset(Running)
@@ -181,9 +181,9 @@ def logic():
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
         EstopOK,
-        any_of(
-            all_of(State == SORTING, IsLarge, Auto),
-            all_of(Manual, DiverterBtn),
+        Or(
+            And(State == SORTING, IsLarge, Auto),
+            And(Manual, DiverterBtn),
         ),
     ):
         out(DiverterCmd)

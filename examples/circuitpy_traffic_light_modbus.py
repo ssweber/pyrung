@@ -10,7 +10,7 @@ The client receive uses a raw Modbus address (``ModbusAddress``) instead of a Cl
 bank string, so it works with any Modbus TCP device — not only Click PLCs.
 """
 
-from pyrung import Bool, Char, Int, Program, Rung, copy, on_delay, out, rise
+from pyrung import Bool, Char, Int, Or, Program, Rung, copy, on_delay, out, rise
 from pyrung.circuitpy import (
     ModbusClientConfig,
     ModbusServerConfig,
@@ -71,7 +71,7 @@ with Program() as logic:
         copy("r", State)
 
     # --- Walk request: latch on rising edge, clear after green phase ---
-    with Rung(rise(WalkRequest) | rise(LocalPedButton)):
+    with Rung(Or(rise(WalkRequest), rise(LocalPedButton))):
         out(WalkActive)
     with Rung(GreenDone):
         copy(False, WalkActive)

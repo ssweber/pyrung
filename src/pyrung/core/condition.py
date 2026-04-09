@@ -9,8 +9,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from pyrung.core._source import _capture_source
-
 if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.memory_block import IndirectRef
@@ -61,73 +59,13 @@ class Condition(ABC):
         if not isinstance(other, Condition):
             raise TypeError(
                 f"Cannot compare Condition with {type(other).__name__}. "
-                f"If using | or & with comparisons, add parentheses: Button | (Step == 0)"
+                f"Use Or() or And() to combine conditions: Or(Button, Step == 0)"
             )
         return self is other
 
     def __hash__(self) -> int:
         """Allow conditions to be used in sets/dicts."""
         return id(self)
-
-    def __or__(self, other: Condition | Tag) -> AnyCondition:
-        """OR two conditions: (Step == 0) | Start."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AnyCondition(self, other)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
-
-    def __ror__(self, other: Tag) -> AnyCondition:
-        """Support Tag | Condition."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Tag):
-            cond = AnyCondition(other, self)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
-
-    def __and__(self, other: Condition | Tag) -> AllCondition:
-        """AND two conditions: (Step == 0) & Start."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AllCondition(self, other)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
-
-    def __rand__(self, other: Condition | Tag) -> AllCondition:
-        """Support reverse AND: Tag & Condition."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AllCondition(other, self)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
 
 
 class CompareEq(Condition):
@@ -396,7 +334,7 @@ class IndirectCompareGe(Condition):
 
 
 # =============================================================================
-# Composite Conditions (all_of / any_of)
+# Composite Conditions (And / Or)
 # =============================================================================
 
 
@@ -455,7 +393,7 @@ class AllCondition(Condition):
     """AND condition - true when all sub-conditions are true.
 
     Example:
-        with Rung(all_of(Ready, AutoMode)):
+        with Rung(And(Ready, AutoMode)):
             out(StartPermissive)
     """
 
@@ -463,51 +401,21 @@ class AllCondition(Condition):
         self.conditions = _flatten_condition_inputs(
             *conditions,
             coerce=_as_condition,
-            group_empty_error="all_of() group cannot be empty",
+            group_empty_error="And() group cannot be empty",
         )
 
         if not self.conditions:
-            raise ValueError("all_of() requires at least one condition")
+            raise ValueError("And() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return all(cond.evaluate(ctx) for cond in self.conditions)
-
-    def __and__(self, other: Condition | Tag) -> AllCondition:
-        """Support chaining: (A & B) & C flattens to AllCondition(A, B, C)."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AllCondition(*self.conditions, other)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
-
-    def __rand__(self, other: Condition | Tag) -> AllCondition:
-        """Support reverse: C & (A & B)."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AllCondition(other, *self.conditions)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
 
 
 class AnyCondition(Condition):
     """OR condition - true when any sub-condition is true.
 
     Example:
-        with Rung(Step == 1, any_of(Start, oCmdStart)):
+        with Rung(Step == 1, Or(Start, oCmdStart)):
             out(Light)
     """
 
@@ -516,46 +424,15 @@ class AnyCondition(Condition):
         for cond in conditions:
             if isinstance(cond, tuple | list):
                 raise TypeError(
-                    "any_of() does not accept tuple/list groups. "
-                    "Use all_of(...) or '&' for grouped AND terms."
+                    "Or() does not accept tuple/list groups. Use And(...) for grouped AND terms."
                 )
             self.conditions.append(_as_condition(cond))
 
         if not self.conditions:
-            raise ValueError("any_of() requires at least one condition")
+            raise ValueError("Or() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         return any(cond.evaluate(ctx) for cond in self.conditions)
-
-    def __or__(self, other: Condition | Tag) -> AnyCondition:
-        """Support chaining: (A | B) | C flattens to AnyCondition(A, B, C)."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AnyCondition(*self.conditions, other)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
-
-    def __ror__(self, other: Condition | Tag) -> AnyCondition:
-        """Support reverse: C | (A | B)."""
-        from pyrung.core.tag import Tag
-
-        if isinstance(other, Condition | Tag):
-            cond = AnyCondition(other, *self.conditions)
-            cond.source_file, cond.source_line = _capture_source(depth=2)
-            for child in cond.conditions:
-                if child.source_file is None:
-                    child.source_file = cond.source_file
-                if child.source_line is None:
-                    child.source_line = cond.source_line
-            return cond
-        return NotImplemented
 
 
 def _normalize_and_condition(

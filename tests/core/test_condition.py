@@ -301,64 +301,64 @@ class TestFallingEdgeCondition:
         assert evaluate_condition(cond, state) is False
 
 
-class TestAnyOf:
-    """Test any_of() composite condition (OR logic)."""
+class TestOr:
+    """Test Or() composite condition (OR logic)."""
 
-    def test_any_of_true_when_first_true(self):
-        """any_of is true when first condition is true."""
-        from pyrung.core import any_of
+    def test_or_true_when_first_true(self):
+        """Or is true when first condition is true."""
+        from pyrung.core import Or
 
         Start = Bool("Start")
         CmdStart = Bool("CmdStart")
-        cond = any_of(Start, CmdStart)
+        cond = Or(Start, CmdStart)
 
         state = SystemState().with_tags({"Start": True, "CmdStart": False})
 
         assert evaluate_condition(cond, state) is True
 
-    def test_any_of_true_when_second_true(self):
-        """any_of is true when second condition is true."""
-        from pyrung.core import any_of
+    def test_or_true_when_second_true(self):
+        """Or is true when second condition is true."""
+        from pyrung.core import Or
 
         Start = Bool("Start")
         CmdStart = Bool("CmdStart")
-        cond = any_of(Start, CmdStart)
+        cond = Or(Start, CmdStart)
 
         state = SystemState().with_tags({"Start": False, "CmdStart": True})
 
         assert evaluate_condition(cond, state) is True
 
-    def test_any_of_true_when_both_true(self):
-        """any_of is true when both conditions are true."""
-        from pyrung.core import any_of
+    def test_or_true_when_both_true(self):
+        """Or is true when both conditions are true."""
+        from pyrung.core import Or
 
         Start = Bool("Start")
         CmdStart = Bool("CmdStart")
-        cond = any_of(Start, CmdStart)
+        cond = Or(Start, CmdStart)
 
         state = SystemState().with_tags({"Start": True, "CmdStart": True})
 
         assert evaluate_condition(cond, state) is True
 
-    def test_any_of_false_when_all_false(self):
-        """any_of is false when all conditions are false."""
-        from pyrung.core import any_of
+    def test_or_false_when_all_false(self):
+        """Or is false when all conditions are false."""
+        from pyrung.core import Or
 
         Start = Bool("Start")
         CmdStart = Bool("CmdStart")
-        cond = any_of(Start, CmdStart)
+        cond = Or(Start, CmdStart)
 
         state = SystemState().with_tags({"Start": False, "CmdStart": False})
 
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_with_comparisons(self):
-        """any_of works with comparison conditions."""
-        from pyrung.core import any_of
+    def test_or_with_comparisons(self):
+        """Or works with comparison conditions."""
+        from pyrung.core import Or
 
         Step = Int("Step")
         Mode = Int("Mode")
-        cond = any_of(Step == 0, Mode == 1)
+        cond = Or(Step == 0, Mode == 1)
 
         # Step is 0, Mode is not 1
         state = SystemState().with_tags({"Step": 0, "Mode": 0})
@@ -372,14 +372,14 @@ class TestAnyOf:
         state = SystemState().with_tags({"Step": 5, "Mode": 0})
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_with_three_conditions(self):
-        """any_of works with more than two conditions."""
-        from pyrung.core import any_of
+    def test_or_with_three_conditions(self):
+        """Or works with more than two conditions."""
+        from pyrung.core import Or
 
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
-        cond = any_of(A, B, C)
+        cond = Or(A, B, C)
 
         # Only C is true
         state = SystemState().with_tags({"A": False, "B": False, "C": True})
@@ -389,13 +389,13 @@ class TestAnyOf:
         state = SystemState().with_tags({"A": False, "B": False, "C": False})
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_with_int_truthiness(self):
-        """any_of treats INT tags as truthy when nonzero."""
-        from pyrung.core import any_of
+    def test_or_with_int_truthiness(self):
+        """Or treats INT tags as truthy when nonzero."""
+        from pyrung.core import Or
 
         Step = Int("Step")
         Start = Bool("Start")
-        cond = any_of(Step, Start)
+        cond = Or(Step, Start)
 
         state = SystemState().with_tags({"Step": 2, "Start": False})
         assert evaluate_condition(cond, state) is True
@@ -403,153 +403,158 @@ class TestAnyOf:
         state = SystemState().with_tags({"Step": 0, "Start": False})
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_rejects_dint_direct_tag(self):
+    def test_or_rejects_dint_direct_tag(self):
         """Direct non-INT numeric tags remain invalid in grouped helpers."""
         import pytest
 
-        from pyrung.core import Dint, any_of
+        from pyrung.core import Dint, Or
 
         Step32 = Dint("Step32")
         Start = Bool("Start")
 
         with pytest.raises(TypeError, match="BOOL and INT"):
-            any_of(Step32, Start)
+            Or(Step32, Start)
 
 
-class TestBitwiseOrOperator:
-    """Test | operator for combining conditions (OR logic)."""
+class TestOperatorRemovalErrors:
+    """Test that | and & operators raise helpful migration errors for conditions."""
 
-    def test_tag_or_tag(self):
-        """Bool tags can be ORed with | operator."""
-        Start = Bool("Start")
-        CmdStart = Bool("CmdStart")
-        cond = Start | CmdStart
+    def test_bool_or_bool_raises(self):
+        """Bool | Bool raises TypeError directing to Or()."""
+        import pytest
 
-        state = SystemState().with_tags({"Start": False, "CmdStart": True})
-        assert evaluate_condition(cond, state) is True
-
-        state = SystemState().with_tags({"Start": False, "CmdStart": False})
-        assert evaluate_condition(cond, state) is False
-
-    def test_condition_or_tag(self):
-        """Conditions can be ORed with tags."""
-        Step = Int("Step")
-        Start = Bool("Start")
-        cond = (Step == 0) | Start
-
-        # Step is 0
-        state = SystemState().with_tags({"Step": 0, "Start": False})
-        assert evaluate_condition(cond, state) is True
-
-        # Start is True
-        state = SystemState().with_tags({"Step": 5, "Start": True})
-        assert evaluate_condition(cond, state) is True
-
-        # Neither
-        state = SystemState().with_tags({"Step": 5, "Start": False})
-        assert evaluate_condition(cond, state) is False
-
-    def test_tag_or_condition(self):
-        """Tags can be ORed with conditions."""
-        Start = Bool("Start")
-        Step = Int("Step")
-        cond = Start | (Step == 0)
-
-        state = SystemState().with_tags({"Start": True, "Step": 5})
-        assert evaluate_condition(cond, state) is True
-
-    def test_chained_or(self):
-        """Multiple | operators chain correctly."""
         A = Bool("A")
         B = Bool("B")
-        C = Bool("C")
-        cond = A | B | C
 
-        # Only C is true
-        state = SystemState().with_tags({"A": False, "B": False, "C": True})
-        assert evaluate_condition(cond, state) is True
+        with pytest.raises(TypeError, match="Use Or"):
+            _ = A | B
 
-        # All false
-        state = SystemState().with_tags({"A": False, "B": False, "C": False})
-        assert evaluate_condition(cond, state) is False
+    def test_bool_and_bool_raises(self):
+        """Bool & Bool raises TypeError directing to And()."""
+        import pytest
 
+        A = Bool("A")
+        B = Bool("B")
 
-class TestOrPrecedenceErrors:
-    """Test helpful errors for | operator precedence mistakes."""
+        with pytest.raises(TypeError, match="Use And"):
+            _ = A & B
 
-    def test_int_or_tag_raises_error(self):
-        """0 | Tag raises helpful error about parentheses."""
+    def test_condition_or_tag_raises(self):
+        """Condition | Tag raises TypeError directing to Or()."""
+        import pytest
+
+        Step = Int("Step")
+        Start = Bool("Start")
+
+        with pytest.raises(TypeError, match="Use Or"):
+            _ = (Step == 0) | Start
+
+    def test_condition_and_tag_raises(self):
+        """Condition & Tag raises TypeError directing to And()."""
+        import pytest
+
+        Step = Int("Step")
+        Start = Bool("Start")
+
+        with pytest.raises(TypeError, match="Use And"):
+            _ = (Step == 0) & Start
+
+    def test_bool_or_condition_raises(self):
+        """Tag | Condition raises TypeError directing to Or()."""
+        import pytest
+
+        Start = Bool("Start")
+        Step = Int("Step")
+
+        with pytest.raises(TypeError, match="Use Or"):
+            _ = Start | (Step == 0)
+
+    def test_bool_and_condition_raises(self):
+        """Tag & Condition raises TypeError directing to And()."""
+        import pytest
+
+        Start = Bool("Start")
+        Step = Int("Step")
+
+        with pytest.raises(TypeError, match="Use And"):
+            _ = Start & (Step == 0)
+
+    def test_int_or_bool_precedence_error(self):
+        """0 | BoolTag raises TypeError (precedence mistake)."""
         import pytest
 
         Start = Bool("Start")
 
-        with pytest.raises(TypeError, match="add parentheses"):
+        with pytest.raises(TypeError, match="precedence"):
             _ = 0 | Start
 
-    def test_tag_or_int_raises_error(self):
-        """Tag | 0 raises helpful error about parentheses."""
+    def test_int_and_bool_precedence_error(self):
+        """0 & BoolTag raises helpful precedence error."""
         import pytest
 
         Start = Bool("Start")
 
-        with pytest.raises(TypeError, match="add parentheses"):
-            _ = Start | 0
+        with pytest.raises(TypeError, match="precedence"):
+            _ = 0 & Start
 
     def test_condition_eq_int_raises_error(self):
-        """AnyCondition == 0 raises helpful error about parentheses."""
+        """Condition == 0 raises helpful error."""
         import pytest
+
+        from pyrung.core import Or
 
         A = Bool("A")
         B = Bool("B")
-        cond = A | B
+        cond = Or(A, B)
 
-        with pytest.raises(TypeError, match="add parentheses"):
+        with pytest.raises(TypeError, match="Or\\(\\) or And\\(\\)"):
             _ = cond == 0
 
     def test_condition_eq_condition_works(self):
         """Condition == Condition uses identity comparison."""
+        from pyrung.core import Or
+
         A = Bool("A")
         B = Bool("B")
-        cond1 = A | B
-        cond2 = A | B
+        cond1 = Or(A, B)
+        cond2 = Or(A, B)
 
-        # Different objects, so not equal
         assert (cond1 == cond1) is True
         assert (cond1 == cond2) is False
 
 
-class TestAllOf:
-    """Test all_of() composite condition (AND logic)."""
+class TestAnd:
+    """Test And() composite condition (AND logic)."""
 
-    def test_all_of_true_when_all_true(self):
-        """all_of is true when all conditions are true."""
-        from pyrung.core import all_of
+    def test_and_true_when_all_true(self):
+        """And is true when all conditions are true."""
+        from pyrung.core import And
 
         Ready = Bool("Ready")
         Auto = Bool("Auto")
-        cond = all_of(Ready, Auto)
+        cond = And(Ready, Auto)
 
         state = SystemState().with_tags({"Ready": True, "Auto": True})
         assert evaluate_condition(cond, state) is True
 
-    def test_all_of_false_when_any_false(self):
-        """all_of is false when any condition is false."""
-        from pyrung.core import all_of
+    def test_and_false_when_any_false(self):
+        """And is false when any condition is false."""
+        from pyrung.core import And
 
         Ready = Bool("Ready")
         Auto = Bool("Auto")
-        cond = all_of(Ready, Auto)
+        cond = And(Ready, Auto)
 
         state = SystemState().with_tags({"Ready": True, "Auto": False})
         assert evaluate_condition(cond, state) is False
 
-    def test_all_of_with_comparisons(self):
-        """all_of works with comparison conditions."""
-        from pyrung.core import all_of
+    def test_and_with_comparisons(self):
+        """And works with comparison conditions."""
+        from pyrung.core import And
 
         Step = Int("Step")
         Mode = Int("Mode")
-        cond = all_of(Step == 1, Mode == 2)
+        cond = And(Step == 1, Mode == 2)
 
         state = SystemState().with_tags({"Step": 1, "Mode": 2})
         assert evaluate_condition(cond, state) is True
@@ -557,13 +562,13 @@ class TestAllOf:
         state = SystemState().with_tags({"Step": 1, "Mode": 1})
         assert evaluate_condition(cond, state) is False
 
-    def test_all_of_with_int_truthiness(self):
-        """all_of treats INT tags as truthy when nonzero."""
-        from pyrung.core import all_of
+    def test_and_with_int_truthiness(self):
+        """And treats INT tags as truthy when nonzero."""
+        from pyrung.core import And
 
         Step = Int("Step")
         Ready = Bool("Ready")
-        cond = all_of(Step, Ready)
+        cond = And(Step, Ready)
 
         state = SystemState().with_tags({"Step": 1, "Ready": True})
         assert evaluate_condition(cond, state) is True
@@ -572,18 +577,18 @@ class TestAllOf:
         assert evaluate_condition(cond, state) is False
 
 
-class TestGroupedAnyOf:
-    """Test explicit grouped AND terms inside any_of()."""
+class TestGroupedOr:
+    """Test explicit grouped AND terms inside Or()."""
 
-    def test_any_of_with_explicit_all_of_group(self):
-        """Grouped AND terms require explicit all_of()."""
-        from pyrung.core import all_of, any_of
+    def test_or_with_explicit_and_group(self):
+        """Grouped AND terms require explicit And()."""
+        from pyrung.core import And, Or
 
         Start = Bool("Start")
         Ready = Bool("Ready")
         Auto = Bool("Auto")
         Remote = Bool("Remote")
-        cond = any_of(Start, all_of(Ready, Auto), Remote)
+        cond = Or(Start, And(Ready, Auto), Remote)
 
         state = SystemState().with_tags(
             {"Start": False, "Ready": True, "Auto": True, "Remote": False}
@@ -595,81 +600,28 @@ class TestGroupedAnyOf:
         )
         assert evaluate_condition(cond, state) is False
 
-    def test_any_of_rejects_tuple_group(self):
-        """Tuple groups must be written explicitly with all_of() or &."""
+    def test_or_rejects_tuple_group(self):
+        """Tuple groups must be written explicitly with And()."""
         import pytest
 
-        from pyrung.core import any_of
+        from pyrung.core import Or
 
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
 
-        with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
-            any_of((A, B), C)  # ty: ignore[invalid-argument-type]
+        with pytest.raises(TypeError, match="And\\(\\.\\.\\.\\)"):
+            Or((A, B), C)  # ty: ignore[invalid-argument-type]
 
-    def test_any_of_rejects_list_group(self):
-        """List groups must be written explicitly with all_of() or &."""
+    def test_or_rejects_list_group(self):
+        """List groups must be written explicitly with And()."""
         import pytest
 
-        from pyrung.core import any_of
+        from pyrung.core import Or
 
         A = Bool("A")
         B = Bool("B")
         C = Bool("C")
 
-        with pytest.raises(TypeError, match="all_of\\(\\.\\.\\.\\) or '&'"):
-            any_of([A, B], C)  # ty: ignore[invalid-argument-type]
-
-
-class TestBitwiseAndOperator:
-    """Test & operator for combining conditions (AND logic)."""
-
-    def test_tag_and_tag(self):
-        """Bool tags can be ANDed with & operator."""
-        A = Bool("A")
-        B = Bool("B")
-        cond = A & B
-
-        state = SystemState().with_tags({"A": True, "B": True})
-        assert evaluate_condition(cond, state) is True
-
-        state = SystemState().with_tags({"A": True, "B": False})
-        assert evaluate_condition(cond, state) is False
-
-    def test_condition_and_condition(self):
-        """Comparison conditions can be ANDed with & operator."""
-        Step = Int("Step")
-        Mode = Int("Mode")
-        cond = (Step == 1) & (Mode == 2)
-
-        state = SystemState().with_tags({"Step": 1, "Mode": 2})
-        assert evaluate_condition(cond, state) is True
-
-        state = SystemState().with_tags({"Step": 1, "Mode": 3})
-        assert evaluate_condition(cond, state) is False
-
-    def test_tag_and_condition(self):
-        """Bool tags and comparison conditions can be mixed with &."""
-        Enable = Bool("Enable")
-        Step = Int("Step")
-        cond = Enable & (Step == 1)
-
-        state = SystemState().with_tags({"Enable": True, "Step": 1})
-        assert evaluate_condition(cond, state) is True
-
-        state = SystemState().with_tags({"Enable": False, "Step": 1})
-        assert evaluate_condition(cond, state) is False
-
-    def test_chained_and(self):
-        """Multiple & operators chain correctly."""
-        A = Bool("A")
-        B = Bool("B")
-        C = Bool("C")
-        cond = A & B & C
-
-        state = SystemState().with_tags({"A": True, "B": True, "C": True})
-        assert evaluate_condition(cond, state) is True
-
-        state = SystemState().with_tags({"A": True, "B": False, "C": True})
-        assert evaluate_condition(cond, state) is False
+        with pytest.raises(TypeError, match="And\\(\\.\\.\\.\\)"):
+            Or([A, B], C)  # ty: ignore[invalid-argument-type]

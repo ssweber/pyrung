@@ -521,7 +521,7 @@ class TestStrictDslControlFlowGuard:
         B = Bool("B")
         Light = Bool("Light")
 
-        with pytest.raises(ForbiddenControlFlowError, match="all_of\\(\\).*any_of\\(\\)"):
+        with pytest.raises(ForbiddenControlFlowError, match="And\\(\\).*Or\\(\\)"):
             with Program():
                 with Rung(A and B):
                     out(Light)

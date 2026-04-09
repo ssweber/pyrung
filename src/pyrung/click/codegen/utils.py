@@ -427,8 +427,8 @@ _RESERVED_IMPORT_NAMES: frozenset[str] = frozenset(
         "branch",
         "forloop",
         # Combinators
-        "any_of",
-        "all_of",
+        "Or",
+        "And",
         # Instructions (Python import names, not Click AF names)
         "out",
         "latch",

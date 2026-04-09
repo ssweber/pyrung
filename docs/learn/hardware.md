@@ -93,7 +93,7 @@ The `Bin[1].Sensor` mapping is the [Lesson 9](structured-tags.md) UDT in action 
 **What doesn't port cleanly.** Every codegen target has limits. A few things the validator will flag:
 
 - Inline math in conditions (`SizeReading + Offset > Threshold`) -- must be a separate `calc` rung
-- Complex nested `any_of`/`all_of` beyond Click's branch depth
+- Complex nested `Or`/`And` beyond Click's branch depth
 - `Real` precision differences -- Click uses 32-bit float; Python uses 64-bit
 - Timer/counter presets that exceed Click's range limits
 - `named_array` structures that don't fit Click's flat memory model without manual address assignment

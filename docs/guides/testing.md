@@ -182,7 +182,7 @@ Conditions compose the same way they do in rungs:
 ```python
 runner.run_until(Motor & ~Fault)                  # Motor on, no fault
 runner.run_until(Temp > 150.0)                    # Temperature exceeded
-runner.run_until(any_of(AlarmA, AlarmB, AlarmC))  # Any alarm triggered
+runner.run_until(Or(AlarmA, AlarmB, AlarmC))  # Any alarm triggered
 ```
 
 `run_until` stops as soon as the condition is met, or after `max_cycles` — whichever comes first.
