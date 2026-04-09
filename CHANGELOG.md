@@ -5,7 +5,7 @@
 ### Breaking changes
 
 - **`all_of`/`any_of` renamed to `And`/`Or`** — PascalCase combinators replace the old function names. `&` and `|` operators removed for conditions (kept for math/bitwise). Comma inside `Rung(...)` stays as implicit AND.
-- **Built-in `Timer` and `Counter` UDTs** — `Timer` and `Counter` are now built-in structured types with `.done` (Bool) and `.acc` (Int/Dint) fields, exported from `pyrung`. Use `Timer.named(n, "Name")` for named instances, `Timer[n]` for anonymous. User-defined UDTs with the same shape still work.
+- **Built-in `Timer` and `Counter` UDTs** — `Timer` and `Counter` are now built-in structured types with `.Done` (Bool) and `.Acc` (Int/Dint) fields, exported from `pyrung`. Use `Timer.named(n, "Name")` for named instances, `Timer[n]` for anonymous. User-defined UDTs with the same shape still work.
 - **Single-argument timer/counter instructions** — `on_delay(timer, preset=...)` replaces `on_delay(done, acc, preset=...)`. Same for `off_delay`, `count_up`, `count_down`. The two-tag form is removed entirely.
 - **`PLCRunner` renamed to `PLC`** — `.active()` removed; `PLC` is now a context manager directly (`with PLC(logic) as plc:`). `dt=` (default `0.010`) and `realtime=True` kwargs replace `set_time_mode()`. `dt=` and `realtime=True` are mutually exclusive. `TimeMode` removed from public exports.
 - **`set_battery_present()` replaced by property** — use `plc.battery_present = False`.
@@ -43,7 +43,7 @@
 
 - Replace `all_of(...)` with `And(...)`, `any_of(...)` with `Or(...)`. Remove `&` / `|` between conditions — use `And()` / `Or()` or commas.
 - Replace `on_delay(done, acc, preset=...)` with `on_delay(timer, preset=...)` using a `Timer` instance. Same for `off_delay`, `count_up`, `count_down` with `Counter` instances.
-- Replace standalone `Bool`/`Int`/`Dint` timer and counter tags with `Timer.named(n, "Name")` / `Counter.named(n, "Name")`. Access `.done` and `.acc` fields on the instance.
+- Replace standalone `Bool`/`Int`/`Dint` timer and counter tags with `Timer.named(n, "Name")` / `Counter.named(n, "Name")`. Access `.Done` and `.Acc` fields on the instance.
 - Replace `PLCRunner` with `PLC` everywhere. Replace `runner = PLCRunner(logic); ctx = runner.active()` with `with PLC(logic) as plc:`.
 - Replace `runner.set_time_mode(TimeMode.REALTIME)` with `PLC(logic, realtime=True)`.
 - Replace `plc.set_battery_present(False)` with `plc.battery_present = False`.

@@ -53,7 +53,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **force()** — persistent override, re-applied pre- and post-logic every scan until removed
 - **`with plc.forced({...}):`** — scoped force context manager (restores on exit)
 - **copy()** clamps out-of-range; **calc()** wraps (modular arithmetic)
-- **Built-in `Timer` and `Counter` UDTs** — `.done` (Bool) + `.acc` (Int/Dint). `Timer.named(n, "Name")` for named instances, single-arg `on_delay(timer, preset=...)`.
+- **Built-in `Timer` and `Counter` UDTs** — `.Done` (Bool) + `.Acc` (Int/Dint). `Timer.named(n, "Name")` for named instances, single-arg `on_delay(timer, preset=...)`.
 - **`And()` / `Or()`** — condition combinators. Comma inside `Rung(...)` is implicit AND.
 - **Counters** count every scan while condition True — use `rise()` for edge-triggered counting
 - **Division by zero** → result = 0, fault flag set
