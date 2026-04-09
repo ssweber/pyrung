@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -824,11 +824,13 @@ class PLC:
         """
         if self._is_fn_predicate(conditions):
             return _BreakpointBuilder(self, conditions[0])
-        predicate = self._compile_condition_predicate(*conditions, method="when")
+        predicate = self._compile_condition_predicate(*conditions, method="when")  # ty: ignore[invalid-argument-type]
         return _BreakpointBuilder(self, predicate)
 
     @staticmethod
-    def _is_fn_predicate(conditions: tuple[Any, ...]) -> bool:
+    def _is_fn_predicate(
+        conditions: tuple[Any, ...],
+    ) -> TypeGuard[tuple[Callable[[SystemState], bool]]]:
         """Return True if conditions is a single callable predicate (not a Tag/Condition)."""
         if len(conditions) != 1 or not callable(conditions[0]):
             return False
@@ -1250,7 +1252,7 @@ class PLC:
         if self._is_fn_predicate(conditions):
             predicate = conditions[0]
         else:
-            predicate = self._compile_condition_predicate(*conditions, method="run_until")
+            predicate = self._compile_condition_predicate(*conditions, method="run_until")  # ty: ignore[invalid-argument-type]
         self._ensure_running()
         for _ in range(max_cycles):
             self._consume_pause_request()
