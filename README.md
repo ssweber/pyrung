@@ -5,7 +5,7 @@
 pyrung turns Python's `with` block into a ladder rung — condition on the rail, instructions in the body.
 
 ```python
-from pyrung import Bool, PLCRunner, Program, Rung, out
+from pyrung import Bool, PLC, Program, Rung, out
 
 Button = Bool("Button")
 Light = Bool("Light")
@@ -14,10 +14,9 @@ with Program() as logic:
     with Rung(Button):
         out(Light)
 
-runner = PLCRunner(logic)
-with runner.active():
+with PLC(logic) as plc:
     Button.value = True
-    runner.step()
+    plc.step()
     assert Light.value is True
 ```
 
@@ -50,6 +49,12 @@ The code reads like a ladder diagram. `with Rung(Start | Motor, ~Stop): out(Moto
 uv add pyrung
 ```
 
+Download the [starter project](https://github.com/ssweber/pyrung/releases) (`pyrung-starter-VERSION.zip`) from the GitHub releases page for ready-to-run examples with Click CSV round-trip. For the VS Code debugger, grab `pyrung-debug-VERSION.vsix` from the same page and install it:
+
+```bash
+code --install-extension pyrung-debug-VERSION.vsix
+```
+
 ### A motor with start/stop logic
 
 ```python
@@ -69,21 +74,20 @@ with Program() as logic:
 ### Test it
 
 ```python
-from pyrung import PLCRunner
+from pyrung import PLC
 
-runner = PLCRunner(logic)
-with runner.active():
+with PLC(logic) as plc:
     Start.value = True
-    runner.step()
+    plc.step()
     assert Running.value is True
 
     # Release start — motor stays latched
     Start.value = False
-    runner.step()
+    plc.step()
     assert Running.value is True
 
     Stop.value = True
-    runner.step()
+    plc.step()
     assert Running.value is False
 ```
 

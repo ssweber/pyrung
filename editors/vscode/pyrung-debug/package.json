@@ -88,7 +88,7 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Path to the Python file that constructs the Program or PLCRunner."
+                "description": "Path to the Python file that constructs the Program or PLC."
               },
               "pythonPath": {
                 "type": "string",
