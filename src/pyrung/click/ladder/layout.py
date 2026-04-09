@@ -445,13 +445,6 @@ class _LayoutMixin:
             return []
 
         local_rows = self._expand_conditions(list(conditions), path=f"{path}.condition")
-        if len(local_rows) != 1:
-            self._raise_issue(
-                path=f"{path}.condition",
-                message="branch(...) local Or() export is not supported in Click ladder v1.",
-                source=None,
-            )
-
         local = local_rows[0]
         tokens: list[str] = []
         for col in range(local.cursor):
