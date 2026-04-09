@@ -128,10 +128,10 @@ class InstanceView:
         self._custom_name = custom_name
         self._tag_cache: dict[str, Tag] = {}
 
-    def __getattr__(self, field_name: str) -> LiveTag:
+    def __getattr__(self, field_name: str) -> Tag:
         cached = self._tag_cache.get(field_name)
         if cached is not None:
-            return cached  # ty: ignore[return-type]
+            return cached
         block = self._owner._blocks.get(field_name)
         if block is None:
             raise AttributeError(f"{type(self._owner).__name__!s} has no field {field_name!r}.")
@@ -151,7 +151,7 @@ class InstanceView:
             object.__setattr__(tag, "_pyrung_structure_field", field_name)
             object.__setattr__(tag, "_pyrung_structure_index", self._index)
         self._tag_cache[field_name] = tag
-        return tag  # ty: ignore[return-type]
+        return tag
 
     def __repr__(self) -> str:
         if self._custom_name is not None:
@@ -242,16 +242,12 @@ class _StructRuntime:
         self.always_number = always_number
         self._structure_kind = kind
         self._original_field_specs = field_specs
-        self._field_specs: dict[str, Field] = {}
+        self._field_specs: dict[str, _FieldSpec] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
 
         for field_spec in field_specs:
-            self._field_specs[field_spec.name] = Field(
-                type=field_spec.type,
-                default=field_spec.default,
-                retentive=field_spec.retentive,
-            )
+            self._field_specs[field_spec.name] = field_spec
             block = Block(
                 name=f"{name}.{field_spec.name}",
                 type=field_spec.type,
@@ -299,7 +295,10 @@ class _StructRuntime:
 
     @property
     def fields(self) -> dict[str, Field]:
-        return dict(self._field_specs)
+        return {
+            name: Field(type=spec.type, default=spec.default, retentive=spec.retentive)
+            for name, spec in self._field_specs.items()
+        }
 
     @property
     def field_names(self) -> tuple[str, ...]:
@@ -676,13 +675,20 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
 # ``Timer[n]`` for throwaway simulation.
 
 
-@udt(count=500)
-class Timer:
-    done: Bool  # noqa: F821
-    acc: Int  # noqa: F821
+Timer = _StructRuntime(
+    name="Timer",
+    count=500,
+    field_specs=(
+        _FieldSpec("done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("acc", TagType.INT, UNSET, retentive=True),
+    ),
+)
 
-
-@udt(count=250)
-class Counter:
-    done: Bool  # noqa: F821
-    acc: Dint  # noqa: F821
+Counter = _StructRuntime(
+    name="Counter",
+    count=250,
+    field_specs=(
+        _FieldSpec("done", TagType.BOOL, UNSET, retentive=False),
+        _FieldSpec("acc", TagType.DINT, UNSET, retentive=True),
+    ),
+)

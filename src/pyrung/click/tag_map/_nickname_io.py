@@ -573,7 +573,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             if kind == "named_array":
                 return None
             if kind == "udt":
-                field = cast(str, entry.logical._pyrung_structure_field)
+                field = cast(str, entry.logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
                 return f"{name}.{field}:udt"
 
         default_start = _default_logical_block_start(entry.hardware_addresses)
