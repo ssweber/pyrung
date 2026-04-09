@@ -192,15 +192,15 @@ from pyrung import udt
 
 @udt()
 class Motor:
-    running: Bool
-    speed: Int
-    fault: Bool
+    Running: Bool
+    Speed: Int
+    Fault: Bool
 ```
 
 Access fields with dot notation:
 
 ```python
-with Rung(Motor.running):
+with Rung(Motor.Running):
     out(StatusLight)
 ```
 
@@ -209,11 +209,11 @@ For multiple instances of the same structure, set `count`:
 ```python
 @udt(count=3)
 class Pump:
-    running: Bool
-    flow: Real
+    Running: Bool
+    Flow: Real
 
 # Access by instance
-with Rung(Pump[1].running):
+with Rung(Pump[1].Running):
     out(Pump1Light)
 ```
 

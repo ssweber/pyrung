@@ -174,6 +174,10 @@ mapping = TagMap({
 })
 ```
 
+### Built-in Timer/Counter mapping
+
+Built-in `Timer` and `Counter` UDTs are automatically resolved to their Click hardware banks — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, `Counter[n].Done` → CT*n*, `Counter[n].Acc` → CTD*n*. No explicit TagMap entries are needed for these.
+
 ### Type validation at map time
 
 `TagMap` validates that logical and hardware data types match:
@@ -224,9 +228,9 @@ Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, a
 
 When both count and stride are given, the row span must equal `count × stride`. When stride is omitted, the row count must be divisible by count.
 
-**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_id` → field `id`).
+**Nickname patterns.** For `count > 1`, nicknames must follow `{Base}{instance}_{field}` with 1-based instance numbers. The instance is derived from position: `position // stride + 1`. Field names are the suffix after the prefix strip (`Channel1_Id` → field `Id`).
 
-For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
+For `count = 1`, nicknames default to the compact form `{Base}_{field}` (no instance number). If the CSV already uses numbered names like `Task1_Call`, the importer detects this and sets `always_number=True` automatically. To force numbered names explicitly, add `,always_number` to the marker:
 
 ```
 <Task:named_array(1,2,always_number)>
@@ -241,29 +245,29 @@ Example — `Channel` with 2 instances, 3 fields, no gaps (`stride=3`):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS101 | `Channel1_id` | `<Channel:named_array(2,3)>` |
-| DS102 | `Channel1_val` | |
-| DS103 | `Channel1_name` | |
-| DS104 | `Channel2_id` | |
-| DS105 | `Channel2_val` | |
-| DS106 | `Channel2_name` | `</Channel:named_array(2,3)>` |
+| DS101 | `Channel1_Id` | `<Channel:named_array(2,3)>` |
+| DS102 | `Channel1_Val` | |
+| DS103 | `Channel1_Name` | |
+| DS104 | `Channel2_Id` | |
+| DS105 | `Channel2_Val` | |
+| DS106 | `Channel2_Name` | `</Channel:named_array(2,3)>` |
 
 Singleton with compact names (`count=1`):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS501 | `Task_call` | `<Task:named_array(1,2)>` |
-| DS502 | `Task_done` | `</Task:named_array(1,2)>` |
+| DS501 | `Task_Call` | `<Task:named_array(1,2)>` |
+| DS502 | `Task_Done` | `</Task:named_array(1,2)>` |
 
 If stride exceeds the field count, the extra slots are gaps (empty nicknames):
 
 | Address | Nickname | Comment |
 |---------|----------|---------|
-| DS101 | `Sensor1_raw` | `<Sensor:named_array(2,3)>` |
-| DS102 | `Sensor1_scaled` | |
+| DS101 | `Sensor1_Raw` | `<Sensor:named_array(2,3)>` |
+| DS102 | `Sensor1_Scaled` | |
 | DS103 | | *(gap)* |
-| DS104 | `Sensor2_raw` | |
-| DS105 | `Sensor2_scaled` | |
+| DS104 | `Sensor2_Raw` | |
+| DS105 | `Sensor2_Scaled` | |
 | DS106 | | `</Sensor:named_array(2,3)>` |
 
 Click codegen can round-trip aligned whole-instance spans back into pyrung as `Name.instance(...)` or `Name.instance_select(...)` instead of raw bank ranges. This works for both dense and sparse layouts:
@@ -276,14 +280,14 @@ fill(0, RecipeProfile.instance_select(1, 2))
 **UDTs** use explicit `:udt` markers per field and memory bank. Each attribute range is a separate marker:
 
 ```text
-<Motor.speed:udt>
-</Motor.speed:udt>
-<Config.timeout:udt />
+<Motor.Speed:udt>
+</Motor.Speed:udt>
+<Config.Timeout:udt />
 ```
 
-The importer collects all `Base.field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
+The importer collects all `Base.Field:udt` ranges that share the same base name and assembles them into a single `@udt`. Field attribute ranges must have matching hardware span lengths across all attributes.
 
-Bare dotted tags such as `<Motor.speed>` are grouping-only and do not reconstruct a UDT.
+Bare dotted tags such as `<Motor.Speed>` are grouping-only and do not reconstruct a UDT.
 
 Nesting is not supported — a UDT field cannot itself be a named array (e.g. `Sts.Recipes:named_array(20,50)` won't parse). Flatten the name instead: `StsRecipes:named_array(20,50)`.
 

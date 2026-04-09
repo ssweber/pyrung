@@ -9,10 +9,10 @@ A singleton UDT (`count=1`) generates compact tag names — no instance number:
 ```python
 @udt()
 class Motor:
-    running: Bool
-    speed: Int
+    Running: Bool
+    Speed: Int
 
-# Tags: Motor_running, Motor_speed
+# Tags: Motor_Running, Motor_Speed
 ```
 
 With `count > 1`, tags are numbered by instance:
@@ -20,10 +20,10 @@ With `count > 1`, tags are numbered by instance:
 ```python
 @udt(count=3)
 class Pump:
-    running: Bool
-    flow: Real
+    Running: Bool
+    Flow: Real
 
-# Tags: Pump1_running, Pump1_flow, Pump2_running, ...
+# Tags: Pump1_Running, Pump1_Flow, Pump2_Running, ...
 ```
 
 If you want numbered names even for a singleton, use `always_number=True`:
@@ -31,10 +31,10 @@ If you want numbered names even for a singleton, use `always_number=True`:
 ```python
 @udt(count=1, always_number=True)
 class Heater:
-    on: Bool
-    temp: Real
+    On: Bool
+    Temp: Real
 
-# Tags: Heater1_on, Heater1_temp (not Heater_on)
+# Tags: Heater1_On, Heater1_Temp (not Heater_On)
 ```
 
 This is useful when your naming convention requires consistency across singletons and counted structures.
@@ -46,9 +46,9 @@ Plain annotations give you the type default (0 for `Int`, `False` for `Bool`, et
 ```python
 @udt(count=3)
 class Alarm:
-    id: Int = Field(default=100)
-    active: Bool
-    message: Char = Field(retentive=True)
+    Id: Int = Field(default=100)
+    Active: Bool
+    Message: Char = Field(retentive=True)
 ```
 
 `retentive=True` means the field survives a STOP→RUN transition. By default, UDT fields inherit the type's retentive policy.
@@ -58,8 +58,8 @@ You can also assign a plain literal as a default:
 ```python
 @udt()
 class Config:
-    mode: Int = 2
-    threshold: Real = 75.0
+    Mode: Int = 2
+    Threshold: Real = 75.0
 ```
 
 ### Per-instance sequences with auto()
@@ -69,12 +69,12 @@ class Config:
 ```python
 @udt(count=3)
 class Alarm:
-    id: Int = auto(start=10, step=5)
-    active: Bool
+    Id: Int = auto(start=10, step=5)
+    Active: Bool
 
-# Alarm[1].id defaults to 10
-# Alarm[2].id defaults to 15
-# Alarm[3].id defaults to 20
+# Alarm[1].Id defaults to 10
+# Alarm[2].Id defaults to 15
+# Alarm[3].Id defaults to 20
 ```
 
 `auto()` only works on numeric types: `Int`, `Dint`, `Word`.
@@ -88,15 +88,15 @@ from pyrung import named_array
 
 @named_array(Int, count=4)
 class Sensor:
-    reading = 0
-    setpoint = 100
+    Reading = 0
+    Setpoint = 100
 ```
 
-This creates 4 instances, each with an `Int`-typed `reading` and `setpoint`. Access works the same as UDTs:
+This creates 4 instances, each with an `Int`-typed `Reading` and `Setpoint`. Access works the same as UDTs:
 
 ```python
-Sensor[1].reading   # first sensor's reading
-Sensor[3].setpoint  # third sensor's setpoint
+Sensor[1].Reading   # first sensor's reading
+Sensor[3].Setpoint  # third sensor's setpoint
 ```
 
 ### Selecting whole instances
@@ -106,9 +106,9 @@ You can select one or more complete instances as a contiguous `BlockRange`. This
 ```python
 @named_array(Int, count=3)
 class RecipeProfile:
-    mix_seconds = 0
-    hold_seconds = 0
-    target_temp = 0
+    MixSeconds = 0
+    HoldSeconds = 0
+    TargetTemp = 0
 
 RecipeProfile.instance(2)              # one complete profile
 RecipeProfile.instance_select(1, 2)    # the first two profiles
@@ -130,8 +130,8 @@ For sparse layouts the returned `BlockRange` spans the full stride (including ga
 ```python
 @named_array(Int, count=2, stride=4)
 class DataPack:
-    id = auto()
-    value = 0
+    Id = auto()
+    Value = 0
 ```
 
 Instance 1 occupies slots 1–4, instance 2 occupies slots 5–8. Only slots 1–2 and 5–6 hold named fields; slots 3–4 and 7–8 are gaps. This matters when mapping to hardware with fixed slot widths.
@@ -143,8 +143,8 @@ Instance 1 occupies slots 1–4, instance 2 occupies slots 5–8. Only slots 1�
 ```python
 @udt(count=2)
 class Motor:
-    running: Bool
-    speed: Int
+    Running: Bool
+    Speed: Int
 
 Pump = Motor.clone("Pump")           # Same layout, count=2
 Fan = Motor.clone("Fan", count=4)    # Same layout, 4 instances
@@ -155,8 +155,8 @@ For named arrays, you can also override stride:
 ```python
 @named_array(Int, count=2, stride=3)
 class Slot:
-    id = auto()
-    value = 0
+    Id = auto()
+    Value = 0
 
 WideSlot = Slot.clone("WideSlot", stride=5)
 ```
@@ -172,17 +172,17 @@ from pyrung.click import ds
 
 @named_array(Int, count=3, stride=2)
 class Channel:
-    id = auto()
-    value = 0
+    Id = auto()
+    Value = 0
 
 entries = Channel.map_to(ds.select(101, 106))
 ```
 
 This maps:
 
-- Channel[1].id → DS101, Channel[1].value → DS102
-- Channel[2].id → DS103, Channel[2].value → DS104
-- Channel[3].id → DS105, Channel[3].value → DS106
+- Channel[1].Id → DS101, Channel[1].Value → DS102
+- Channel[2].Id → DS103, Channel[2].Value → DS104
+- Channel[3].Id → DS105, Channel[3].Value → DS106
 
 The target range must have exactly `count * stride` addresses. Each instance claims `stride` consecutive slots, with fields filling from the front and gaps (if any) at the end.
 

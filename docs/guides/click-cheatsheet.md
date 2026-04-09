@@ -268,12 +268,12 @@ from pyrung import named_array, Int, Real
 
 @named_array(Int, count=4)
 class Sensor:
-    raw = 0
-    scaled = 0
-    setpoint = 100
+    Raw = 0
+    Scaled = 0
+    Setpoint = 100
 
-Sensor[1].raw             # first sensor's raw reading
-Sensor[3].setpoint        # third sensor's setpoint
+Sensor[1].Raw             # first sensor's raw reading
+Sensor[3].Setpoint        # third sensor's setpoint
 Sensor.select(1, 3)       # fields 1-3 as a BlockRange
 Sensor.instance(2)        # all fields for instance 2
 Sensor.instance_select(1, 2)  # all fields for instances 1-2
@@ -394,5 +394,7 @@ mapping = TagMap({
 # Validate against Click hardware restrictions
 report = mapping.validate(logic, mode="warn")
 ```
+
+Built-in `Timer` and `Counter` UDTs are automatically mapped — `Timer[n].Done` → T*n*, `Timer[n].Acc` → TD*n*, etc. No explicit entries needed.
 
 Named arrays use `.map_to()` instead of TagMap — see [Named arrays](#named-arrays) above.

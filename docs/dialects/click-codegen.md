@@ -47,18 +47,18 @@ When `nickname_csv=` is provided, codegen calls `TagMap.from_nickname_file()` in
 Without `nickname_csv`, a named-array group comes back flat:
 
 ```python
-Channel1_id = Int("Channel1_id")
-Channel1_val = Int("Channel1_val")
-Channel2_id = Int("Channel2_id")
-Channel2_val = Int("Channel2_val")
+Channel1_Id = Int("Channel1_Id")
+Channel1_Val = Int("Channel1_Val")
+Channel2_Id = Int("Channel2_Id")
+Channel2_Val = Int("Channel2_Val")
 
 # in the program:
-copy(Channel1_id, Channel2_val)
+copy(Channel1_Id, Channel2_Val)
 
 # in TagMap:
 mapping = TagMap({
-    Channel1_id: ds[101],
-    Channel1_val: ds[102],
+    Channel1_Id: ds[101],
+    Channel1_Val: ds[102],
     ...
 })
 ```
@@ -68,11 +68,11 @@ With `nickname_csv=` pointing to a CSV that has named-array markers:
 ```python
 @named_array(Int, count=2)
 class Channel:
-    id = 0
-    val = 0
+    Id = 0
+    Val = 0
 
 # in the program:
-copy(Channel[1].id, Channel[2].val)
+copy(Channel[1].Id, Channel[2].Val)
 
 # in TagMap:
 mapping = TagMap([
@@ -94,16 +94,16 @@ For UDTs (fields spanning different memory banks), per-field `map_to` is emitted
 ```python
 @udt(count=2)
 class Motor:
-    running: Bool = False
-    speed: Int = 0
+    Running: Bool = False
+    Speed: Int = 0
 
 mapping = TagMap([
-    Motor.running.map_to(c.select(101, 102)),
-    Motor.speed.map_to(ds.select(1001, 1002)),
+    Motor.Running.map_to(c.select(101, 102)),
+    Motor.Speed.map_to(ds.select(1001, 1002)),
 ], include_system=False)
 ```
 
-Singleton structures (count=1) use dotted access without indexing: `Config.timeout`, not `Config[1].timeout`. If the CSV uses numbered names for a singleton (e.g. `Config1_timeout`), the importer infers `always_number=True` and emits `@named_array(Int, always_number=True)`.
+Singleton structures (count=1) use dotted access without indexing: `Config.Timeout`, not `Config[1].Timeout`. If the CSV uses numbered names for a singleton (e.g. `Config1_Timeout`), the importer infers `always_number=True` and emits `@named_array(Int, always_number=True)`.
 
 For details on `@named_array` and `@udt` syntax, see the [Tag Structures guide](../guides/tag-structures.md). For the CSV marker format, see [CSV marker format](click.md#csv-marker-format).
 
