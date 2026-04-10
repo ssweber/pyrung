@@ -6,7 +6,22 @@ They manipulate both a done bit and an accumulator.
 
 import pytest
 
-from pyrung.core import Bool, Counter, Int, Program, Rung, count_down, count_up, latch, out, rise
+from pyrung.core import (
+    PLC,
+    Bool,
+    Counter,
+    Dint,
+    Int,
+    Program,
+    Real,
+    Rung,
+    count_down,
+    count_up,
+    latch,
+    out,
+    rise,
+    udt,
+)
 
 
 class TestCountUpInstruction:
@@ -772,3 +787,71 @@ class TestCounterConditionTypeGuards:
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
                     count_down(Counter[1], preset=5).reset(ResetValue)
+
+
+class TestCounterStructuralContract:
+    """Counter instructions accept any UDT with Done: Bool and Acc: Int|Dint."""
+
+    def test_custom_udt_with_dint_acc_works(self):
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        @udt()
+        class MyCounter:
+            Done: Bool  # noqa: F821
+            Acc: Dint  # noqa: F821
+
+        with Program() as logic:
+            with Rung(Sensor):
+                count_up(MyCounter[1], preset=5).reset(Reset)
+
+        runner = PLC(logic)
+        runner.patch({"Sensor": True, "Reset": False})
+        runner.step()
+        assert runner.current_state.tags["MyCounter_Acc"] == 1
+
+    def test_custom_udt_with_int_acc_works(self):
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        @udt()
+        class SmallCounter:
+            Done: Bool  # noqa: F821
+            Acc: Int  # noqa: F821
+
+        with Program() as logic:
+            with Rung(Sensor):
+                count_up(SmallCounter[1], preset=5).reset(Reset)
+
+        runner = PLC(logic)
+        runner.patch({"Sensor": True, "Reset": False})
+        runner.step()
+        assert runner.current_state.tags["SmallCounter_Acc"] == 1
+
+    def test_rejects_non_bool_done(self):
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        @udt()
+        class BadDone:
+            Done: Int  # noqa: F821
+            Acc: Dint  # noqa: F821
+
+        with Program():
+            with Rung(Sensor):
+                with pytest.raises(TypeError, match="'Done' to be a Bool"):
+                    count_up(BadDone[1], preset=5).reset(Reset)
+
+    def test_rejects_non_int_acc(self):
+        Sensor = Bool("Sensor")
+        Reset = Bool("Reset")
+
+        @udt()
+        class BadAcc:
+            Done: Bool  # noqa: F821
+            Acc: Real  # noqa: F821
+
+        with Program():
+            with Rung(Sensor):
+                with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
+                    count_up(BadAcc[1], preset=5).reset(Reset)
