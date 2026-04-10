@@ -2302,7 +2302,7 @@ class TestInMemoryRoundTrip:
     def test_bundle_round_trip_type_error(self):
         """ladder_to_pyrung rejects unsupported source types."""
         with pytest.raises(TypeError, match="source must be"):
-            ladder_to_pyrung(42)  # ty: ignore[invalid-argument-type]
+            ladder_to_pyrung(42)
 
 
 # ---------------------------------------------------------------------------

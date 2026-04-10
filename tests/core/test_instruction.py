@@ -1457,7 +1457,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="comparison must use a .select\\(\\) range"):
             SearchInstruction(
-                RangeComparison(Int("NotARange"), "==", 1),  # ty: ignore[invalid-argument-type]
+                RangeComparison(Int("NotARange"), "==", 1),
                 result=Result,
                 found=Found,
             )
@@ -1470,7 +1470,7 @@ class TestSearchInstruction:
 
         with pytest.raises(TypeError, match="expects a comparison expression"):
             SearchInstruction(
-                "not a comparison",  # ty: ignore[invalid-argument-type]
+                "not a comparison",
                 result=Result,
                 found=Found,
             )

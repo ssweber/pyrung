@@ -297,23 +297,23 @@ class TestGenerateCircuitPyAPI:
         prog = Program(strict=False)
 
         with pytest.raises(TypeError, match="program"):
-            generate_circuitpy("nope", hw, target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy("nope", hw, target_scan_ms=10.0)
         with pytest.raises(TypeError, match="hw"):
-            generate_circuitpy(prog, object(), target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, object(), target_scan_ms=10.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=0.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=math.inf)
         with pytest.raises(TypeError, match="watchdog_ms"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)
         with pytest.raises(TypeError, match="runstop"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")
         with pytest.raises(TypeError, match="modbus_server"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")
         with pytest.raises(TypeError, match="tag_map"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")
         with pytest.raises(ValueError, match="mapped_tag_scope"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")
 
     def test_modbus_requires_tag_map(self):
         hw = P1AM()

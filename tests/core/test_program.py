@@ -534,7 +534,7 @@ class TestStrictDslControlFlowGuard:
 
         with pytest.raises(ForbiddenControlFlowError, match="Use `~Tag`"):
             with Program():
-                with Rung(not A):  # ty: ignore[invalid-argument-type]
+                with Rung(not A):
                     out(Light)
 
     def test_context_manager_rejects_for_loop(self):

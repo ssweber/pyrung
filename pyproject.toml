@@ -155,8 +155,16 @@ exclude = [
 # Note: unresolved-import is ignored because ty has issues with src-layout
 # projects and relative imports. The code runs correctly with Python.
 unresolved-import = "ignore"
-not-subscriptable = "ignore"  # @udt() replaces the class with a subscriptable _StructRuntime at runtime
+not-subscriptable = "ignore"  # @udt() replaces the class with _StructRuntime at runtime (https://github.com/astral-sh/ty/issues/143)
 unused-ignore-comment = "error"
+
+# @udt() class decorator support pending (https://github.com/astral-sh/ty/issues/143):
+# _StructRuntime.__getattr__ returns Block | LiveTag; ty can't narrow the union.
+[[tool.ty.overrides]]
+include = ["tests/**"]
+[tool.ty.overrides.rules]
+invalid-argument-type = "ignore"
+unresolved-attribute = "ignore"
 
 
 [tool.pytest.ini_options]

@@ -611,7 +611,7 @@ class TestGroupedOr:
         C = Bool("C")
 
         with pytest.raises(TypeError, match="And\\(\\.\\.\\.\\)"):
-            Or((A, B), C)  # ty: ignore[invalid-argument-type]
+            Or((A, B), C)
 
     def test_or_rejects_list_group(self):
         """List groups must be written explicitly with And()."""
@@ -624,4 +624,4 @@ class TestGroupedOr:
         C = Bool("C")
 
         with pytest.raises(TypeError, match="And\\(\\.\\.\\.\\)"):
-            Or([A, B], C)  # ty: ignore[invalid-argument-type]
+            Or([A, B], C)

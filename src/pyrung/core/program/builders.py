@@ -47,6 +47,8 @@ def _extract_done_acc(instance: InstanceView | _StructRuntime, func_name: str) -
             f"{func_name}() requires a Timer/Counter instance with an 'Acc' field, "
             f"got {instance!r}."
         ) from None
+    assert isinstance(done_bit, Tag), f"Expected Tag for Done, got {type(done_bit)}"
+    assert isinstance(accumulator, Tag), f"Expected Tag for Acc, got {type(accumulator)}"
     return done_bit, accumulator
 
 
