@@ -23,7 +23,7 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.structure import InstanceView, _StructRuntime
-from pyrung.core.tag import Tag
+from pyrung.core.tag import Tag, TagType
 
 from .context import _require_rung_context
 
@@ -31,8 +31,15 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange
 
 
+_ACC_TYPES = frozenset({TagType.INT, TagType.DINT})
+
+
 def _extract_done_acc(instance: InstanceView | _StructRuntime, func_name: str) -> tuple[Tag, Tag]:
-    """Extract ``Done`` and ``Acc`` tags from a Timer/Counter instance."""
+    """Extract ``Done`` and ``Acc`` tags from a Timer/Counter instance.
+
+    Any structured type with a ``Done`` (Bool) field and an ``Acc``
+    (Int or Dint) field satisfies the structural contract.
+    """
     try:
         done_bit = instance.Done
     except AttributeError:
@@ -47,8 +54,12 @@ def _extract_done_acc(instance: InstanceView | _StructRuntime, func_name: str) -
             f"{func_name}() requires a Timer/Counter instance with an 'Acc' field, "
             f"got {instance!r}."
         ) from None
-    assert isinstance(done_bit, Tag), f"Expected Tag for Done, got {type(done_bit)}"
-    assert isinstance(accumulator, Tag), f"Expected Tag for Acc, got {type(accumulator)}"
+    if not isinstance(done_bit, Tag) or done_bit.type is not TagType.BOOL:
+        raise TypeError(f"{func_name}() requires 'Done' to be a Bool tag, got {done_bit!r}.")
+    if not isinstance(accumulator, Tag) or accumulator.type not in _ACC_TYPES:
+        raise TypeError(
+            f"{func_name}() requires 'Acc' to be an Int or Dint tag, got {accumulator!r}."
+        )
     return done_bit, accumulator
 
 

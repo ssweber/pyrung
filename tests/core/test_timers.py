@@ -21,9 +21,11 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Dint,
     Field,
     Int,
     Program,
+    Real,
     Rung,
     Timer,
     copy,
@@ -900,3 +902,67 @@ class TestTimerConditionTypeGuards:
             with Rung(Enable):
                 with pytest.raises(TypeError, match="Non-BOOL tag"):
                     on_delay(Timer[1], preset=100).reset(ResetValue)
+
+
+class TestTimerStructuralContract:
+    """Timer instructions accept any UDT with Done: Bool and Acc: Int|Dint."""
+
+    def test_custom_udt_with_int_acc_works(self):
+        Enable = Bool("Enable")
+
+        @udt()
+        class MyTimer:
+            Done: Bool  # noqa: F821
+            Acc: Int  # noqa: F821
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(MyTimer[1], preset=100)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["MyTimer_Acc"] == 10
+
+    def test_custom_udt_with_dint_acc_works(self):
+        Enable = Bool("Enable")
+
+        @udt()
+        class BigTimer:
+            Done: Bool  # noqa: F821
+            Acc: Dint  # noqa: F821
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(BigTimer[1], preset=100)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["BigTimer_Acc"] == 10
+
+    def test_rejects_non_bool_done(self):
+        Enable = Bool("Enable")
+
+        @udt()
+        class BadDone:
+            Done: Int  # noqa: F821
+            Acc: Int  # noqa: F821
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="'Done' to be a Bool"):
+                    on_delay(BadDone[1], preset=100)
+
+    def test_rejects_non_int_acc(self):
+        Enable = Bool("Enable")
+
+        @udt()
+        class BadAcc:
+            Done: Bool  # noqa: F821
+            Acc: Real  # noqa: F821
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
+                    on_delay(BadAcc[1], preset=100)

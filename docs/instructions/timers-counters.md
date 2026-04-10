@@ -21,6 +21,20 @@ c = Counter[1]
 
 Use `Timer.clone("Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
 
+### Custom types
+
+Timer and counter instructions use a structural contract: any `@udt()` with a `Done: Bool` field and an `Acc: Int` or `Acc: Dint` field works with `on_delay`, `off_delay`, `count_up`, and `count_down`.
+
+```python
+from pyrung import udt, Bool, Dint
+
+@udt()
+class MyCounter:
+    Done: Bool
+    Acc: Dint
+    Faults: Dint  # extra fields are fine
+```
+
 ## Timers
 
 ### On-delay timer (TON / RTON)
