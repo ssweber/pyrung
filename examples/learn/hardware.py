@@ -109,7 +109,7 @@ with Program() as logic:
 
 # --- Option B: Map to a Click PLC ---
 
-from pyrung.click import TagMap, c, ds, pyrung_to_ladder, x, y
+from pyrung.click import TagMap, c, ct, ctd, ds, pyrung_to_ladder, t, td, x, y
 
 mapping = TagMap(
     {
@@ -139,6 +139,16 @@ mapping = TagMap(
         State: ds[5],
         SizeReading: ds[6],
         SizeThreshold: ds[7],
+        # Timers
+        DetTimer.Done: t[1],
+        DetTimer.Acc: td[1],
+        HoldTimer.Done: t[2],
+        HoldTimer.Acc: td[2],
+        # Counters
+        BinACounter.Done: ct[1],
+        BinACounter.Acc: ctd[1],
+        BinBCounter.Done: ct[2],
+        BinBCounter.Acc: ctd[2],
     }
 )
 
