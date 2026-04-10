@@ -18,6 +18,9 @@ from pyrung.core import (
     time_drum,
 )
 
+Counter2 = Counter.clone("Counter2")
+Counter3 = Counter.clone("Counter3")
+
 
 def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
     enable = Bool("Enable")
@@ -41,20 +44,20 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
         }
     )
     runner.step()
-    assert runner.current_state.tags["Counter1_Acc"] == 1
+    assert runner.current_state.tags["Counter_Acc"] == 1
 
     runner.patch({"DownB": True})
     runner.step()
-    assert runner.current_state.tags["Counter1_Acc"] == 1
+    assert runner.current_state.tags["Counter_Acc"] == 1
 
     runner.patch({"ResetA": True, "ResetB": False})
     runner.step()
-    assert runner.current_state.tags["Counter1_Acc"] == 1
+    assert runner.current_state.tags["Counter_Acc"] == 1
 
     runner.patch({"ResetB": True})
     runner.step()
-    assert runner.current_state.tags["Counter1_Acc"] == 0
-    assert runner.current_state.tags["Counter1_Done"] is False
+    assert runner.current_state.tags["Counter_Acc"] == 0
+    assert runner.current_state.tags["Counter_Done"] is False
 
 
 def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
@@ -112,16 +115,16 @@ def test_on_delay_reset_accepts_variadic_conditions() -> None:
     runner = PLC(logic, dt=0.1)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
     runner.step()
-    assert runner.current_state.tags["Timer1_Acc"] == 100
+    assert runner.current_state.tags["Timer_Acc"] == 100
 
     runner.patch({"ResetA": True, "ResetB": False})
     runner.step()
-    assert runner.current_state.tags["Timer1_Acc"] == 200
+    assert runner.current_state.tags["Timer_Acc"] == 200
 
     runner.patch({"ResetB": True})
     runner.step()
-    assert runner.current_state.tags["Timer1_Acc"] == 0
-    assert runner.current_state.tags["Timer1_Done"] is False
+    assert runner.current_state.tags["Timer_Acc"] == 0
+    assert runner.current_state.tags["Timer_Done"] is False
 
 
 def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
@@ -131,7 +134,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
 
     with Program() as logic:
         with Rung(enable):
-            count_down(Counter[2], preset=5).reset(reset_a, reset_b)
+            count_down(Counter2, preset=5).reset(reset_a, reset_b)
 
     runner = PLC(logic)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
@@ -376,7 +379,7 @@ def test_single_condition_forms_remain_supported() -> None:
 
     with Program() as logic:
         with Rung(enable):
-            count_down(Counter[3], preset=5).reset(reset)
+            count_down(Counter3, preset=5).reset(reset)
 
     runner = PLC(logic)
     runner.patch({"Enable": True, "Reset": False})

@@ -39,7 +39,6 @@ from pyrung.click.codegen.utils import (
     _CLICK_PI_RE,
     _EXPR_FUNC_IMPORT_NAMES,
     _parse_af_args,
-    _parse_operand_prefix,
     _sub_operand,
     _sub_operand_kwarg,
 )
@@ -121,8 +120,9 @@ def _generate_code(
         _emit_tag_declarations(lines, collection)
         lines.append("")
 
-    if collection.named_timer_counters:
-        _emit_named_tc_declarations(lines, collection)
+    if collection.timer_counter_clones:
+        lines.append("# --- Clones ---")
+        _emit_tc_clone_declarations(lines, collection)
         lines.append("")
 
     if collection.plain_blocks:
@@ -295,10 +295,10 @@ def _emit_tag_declarations(
         lines.append(line)
 
 
-def _emit_named_tc_declarations(lines: list[str], collection: _OperandCollection) -> None:
-    """Emit Timer.named() / Counter.named() declarations."""
-    for decl in collection.named_timer_counters:
-        lines.append(f'{decl.var_name} = {decl.kind}.named({decl.index}, "{decl.slug}")')
+def _emit_tc_clone_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit Timer.clone() / Counter.clone() declarations."""
+    for decl in collection.timer_counter_clones:
+        lines.append(f'{decl.var_name} = {decl.kind}.clone("{decl.var_name}")')
 
 
 def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -853,26 +853,13 @@ def _merge_timer_counter_args(
     done_bit_operand: str,
     collection: _OperandCollection,
 ) -> str | None:
-    """Merge done_bit + accumulator operands into a Timer/Counter reference.
+    """Merge done_bit + accumulator operands into a Timer/Counter clone reference.
 
-    Returns the merged reference string, or None if the operand can't be parsed.
-    Uses the named declaration's var_name when a nickname was provided,
-    otherwise falls back to Timer[n] / Counter[n].
+    Returns the clone var_name, or None if the operand can't be parsed.
     """
-    parsed = _parse_operand_prefix(done_bit_operand)
-    if parsed is None:
-        return None
-    prefix, _, _, index = parsed
-
-    # Named timer/counter — use the slug variable
-    for decl in collection.named_timer_counters:
+    for decl in collection.timer_counter_clones:
         if decl.done_operand == done_bit_operand:
             return decl.var_name
-
-    if func_name in {"on_delay", "off_delay"} and prefix == "T":
-        return f"Timer[{index}]"
-    if func_name in {"count_up", "count_down"} and prefix == "CT":
-        return f"Counter[{index}]"
     return None
 
 
@@ -1001,8 +988,10 @@ def _emit_comment(lines: list[str], comment: str, indent: int) -> None:
 def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
     """Emit the TagMap constructor."""
     has_structures = bool(collection.structures)
+    has_clones = bool(collection.timer_counter_clones)
+    use_list_form = has_structures or has_clones
 
-    if has_structures:
+    if use_list_form:
         lines.append("mapping = TagMap([")
     else:
         lines.append("mapping = TagMap({")
@@ -1013,7 +1002,7 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
         key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
     )
 
-    if has_structures:
+    if use_list_form:
         # Structure-level map_to entries
         for sdecl in collection.structures:
             if sdecl.structure_type == "named_array":
@@ -1035,6 +1024,14 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
                             f"    {sdecl.name}.{fn}.map_to("
                             f"{fhw.block_var}.select({fhw.start}, {fhw.end})),"
                         )
+        # Timer/counter clone map_to entries
+        for decl in collection.timer_counter_clones:
+            if decl.kind == "Timer":
+                lines.append(f"    {decl.var_name}.Done.map_to(t[{decl.index}]),")
+                lines.append(f"    {decl.var_name}.Acc.map_to(td[{decl.index}]),")
+            else:
+                lines.append(f"    {decl.var_name}.Done.map_to(ct[{decl.index}]),")
+                lines.append(f"    {decl.var_name}.Acc.map_to(ctd[{decl.index}]),")
         for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
             lines.append(
                 f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501

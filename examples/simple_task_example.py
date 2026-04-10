@@ -9,12 +9,11 @@ clears all task state (Active, Step, Advance, StepTime) when
 import os
 
 from pyrung import (
+    PLC,
     Bool,
     Int,
-    PLC,
     Rung,
     Timer,
-
     branch,
     calc,
     call,
@@ -22,7 +21,6 @@ from pyrung import (
     on_delay,
     out,
     program,
-    reset,
     subroutine,
     udt,
 )
@@ -36,7 +34,7 @@ class Task:
     Advance: Int
 
 
-StepTimer = Timer.named(1, "StepTimer")
+StepTimer = Timer.clone("StepTimer")
 Valve1 = Bool("Valve1")
 
 

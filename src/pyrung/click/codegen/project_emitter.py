@@ -16,12 +16,12 @@ from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _scan_file_refs
 from pyrung.click.codegen.emitter import (
-    _emit_named_tc_declarations,
     _emit_plain_block_declarations,
     _emit_rung_sequence,
     _emit_structure_declarations,
     _emit_tag_declarations,
     _emit_tag_map,
+    _emit_tc_clone_declarations,
     _is_trailing_return,
     _prescan_expr_funcs,
 )
@@ -258,8 +258,9 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
         _emit_tag_declarations(lines, collection, suppress_comments=True)
         lines.append("")
 
-    if collection.named_timer_counters:
-        _emit_named_tc_declarations(lines, collection)
+    if collection.timer_counter_clones:
+        lines.append("# --- Clones ---")
+        _emit_tc_clone_declarations(lines, collection)
         lines.append("")
 
     if collection.plain_blocks:
@@ -413,7 +414,7 @@ def _generate_main_file(
         block_var_names=set(refs.block_var_names),
         range_var_names=set(refs.range_var_names),
         structure_names=set(refs.structure_names),
-        named_tc_var_names=set(refs.named_tc_var_names),
+        tc_clone_var_names=set(refs.tc_clone_var_names),
     )
     _emit_tags_import_line(lines, refs_with_mapping, include_mapping=True)
 
@@ -565,7 +566,7 @@ def _emit_tags_import_line(
     names.extend(sorted(refs.block_var_names))
     names.extend(sorted(refs.range_var_names))
     names.extend(sorted(refs.structure_names))
-    names.extend(sorted(refs.named_tc_var_names))
+    names.extend(sorted(refs.tc_clone_var_names))
 
     if names:
         lines.append(f"from tags import {', '.join(names)}")

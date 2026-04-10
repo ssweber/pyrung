@@ -2,25 +2,25 @@
 
 # --- The ladder logic way ---
 
-from pyrung import Bool, Int, Program, Rung, PLC, branch, comment, out, latch, reset, Or, And
+from pyrung import PLC, Bool, Int, Or, Program, Rung, branch, comment, latch, out, reset
 
-Auto          = Bool("Auto")
-Manual        = Bool("Manual")
-StopBtn       = Bool("StopBtn")     # NC contact
-StartBtn      = Bool("StartBtn")
-EstopOK       = Bool("EstopOK")     # NC safety relay permission
-Running       = Bool("Running")
-Light         = Bool("Light")
-DiverterBtn   = Bool("DiverterBtn")
-DiverterCmd   = Bool("DiverterCmd")
+Auto = Bool("Auto")
+Manual = Bool("Manual")
+StopBtn = Bool("StopBtn")  # NC contact
+StartBtn = Bool("StartBtn")
+EstopOK = Bool("EstopOK")  # NC safety relay permission
+Running = Bool("Running")
+Light = Bool("Light")
+DiverterBtn = Bool("DiverterBtn")
+DiverterCmd = Bool("DiverterCmd")
 ConveyorMotor = Bool("ConveyorMotor")
-StatusLight   = Bool("StatusLight")
-Mode          = Int("Mode")
+StatusLight = Bool("StatusLight")
+Mode = Int("Mode")
 
 with Program() as logic:
     # Motor runs in either mode when started
     with Rung(Or(Auto, Manual)):
-        out(Light)                        # Status light: either mode is active
+        out(Light)  # Status light: either mode is active
 
     # Or works with comparisons and any number of conditions
     with Rung(Or(Mode == 1, Mode == 3, Mode == 5)):
@@ -47,7 +47,7 @@ with Program() as logic:
 # --- Try it ---
 
 with PLC(logic) as plc:
-    StopBtn.value = True             # NC inputs: True = healthy
+    StopBtn.value = True  # NC inputs: True = healthy
     EstopOK.value = True
 
     Auto.value = True
@@ -59,7 +59,7 @@ with PLC(logic) as plc:
 
     StartBtn.value = False
     plc.step()
-    assert Running.value is True     # Still running (latched)
+    assert Running.value is True  # Still running (latched)
 
     # E-stop kills everything (NC opens)
     EstopOK.value = False

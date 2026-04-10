@@ -16,15 +16,14 @@ Hardware:
 import os
 
 from pyrung import (
+    And,
     Bool,
     Counter,
     Int,
+    Or,
     Program,
     Rung,
     Timer,
-
-    And,
-    Or,
     branch,
     comment,
     copy,
@@ -79,12 +78,12 @@ SizeReading = Int("SizeReading")  # analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # small/large cutoff
 
 # Timers — detection and diverter hold
-DetTimer = Timer.named(1, "DetTimer")
-HoldTimer = Timer.named(2, "HoldTimer")
+DetTimer = Timer.clone("DetTimer")
+HoldTimer = Timer.clone("HoldTimer")
 
 # Counters — per bin
-BinACounter = Counter.named(1, "BinACounter")
-BinBCounter = Counter.named(2, "BinBCounter")
+BinACounter = Counter.clone("BinACounter")
+BinBCounter = Counter.clone("BinBCounter")
 
 # ---------------------------------------------------------------------------
 # Logic

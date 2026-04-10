@@ -10,12 +10,11 @@ This demonstrates a common task pattern used in Click PLC programs:
 import os
 
 from pyrung import (
+    PLC,
     Bool,
     Int,
-    PLC,
     Rung,
     Timer,
-
     calc,
     call,
     copy,
@@ -40,8 +39,8 @@ class Task:
 
 # Rename Step1_Active to describe your actual step (e.g., FillTank, HomeAxis).
 Step1_Active = Bool("Step1_Active")
-ElapsedTimer = Timer.named(1, "ElapsedTimer")
-StepTimer = Timer.named(2, "StepTimer")
+ElapsedTimer = Timer.clone("ElapsedTimer")
+StepTimer = Timer.clone("StepTimer")
 Valve1 = Bool("Valve1")
 
 

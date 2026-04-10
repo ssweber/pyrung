@@ -8,9 +8,12 @@ import queue
 from pathlib import Path
 from typing import Any
 
+from pyrung.core import Counter
 from pyrung.core.debug_trace import RungTraceEvent
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.protocol import read_message
+
+Counter2 = Counter.clone("Counter2")
 
 
 def _drain_messages(stream: io.BytesIO) -> list[dict[str, Any]]:
@@ -408,6 +411,8 @@ def _chained_builder_debug_script() -> str:
     return (
         "from pyrung.core import Block, Bool, Counter, PLC, Program, Rung, TagType, Timer, count_down, count_up, on_delay, shift\n"
         "\n"
+        "Counter2 = Counter.clone('Counter2')\n"
+        "\n"
         "Enable = Bool('Enable')\n"
         "Down = Bool('Down')\n"
         "Reset = Bool('Reset')\n"
@@ -421,7 +426,7 @@ def _chained_builder_debug_script() -> str:
         "        cu_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
-        "        cd_builder = count_down(Counter[2], preset=5)\n"
+        "        cd_builder = count_down(Counter2, preset=5)\n"
         "        cd_builder.reset(Reset)\n"
         "\n"
         "    with Rung(Enable):\n"
@@ -1025,7 +1030,7 @@ def test_stepin_walks_chained_builder_substeps_with_friendly_labels_and_trace_li
         ("Reset", _line_number(script, "cu_builder.reset(Reset)")),
         (
             "Count Down",
-            _line_number(script, "cd_builder = count_down(Counter[2], preset=5)"),
+            _line_number(script, "cd_builder = count_down(Counter2, preset=5)"),
         ),
         ("Reset", _line_number(script, "cd_builder.reset(Reset)")),
         (

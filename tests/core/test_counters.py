@@ -33,18 +33,18 @@ class TestCountUpInstruction:
         # Enable sensor and run 3 scans - should increment each scan
         runner.patch({"PartSensor": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 1
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
         runner.step()  # Still true - should increment again
-        assert runner.current_state.tags["Counter1_Acc"] == 2
+        assert runner.current_state.tags["Counter_Acc"] == 2
 
         runner.step()  # Still true - should increment again
-        assert runner.current_state.tags["Counter1_Acc"] == 3
+        assert runner.current_state.tags["Counter_Acc"] == 3
 
         # Disable sensor - should stop incrementing
         runner.patch({"PartSensor": False})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 3
+        assert runner.current_state.tags["Counter_Acc"] == 3
 
     def test_count_up_sets_done_bit_at_preset(self):
         """CTU done bit turns ON when accumulator >= preset."""
@@ -67,13 +67,13 @@ class TestCountUpInstruction:
             runner.step()
 
         # Should be at preset now
-        assert runner.current_state.tags["Counter1_Acc"] == 3
-        assert runner.current_state.tags["Counter1_Done"] is True  # Done bit ON
+        assert runner.current_state.tags["Counter_Acc"] == 3
+        assert runner.current_state.tags["Counter_Done"] is True  # Done bit ON
 
         # Continue counting - done bit stays ON
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 4
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 4
+        assert runner.current_state.tags["Counter_Done"] is True
 
     def test_count_up_reset(self):
         """CTU reset clears both done bit and accumulator."""
@@ -95,14 +95,14 @@ class TestCountUpInstruction:
         runner.step()
         runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == 2
+        assert runner.current_state.tags["Counter_Acc"] == 2
 
         # Activate reset
         runner.patch({"ResetBtn": True})
         runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == 0
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is False
 
     def test_count_up_with_down_bidirectional(self):
         """CTU with .down() creates bidirectional counter."""
@@ -123,26 +123,26 @@ class TestCountUpInstruction:
         # Increment on Enter rising edge
         runner.patch({"Enter": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 1
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
         runner.patch({"Enter": False})
         runner.step()
 
         runner.patch({"Enter": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2
+        assert runner.current_state.tags["Counter_Acc"] == 2
 
         # Decrement on Exit rising edge
         runner.patch({"Enter": False, "Exit": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 1
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
         runner.patch({"Exit": False})
         runner.step()
 
         runner.patch({"Exit": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0
+        assert runner.current_state.tags["Counter_Acc"] == 0
 
 
 class TestCountDownInstruction:
@@ -170,7 +170,7 @@ class TestCountDownInstruction:
         # Initialize with reset - should clear to 0
         runner.patch({"Reload": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0
+        assert runner.current_state.tags["Counter_Acc"] == 0
 
         runner.patch({"Reload": False})
         runner.step()
@@ -178,18 +178,18 @@ class TestCountDownInstruction:
         # Enable dispense and run 3 scans - should decrement each scan
         runner.patch({"Dispense": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -1
+        assert runner.current_state.tags["Counter_Acc"] == -1
 
         runner.step()  # Still true - should decrement again
-        assert runner.current_state.tags["Counter1_Acc"] == -2
+        assert runner.current_state.tags["Counter_Acc"] == -2
 
         runner.step()  # Still true - should decrement again
-        assert runner.current_state.tags["Counter1_Acc"] == -3
+        assert runner.current_state.tags["Counter_Acc"] == -3
 
         # Disable dispense - should stop decrementing
         runner.patch({"Dispense": False})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -3
+        assert runner.current_state.tags["Counter_Acc"] == -3
 
     def test_count_down_sets_done_bit_at_negative_preset(self):
         """CTD done bit turns ON when accumulator <= -preset.
@@ -212,8 +212,8 @@ class TestCountDownInstruction:
         # Initialize - should clear to 0
         runner.patch({"ResetBtn": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is False
 
         runner.patch({"ResetBtn": False})
         runner.step()
@@ -223,18 +223,18 @@ class TestCountDownInstruction:
         for _ in range(2):
             runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == -2
-        assert runner.current_state.tags["Counter1_Done"] is False  # Not done yet
+        assert runner.current_state.tags["Counter_Acc"] == -2
+        assert runner.current_state.tags["Counter_Done"] is False  # Not done yet
 
         # Count one more time to reach -3 (done!)
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -3
-        assert runner.current_state.tags["Counter1_Done"] is True  # Done bit ON
+        assert runner.current_state.tags["Counter_Acc"] == -3
+        assert runner.current_state.tags["Counter_Done"] is True  # Done bit ON
 
         # Continue counting - done bit stays ON
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -4
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == -4
+        assert runner.current_state.tags["Counter_Done"] is True
 
     def test_count_down_reset_clears_to_zero(self):
         """CTD reset clears accumulator to 0.
@@ -261,14 +261,14 @@ class TestCountDownInstruction:
         runner.step()
         runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == -2
+        assert runner.current_state.tags["Counter_Acc"] == -2
 
         # Activate reset - should clear to 0
         runner.patch({"ResetBtn": True})
         runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == 0
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is False
 
 
 class TestCounterAccumulatorClamp:
@@ -290,15 +290,15 @@ class TestCounterAccumulatorClamp:
         runner.step()
 
         # Prime to one below max, then increment into max
-        runner.patch({"Trigger": True, "Counter1_Acc": 2147483646})
+        runner.patch({"Trigger": True, "Counter_Acc": 2147483646})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2147483647
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 2147483647
+        assert runner.current_state.tags["Counter_Done"] is True
 
         # Further increments stay clamped
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2147483647
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 2147483647
+        assert runner.current_state.tags["Counter_Done"] is True
 
     def test_ctd_accumulator_clamps_at_dint_min(self):
         """CTD accumulator saturates at DINT min (-2147483648)."""
@@ -316,15 +316,15 @@ class TestCounterAccumulatorClamp:
         runner.step()
 
         # Prime to one above min, then decrement into min
-        runner.patch({"Trigger": True, "Counter1_Acc": -2147483647})
+        runner.patch({"Trigger": True, "Counter_Acc": -2147483647})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -2147483648
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == -2147483648
+        assert runner.current_state.tags["Counter_Done"] is True
 
         # Further decrements stay clamped
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -2147483648
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == -2147483648
+        assert runner.current_state.tags["Counter_Done"] is True
 
     def test_ctu_bidirectional_clamp_applies_after_net_delta(self):
         """Bidirectional CTU clamps after applying net (+1/-1) scan delta."""
@@ -343,14 +343,14 @@ class TestCounterAccumulatorClamp:
         runner.step()
 
         # With both UP and DOWN true at max, net delta is zero (stays at max)
-        runner.patch({"Enable": True, "Down": True, "Counter1_Acc": 2147483647})
+        runner.patch({"Enable": True, "Down": True, "Counter_Acc": 2147483647})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2147483647
+        assert runner.current_state.tags["Counter_Acc"] == 2147483647
 
         # DOWN-only scan still decrements from the clamped value
         runner.patch({"Enable": False, "Down": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2147483646
+        assert runner.current_state.tags["Counter_Acc"] == 2147483646
 
 
 class TestCounterIntegration:
@@ -405,7 +405,7 @@ class TestCounterIntegration:
         # - CopiedCounterBeforeEnd captured the counter value (1)
         # - Val2MultiplyInPlace was set to 10
         # - DataTest changed to 2 at end of scan
-        assert runner.current_state.tags["Counter1_Acc"] == 1, (
+        assert runner.current_state.tags["Counter_Acc"] == 1, (
             "Counter should have incremented to 1 during first scan"
         )
         assert runner.current_state.tags["CopiedCounterBeforeEnd"] == 1, (
@@ -423,10 +423,10 @@ class TestCounterIntegration:
 
         # Expected behavior after scan 2:
         # - Counter reset because DataTest == 2
-        assert runner.current_state.tags["Counter1_Acc"] == 0, (
+        assert runner.current_state.tags["Counter_Acc"] == 0, (
             "Counter should reset to 0 on second scan (DataTest == 2)"
         )
-        assert runner.current_state.tags["Counter1_Done"] is False, (
+        assert runner.current_state.tags["Counter_Done"] is False, (
             "Counter done bit should be false after reset"
         )
 
@@ -468,7 +468,7 @@ class TestCounterIntegration:
         runner.step()
 
         # Check: Did we see the counter at 1 in the SAME scan?
-        assert runner.current_state.tags["Counter1_Acc"] == 1, (
+        assert runner.current_state.tags["Counter_Acc"] == 1, (
             "Counter should be at 1 after first scan"
         )
         assert runner.current_state.tags["SawCounterAt1"] is True, (
@@ -479,7 +479,7 @@ class TestCounterIntegration:
         runner.step()
 
         # Check: Did we see the counter at 2 in the SAME scan?
-        assert runner.current_state.tags["Counter1_Acc"] == 2, (
+        assert runner.current_state.tags["Counter_Acc"] == 2, (
             "Counter should be at 2 after second scan"
         )
         assert runner.current_state.tags["SawCounterAt2"] is True, (
@@ -526,7 +526,7 @@ class TestCounterIntegration:
             runner.patch({"PartSensor": False})
             runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == 50
+        assert runner.current_state.tags["Counter_Acc"] == 50
         assert runner.current_state.tags["HalfwayLight"] is True
         assert runner.current_state.tags["BatchComplete"] is False
 
@@ -537,8 +537,8 @@ class TestCounterIntegration:
             runner.patch({"PartSensor": False})
             runner.step()
 
-        assert runner.current_state.tags["Counter1_Acc"] == 100
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 100
+        assert runner.current_state.tags["Counter_Done"] is True
         assert runner.current_state.tags["BatchComplete"] is True
 
     def test_counter_in_branch_requires_parent_and_branch_conditions(self):
@@ -563,7 +563,7 @@ class TestCounterIntegration:
         # Case 1: Parent true, branch false - should NOT increment
         runner.patch({"AutoMode": True})  # Rising edge on AutoMode
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 1  # Increments
+        assert runner.current_state.tags["Counter_Acc"] == 1  # Increments
 
         runner.patch({"AutoMode": False})
         runner.step()
@@ -571,7 +571,7 @@ class TestCounterIntegration:
         # Case 2: Parent false, branch true - should NOT increment
         runner.patch({"Step": 1, "AutoMode": True})  # Parent false, branch has rising edge
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 1  # Should stay at 1
+        assert runner.current_state.tags["Counter_Acc"] == 1  # Should stay at 1
 
         # Case 3: Parent true, branch true - SHOULD increment
         # Need to clear AutoMode first, then make both conditions true together
@@ -579,7 +579,7 @@ class TestCounterIntegration:
         runner.step()
         runner.patch({"Step": 0, "AutoMode": True})  # Now both true (rising edge on combined)
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 2
+        assert runner.current_state.tags["Counter_Acc"] == 2
 
     def test_count_down_in_branch_requires_parent_and_branch_conditions(self):
         """Count down in branch should require BOTH parent rung AND branch conditions."""
@@ -603,7 +603,7 @@ class TestCounterIntegration:
         # Initialize with reset - clears to 0
         runner.patch({"ResetBtn": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0
+        assert runner.current_state.tags["Counter_Acc"] == 0
 
         runner.patch({"ResetBtn": False})
         runner.step()
@@ -611,17 +611,17 @@ class TestCounterIntegration:
         # Case 1: Parent false, branch true - should NOT decrement
         runner.patch({"Enable": False, "Mode": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0  # Should stay at 0
+        assert runner.current_state.tags["Counter_Acc"] == 0  # Should stay at 0
 
         # Case 2: Parent true, branch false - should NOT decrement
         runner.patch({"Enable": True, "Mode": False})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 0  # Should stay at 0
+        assert runner.current_state.tags["Counter_Acc"] == 0  # Should stay at 0
 
         # Case 3: Parent true, branch true - SHOULD decrement
         runner.patch({"Mode": True})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -1
+        assert runner.current_state.tags["Counter_Acc"] == -1
 
 
 class TestDynamicpresets:
@@ -647,25 +647,25 @@ class TestDynamicpresets:
         runner.patch({"Trigger": True})
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 4
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 4
+        assert runner.current_state.tags["Counter_Done"] is False
 
         # Count one more - done at preset=5
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 5
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 5
+        assert runner.current_state.tags["Counter_Done"] is True
 
         # Change preset to 10 - done should go back to False
         runner.patch({"preset": 10})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 6
-        assert runner.current_state.tags["Counter1_Done"] is False  # Not done anymore
+        assert runner.current_state.tags["Counter_Acc"] == 6
+        assert runner.current_state.tags["Counter_Done"] is False  # Not done anymore
 
         # Continue to new preset
         for _ in range(4):
             runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 10
-        assert runner.current_state.tags["Counter1_Done"] is True  # Done again
+        assert runner.current_state.tags["Counter_Acc"] == 10
+        assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
     def test_ctd_with_dynamic_preset(self):
         """CTD supports Tag preset that can change at runtime."""
@@ -693,24 +693,24 @@ class TestDynamicpresets:
         runner.patch({"Trigger": True})
         for _ in range(2):
             runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -2
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == -2
+        assert runner.current_state.tags["Counter_Done"] is False
 
         # Count one more - done at -3 (meets -preset)
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -3
-        assert runner.current_state.tags["Counter1_Done"] is True
+        assert runner.current_state.tags["Counter_Acc"] == -3
+        assert runner.current_state.tags["Counter_Done"] is True
 
         # Change preset to 5 - done should go back to False
         runner.patch({"preset": 5})
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -4
-        assert runner.current_state.tags["Counter1_Done"] is False  # Not done anymore
+        assert runner.current_state.tags["Counter_Acc"] == -4
+        assert runner.current_state.tags["Counter_Done"] is False  # Not done anymore
 
         # Count one more to -5 - done again
         runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == -5
-        assert runner.current_state.tags["Counter1_Done"] is True  # Done again
+        assert runner.current_state.tags["Counter_Acc"] == -5
+        assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
     def test_preset_decrease_affects_done_immediately(self):
         """When preset decreases below acc, done bit changes immediately."""
@@ -732,14 +732,14 @@ class TestDynamicpresets:
         runner.patch({"Trigger": True})
         for _ in range(10):
             runner.step()
-        assert runner.current_state.tags["Counter1_Acc"] == 10
-        assert runner.current_state.tags["Counter1_Done"] is False
+        assert runner.current_state.tags["Counter_Acc"] == 10
+        assert runner.current_state.tags["Counter_Done"] is False
 
         # Decrease preset to 5 - done should become True immediately
         runner.patch({"preset": 5})
         runner.step()  # Acc goes to 11, but preset is now 5
-        assert runner.current_state.tags["Counter1_Acc"] == 11
-        assert runner.current_state.tags["Counter1_Done"] is True  # Now done!
+        assert runner.current_state.tags["Counter_Acc"] == 11
+        assert runner.current_state.tags["Counter_Done"] is True  # Now done!
 
 
 class TestCounterConditionTypeGuards:

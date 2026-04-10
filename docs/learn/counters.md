@@ -21,8 +21,8 @@ from pyrung import Bool, Counter, Program, Rung, PLC, count_up, rise
 
 BinASensor  = Bool("BinASensor")
 BinBSensor  = Bool("BinBSensor")
-BinACounter = Counter.named(1, "BinACounter")
-BinBCounter = Counter.named(2, "BinBCounter")
+BinACounter = Counter.clone("BinACounter")
+BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool("CountReset")
 
 with Program() as logic:
@@ -59,7 +59,7 @@ If this looks familiar, it should — it's the same `.reset()` chain from the [r
 Counters can also count in both directions. A `count_up` with a `.down()` chain becomes a bidirectional counter (CTUD) — boxes entering minus boxes leaving gives boxes currently in zone:
 
 ```python
-ZoneCounter = Counter.named(3, "ZoneCounter")
+ZoneCounter = Counter.clone("ZoneCounter")
 
 count_up(ZoneCounter, preset=50) \
     .down(BoxLeavesSensor) \

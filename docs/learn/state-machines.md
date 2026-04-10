@@ -44,8 +44,8 @@ SizeThreshold = Int("SizeThreshold")
 
 # Internal
 IsLarge   = Bool("IsLarge")
-DetTimer  = Timer.named(1, "DetTimer")
-HoldTimer = Timer.named(2, "HoldTimer")
+DetTimer  = Timer.clone("DetTimer")
+HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")

@@ -33,7 +33,7 @@ from pyrung import Bool, Timer, Program, Rung, PLC, on_delay, out
 
 EntrySensor = Bool("EntrySensor")
 DiverterCmd = Bool("DiverterCmd")
-HoldTimer   = Timer.named(1, "HoldTimer")
+HoldTimer   = Timer.clone("HoldTimer")
 
 with Program() as logic:
     with Rung(EntrySensor):
@@ -44,11 +44,11 @@ with Program() as logic:
 
 This reads: "While the entry sensor sees a box, accumulate time. While the sensor is active and the timer hasn't finished, keep the diverter open." After 2 seconds, `HoldTimer.Done` goes true, `~HoldTimer.Done` goes false, and the diverter closes. If the sensor goes false early, the timer resets (that's `on_delay` / TON behavior).
 
-`Timer` is a built-in structured type with two fields: `.Done` (Bool) fires when the accumulator reaches the preset, and `.Acc` (Int) tracks elapsed time. `Timer.named(1, "HoldTimer")` creates instance 1 with the name "HoldTimer" — in the PLC tag table, that expands to `HoldTimer_Done` and `HoldTimer_Acc`. You'll see the same two-field model again with counters in the next lesson.
+`Timer` is a built-in structured type with two fields: `.Done` (Bool) fires when the accumulator reaches the preset, and `.Acc` (Int) tracks elapsed time. `Timer.clone("HoldTimer")` creates a named timer clone — in the PLC tag table, that expands to `HoldTimer_Done` and `HoldTimer_Acc`. You'll see the same two-field model again with counters in the next lesson.
 
 !!! tip "Name your timers"
 
-    For real programs deploying to hardware, always use `Timer.named(n, "Name")`. When `Timer1_Done` shows up in a fault log six months later, it tells you nothing. `HoldTimer_Done` tells you everything. `Timer[n]` (anonymous, auto-numbered) is fine for throwaway simulation tests — but named instances are the 95% case.
+    For real programs deploying to hardware, always use `Timer.clone("Name")`. When `Timer1_Done` shows up in a fault log six months later, it tells you nothing. `HoldTimer_Done` tells you everything. `Timer[n]` (anonymous, auto-numbered) is fine for throwaway simulation tests — but named instances are the 95% case.
 
 !!! note "Why `\"Tms\"` and not `\"Milliseconds\"`?"
 

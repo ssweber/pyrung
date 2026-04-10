@@ -31,6 +31,8 @@ from pyrung.core.program import (
     time_drum,
 )
 
+Timer2 = Timer.clone("Timer2")
+
 
 def _build_program(fn):
     prog = Program(strict=False)
@@ -77,15 +79,15 @@ def test_r7_timer_role_validation():
     def logic():
         with Rung():
             on_delay(Timer[1], preset=10)
-            on_delay(Timer[2], preset=10)
+            on_delay(Timer2, preset=10)
 
     prog = _build_program(logic)
     tag_map = TagMap(
         [
             Timer[1].Done.map_to(t[1]),
             Timer[1].Acc.map_to(td[1]),
-            Timer[2].Done.map_to(c[1]),
-            Timer[2].Acc.map_to(td[2]),
+            Timer2.Done.map_to(c[1]),
+            Timer2.Acc.map_to(td[2]),
         ],
         include_system=False,
     )

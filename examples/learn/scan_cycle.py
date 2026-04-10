@@ -2,9 +2,9 @@
 
 # --- The ladder logic way ---
 
-from pyrung import Bool, Program, Rung, PLC, out
+from pyrung import PLC, Bool, Program, Rung, out
 
-RunButton     = Bool("RunButton")
+RunButton = Bool("RunButton")
 ConveyorMotor = Bool("ConveyorMotor")
 
 with Program() as logic:
@@ -15,9 +15,9 @@ with Program() as logic:
 
 with PLC(logic) as plc:
     RunButton.value = True
-    plc.step()               # One scan
+    plc.step()  # One scan
     assert ConveyorMotor.value is True
 
     RunButton.value = False
-    plc.step()               # Next scan
+    plc.step()  # Next scan
     assert ConveyorMotor.value is False  # Motor follows button, every scan

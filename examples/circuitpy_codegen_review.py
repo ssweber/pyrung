@@ -12,17 +12,17 @@ inspect one generated file that includes:
 """
 
 from pyrung import (
+    And,
     Block,
     Bool,
     Counter,
     Dint,
     Int,
+    Or,
     Program,
     Rung,
     TagType,
     Timer,
-    And,
-    Or,
     blockcopy,
     branch,
     calc,
@@ -69,10 +69,10 @@ StepDone = Bool("StepDone")
 Found = Bool("Found")
 
 # Timer/counter instances
-RTon = Timer.named(1, "RTon")
-Tof = Timer.named(2, "Tof")
-Ctu = Counter.named(1, "Ctu")
-Ctd = Counter.named(2, "Ctd")
+RTon = Timer.clone("RTon")
+Tof = Timer.clone("Tof")
+Ctu = Counter.clone("Ctu")
+Ctd = Counter.clone("Ctd")
 
 # Data tags
 Idx = Int("Idx", default=1)

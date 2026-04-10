@@ -32,6 +32,12 @@ from pyrung.core.validation.duplicate_out import (
     validate_conflicting_outputs,
 )
 
+Counter2 = Counter.clone("Counter2")
+Timer2 = Timer.clone("Timer2")
+Timer3 = Timer.clone("Timer3")
+Timer4 = Timer.clone("Timer4")
+Timer5 = Timer.clone("Timer5")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -413,7 +419,7 @@ class TestTimerConflict:
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer1_Done" for f in report.findings)
+        assert any(f.target_name == "Timer_Done" for f in report.findings)
 
     def test_shared_accumulator(self):
         with Program() as prog:
@@ -423,7 +429,7 @@ class TestTimerConflict:
                 on_delay(Timer[1], preset=2000)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Timer1_Acc" for f in report.findings)
+        assert any(f.target_name == "Timer_Acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +446,7 @@ class TestCounterConflict:
                 count_up(Counter[1], preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
-        assert any(f.target_name == "Counter1_Acc" for f in report.findings)
+        assert any(f.target_name == "Counter_Acc" for f in report.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +458,9 @@ class TestTimerOutConflict:
     def test_timer_done_bit_vs_out(self):
         with Program() as prog:
             with Rung(ButtonA):
-                on_delay(Timer[2], preset=1000)
+                on_delay(Timer2, preset=1000)
             with Rung(ButtonB):
-                out(Timer[2].Done)
+                out(Timer2.Done)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Timer2_Done" for f in report.findings)
@@ -608,9 +614,9 @@ class TestEdgeCases:
     def test_off_delay_conflict(self):
         with Program() as prog:
             with Rung(ButtonA):
-                off_delay(Timer[3], preset=1000)
+                off_delay(Timer3, preset=1000)
             with Rung(ButtonB):
-                off_delay(Timer[3], preset=2000)
+                off_delay(Timer3, preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Timer3_Done" for f in report.findings)
@@ -618,9 +624,9 @@ class TestEdgeCases:
     def test_count_down_conflict(self):
         with Program() as prog:
             with Rung(ButtonA):
-                count_down(Counter[2], preset=10).reset(ResetBtn)
+                count_down(Counter2, preset=10).reset(ResetBtn)
             with Rung(ButtonB):
-                count_down(Counter[2], preset=20).reset(ResetBtn)
+                count_down(Counter2, preset=20).reset(ResetBtn)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Counter2_Done" for f in report.findings)
@@ -629,9 +635,9 @@ class TestEdgeCases:
         """Timers in same scope always execute — conditions don't help."""
         with Program() as prog:
             with Rung(State == 1):
-                on_delay(Timer[4], preset=1000)
+                on_delay(Timer4, preset=1000)
             with Rung(State == 2):
-                on_delay(Timer[4], preset=2000)
+                on_delay(Timer4, preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert any(f.target_name == "Timer4_Done" for f in report.findings)
@@ -646,10 +652,10 @@ class TestEdgeCases:
                 call("timer_b")
             with subroutine("timer_a"):
                 with Rung():
-                    on_delay(Timer[5], preset=1000)
+                    on_delay(Timer5, preset=1000)
             with subroutine("timer_b"):
                 with Rung():
-                    on_delay(Timer[5], preset=2000)
+                    on_delay(Timer5, preset=2000)
 
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 0

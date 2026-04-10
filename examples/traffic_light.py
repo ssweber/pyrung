@@ -11,12 +11,12 @@ Demonstrates:
 import os
 
 from pyrung import (
+    PLC,
     Block,
     Bool,
     Char,
     Counter,
     Int,
-    PLC,
     Rung,
     TagType,
     Timer,
@@ -29,16 +29,16 @@ from pyrung import (
     udt,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. Tag declarations
 # ---------------------------------------------------------------------------
 # Traffic light state: "g"reen, "y"ellow, "r"ed
 State = Char("State")
 
-GreenTimer = Timer.named(1, "GreenTimer")
-YellowTimer = Timer.named(2, "YellowTimer")
-RedTimer = Timer.named(3, "RedTimer")
+GreenTimer = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
+RedTimer = Timer.clone("RedTimer")
+
 
 @udt()
 class Car:
@@ -50,7 +50,8 @@ class Car:
     SpeedIn: Int
     LogEnable: Bool
 
-CarCounter = Counter.named(1, "CarCounter")
+
+CarCounter = Counter.clone("CarCounter")
 
 # Memory blocks for speed history log.
 DS = Block("DS", TagType.INT, 1, 5)
@@ -94,7 +95,7 @@ def logic():
     # ------------------------------------------------------------------
     with Rung(rise(Car.LogEnable)):
         blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up
-        copy(Car.SpeedIn, DS[1])                 # newest into slot 1
+        copy(Car.SpeedIn, DS[1])  # newest into slot 1
 
 
 # ---------------------------------------------------------------------------

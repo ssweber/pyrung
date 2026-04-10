@@ -74,6 +74,9 @@ from pyrung.core.program import (
 )
 from tests.click.helpers import build_program, normalize_csv
 
+Counter3 = Counter.clone("Counter3")
+Timer2 = Timer.clone("Timer2")
+
 
 def _header() -> tuple[str, ...]:
     return (
@@ -831,9 +834,9 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
         with Rung(Enable):
             on_delay(Timer[1], preset=100).reset(TonReset)
         with Rung(Enable):
-            off_delay(Timer[2], preset=50)
+            off_delay(Timer2, preset=50)
         with Rung(Enable):
-            count_down(Counter[3], preset=9).reset(CdReset)
+            count_down(Counter3, preset=9).reset(CdReset)
         with Rung(Enable):
             shift(Bits.select(1, 8)).clock(ShiftClock).reset(ShiftReset)
         with Rung(Enable):
@@ -885,10 +888,10 @@ def test_tokens_cover_remaining_instruction_families_and_pin_rows():
             Timer[1].Done: t[1],
             Timer[1].Acc: td[1],
             TonReset: x[2],
-            Timer[2].Done: t[2],
-            Timer[2].Acc: td[2],
-            Counter[3].Done: ct[3],
-            Counter[3].Acc: ctd[3],
+            Timer2.Done: t[2],
+            Timer2.Acc: td[2],
+            Counter3.Done: ct[3],
+            Counter3.Acc: ctd[3],
             CdReset: x[3],
             ShiftClock: x[4],
             ShiftReset: x[5],
