@@ -289,8 +289,8 @@ fill(0, Sensor.instance_select(1, 4))
 
 ```python
 Sensor.map_to(ds.select(101, 112))   # 4 instances * 3 fields = 12 slots
-# Sensor[1].raw → DS101, Sensor[1].scaled → DS102, Sensor[1].setpoint → DS103
-# Sensor[2].raw → DS104, ...
+# Sensor[1].Raw → DS101, Sensor[1].Scaled → DS102, Sensor[1].Setpoint → DS103
+# Sensor[2].Raw → DS104, ...
 ```
 
 For UDTs (mixed-type structures) and advanced options like stride, cloning, and `auto()` defaults, see [Tag Structures](tag-structures.md).
@@ -373,7 +373,7 @@ DS = Block("DS", TagType.INT, 1, 5)
 
 with Rung(rise(LogEnable)):
     blockcopy(DS.select(1, 4), DS.select(2, 5))  # shift up
-    copy(NewValue, DS[1])                          # newest into slot 1
+    copy(NewValue, DS[1])                        # newest into slot 1
 ```
 
 ### Task sequencer
