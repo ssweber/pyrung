@@ -32,7 +32,7 @@ Ladder is still the dominant programming language in North American manufacturin
 - Generate a self-contained CircuitPython scan loop for a P1AM-200
 - Run as an emulated Click over Modbus — spin up two pyrung programs and test them talking to each other, no hardware required
 
-The code reads like a ladder diagram. `with Rung(Start | Motor, ~Stop): out(Motor)` is a seal-in circuit, and it looks like one. There's no `if/else`. Power flows through the rung or it doesn't. The scan cycle is deterministic, timers accumulate the same way, rung order matters the same way. What you learn in pyrung transfers directly to a real ladder editor.
+The code reads like a ladder diagram. `with Rung(Or(Start, Motor), ~Stop): out(Motor)` is a seal-in circuit, and it looks like one. There's no `if/else`. Power flows through the rung or it doesn't. The scan cycle is deterministic, timers accumulate the same way, rung order matters the same way. What you learn in pyrung transfers directly to a real ladder editor.
 
 ## Who's this for?
 

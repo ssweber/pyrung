@@ -143,7 +143,7 @@ def test_run_enabled_function_non_callable_raises_type_error():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_enabled_function(123)  # ty: ignore[invalid-argument-type]
+                run_enabled_function(123)
     assert str(exc_info.value) == "run_enabled_function() fn must be callable, got int"
 
 
@@ -156,7 +156,7 @@ def test_run_enabled_function_async_function_rejected():
     with pytest.raises(TypeError) as exc_info:
         with Program():
             with Rung(Enable):
-                run_enabled_function(callback)  # ty: ignore[invalid-argument-type]
+                run_enabled_function(callback)
     assert (
         str(exc_info.value)
         == "run_enabled_function() fn must be synchronous (async def is not supported)"

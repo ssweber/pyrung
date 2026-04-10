@@ -77,6 +77,9 @@ from pyrung.core.program import (
     unpack_to_words,
 )
 
+Counter2 = Counter.clone("Counter2")
+Timer2 = Timer.clone("Timer2")
+
 
 def _build_program_and_mapping():
     """Build a Click-compatible program with broad instruction coverage."""
@@ -148,7 +151,7 @@ def _build_program_and_mapping():
 
         # R4: Off-delay
         with Rung(Running):
-            off_delay(Timer[2], preset=100)
+            off_delay(Timer2, preset=100)
 
         # R5: Count-up with reset pin
         with Rung(Running):
@@ -156,7 +159,7 @@ def _build_program_and_mapping():
 
         # R6: Count-down with reset pin
         with Rung(Running):
-            count_down(Counter[2], preset=5).reset(ShiftReset)
+            count_down(Counter2, preset=5).reset(ShiftReset)
 
         # R7: copy + calc + indirect copy + blockcopy + fill
         with Rung(Running, Timer[1].Done):
@@ -298,13 +301,13 @@ def _build_program_and_mapping():
             # Timers
             Timer[1].Done: t[1],
             Timer[1].Acc: td[1],
-            Timer[2].Done: t[2],
-            Timer[2].Acc: td[2],
+            Timer2.Done: t[2],
+            Timer2.Acc: td[2],
             # Counters
             Counter[1].Done: ct[1],
             Counter[1].Acc: ctd[1],
-            Counter[2].Done: ct[2],
-            Counter[2].Acc: ctd[2],
+            Counter2.Done: ct[2],
+            Counter2.Acc: ctd[2],
             # Data (DS)
             Idx: ds[1],
             Source: ds[2],

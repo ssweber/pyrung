@@ -21,13 +21,13 @@ from pyrung.click.codegen.models import (
     _BlockSlotDecl,
     _FieldHw,
     _FileRefs,
-    _NamedTimerCounterDecl,
     _OperandCollection,
     _PlainBlockDecl,
     _RangeDecl,
     _SemanticRender,
     _StructureDecl,
     _TagDecl,
+    _TimerCounterCloneDecl,
 )
 from pyrung.click.codegen.utils import (
     _POINTER_RE,
@@ -524,24 +524,18 @@ def _scan_token_for_operands(
 
 
 # Suffixes to strip from timer/counter nicknames so that
-# Timer.named(1, "OvenTimer") doesn't produce OvenTimer_Done_Done.
+# Timer.clone("OvenTimer") doesn't produce OvenTimer_Done_Done.
 _TC_NICK_SUFFIXES = ("_Done", "_Acc")
 
 
-def _register_named_timer_counter(
+def _register_timer_counter_clone(
     done_operand: str,
     acc_operand: str,
-    nick: str,
+    nick: str | None,
     func_name: str,
     collection: _OperandCollection,
 ) -> None:
-    """Register a Timer.named() / Counter.named() declaration from a nickname."""
-    # Strip _Done / _Acc suffix if present
-    for suffix in _TC_NICK_SUFFIXES:
-        if nick.endswith(suffix) and len(nick) > len(suffix):
-            nick = nick[: -len(suffix)]
-            break
-
+    """Register a Timer.clone() / Counter.clone() declaration."""
     parsed = _parse_operand_prefix(done_operand)
     if parsed is None:
         return
@@ -549,22 +543,31 @@ def _register_named_timer_counter(
     kind = "Timer" if prefix == "T" else "Counter"
 
     # Avoid duplicate declarations for the same timer/counter
-    if any(d.done_operand == done_operand for d in collection.named_timer_counters):
+    if any(d.done_operand == done_operand for d in collection.timer_counter_clones):
         return
+
+    # Determine the clone name: nickname (suffix-stripped) or operand prefix+index
+    if nick:
+        for suffix in _TC_NICK_SUFFIXES:
+            if nick.endswith(suffix) and len(nick) > len(suffix):
+                nick = nick[: -len(suffix)]
+                break
+        raw_name = nick
+    else:
+        raw_name = f"{prefix}{index}"
 
     used_var_names = (
         {decl.var_name for decl in collection.tags.values()}
         | {decl.var_name for decl in collection.ranges.values()}
-        | {d.var_name for d in collection.named_timer_counters}
+        | {d.var_name for d in collection.timer_counter_clones}
     )
-    slug = _make_safe_identifier(nick, used_names=used_var_names)
+    var_name = _make_safe_identifier(raw_name, used_names=used_var_names)
 
-    collection.named_timer_counters.append(
-        _NamedTimerCounterDecl(
-            var_name=slug,
+    collection.timer_counter_clones.append(
+        _TimerCounterCloneDecl(
+            var_name=var_name,
             kind=kind,
             index=index,
-            slug=slug,
             done_operand=done_operand,
             acc_operand=acc_operand,
         )
@@ -572,15 +575,22 @@ def _register_named_timer_counter(
     # Register semantic operands so condition references resolve:
     # T1 → OvenTimer.Done, TD1 → OvenTimer.Acc
     collection.semantic_operands[done_operand] = _SemanticRender(
-        expr=f"{slug}.Done",
-        import_kind="named_tc",
-        import_name=slug,
+        expr=f"{var_name}.Done",
+        import_kind="tc_clone",
+        import_name=var_name,
     )
     collection.semantic_operands[acc_operand] = _SemanticRender(
-        expr=f"{slug}.Acc",
-        import_kind="named_tc",
-        import_name=slug,
+        expr=f"{var_name}.Acc",
+        import_kind="tc_clone",
+        import_name=var_name,
     )
+    # Ensure hardware blocks are imported for TagMap entries
+    if kind == "Timer":
+        collection.used_blocks.add("t")
+        collection.used_blocks.add("td")
+    else:
+        collection.used_blocks.add("ct")
+        collection.used_blocks.add("ctd")
 
 
 def _scan_af_token(
@@ -606,9 +616,8 @@ def _scan_af_token(
     if func_name in _INSTRUCTION_NAMES:
         collection.used_instructions.add(func_name)
 
-    # Track timer/counter done_bit + accumulator operands so they can be
-    # suppressed from tag declarations and TagMap (they resolve automatically
-    # via the built-in Timer/Counter UDTs).
+    # Track timer/counter done_bit + accumulator operands and register a
+    # clone declaration for each used pair.
     if func_name in {"on_delay", "off_delay", "count_up", "count_down"}:
         from pyrung.click.codegen.utils import _parse_af_args
 
@@ -617,13 +626,8 @@ def _scan_af_token(
             collection.timer_counter_operands.add(tc_args[0])
             collection.timer_counter_operands.add(tc_args[1])
 
-            # Named timer/counter: use done-bit nickname as Timer.named() slug
-            if nicknames:
-                nick = nicknames.get(tc_args[0])
-                if nick:
-                    _register_named_timer_counter(
-                        tc_args[0], tc_args[1], nick, func_name, collection
-                    )
+            nick = nicknames.get(tc_args[0]) if nicknames else None
+            _register_timer_counter_clone(tc_args[0], tc_args[1], nick, func_name, collection)
 
     if func_name in {"send", "receive"}:
         if "ModbusTcpTarget(" in args_str:
@@ -886,11 +890,11 @@ def _ref_af_token(
 
         tc_args, tc_kwargs = _parse_af_args(args_str)
         if len(tc_args) >= 2:
-            # Track named_tc ref for project-mode imports
+            # Track tc_clone ref for project-mode imports
             done_operand = tc_args[0]
             render = collection.semantic_operands.get(done_operand)
-            if render is not None and render.import_kind == "named_tc":
-                refs.named_tc_var_names.add(render.import_name)
+            if render is not None and render.import_kind == "tc_clone":
+                refs.tc_clone_var_names.add(render.import_name)
             # Rebuild args_str without the first two positional args
             remaining = [f"{k}={v}" for k, v in tc_kwargs]
             args_str = ",".join(remaining)
@@ -922,8 +926,8 @@ def _ref_operands_in_text(
             refs.block_var_names.add(render.import_name)
         elif render.import_kind == "structure":
             refs.structure_names.add(render.import_name)
-        elif render.import_kind == "named_tc":
-            refs.named_tc_var_names.add(render.import_name)
+        elif render.import_kind == "tc_clone":
+            refs.tc_clone_var_names.add(render.import_name)
 
     # Check ranges
     for range_match in _RANGE_RE.finditer(text):

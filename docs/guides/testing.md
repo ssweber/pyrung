@@ -49,7 +49,7 @@ Timers accumulate time across scans. With a fixed `dt`, the math is exact:
 from pyrung import Bool, Timer, PLC, Program, Rung, on_delay
 
 Enable   = Bool("Enable")
-MyTimer  = Timer.named(1, "MyTimer")
+MyTimer  = Timer.clone("MyTimer")
 
 with Program() as logic:
     with Rung(Enable):

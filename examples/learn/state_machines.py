@@ -2,26 +2,25 @@
 
 # --- The ladder logic way ---
 
-from pyrung import Bool, Int, Timer, Program, Rung, PLC
-from pyrung import comment, on_delay, copy, latch, reset, rise
+from pyrung import PLC, Bool, Int, Program, Rung, Timer, comment, copy, latch, on_delay, reset, rise
 
 # State values as tag-constants — initialized once, never written
-IDLE      = Int("IDLE",      default=0)
+IDLE = Int("IDLE", default=0)
 DETECTING = Int("DETECTING", default=1)
-SORTING   = Int("SORTING",   default=2)
+SORTING = Int("SORTING", default=2)
 RESETTING = Int("RESETTING", default=3)
 
 State = Int("State")
 
 # Inputs
-EntrySensor   = Bool("EntrySensor")
-SizeReading   = Int("SizeReading")
+EntrySensor = Bool("EntrySensor")
+SizeReading = Int("SizeReading")
 SizeThreshold = Int("SizeThreshold")
 
 # Internal
-IsLarge   = Bool("IsLarge")
-DetTimer  = Timer.named(1, "DetTimer")
-HoldTimer = Timer.named(2, "HoldTimer")
+IsLarge = Bool("IsLarge")
+DetTimer = Timer.clone("DetTimer")
+HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
     comment("IDLE to DETECTING: box arrives")
@@ -58,14 +57,14 @@ with PLC(logic, dt=0.010) as plc:
     SizeReading.value = 150
 
     plc.step()
-    assert State.value == 1             # DETECTING
+    assert State.value == 1  # DETECTING
 
     # Wait for detection period (0.5s = 50 scans)
     plc.run(cycles=50)
-    assert State.value == 2             # SORTING
-    assert IsLarge.value is True        # Classified as large
+    assert State.value == 2  # SORTING
+    assert IsLarge.value is True  # Classified as large
 
     # Wait for hold period + pass through RESETTING (2s = 200 scans)
     plc.run(cycles=200)
-    assert State.value == 0             # Back to IDLE
-    assert IsLarge.value is False       # Cleaned up in RESETTING
+    assert State.value == 0  # Back to IDLE
+    assert IsLarge.value is False  # Cleaned up in RESETTING

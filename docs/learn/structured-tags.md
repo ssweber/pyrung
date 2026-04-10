@@ -29,8 +29,8 @@ class Bin:
     Sensor: Bool
     Full: Bool
 
-BinACounter = Counter.named(1, "BinACounter")
-BinBCounter = Counter.named(2, "BinBCounter")
+BinACounter = Counter.clone("BinACounter")
+BinBCounter = Counter.clone("BinBCounter")
 CountReset  = Bool("CountReset")
 
 with Program() as logic:

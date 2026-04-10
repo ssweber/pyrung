@@ -42,35 +42,6 @@ _RESERVED_SYSTEM_HARDWARE_KEYS: frozenset[int] = frozenset(
 
 _BLOCK_SLOT_OWNER_RE = re.compile(r"^block slot (?P<block_name>.+)\[(?P<addr>[0-9]+)\]$")
 
-_BUILTIN_BANK_MAP: dict[tuple[int, str], str] | None = None
-
-
-def _auto_resolve_builtin_tag(tag: Tag) -> str | None:
-    """If *tag* belongs to a built-in Timer/Counter UDT, return its Click address."""
-    runtime = getattr(tag, "_pyrung_structure_runtime", None)
-    if runtime is None:
-        return None
-    field = getattr(tag, "_pyrung_structure_field", None)
-    index = getattr(tag, "_pyrung_structure_index", None)
-    if field is None or index is None:
-        return None
-
-    global _BUILTIN_BANK_MAP  # noqa: PLW0603
-    if _BUILTIN_BANK_MAP is None:
-        from pyrung.core.structure import Counter, Timer
-
-        _BUILTIN_BANK_MAP = {
-            (id(Timer), "Done"): "T",
-            (id(Timer), "Acc"): "TD",
-            (id(Counter), "Done"): "CT",
-            (id(Counter), "Acc"): "CTD",
-        }
-
-    bank_prefix = _BUILTIN_BANK_MAP.get((id(runtime), field))
-    if bank_prefix is None:
-        return None
-    return format_address_display(bank_prefix, index)
-
 
 class TagMap:
     """Maps logical Tags and Blocks to Click hardware addresses.
@@ -302,10 +273,6 @@ class TagMap:
                 hardware = self._block_slot_forward_by_name.get(source.name)
                 if hardware is not None:
                     return hardware.name
-                # Auto-resolve built-in Timer/Counter tags to Click banks.
-                resolved = _auto_resolve_builtin_tag(source)
-                if resolved is not None:
-                    return resolved
                 raise KeyError(f"No mapping for standalone tag {source.name!r}.")
             return entry.hardware.name
 

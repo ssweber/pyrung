@@ -362,17 +362,26 @@ def build_program(source: str) -> tuple[Program, TagMap]:
             "or provide a bare body that can be auto-wrapped."
         )
 
-    # Build the TagMap
-    mapping_dict: dict[Any, Any] = {}
+    # Build the TagMap — skip flat T/TD/CT/CTD operands (handled by block mapping below)
+    _TC_BLOCK_VARS = {"t", "td", "ct", "ctd"}
+    mapping_entries: list[Any] = []
     for operand, (_, block_var, index) in seen.items():
+        if block_var in _TC_BLOCK_VARS:
+            continue
         tag_obj = ns[operand]
         block_obj = _CLICK_BLOCKS[block_var]
-        mapping_dict[tag_obj] = block_obj[index]
+        mapping_entries.append(tag_obj.map_to(block_obj[index]))
     for spec in range_specs.values():
         block_obj = _CLICK_BLOCKS[spec.block_var]
-        mapping_dict[ns[spec.name]] = block_obj.select(spec.start, spec.end)
+        mapping_entries.append(ns[spec.name].map_to(block_obj.select(spec.start, spec.end)))
 
-    return logic, TagMap(mapping_dict, include_system=False)
+    # Map built-in Timer/Counter blocks to Click hardware banks.
+    mapping_entries.append(Timer._blocks["Done"].map_to(t.select(1, 1)))
+    mapping_entries.append(Timer._blocks["Acc"].map_to(td.select(1, 1)))
+    mapping_entries.append(Counter._blocks["Done"].map_to(ct.select(1, 1)))
+    mapping_entries.append(Counter._blocks["Acc"].map_to(ctd.select(1, 1)))
+
+    return logic, TagMap(mapping_entries, include_system=False)
 
 
 # ---------------------------------------------------------------------------

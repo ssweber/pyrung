@@ -12,21 +12,21 @@ bank string, so it works with any Modbus TCP device — not only Click PLCs.
 
 from pyrung import Bool, Char, Int, Or, Program, Rung, Timer, copy, on_delay, out, rise
 from pyrung.circuitpy import (
+    P1AM,
     ModbusClientConfig,
     ModbusServerConfig,
-    P1AM,
     generate_circuitpy,
 )
-from pyrung.click import ModbusTcpTarget, TagMap, c, ds, t, td, txt, receive, send
+from pyrung.click import ModbusTcpTarget, TagMap, c, ds, receive, t, td, txt
 from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
 # ── Hardware ──────────────────────────────────────────────────────────────
 hw = P1AM()
-inputs = hw.slot(1, "P1-08SIM")   # 8-ch discrete input simulator
+inputs = hw.slot(1, "P1-08SIM")  # 8-ch discrete input simulator
 outputs = hw.slot(2, "P1-15TD2")  # 15-ch discrete output (24V source)
 
-ManualOverride = inputs[1]         # toggle: freeze current phase
-LocalPedButton = inputs[2]         # local pedestrian push-button
+ManualOverride = inputs[1]  # toggle: freeze current phase
+LocalPedButton = inputs[2]  # local pedestrian push-button
 
 RedLight = outputs[1]
 YellowLight = outputs[2]
@@ -35,9 +35,9 @@ GreenLight = outputs[3]
 # ── Tags ──────────────────────────────────────────────────────────────────
 State = Char("State", default="r")  # r=red, g=green, y=yellow
 
-RedTimer = Timer.named(1, "RedTimer")
-GreenTimer = Timer.named(2, "GreenTimer")
-YellowTimer = Timer.named(3, "YellowTimer")
+RedTimer = Timer.clone("RedTimer")
+GreenTimer = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
 
 # Walk request — received from remote pedestrian panel via Modbus client
 WalkRequest = Bool("WalkRequest")
@@ -96,23 +96,25 @@ with Program() as logic:
         )
 
 # ── Tag Map (Click address space for Modbus exposure) ─────────────────────
-mapping = TagMap({
-    State: txt[1],          # TXT1 = current phase letter
-    WalkActive: c[1],       # C1 = walk active flag
-    WalkRequest: c[2],      # C2 = walk request (received from remote)
-    # Timers — done bits (T) and accumulators (TD)
-    RedTimer.Done: t[1],
-    RedTimer.Acc: td[1],
-    GreenTimer.Done: t[2],
-    GreenTimer.Acc: td[2],
-    YellowTimer.Done: t[3],
-    YellowTimer.Acc: td[3],
-    # Modbus client status
-    RxBusy: c[3],
-    RxOk: c[4],
-    RxErr: c[5],
-    RxExCode: ds[1],
-})
+mapping = TagMap(
+    {
+        State: txt[1],  # TXT1 = current phase letter
+        WalkActive: c[1],  # C1 = walk active flag
+        WalkRequest: c[2],  # C2 = walk request (received from remote)
+        # Timers — done bits (T) and accumulators (TD)
+        RedTimer.Done: t[1],
+        RedTimer.Acc: td[1],
+        GreenTimer.Done: t[2],
+        GreenTimer.Acc: td[2],
+        YellowTimer.Done: t[3],
+        YellowTimer.Acc: td[3],
+        # Modbus client status
+        RxBusy: c[3],
+        RxOk: c[4],
+        RxErr: c[5],
+        RxExCode: ds[1],
+    }
+)
 
 # ── Modbus configs ────────────────────────────────────────────────────────
 server_cfg = ModbusServerConfig(ip="192.168.1.221")

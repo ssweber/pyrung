@@ -424,4 +424,4 @@ class TestP1AMBoardModel:
         assert cfg.expose_mode_tags is True
 
         with pytest.raises(ValueError, match="source"):
-            RunStopConfig(source="board.led")  # ty: ignore[invalid-argument-type]
+            RunStopConfig(source="board.led")

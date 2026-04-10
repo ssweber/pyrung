@@ -153,4 +153,4 @@ def test_patch_rejects_invalid_key_types() -> None:
     runner = PLC(logic=[])
 
     with pytest.raises(TypeError, match="str or Tag"):
-        runner.patch({1: True})  # ty: ignore[invalid-argument-type]
+        runner.patch({1: True})

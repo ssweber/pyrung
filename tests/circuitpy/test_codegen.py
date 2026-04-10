@@ -82,6 +82,10 @@ from pyrung.core.expression import Expression
 from pyrung.core.instruction import Instruction
 from pyrung.core.system_points import system
 
+Counter2 = Counter.clone("Counter2")
+Timer2 = Timer.clone("Timer2")
+Timer4 = Timer.clone("Timer4")
+
 
 def _context_for_program(program: Program, hw: P1AM) -> CodegenContext:
     ctx = CodegenContext(program=program, hw=hw, target_scan_ms=10.0, watchdog_ms=None)
@@ -293,23 +297,23 @@ class TestGenerateCircuitPyAPI:
         prog = Program(strict=False)
 
         with pytest.raises(TypeError, match="program"):
-            generate_circuitpy("nope", hw, target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy("nope", hw, target_scan_ms=10.0)
         with pytest.raises(TypeError, match="hw"):
-            generate_circuitpy(prog, object(), target_scan_ms=10.0)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, object(), target_scan_ms=10.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=0.0)
         with pytest.raises(ValueError, match="target_scan_ms"):
             generate_circuitpy(prog, hw, target_scan_ms=math.inf)
         with pytest.raises(TypeError, match="watchdog_ms"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, watchdog_ms=1.5)
         with pytest.raises(TypeError, match="runstop"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, runstop="nope")
         with pytest.raises(TypeError, match="modbus_server"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, modbus_server="nope")
         with pytest.raises(TypeError, match="tag_map"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, tag_map="nope")
         with pytest.raises(ValueError, match="mapped_tag_scope"):
-            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")  # ty: ignore[invalid-argument-type]
+            generate_circuitpy(prog, hw, target_scan_ms=10.0, mapped_tag_scope="nope")
 
     def test_modbus_requires_tag_map(self):
         hw = P1AM()
@@ -554,11 +558,11 @@ class TestInstructionCoverage:
             with Rung(Bool("Enable")):
                 on_delay(Timer[1], preset=5).reset(reset_tag)
             with Rung(Bool("Enable")):
-                off_delay(Timer[2], preset=5)
+                off_delay(Timer2, preset=5)
             with Rung(Bool("Enable")):
                 count_up(Counter[1], preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
-                count_down(Counter[2], preset=2).reset(reset_tag)
+                count_down(Counter2, preset=2).reset(reset_tag)
             with Rung(Bool("Enable")):
                 copy(40000, source)
                 calc(source + 1, calc_out)
@@ -1446,9 +1450,9 @@ class TestRuntimeSplit:
         from pyrung.core.instruction.send_receive import ModbusAddress, RegisterType
 
         State = Char("State", default="r")
-        RedTimer = Timer.named(1, "RedTimer")
-        GreenTimer = Timer.named(2, "GreenTimer")
-        YellowTimer = Timer.named(3, "YellowTimer")
+        RedTimer = Timer.clone("RedTimer")
+        GreenTimer = Timer.clone("GreenTimer")
+        YellowTimer = Timer.clone("YellowTimer")
         WalkRequest = Bool("WalkRequest")
         RxBusy, RxOk, RxErr = Bool("RxBusy"), Bool("RxOk"), Bool("RxErr")
         RxExCode = Int("RxExCode")
@@ -1527,8 +1531,8 @@ class TestRuntimeSplit:
 
         with Program(strict=False) as prog:
             with Rung(State == "r"):
-                on_delay(Timer[4], preset=3000, unit="Tms")
-            with Rung(Timer[4].Done):
+                on_delay(Timer4, preset=3000, unit="Tms")
+            with Rung(Timer4.Done):
                 copy("g", State)
             with Rung(State == "g"):
                 copy(0, board.neopixel.r)

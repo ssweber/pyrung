@@ -2,32 +2,32 @@
 
 # --- The ladder logic way ---
 
-from pyrung import Bool, Program, Rung, PLC, latch, reset, comment
+from pyrung import PLC, Bool, Program, Rung, comment, latch, reset
 
-StartBtn = Bool("StartBtn")    # NO momentary contact
-StopBtn  = Bool("StopBtn")     # NC contact: conductive at rest
-Running  = Bool("Running")
+StartBtn = Bool("StartBtn")  # NO momentary contact
+StopBtn = Bool("StopBtn")  # NC contact: conductive at rest
+Running = Bool("Running")
 
 with Program() as logic:
     with Rung(StartBtn):
-        latch(Running)       # SET: Running = True, stays True
+        latch(Running)  # SET: Running = True, stays True
     with Rung(~StopBtn):
-        reset(Running)       # RESET when stop pressed or wire broken
+        reset(Running)  # RESET when stop pressed or wire broken
 
 # --- Try it ---
 
 with PLC(logic) as plc:
-    StopBtn.value = True             # NC input: True = healthy wiring
+    StopBtn.value = True  # NC input: True = healthy wiring
 
     StartBtn.value = True
     plc.step()
     assert Running.value is True
 
-    StartBtn.value = False           # Finger off the button
+    StartBtn.value = False  # Finger off the button
     plc.step()
-    assert Running.value is True     # Still running!
+    assert Running.value is True  # Still running!
 
-    StopBtn.value = False            # Stop pressed (NC opens)
+    StopBtn.value = False  # Stop pressed (NC opens)
     plc.step()
     assert Running.value is False
 

@@ -10,16 +10,16 @@ For an introduction to the DSL vocabulary, see [Core Concepts](../getting-starte
 from pyrung import Timer, Counter
 
 # Named instances — the 95% case for real programs
-OvenTimer   = Timer.named(1, "OvenTimer")
-CycleTimer  = Timer.named(2, "CycleTimer")
-PartCounter = Counter.named(1, "PartCounter")
+OvenTimer   = Timer.clone("OvenTimer")
+CycleTimer  = Timer.clone("CycleTimer")
+PartCounter = Counter.clone("PartCounter")
 
 # Anonymous instances — fine for throwaway simulation tests
 t = Timer[1]
 c = Counter[1]
 ```
 
-Use `Timer.named(n, "Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
+Use `Timer.clone("Name")` for production code — `OvenTimer_Done` in a fault log tells you everything; `Timer1_Done` tells you nothing.
 
 ## Timers
 
@@ -72,9 +72,9 @@ The accumulator stores integer ticks in the selected unit. The time unit control
 ### Example: traffic light
 
 ```python
-GreenTimer  = Timer.named(1, "GreenTimer")
-YellowTimer = Timer.named(2, "YellowTimer")
-RedTimer    = Timer.named(3, "RedTimer")
+GreenTimer  = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
+RedTimer    = Timer.clone("RedTimer")
 
 with Rung(State == "g"):
     on_delay(GreenTimer, preset=3000, unit="Tms")

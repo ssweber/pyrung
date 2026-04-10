@@ -3,20 +3,17 @@ import gc
 import json
 import math
 import os
-import re
 import struct
 import time
 
+import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket
 import board
 import busio
+import digitalio
 import P1AM
 import sdcardio
 import storage
-
-import digitalio
-
 from adafruit_wiznet5k.adafruit_wiznet5k import WIZNET5K
-import adafruit_wiznet5k.adafruit_wiznet5k_socket as _mb_socket
 
 try:
     import microcontroller
@@ -28,9 +25,9 @@ TARGET_SCAN_MS = 10.0
 WATCHDOG_MS = 5000
 PRINT_SCAN_OVERRUNS = False
 
-_SLOT_MODULES = ['P1-08SIM', 'P1-08TRS']
-_RET_DEFAULTS = {'GreenAcc': 0, 'RedAcc': 0, 'State': 'r', 'YellowAcc': 0}
-_RET_TYPES = {'GreenAcc': 'INT', 'RedAcc': 'INT', 'State': 'CHAR', 'YellowAcc': 'INT'}
+_SLOT_MODULES = ["P1-08SIM", "P1-08TRS"]
+_RET_DEFAULTS = {"GreenAcc": 0, "RedAcc": 0, "State": "r", "YellowAcc": 0}
+_RET_TYPES = {"GreenAcc": "INT", "RedAcc": "INT", "State": "CHAR", "YellowAcc": "INT"}
 _RET_SCHEMA = "00e8dfc526c074a1fede3a1f74f6074ccaea57c73dd3d7d71798052aac7f3a1f"
 
 # -- Hardware bootstrap --------------------------------------------------------
@@ -62,7 +59,7 @@ _t_RxBusy = False
 _t_RxErr = False
 _t_RxExCode = 0
 _t_RxOk = False
-_t_State = 'r'
+_t_State = "r"
 _t_WalkActive = False
 _t_WalkRequest = False
 _t_YellowAcc = 0
@@ -92,11 +89,12 @@ _sd_delete_all_cmd = False
 
 # -- Modbus TCP ----------------------------------------------------------------
 _mb_server = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)
-_mb_server.bind(('', 502))
+_mb_server.bind(("", 502))
 _mb_server.listen(2)
 _mb_server.settimeout(0)
 _mb_clients = [None] * 2
 _mb_buf = bytearray(260)
+
 
 def service_modbus_server():
     try:
@@ -135,6 +133,7 @@ def service_modbus_server():
             _sock.close()
             _mb_clients[_idx] = None
 
+
 _MB_CLIENT_IDLE = 0
 _MB_CLIENT_CONNECTING = 1
 _MB_CLIENT_SENDING = 2
@@ -142,52 +141,56 @@ _MB_CLIENT_WAITING = 3
 _MB_CLIENT_DONE = 4
 _MB_CLIENT_ERROR = 5
 
+
 def _mb_client_close(job):
-    _sock = job.get('socket')
+    _sock = job.get("socket")
     if _sock is not None:
         try:
             _sock.close()
         except Exception:
             pass
-    job['socket'] = None
+    job["socket"] = None
+
 
 def _mb_client_reset_runtime(job):
     _mb_client_close(job)
-    job['request'] = b''
-    job['sent_offset'] = 0
-    job['rx_len'] = 0
-    job['state'] = _MB_CLIENT_IDLE
+    job["request"] = b""
+    job["sent_offset"] = 0
+    job["rx_len"] = 0
+    job["state"] = _MB_CLIENT_IDLE
+
 
 def _mb_client_frame_length(data, n):
     if int(n) < 7:
         return None
     try:
-        _length = struct.unpack('>H', bytes(data[4:6]))[0]
+        _length = struct.unpack(">H", bytes(data[4:6]))[0]
     except Exception:
         return None
     return 6 + int(_length)
 
+
 def _mb_client_pack_register_values(bank, values):
-    if bank in ('DS', 'TD', 'SD'):
-        return [struct.unpack('<H', struct.pack('<h', int(_value)))[0] for _value in values]
-    if bank in ('DD', 'CTD'):
+    if bank in ("DS", "TD", "SD"):
+        return [struct.unpack("<H", struct.pack("<h", int(_value)))[0] for _value in values]
+    if bank in ("DD", "CTD"):
         _regs = []
         for _value in values:
-            _regs.extend(struct.unpack('<HH', struct.pack('<i', int(_value))))
+            _regs.extend(struct.unpack("<HH", struct.pack("<i", int(_value))))
         return _regs
-    if bank == 'DF':
+    if bank == "DF":
         _regs = []
         for _value in values:
-            _regs.extend(struct.unpack('<HH', struct.pack('<f', float(_value))))
+            _regs.extend(struct.unpack("<HH", struct.pack("<f", float(_value))))
         return _regs
-    if bank in ('DH', 'XD', 'YD'):
+    if bank in ("DH", "XD", "YD"):
         return [int(_value) & 0xFFFF for _value in values]
-    if bank == 'TXT':
+    if bank == "TXT":
         _regs = []
         _index = 0
         while _index < len(values):
             _lo_raw = values[_index]
-            _hi_raw = values[_index + 1] if (_index + 1) < len(values) else ''
+            _hi_raw = values[_index + 1] if (_index + 1) < len(values) else ""
             _lo = ord(_lo_raw[0]) if isinstance(_lo_raw, str) and _lo_raw else 0
             _hi = ord(_hi_raw[0]) if isinstance(_hi_raw, str) and _hi_raw else 0
             _regs.append((_lo & 0xFF) | ((_hi & 0xFF) << 8))
@@ -195,34 +198,49 @@ def _mb_client_pack_register_values(bank, values):
         return _regs
     return [int(_value) & 0xFFFF for _value in values]
 
+
 def _mb_client_unpack_register_values(bank, regs, logical_count):
-    if bank in ('DS', 'TD', 'SD'):
-        return [struct.unpack('<h', struct.pack('<H', int(_reg) & 0xFFFF))[0] for _reg in regs[:logical_count]]
-    if bank in ('DD', 'CTD'):
+    if bank in ("DS", "TD", "SD"):
+        return [
+            struct.unpack("<h", struct.pack("<H", int(_reg) & 0xFFFF))[0]
+            for _reg in regs[:logical_count]
+        ]
+    if bank in ("DD", "CTD"):
         _values = []
         for _index in range(0, len(regs), 2):
             if (_index + 1) >= len(regs):
                 break
-            _values.append(struct.unpack('<i', struct.pack('<HH', int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF))[0])
+            _values.append(
+                struct.unpack(
+                    "<i",
+                    struct.pack("<HH", int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF),
+                )[0]
+            )
         return _values[:logical_count]
-    if bank == 'DF':
+    if bank == "DF":
         _values = []
         for _index in range(0, len(regs), 2):
             if (_index + 1) >= len(regs):
                 break
-            _values.append(struct.unpack('<f', struct.pack('<HH', int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF))[0])
+            _values.append(
+                struct.unpack(
+                    "<f",
+                    struct.pack("<HH", int(regs[_index]) & 0xFFFF, int(regs[_index + 1]) & 0xFFFF),
+                )[0]
+            )
         return _values[:logical_count]
-    if bank in ('DH', 'XD', 'YD'):
+    if bank in ("DH", "XD", "YD"):
         return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]
-    if bank == 'TXT':
+    if bank == "TXT":
         _values = []
         for _reg in regs:
             _lo = int(_reg) & 0xFF
             _hi = (int(_reg) >> 8) & 0xFF
-            _values.append('' if _lo == 0 else chr(_lo))
-            _values.append('' if _hi == 0 else chr(_hi))
+            _values.append("" if _lo == 0 else chr(_lo))
+            _values.append("" if _hi == 0 else chr(_hi))
         return _values[:logical_count]
     return [(int(_reg) & 0xFFFF) for _reg in regs[:logical_count]]
+
 
 def _mb_client_i1_set_status(busy, success, error, exception_response):
     global _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk
@@ -231,25 +249,28 @@ def _mb_client_i1_set_status(busy, success, error, exception_response):
     _t_RxErr = bool(error)
     _t_RxExCode = int(exception_response)
 
+
 def _mb_client_i1_values():
     global _t_WalkRequest
     return [_t_WalkRequest]
 
+
 def _mb_client_i1_build_request(tid):  # read coils: C1 (1 coil) on ped_panel
-    _pdu = struct.pack('>BHH', 1, 16384, 1)
-    return struct.pack('>HHHB', int(tid) & 0xFFFF, 0, len(_pdu) + 1, 1) + _pdu
+    _pdu = struct.pack(">BHH", 1, 16384, 1)
+    return struct.pack(">HHHB", int(tid) & 0xFFFF, 0, len(_pdu) + 1, 1) + _pdu
+
 
 def _mb_client_i1_apply_response(data, n):
     global _t_WalkRequest
     if int(n) < 8:
         return (False, 0)
     try:
-        _tid, _pid, _length, _uid = struct.unpack('>HHHB', bytes(data[:7]))
+        _tid, _pid, _length, _uid = struct.unpack(">HHHB", bytes(data[:7]))
     except Exception:
         return (False, 0)
     if _pid != 0 or _uid != 1:
         return (False, 0)
-    if _tid != int(_mb_client_i1['tid']):
+    if _tid != int(_mb_client_i1["tid"]):
         return (False, 0)
     _frame_len = 6 + int(_length)
     if _frame_len > int(n) or _frame_len < 8:
@@ -270,113 +291,116 @@ def _mb_client_i1_apply_response(data, n):
     for _offset in range(1):
         _byte = int(data[9 + (_offset // 8)])
         _values.append(bool((_byte >> (_offset % 8)) & 0x1))
-    _t_WalkRequest = _store_copy_value_to_type(_values[0], 'BOOL')
+    _t_WalkRequest = _store_copy_value_to_type(_values[0], "BOOL")
     return (True, 0)
 
+
 _mb_client_i1 = {
-    'name': '_mb_client_i1',
-    'enabled': False,
-    'state': _MB_CLIENT_IDLE,
-    'socket': None,
-    'request': b'',
-    'sent_offset': 0,
-    'rx_buf': bytearray(260),
-    'rx_len': 0,
-    'deadline': 0.0,
-    'tid': 0,
-    'host': '192.168.1.50',
-    'port': 502,
-    'timeout_s': 1.0,
-    'build': _mb_client_i1_build_request,
-    'apply': _mb_client_i1_apply_response,
-    'set_status': _mb_client_i1_set_status,
+    "name": "_mb_client_i1",
+    "enabled": False,
+    "state": _MB_CLIENT_IDLE,
+    "socket": None,
+    "request": b"",
+    "sent_offset": 0,
+    "rx_buf": bytearray(260),
+    "rx_len": 0,
+    "deadline": 0.0,
+    "tid": 0,
+    "host": "192.168.1.50",
+    "port": 502,
+    "timeout_s": 1.0,
+    "build": _mb_client_i1_build_request,
+    "apply": _mb_client_i1_apply_response,
+    "set_status": _mb_client_i1_set_status,
 }
 
 _mb_client_jobs = [_mb_client_i1]
 
+
 def service_modbus_client():
     _now = time.monotonic()
     for _job in _mb_client_jobs:
-        if not bool(_job['enabled']):
+        if not bool(_job["enabled"]):
             _mb_client_reset_runtime(_job)
-            _job['set_status'](False, False, False, 0)
+            _job["set_status"](False, False, False, 0)
             continue
-        if _job['state'] in (_MB_CLIENT_DONE, _MB_CLIENT_ERROR):
+        if _job["state"] in (_MB_CLIENT_DONE, _MB_CLIENT_ERROR):
             _mb_client_reset_runtime(_job)
-        if _job['state'] == _MB_CLIENT_IDLE:
-            _job['tid'] = (int(_job['tid']) + 1) & 0xFFFF
-            if _job['tid'] == 0:
-                _job['tid'] = 1
-            _job['request'] = _job['build'](_job['tid'])
-            _job['sent_offset'] = 0
-            _job['rx_len'] = 0
-            _job['deadline'] = _now + float(_job['timeout_s'])
-            _job['set_status'](True, False, False, 0)
-            _job['state'] = _MB_CLIENT_CONNECTING
+        if _job["state"] == _MB_CLIENT_IDLE:
+            _job["tid"] = (int(_job["tid"]) + 1) & 0xFFFF
+            if _job["tid"] == 0:
+                _job["tid"] = 1
+            _job["request"] = _job["build"](_job["tid"])
+            _job["sent_offset"] = 0
+            _job["rx_len"] = 0
+            _job["deadline"] = _now + float(_job["timeout_s"])
+            _job["set_status"](True, False, False, 0)
+            _job["state"] = _MB_CLIENT_CONNECTING
             continue
-        if _job['state'] == _MB_CLIENT_CONNECTING:
-            if _job['socket'] is None:
+        if _job["state"] == _MB_CLIENT_CONNECTING:
+            if _job["socket"] is None:
                 try:
-                    _job['socket'] = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)
-                    _job['socket'].settimeout(0)
+                    _job["socket"] = _mb_socket.socket(_mb_socket.AF_INET, _mb_socket.SOCK_STREAM)
+                    _job["socket"].settimeout(0)
                 except OSError:
-                    _job['set_status'](False, False, True, 0)
-                    _job['state'] = _MB_CLIENT_ERROR
+                    _job["set_status"](False, False, True, 0)
+                    _job["state"] = _MB_CLIENT_ERROR
                     continue
             try:
-                _job['socket'].connect((_job['host'], int(_job['port'])))
+                _job["socket"].connect((_job["host"], int(_job["port"])))
             except OSError:
-                if _now >= float(_job['deadline']):
-                    _job['set_status'](False, False, True, 0)
-                    _job['state'] = _MB_CLIENT_ERROR
+                if _now >= float(_job["deadline"]):
+                    _job["set_status"](False, False, True, 0)
+                    _job["state"] = _MB_CLIENT_ERROR
                     _mb_client_close(_job)
                 else:
-                    _job['state'] = _MB_CLIENT_CONNECTING
+                    _job["state"] = _MB_CLIENT_CONNECTING
                 continue
-            _job['state'] = _MB_CLIENT_SENDING
+            _job["state"] = _MB_CLIENT_SENDING
             continue
-        if _job['state'] == _MB_CLIENT_SENDING:
+        if _job["state"] == _MB_CLIENT_SENDING:
             try:
-                _sent = int(_job['socket'].send(_job['request'][int(_job['sent_offset']):]))
+                _sent = int(_job["socket"].send(_job["request"][int(_job["sent_offset"]) :]))
             except OSError:
-                _job['set_status'](False, False, True, 0)
-                _job['state'] = _MB_CLIENT_ERROR
+                _job["set_status"](False, False, True, 0)
+                _job["state"] = _MB_CLIENT_ERROR
                 _mb_client_close(_job)
                 continue
             if _sent < 0:
                 _sent = 0
-            _job['sent_offset'] = int(_job['sent_offset']) + _sent
-            if int(_job['sent_offset']) >= len(_job['request']):
-                _job['state'] = _MB_CLIENT_WAITING
-            elif _now >= float(_job['deadline']):
-                _job['set_status'](False, False, True, 0)
-                _job['state'] = _MB_CLIENT_ERROR
+            _job["sent_offset"] = int(_job["sent_offset"]) + _sent
+            if int(_job["sent_offset"]) >= len(_job["request"]):
+                _job["state"] = _MB_CLIENT_WAITING
+            elif _now >= float(_job["deadline"]):
+                _job["set_status"](False, False, True, 0)
+                _job["state"] = _MB_CLIENT_ERROR
                 _mb_client_close(_job)
             continue
-        if _job['state'] != _MB_CLIENT_WAITING:
+        if _job["state"] != _MB_CLIENT_WAITING:
             continue
         try:
-            _view = memoryview(_job['rx_buf'])[int(_job['rx_len']):]
-            _n = int(_job['socket'].recv_into(_view))
+            _view = memoryview(_job["rx_buf"])[int(_job["rx_len"]) :]
+            _n = int(_job["socket"].recv_into(_view))
         except OSError:
             _n = 0
         if _n > 0:
-            _job['rx_len'] = int(_job['rx_len']) + _n
-            _frame_len = _mb_client_frame_length(_job['rx_buf'], _job['rx_len'])
-            if _frame_len is not None and int(_job['rx_len']) >= int(_frame_len):
-                _ok, _exception = _job['apply'](_job['rx_buf'], int(_frame_len))
+            _job["rx_len"] = int(_job["rx_len"]) + _n
+            _frame_len = _mb_client_frame_length(_job["rx_buf"], _job["rx_len"])
+            if _frame_len is not None and int(_job["rx_len"]) >= int(_frame_len):
+                _ok, _exception = _job["apply"](_job["rx_buf"], int(_frame_len))
                 if _ok:
-                    _job['set_status'](False, True, False, 0)
-                    _job['state'] = _MB_CLIENT_DONE
+                    _job["set_status"](False, True, False, 0)
+                    _job["state"] = _MB_CLIENT_DONE
                 else:
-                    _job['set_status'](False, False, True, int(_exception))
-                    _job['state'] = _MB_CLIENT_ERROR
+                    _job["set_status"](False, False, True, int(_exception))
+                    _job["state"] = _MB_CLIENT_ERROR
                 _mb_client_close(_job)
                 continue
-        if _now >= float(_job['deadline']):
-            _job['set_status'](False, False, True, 0)
-            _job['state'] = _MB_CLIENT_ERROR
+        if _now >= float(_job["deadline"]):
+            _job["set_status"](False, False, True, 0)
+            _job["state"] = _MB_CLIENT_ERROR
             _mb_client_close(_job)
+
 
 # -- Retentive memory (SD card) ------------------------------------------------
 def _mount_sd():
@@ -395,8 +419,16 @@ def _mount_sd():
         _sd_error_code = 1
         print(f"Retentive storage unavailable: {exc}")
 
+
 def load_memory():
-    global _t_GreenAcc, _t_RedAcc, _t_State, _t_YellowAcc, _sd_write_status, _sd_error, _sd_error_code
+    global \
+        _t_GreenAcc, \
+        _t_RedAcc, \
+        _t_State, \
+        _t_YellowAcc, \
+        _sd_write_status, \
+        _sd_error, \
+        _sd_error_code
     if not _sd_available:
         print("Retentive load skipped: SD unavailable")
         return
@@ -408,7 +440,7 @@ def load_memory():
         print("Retentive load skipped: interrupted previous save detected")
         return
     try:
-        with open(_MEMORY_PATH, "r", encoding="utf-8") as f:
+        with open(_MEMORY_PATH, encoding="utf-8") as f:
             payload = json.load(f)
     except Exception as exc:
         _sd_error = True
@@ -438,7 +470,11 @@ def load_memory():
     _entry = values.get("State")
     if isinstance(_entry, dict) and _entry.get("type") == "CHAR":
         try:
-            _t_State = (_entry.get("value", _t_State) if isinstance(_entry.get("value", _t_State), str) else '')
+            _t_State = (
+                _entry.get("value", _t_State)
+                if isinstance(_entry.get("value", _t_State), str)
+                else ""
+            )
         except Exception:
             pass
     _entry = values.get("YellowAcc")
@@ -451,8 +487,16 @@ def load_memory():
     _sd_error_code = 0
     _sd_write_status = False
 
+
 def save_memory():
-    global _t_GreenAcc, _t_RedAcc, _t_State, _t_YellowAcc, _sd_write_status, _sd_error, _sd_error_code
+    global \
+        _t_GreenAcc, \
+        _t_RedAcc, \
+        _t_State, \
+        _t_YellowAcc, \
+        _sd_write_status, \
+        _sd_error, \
+        _sd_error_code
     if not _sd_available:
         return
     _sd_write_status = True
@@ -486,8 +530,10 @@ def save_memory():
     _sd_error_code = 0
     _sd_write_status = False
 
+
 _mount_sd()
 load_memory()
+
 
 # -- Helpers -------------------------------------------------------------------
 def _service_sd_commands():
@@ -545,8 +591,10 @@ def _service_sd_commands():
     # SC69 pulses for this serviced-command scan; reset occurs at next scan start.
     _sd_write_status = True
 
+
 def _rise(curr, prev):
     return bool(curr) and not bool(prev)
+
 
 def _store_copy_value_to_type(value, dest_type):
     if isinstance(value, float) and not math.isfinite(value):
@@ -570,6 +618,7 @@ def _store_copy_value_to_type(value, dest_type):
             raise ValueError("CHAR value must be blank or one ASCII character")
         return value
     return value
+
 
 # -- Modbus address mapping ----------------------------------------------------
 def _mb_reverse_coil(addr):
@@ -631,6 +680,7 @@ def _mb_reverse_coil(addr):
         return ("SC", (addr - 61440) + 1)
     return None
 
+
 def _mb_reverse_register(addr):
     # DS (int memory)
     if 0 <= addr <= 4499:
@@ -671,11 +721,19 @@ def _mb_reverse_register(addr):
         return ("SD", (_offset // 1) + 1, _offset % 1)
     return None
 
+
 def _mb_xy_word_start(word_index):
     _idx = int(word_index)
     if _idx < 0 or _idx > 16:
         return None
-    return (1 if int(word_index) == 0 else 21 if int(word_index) == 1 else (((int(word_index) // 2) * 100) + 1))
+    return (
+        1
+        if int(word_index) == 0
+        else 21
+        if int(word_index) == 1
+        else (((int(word_index) // 2) * 100) + 1)
+    )
+
 
 def _mb_read_coil_plc(bank, index):
     if bank == "C" and index == 1:
@@ -696,8 +754,17 @@ def _mb_read_coil_plc(bank, index):
         return bool(_t_YellowDone)
     return False
 
+
 def _mb_write_coil_plc(bank, index, val):
-    global _t_GreenDone, _t_RedDone, _t_RxBusy, _t_RxErr, _t_RxOk, _t_WalkActive, _t_WalkRequest, _t_YellowDone
+    global \
+        _t_GreenDone, \
+        _t_RedDone, \
+        _t_RxBusy, \
+        _t_RxErr, \
+        _t_RxOk, \
+        _t_WalkActive, \
+        _t_WalkRequest, \
+        _t_YellowDone
     _value = bool(val)
     if bank == "C" and index == 1:
         _t_WalkActive = _value
@@ -729,6 +796,7 @@ def _mb_write_coil_plc(bank, index, val):
         return index in [53, 55, 60, 61, 65, 66, 67, 75, 76, 120, 121]
     return False
 
+
 def _mb_read_mirrored_word(bank, word_index):
     _start = _mb_xy_word_start(word_index)
     if _start is None:
@@ -736,8 +804,9 @@ def _mb_read_mirrored_word(bank, word_index):
     _word = 0
     for _bit_index in range(16):
         if _mb_read_coil_plc(bank, _start + _bit_index):
-            _word |= (1 << _bit_index)
+            _word |= 1 << _bit_index
     return _word
+
 
 def _mb_write_mirrored_word(word_index, value):
     _start = _mb_xy_word_start(word_index)
@@ -748,22 +817,24 @@ def _mb_write_mirrored_word(word_index, value):
         _mb_write_coil_plc("Y", _start + _bit_index, bool((_word >> _bit_index) & 0x1))
     return True
 
+
 def _mb_read_reg_plc(bank, index, reg_pos):
     if bank == "XD":
         return _mb_read_mirrored_word("X", index)
     if bank == "YD":
         return _mb_read_mirrored_word("Y", index)
     if bank == "DS" and index == 1:
-        return struct.unpack('<H', struct.pack('<h', int(_t_RxExCode)))[0]
+        return struct.unpack("<H", struct.pack("<h", int(_t_RxExCode)))[0]
     if bank == "TD" and index == 1:
-        return struct.unpack('<H', struct.pack('<h', int(_t_RedAcc)))[0]
+        return struct.unpack("<H", struct.pack("<h", int(_t_RedAcc)))[0]
     if bank == "TD" and index == 2:
-        return struct.unpack('<H', struct.pack('<h', int(_t_GreenAcc)))[0]
+        return struct.unpack("<H", struct.pack("<h", int(_t_GreenAcc)))[0]
     if bank == "TD" and index == 3:
-        return struct.unpack('<H', struct.pack('<h', int(_t_YellowAcc)))[0]
+        return struct.unpack("<H", struct.pack("<h", int(_t_YellowAcc)))[0]
     if bank == "TXT" and index == 1:
         return ((ord(_t_State) if _t_State else 0) & 0xFF) | (((0) & 0xFF) << 8)
     return 0
+
 
 def _mb_write_reg_plc(bank, index, reg_pos, value):
     global _t_GreenAcc, _t_RedAcc, _t_RxExCode, _t_State, _t_YellowAcc
@@ -773,16 +844,16 @@ def _mb_write_reg_plc(bank, index, reg_pos, value):
     if bank == "YD":
         return _mb_write_mirrored_word(index, _word)
     if bank == "DS" and index == 1:
-        _t_RxExCode = struct.unpack('<h', struct.pack('<H', _word))[0]
+        _t_RxExCode = struct.unpack("<h", struct.pack("<H", _word))[0]
         return True
     if bank == "TD" and index == 1:
-        _t_RedAcc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        _t_RedAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
         return True
     if bank == "TD" and index == 2:
-        _t_GreenAcc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        _t_GreenAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
         return True
     if bank == "TD" and index == 3:
-        _t_YellowAcc = struct.unpack('<h', struct.pack('<H', _word))[0]
+        _t_YellowAcc = struct.unpack("<h", struct.pack("<H", _word))[0]
         return True
     if bank == "TXT" and index == 1:
         _t_State = chr(_word & 0xFF)
@@ -790,8 +861,39 @@ def _mb_write_reg_plc(bank, index, reg_pos, value):
     if bank in ("DS", "DD", "DH", "DF", "TXT", "TD", "CTD"):
         return True
     if bank == "SD":
-        return index in [29, 31, 32, 34, 35, 36, 40, 41, 42, 50, 51, 60, 61, 106, 107, 108, 112, 113, 114, 140, 141, 142, 143, 144, 145, 146, 147, 214, 215]
+        return index in [
+            29,
+            31,
+            32,
+            34,
+            35,
+            36,
+            40,
+            41,
+            42,
+            50,
+            51,
+            60,
+            61,
+            106,
+            107,
+            108,
+            112,
+            113,
+            114,
+            140,
+            141,
+            142,
+            143,
+            144,
+            145,
+            146,
+            147,
+            214,
+            215,
+        ]
     return False
+
 
 def _mb_read_coil(addr):
     _mapped = _mb_reverse_coil(int(addr))
@@ -800,12 +902,14 @@ def _mb_read_coil(addr):
     _bank, _index = _mapped
     return _mb_read_coil_plc(_bank, _index)
 
+
 def _mb_write_coil(addr, val):
     _mapped = _mb_reverse_coil(int(addr))
     if _mapped is None:
         return False
     _bank, _index = _mapped
     return _mb_write_coil_plc(_bank, _index, val)
+
 
 def _mb_read_reg(addr):
     _mapped = _mb_reverse_register(int(addr))
@@ -814,6 +918,7 @@ def _mb_read_reg(addr):
     _bank, _index, _reg_pos = _mapped
     return _mb_read_reg_plc(_bank, _index, _reg_pos)
 
+
 def _mb_write_reg(addr, val):
     _mapped = _mb_reverse_register(int(addr))
     if _mapped is None:
@@ -821,14 +926,18 @@ def _mb_write_reg(addr, val):
     _bank, _index, _reg_pos = _mapped
     return _mb_write_reg_plc(_bank, _index, _reg_pos, val)
 
+
 def _mb_err(tid, uid, fc, code):
-    return struct.pack('>HHHBB', int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80) + bytes([int(code) & 0xFF])
+    return struct.pack(
+        ">HHHBB", int(tid) & 0xFFFF, 0, 3, int(uid) & 0xFF, (int(fc) & 0x7F) | 0x80
+    ) + bytes([int(code) & 0xFF])
+
 
 def _mb_handle(data, n):
     if n < 8:
         return None
     try:
-        tid, pid, length, uid = struct.unpack('>HHHB', bytes(data[:7]))
+        tid, pid, length, uid = struct.unpack(">HHHB", bytes(data[:7]))
     except Exception:
         return None
     if pid != 0:
@@ -840,7 +949,7 @@ def _mb_handle(data, n):
     if fc in (1, 2):
         if pdu_end < 12:
             return _mb_err(tid, uid, fc, 3)
-        start, count = struct.unpack('>HH', bytes(data[8:12]))
+        start, count = struct.unpack(">HH", bytes(data[8:12]))
         if count < 1 or count > 2000:
             return _mb_err(tid, uid, fc, 3)
         bits = []
@@ -854,11 +963,13 @@ def _mb_handle(data, n):
         for _offset, _bit in enumerate(bits):
             if _bit:
                 payload[_offset // 8] |= 1 << (_offset % 8)
-        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)
+        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
+            payload
+        )
     if fc in (3, 4):
         if pdu_end < 12:
             return _mb_err(tid, uid, fc, 3)
-        start, count = struct.unpack('>HH', bytes(data[8:12]))
+        start, count = struct.unpack(">HH", bytes(data[8:12]))
         if count < 1 or count > 125:
             return _mb_err(tid, uid, fc, 3)
         regs = []
@@ -869,12 +980,14 @@ def _mb_handle(data, n):
             regs.append(int(_reg) & 0xFFFF)
         payload = bytearray()
         for _reg in regs:
-            payload.extend(struct.pack('>H', _reg))
-        return struct.pack('>HHHBBB', tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(payload)
+            payload.extend(struct.pack(">H", _reg))
+        return struct.pack(">HHHBBB", tid, 0, len(payload) + 3, uid, fc, len(payload)) + bytes(
+            payload
+        )
     if fc == 5:
         if pdu_end < 12:
             return _mb_err(tid, uid, fc, 3)
-        addr, raw = struct.unpack('>HH', bytes(data[8:12]))
+        addr, raw = struct.unpack(">HH", bytes(data[8:12]))
         if raw not in (0x0000, 0xFF00):
             return _mb_err(tid, uid, fc, 3)
         if not _mb_write_coil(addr, raw == 0xFF00):
@@ -883,58 +996,78 @@ def _mb_handle(data, n):
     if fc == 6:
         if pdu_end < 12:
             return _mb_err(tid, uid, fc, 3)
-        addr, raw = struct.unpack('>HH', bytes(data[8:12]))
+        addr, raw = struct.unpack(">HH", bytes(data[8:12]))
         if not _mb_write_reg(addr, raw):
             return _mb_err(tid, uid, fc, 2)
         return bytes(data[:12])
     if fc == 15:
         if pdu_end < 13:
             return _mb_err(tid, uid, fc, 3)
-        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))
+        start, count, byte_count = struct.unpack(">HHB", bytes(data[8:13]))
         if count < 1 or count > 1968 or byte_count != ((count + 7) // 8):
             return _mb_err(tid, uid, fc, 3)
         if pdu_end < 13 + byte_count:
             return _mb_err(tid, uid, fc, 3)
-        payload = data[13:13 + byte_count]
+        payload = data[13 : 13 + byte_count]
         for _offset in range(count):
             _bit = bool((payload[_offset // 8] >> (_offset % 8)) & 0x1)
             if not _mb_write_coil(start + _offset, _bit):
                 return _mb_err(tid, uid, fc, 2)
-        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)
+        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
     if fc == 16:
         if pdu_end < 13:
             return _mb_err(tid, uid, fc, 3)
-        start, count, byte_count = struct.unpack('>HHB', bytes(data[8:13]))
+        start, count, byte_count = struct.unpack(">HHB", bytes(data[8:13]))
         if count < 1 or count > 123 or byte_count != (count * 2):
             return _mb_err(tid, uid, fc, 3)
         if pdu_end < 13 + byte_count:
             return _mb_err(tid, uid, fc, 3)
         for _offset in range(count):
             _base = 13 + (_offset * 2)
-            _reg = struct.unpack('>H', bytes(data[_base:_base + 2]))[0]
+            _reg = struct.unpack(">H", bytes(data[_base : _base + 2]))[0]
             if not _mb_write_reg(start + _offset, _reg):
                 return _mb_err(tid, uid, fc, 2)
-        return struct.pack('>HHHBBHH', tid, 0, 6, uid, fc, start, count)
+        return struct.pack(">HHHBBHH", tid, 0, 6, uid, fc, start, count)
     return _mb_err(tid, uid, fc, 1)
+
 
 # Embedded function call targets.
 # None emitted in foundation step.
 
+
 # -- Ladder logic --------------------------------------------------------------
 def _run_main_rungs():
-    global _b_Slot1, _b_Slot2, _mb_client_i1, _mem, _prev, _t_GreenAcc, _t_GreenDone, _t_RedAcc, _t_RedDone, _t_RxBusy, _t_RxErr, _t_RxExCode, _t_RxOk, _t_State, _t_WalkActive, _t_WalkRequest, _t_YellowAcc, _t_YellowDone
-    _rung_1_enabled = (_t_State == 'r') and (not bool(_b_Slot1[0]))
+    global \
+        _b_Slot1, \
+        _b_Slot2, \
+        _mb_client_i1, \
+        _mem, \
+        _prev, \
+        _t_GreenAcc, \
+        _t_GreenDone, \
+        _t_RedAcc, \
+        _t_RedDone, \
+        _t_RxBusy, \
+        _t_RxErr, \
+        _t_RxExCode, \
+        _t_RxOk, \
+        _t_State, \
+        _t_WalkActive, \
+        _t_WalkRequest, \
+        _t_YellowAcc, \
+        _t_YellowDone
+    _rung_1_enabled = (_t_State == "r") and (not bool(_b_Slot1[0]))
     _frac = float(_mem.get("_frac:RedAcc", 0.0))
     if _rung_1_enabled:
         _dt = float(_mem.get("_dt", 0.0))
         _acc = int(_t_RedAcc)
-        _dt_units = ((_dt * 1000.0) + _frac)
+        _dt_units = (_dt * 1000.0) + _frac
         _int_units = int(_dt_units)
         _new_frac = _dt_units - _int_units
         _acc = min(_acc + _int_units, 32767)
-        _preset = int(5000)
+        _preset = 5000
         _mem["_frac:RedAcc"] = _new_frac
-        _t_RedDone = (_acc >= _preset)
+        _t_RedDone = _acc >= _preset
         _t_RedAcc = _acc
     else:
         _mem["_frac:RedAcc"] = 0.0
@@ -942,19 +1075,19 @@ def _run_main_rungs():
         _t_RedAcc = 0
     _rung_2_enabled = bool(_t_RedDone)
     if _rung_2_enabled:
-        _t_State = _store_copy_value_to_type('g', "CHAR")
-    _rung_3_enabled = (_t_State == 'g') and (not bool(_b_Slot1[0]))
+        _t_State = _store_copy_value_to_type("g", "CHAR")
+    _rung_3_enabled = (_t_State == "g") and (not bool(_b_Slot1[0]))
     _frac = float(_mem.get("_frac:GreenAcc", 0.0))
     if _rung_3_enabled:
         _dt = float(_mem.get("_dt", 0.0))
         _acc = int(_t_GreenAcc)
-        _dt_units = ((_dt * 1000.0) + _frac)
+        _dt_units = (_dt * 1000.0) + _frac
         _int_units = int(_dt_units)
         _new_frac = _dt_units - _int_units
         _acc = min(_acc + _int_units, 32767)
-        _preset = int(4000)
+        _preset = 4000
         _mem["_frac:GreenAcc"] = _new_frac
-        _t_GreenDone = (_acc >= _preset)
+        _t_GreenDone = _acc >= _preset
         _t_GreenAcc = _acc
     else:
         _mem["_frac:GreenAcc"] = 0.0
@@ -962,19 +1095,19 @@ def _run_main_rungs():
         _t_GreenAcc = 0
     _rung_4_enabled = bool(_t_GreenDone)
     if _rung_4_enabled:
-        _t_State = _store_copy_value_to_type('y', "CHAR")
-    _rung_5_enabled = (_t_State == 'y') and (not bool(_b_Slot1[0]))
+        _t_State = _store_copy_value_to_type("y", "CHAR")
+    _rung_5_enabled = (_t_State == "y") and (not bool(_b_Slot1[0]))
     _frac = float(_mem.get("_frac:YellowAcc", 0.0))
     if _rung_5_enabled:
         _dt = float(_mem.get("_dt", 0.0))
         _acc = int(_t_YellowAcc)
-        _dt_units = ((_dt * 1000.0) + _frac)
+        _dt_units = (_dt * 1000.0) + _frac
         _int_units = int(_dt_units)
         _new_frac = _dt_units - _int_units
         _acc = min(_acc + _int_units, 32767)
-        _preset = int(1500)
+        _preset = 1500
         _mem["_frac:YellowAcc"] = _new_frac
-        _t_YellowDone = (_acc >= _preset)
+        _t_YellowDone = _acc >= _preset
         _t_YellowAcc = _acc
     else:
         _mem["_frac:YellowAcc"] = 0.0
@@ -982,8 +1115,10 @@ def _run_main_rungs():
         _t_YellowAcc = 0
     _rung_6_enabled = bool(_t_YellowDone)
     if _rung_6_enabled:
-        _t_State = _store_copy_value_to_type('r', "CHAR")
-    _rung_7_enabled = (_rise(bool(_t_WalkRequest), bool(_prev.get("WalkRequest", False))) or _rise(bool(_b_Slot1[1]), bool(_prev.get("Slot1.2", False))))
+        _t_State = _store_copy_value_to_type("r", "CHAR")
+    _rung_7_enabled = _rise(bool(_t_WalkRequest), bool(_prev.get("WalkRequest", False))) or _rise(
+        bool(_b_Slot1[1]), bool(_prev.get("Slot1.2", False))
+    )
     if _rung_7_enabled:
         _t_WalkActive = True
     else:
@@ -991,23 +1126,24 @@ def _run_main_rungs():
     _rung_8_enabled = bool(_t_GreenDone)
     if _rung_8_enabled:
         _t_WalkActive = _store_copy_value_to_type(False, "BOOL")
-    _rung_9_enabled = (_t_State == 'r')
+    _rung_9_enabled = _t_State == "r"
     if _rung_9_enabled:
         _b_Slot2[0] = True
     else:
         _b_Slot2[0] = False
-    _rung_10_enabled = (_t_State == 'g')
+    _rung_10_enabled = _t_State == "g"
     if _rung_10_enabled:
         _b_Slot2[2] = True
     else:
         _b_Slot2[2] = False
-    _rung_11_enabled = (_t_State == 'y')
+    _rung_11_enabled = _t_State == "y"
     if _rung_11_enabled:
         _b_Slot2[1] = True
     else:
         _b_Slot2[1] = False
     _rung_12_enabled = True
     _mb_client_i1["enabled"] = bool(_rung_12_enabled)
+
 
 # -- I/O -----------------------------------------------------------------------
 def _read_inputs():
@@ -1022,26 +1158,28 @@ def _read_inputs():
     _b_Slot1[6] = bool((_mask_s1_1 >> 6) & 1)
     _b_Slot1[7] = bool((_mask_s1_1 >> 7) & 1)
 
+
 def _write_outputs():
     global _b_Slot2
     _out_mask_s2_1 = 0
     if bool(_b_Slot2[0]):
-        _out_mask_s2_1 |= (1 << 0)
+        _out_mask_s2_1 |= 1 << 0
     if bool(_b_Slot2[1]):
-        _out_mask_s2_1 |= (1 << 1)
+        _out_mask_s2_1 |= 1 << 1
     if bool(_b_Slot2[2]):
-        _out_mask_s2_1 |= (1 << 2)
+        _out_mask_s2_1 |= 1 << 2
     if bool(_b_Slot2[3]):
-        _out_mask_s2_1 |= (1 << 3)
+        _out_mask_s2_1 |= 1 << 3
     if bool(_b_Slot2[4]):
-        _out_mask_s2_1 |= (1 << 4)
+        _out_mask_s2_1 |= 1 << 4
     if bool(_b_Slot2[5]):
-        _out_mask_s2_1 |= (1 << 5)
+        _out_mask_s2_1 |= 1 << 5
     if bool(_b_Slot2[6]):
-        _out_mask_s2_1 |= (1 << 6)
+        _out_mask_s2_1 |= 1 << 6
     if bool(_b_Slot2[7]):
-        _out_mask_s2_1 |= (1 << 7)
+        _out_mask_s2_1 |= 1 << 7
     base.writeDiscrete(_out_mask_s2_1, 2)
+
 
 # -- Main scan loop ------------------------------------------------------------
 gc.disable()
@@ -1078,4 +1216,3 @@ while True:
             print(f"Scan overrun #{_scan_overrun_count}: {-sleep_ms:.3f} ms late")
 
     gc.collect()
-

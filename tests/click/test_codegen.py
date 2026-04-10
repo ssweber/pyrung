@@ -1357,7 +1357,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                on_delay(Timer[1], preset=100, unit="Tms").reset(X002)
+                on_delay(T1, preset=100, unit="Tms").reset(X002)
             """,
         )
 
@@ -1371,7 +1371,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                count_up(Counter[1], preset=10).down(X002).reset(X003)
+                count_up(CT1, preset=10).down(X002).reset(X003)
             """,
         )
 
@@ -2302,7 +2302,7 @@ class TestInMemoryRoundTrip:
     def test_bundle_round_trip_type_error(self):
         """ladder_to_pyrung rejects unsupported source types."""
         with pytest.raises(TypeError, match="source must be"):
-            ladder_to_pyrung(42)  # ty: ignore[invalid-argument-type]
+            ladder_to_pyrung(42)
 
 
 # ---------------------------------------------------------------------------
@@ -2500,7 +2500,7 @@ class TestNicknameMerge:
             ladder_to_pyrung(csv_path, nickname_csv="foo.csv", nicknames={"X001": "a"})
 
     def test_named_timer(self):
-        """Timer with nickname emits Timer.named() declaration."""
+        """Timer with nickname emits Timer.clone() declaration."""
         _assert_codegen_full(
             """
             with Rung(X1):
@@ -2515,7 +2515,8 @@ class TestNicknameMerge:
             # --- Tags ---
             X001 = Bool("X001")
 
-            OvenTimer = Timer.named(1, "OvenTimer")
+            # --- Clones ---
+            OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
             with Program(strict=False) as logic:
@@ -2523,15 +2524,19 @@ class TestNicknameMerge:
                     on_delay(OvenTimer, preset=100, unit="Tms")
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-            })
+            mapping = TagMap([
+                # --- Timers & Counters ---
+                OvenTimer.Done.map_to(t[1]),
+                OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
+                X001.map_to(x[1]),
+            ])
             """,
             nicknames={"T1": "OvenTimer"},
         )
 
     def test_named_timer_done_suffix_stripped(self):
-        """Nickname ending in _Done has suffix stripped for the slug."""
+        """Nickname ending in _Done has suffix stripped for the clone name."""
         _assert_codegen_full(
             """
             with Rung(X1):
@@ -2546,7 +2551,8 @@ class TestNicknameMerge:
             # --- Tags ---
             X001 = Bool("X001")
 
-            OvenTimer = Timer.named(1, "OvenTimer")
+            # --- Clones ---
+            OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
             with Program(strict=False) as logic:
@@ -2554,15 +2560,19 @@ class TestNicknameMerge:
                     on_delay(OvenTimer, preset=100, unit="Tms")
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-            })
+            mapping = TagMap([
+                # --- Timers & Counters ---
+                OvenTimer.Done.map_to(t[1]),
+                OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
+                X001.map_to(x[1]),
+            ])
             """,
             nicknames={"T1": "OvenTimer_Done"},
         )
 
     def test_named_counter(self):
-        """Counter with nickname emits Counter.named() declaration."""
+        """Counter with nickname emits Counter.clone() declaration."""
         _assert_codegen_full(
             """
             with Rung(X1):
@@ -2578,7 +2588,8 @@ class TestNicknameMerge:
             X001 = Bool("X001")
             X002 = Bool("X002")
 
-            PartCounter = Counter.named(1, "PartCounter")
+            # --- Clones ---
+            PartCounter = Counter.clone("PartCounter")
 
             # --- Program ---
             with Program(strict=False) as logic:
@@ -2586,16 +2597,20 @@ class TestNicknameMerge:
                     count_up(PartCounter, preset=10).reset(X002)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-                X002: x[2],
-            })
+            mapping = TagMap([
+                # --- Timers & Counters ---
+                PartCounter.Done.map_to(ct[1]),
+                PartCounter.Acc.map_to(ctd[1]),
+                # --- Tags ---
+                X001.map_to(x[1]),
+                X002.map_to(x[2]),
+            ])
             """,
             nicknames={"CT1": "PartCounter"},
         )
 
     def test_timer_without_nickname_unchanged(self):
-        """Timer without nickname still emits Timer[n]."""
+        """Timer without nickname emits clone named after operand."""
         _assert_codegen_full(
             """
             with Rung(X1):
@@ -2610,15 +2625,22 @@ class TestNicknameMerge:
             # --- Tags ---
             X001 = Bool("X001")
 
+            # --- Clones ---
+            T1 = Timer.clone("T1")
+
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    on_delay(Timer[1], preset=100, unit="Tms")
+                    on_delay(T1, preset=100, unit="Tms")
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-            })
+            mapping = TagMap([
+                # --- Timers & Counters ---
+                T1.Done.map_to(t[1]),
+                T1.Acc.map_to(td[1]),
+                # --- Tags ---
+                X001.map_to(x[1]),
+            ])
             """,
         )
 
@@ -2641,7 +2663,8 @@ class TestNicknameMerge:
             X001 = Bool("X001")
             Y001 = Bool("Y001")
 
-            OvenTimer = Timer.named(1, "OvenTimer")
+            # --- Clones ---
+            OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
             with Program(strict=False) as logic:
@@ -2652,10 +2675,14 @@ class TestNicknameMerge:
                     out(Y001)
 
             # --- Tag Map ---
-            mapping = TagMap({
-                X001: x[1],
-                Y001: y[1],
-            })
+            mapping = TagMap([
+                # --- Timers & Counters ---
+                OvenTimer.Done.map_to(t[1]),
+                OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
+                X001.map_to(x[1]),
+                Y001.map_to(y[1]),
+            ])
             """,
             nicknames={"T1": "OvenTimer"},
         )

@@ -22,7 +22,7 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
 )
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.structure import InstanceView
+from pyrung.core.structure import InstanceView, _StructRuntime
 from pyrung.core.tag import Tag
 
 from .context import _require_rung_context
@@ -31,8 +31,8 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange
 
 
-def _extract_done_acc(instance: InstanceView, func_name: str) -> tuple[Tag, Tag]:
-    """Extract ``Done`` and ``Acc`` tags from a Timer/Counter InstanceView."""
+def _extract_done_acc(instance: InstanceView | _StructRuntime, func_name: str) -> tuple[Tag, Tag]:
+    """Extract ``Done`` and ``Acc`` tags from a Timer/Counter instance."""
     try:
         done_bit = instance.Done
     except AttributeError:
@@ -47,6 +47,8 @@ def _extract_done_acc(instance: InstanceView, func_name: str) -> tuple[Tag, Tag]
             f"{func_name}() requires a Timer/Counter instance with an 'Acc' field, "
             f"got {instance!r}."
         ) from None
+    assert isinstance(done_bit, Tag), f"Expected Tag for Done, got {type(done_bit)}"
+    assert isinstance(accumulator, Tag), f"Expected Tag for Acc, got {type(accumulator)}"
     return done_bit, accumulator
 
 
@@ -703,7 +705,7 @@ class CountDownBuilder(_BuilderBase):
 
 
 def count_up(
-    counter: InstanceView,
+    counter: InstanceView | _StructRuntime,
     *,
     preset: Tag | int,
 ) -> CountUpBuilder:
@@ -738,7 +740,7 @@ def count_up(
 
 
 def count_down(
-    counter: InstanceView,
+    counter: InstanceView | _StructRuntime,
     *,
     preset: Tag | int,
 ) -> CountDownBuilder:
@@ -898,7 +900,7 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
 
 
 def on_delay(
-    timer: InstanceView,
+    timer: InstanceView | _StructRuntime,
     *,
     preset: Tag | int,
     unit: str = "Tms",
@@ -937,7 +939,7 @@ def on_delay(
 
 
 def off_delay(
-    timer: InstanceView,
+    timer: InstanceView | _StructRuntime,
     *,
     preset: Tag | int,
     unit: str = "Tms",

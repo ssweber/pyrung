@@ -35,6 +35,8 @@ from pyrung.core.validation.walker import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+Timer2 = Timer.clone("Timer2")
+
 DS = Block("DS", TagType.INT, 1, 100)
 DD = Block("DD", TagType.DINT, 1, 100)
 Result = Dint("Result")
@@ -421,7 +423,7 @@ class TestMissingFieldsCaptured:
 
         with Program() as prog:
             with Rung(Bool("Enable2")):
-                off_delay(Timer[2], preset=100, unit="Tm")
+                off_delay(Timer2, preset=100, unit="Tm")
 
         facts = walk_program(prog)
         tu_facts = _facts_at(facts, "instruction.unit")

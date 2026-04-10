@@ -101,12 +101,12 @@ The full instruction set (branching, subroutines, shift registers, edge detectio
 
 ## Timers and counters
 
-`Timer` and `Counter` are built-in structured types. Each has a `.Done` bit and an `.Acc` accumulator. Use `Timer.named(n, "Name")` for named instances:
+`Timer` and `Counter` are built-in structured types. Each has a `.Done` bit and an `.Acc` accumulator. Use `Timer.clone("Name")` for named instances:
 
 ```python
 from pyrung import Timer, Counter
 
-GreenTimer = Timer.named(1, "GreenTimer")
+GreenTimer = Timer.clone("GreenTimer")
 
 with Rung(State == "g"):
     on_delay(GreenTimer, preset=3000, unit="Tms")  # 3000 ms
@@ -117,7 +117,7 @@ The accumulator tracks progress in the unit you specify (`"Tms"` for millisecond
 Counters increment once per scan while enabled. Use `rise()` on the rung condition if you want one increment per leading edge:
 
 ```python
-PartCounter = Counter.named(1, "PartCounter")
+PartCounter = Counter.clone("PartCounter")
 
 with Rung(rise(Sensor)):
     count_up(PartCounter, preset=9999).reset(CountReset)

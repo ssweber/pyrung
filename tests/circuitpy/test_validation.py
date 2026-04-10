@@ -29,6 +29,13 @@ from pyrung.core import (
     subroutine,
 )
 
+Timer2 = Timer.clone("Timer2")
+Timer3 = Timer.clone("Timer3")
+Timer4 = Timer.clone("Timer4")
+Timer5 = Timer.clone("Timer5")
+Timer6 = Timer.clone("Timer6")
+Timer7 = Timer.clone("Timer7")
+
 
 def _build_program(fn):
     prog = Program(strict=False)
@@ -180,7 +187,7 @@ class TestTimerSeconds:
 
         def logic():
             with Rung(Bool("Enable")):
-                on_delay(Timer[2], preset=10, unit="Ts").reset(reset_tag)
+                on_delay(Timer2, preset=10, unit="Ts").reset(reset_tag)
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
@@ -194,7 +201,7 @@ class TestOffDelayTimer:
 
         def logic():
             with Rung(Bool("Enable")):
-                off_delay(Timer[3], preset=10, unit="Tms")
+                off_delay(Timer3, preset=10, unit="Tms")
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=hw, mode="warn")
@@ -214,7 +221,7 @@ class TestNoHardware:
             with Rung(Bool("Enable")):
                 out(remote_light)
                 run_function(fn)
-                on_delay(Timer[4], preset=10, unit="Tms").reset(Bool("Reset"))
+                on_delay(Timer4, preset=10, unit="Tms").reset(Bool("Reset"))
 
         prog = _build_program(logic)
         report = validate_circuitpy_program(prog, hw=None, mode="warn")
@@ -356,7 +363,7 @@ class TestSuggestionContent:
 
         def logic():
             with Rung(Bool("Enable")):
-                on_delay(Timer[5], preset=5, unit="Tms").reset(Bool("Reset"))
+                on_delay(Timer5, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
         finding = [f for f in report.hints if f.code == CPY_TIMER_RESOLUTION][0]
@@ -408,7 +415,7 @@ class TestStrictMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
-                on_delay(Timer[6], preset=5, unit="Tms").reset(Bool("Reset"))
+                on_delay(Timer6, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="strict")
         codes = set(_finding_codes(report))
@@ -433,7 +440,7 @@ class TestWarnMode:
             with Rung(external_input):
                 out(light)
                 run_function(fn)
-                on_delay(Timer[7], preset=5, unit="Tms").reset(Bool("Reset"))
+                on_delay(Timer7, preset=5, unit="Tms").reset(Bool("Reset"))
 
         report = validate_circuitpy_program(_build_program(logic), hw=hw, mode="warn")
         codes = set(_finding_codes(report))

@@ -20,9 +20,9 @@ from pyrung import Char, Timer, Program, Rung, copy, on_delay
 State = Char("State")
 
 # Each phase gets a named timer
-GreenTimer  = Timer.named(1, "GreenTimer")
-YellowTimer = Timer.named(2, "YellowTimer")
-RedTimer    = Timer.named(3, "RedTimer")
+GreenTimer  = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
+RedTimer    = Timer.clone("RedTimer")
 
 with Program() as logic:
     # Green for 3 seconds, then yellow

@@ -90,13 +90,12 @@ class _TagDecl:
 
 
 @dataclass
-class _NamedTimerCounterDecl:
-    """A Timer.named() / Counter.named() declaration derived from a nickname."""
+class _TimerCounterCloneDecl:
+    """A Timer.clone() / Counter.clone() declaration for codegen."""
 
-    var_name: str  # safe Python identifier (e.g. "OvenTimer")
+    var_name: str  # safe Python identifier (e.g. "OvenTimer" or "T1")
     kind: str  # "Timer" or "Counter"
     index: int  # 1-based block index
-    slug: str  # name passed to .named() (same as var_name)
     done_operand: str  # original done-bit operand (e.g. "T1")
     acc_operand: str  # original accumulator operand (e.g. "TD1")
 
@@ -210,7 +209,7 @@ class _OperandCollection:
     semantic_ranges: dict[str, _SemanticRender] = field(default_factory=dict)
     range_comments: dict[str, str] = field(default_factory=dict)
     timer_counter_operands: set[str] = field(default_factory=set)
-    named_timer_counters: list[_NamedTimerCounterDecl] = field(default_factory=list)
+    timer_counter_clones: list[_TimerCounterCloneDecl] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -240,5 +239,5 @@ class _FileRefs:
     has_modbus_rtu_target: bool = False
     has_modbus_address: bool = False
     has_system_import: bool = False
-    named_tc_var_names: set[str] = field(default_factory=set)
+    tc_clone_var_names: set[str] = field(default_factory=set)
     subroutine_func_names: set[str] = field(default_factory=set)

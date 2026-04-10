@@ -34,6 +34,12 @@ from pyrung.core import (
 )
 from pyrung.core.instruction import ForLoopInstruction
 
+Counter2 = Counter.clone("Counter2")
+Counter3 = Counter.clone("Counter3")
+Counter4 = Counter.clone("Counter4")
+Counter5 = Counter.clone("Counter5")
+Timer2 = Timer.clone("Timer2")
+
 
 def _line_no() -> int:
     frame = cast(FrameType, inspect.currentframe())
@@ -131,7 +137,7 @@ def test_builder_paths_capture_source_lines_for_branch_forloop_and_terminal_inst
 
         with Rung(enable):
             count_down_line = _line_no() + 1
-            count_down(Counter[2], preset=5).reset(reset_cond)
+            count_down(Counter2, preset=5).reset(reset_cond)
 
         with Rung(enable):
             on_delay_line = _line_no() + 1
@@ -224,7 +230,7 @@ def test_multiline_count_up_captures_instruction_end_line_and_debug_step_end_lin
         with Rung(enable):
             count_up_line = _line_no() + 1
             count_up(
-                Counter[3],
+                Counter3,
                 preset=5,
             ).reset(reset_cond)
             count_up_end_line = _line_no() - 1
@@ -263,7 +269,7 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
     with Program(strict=False) as prog:
         with Rung(enable):
             cu_line = _line_no() + 1
-            cu_builder = count_up(Counter[4], preset=5)
+            cu_builder = count_up(Counter4, preset=5)
             cu_down_line = _line_no() + 1
             cu_builder = cu_builder.down(down)
             cu_reset_line = _line_no() + 1
@@ -271,13 +277,13 @@ def test_chained_builder_methods_capture_distinct_debug_substep_lines():
 
         with Rung(enable):
             cd_line = _line_no() + 1
-            cd_builder = count_down(Counter[5], preset=5)
+            cd_builder = count_down(Counter5, preset=5)
             cd_reset_line = _line_no() + 1
             cd_builder.reset(reset_cond)
 
         with Rung(enable):
             timer_line = _line_no() + 1
-            timer_builder = on_delay(Timer[2], preset=50)
+            timer_builder = on_delay(Timer2, preset=50)
             timer_reset_line = _line_no() + 1
             timer_builder.reset(reset_cond)
 

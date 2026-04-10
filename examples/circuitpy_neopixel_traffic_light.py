@@ -5,9 +5,9 @@ from pyrung.circuitpy import P1AM, board, generate_circuitpy
 
 State = Char("State", default="r")  # r=red, g=green, y=yellow
 
-RedTimer = Timer.named(1, "RedTimer")
-GreenTimer = Timer.named(2, "GreenTimer")
-YellowTimer = Timer.named(3, "YellowTimer")
+RedTimer = Timer.clone("RedTimer")
+GreenTimer = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
 
 
 with Program() as logic:

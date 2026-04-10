@@ -2,32 +2,32 @@
 
 # --- UDTs ---
 
-from pyrung import udt, Bool, Int, Counter, Program, Rung, PLC, out, rise, count_up
+from pyrung import PLC, Bool, Counter, Int, Program, Rung, count_up, out, rise, udt
+
 
 @udt(count=2)
 class Bin:
     Sensor: Bool
     Full: Bool
 
-BinACounter = Counter.named(1, "BinACounter")
-BinBCounter = Counter.named(2, "BinBCounter")
-CountReset  = Bool("CountReset")
+
+BinACounter = Counter.clone("BinACounter")
+BinBCounter = Counter.clone("BinBCounter")
+CountReset = Bool("CountReset")
 
 # --- Blocks ---
 
-from pyrung import Block, TagType, copy, blockcopy
+from pyrung import Block, TagType, blockcopy, copy
 
-SortLog  = Block("SortLog", TagType.INT, 1, 5)    # SortLog1..SortLog5
-BoxSize  = Int("BoxSize")
-NewBox   = Bool("NewBox")
+SortLog = Block("SortLog", TagType.INT, 1, 5)  # SortLog1..SortLog5
+BoxSize = Int("BoxSize")
+NewBox = Bool("NewBox")
 
 with Program() as logic:
     with Rung(rise(Bin[1].Sensor)):
-        count_up(BinACounter, preset=10) \
-            .reset(CountReset)
+        count_up(BinACounter, preset=10).reset(CountReset)
     with Rung(rise(Bin[2].Sensor)):
-        count_up(BinBCounter, preset=10) \
-            .reset(CountReset)
+        count_up(BinBCounter, preset=10).reset(CountReset)
 
     with Rung(BinACounter.Done):
         out(Bin[1].Full)
@@ -37,7 +37,7 @@ with Program() as logic:
     # Log box sizes: shift register pattern
     with Rung(rise(NewBox)):
         blockcopy(SortLog.select(1, 4), SortLog.select(2, 5))  # Shift down
-        copy(BoxSize, SortLog[1])                                # Insert at front
+        copy(BoxSize, SortLog[1])  # Insert at front
 
 # --- Try it ---
 
@@ -50,7 +50,7 @@ with PLC(logic) as plc:
         plc.step()
 
     assert BinACounter.Acc.value == 3
-    assert BinBCounter.Acc.value == 0    # Bin 2 untouched
+    assert BinBCounter.Acc.value == 0  # Bin 2 untouched
     assert Bin[1].Full.value is False
 
     # Log 3 box sizes

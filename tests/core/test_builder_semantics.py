@@ -20,6 +20,16 @@ from pyrung.core import (
     time_drum,
 )
 
+Counter2 = Counter.clone("Counter2")
+Counter3 = Counter.clone("Counter3")
+Counter4 = Counter.clone("Counter4")
+Counter5 = Counter.clone("Counter5")
+Counter6 = Counter.clone("Counter6")
+Counter7 = Counter.clone("Counter7")
+Counter8 = Counter.clone("Counter8")
+Timer2 = Timer.clone("Timer2")
+Timer3 = Timer.clone("Timer3")
+
 
 def test_count_up_missing_reset_raises() -> None:
     enable = Bool("Enable")
@@ -36,7 +46,7 @@ def test_count_down_missing_reset_raises() -> None:
     with pytest.raises(RuntimeError, match="count_down"):
         with Program():
             with Rung(enable):
-                count_down(Counter[2], preset=5)
+                count_down(Counter2, preset=5)
 
 
 def test_event_drum_missing_reset_raises() -> None:
@@ -96,7 +106,7 @@ def test_pending_required_builder_blocks_following_dsl_statements() -> None:
     with pytest.raises(RuntimeError, match="count_up"):
         with Program():
             with Rung(enable):
-                count_up(Counter[3], preset=5)
+                count_up(Counter3, preset=5)
                 out(light)
 
 
@@ -109,7 +119,7 @@ def test_pending_required_builder_blocks_branch_entry() -> None:
     with pytest.raises(RuntimeError, match="count_up"):
         with Program(strict=False):
             with Rung(enable):
-                builder = count_up(Counter[4], preset=5)
+                builder = count_up(Counter4, preset=5)
                 with branch(mode):
                     out(light)
                 builder.reset(reset)
@@ -123,7 +133,7 @@ def test_parent_flow_terminal_blocks_following_instruction() -> None:
     with pytest.raises(RuntimeError, match="terminal"):
         with Program():
             with Rung(enable):
-                count_up(Counter[5], preset=5).reset(reset)
+                count_up(Counter5, preset=5).reset(reset)
                 out(light)
 
 
@@ -136,7 +146,7 @@ def test_parent_flow_terminal_blocks_following_branch() -> None:
     with pytest.raises(RuntimeError, match="terminal"):
         with Program():
             with Rung(enable):
-                count_down(Counter[6], preset=5).reset(reset)
+                count_down(Counter6, preset=5).reset(reset)
                 with branch(mode):
                     out(light)
 
@@ -151,7 +161,7 @@ def test_branch_flow_terminal_blocks_following_branch_local_instruction() -> Non
         with Program():
             with Rung(enable):
                 with branch(mode):
-                    count_up(Counter[7], preset=5).reset(reset)
+                    count_up(Counter7, preset=5).reset(reset)
                     out(light)
 
 
@@ -165,7 +175,7 @@ def test_terminal_inside_branch_does_not_block_sibling_branch() -> None:
     with Program():
         with Rung(enable):
             with branch(mode_a):
-                count_up(Counter[8], preset=5).reset(reset)
+                count_up(Counter8, preset=5).reset(reset)
             with branch(mode_b):
                 out(light)
 
@@ -192,7 +202,7 @@ def test_tof_allows_following_instruction_and_branch() -> None:
 
     with Program():
         with Rung(enable):
-            off_delay(Timer[2], preset=5)
+            off_delay(Timer2, preset=5)
             out(light)
             with branch(mode):
                 out(branch_light)
@@ -206,7 +216,7 @@ def test_rton_is_terminal_in_same_flow() -> None:
     with pytest.raises(RuntimeError, match="terminal"):
         with Program():
             with Rung(enable):
-                on_delay(Timer[3], preset=5).reset(reset)
+                on_delay(Timer3, preset=5).reset(reset)
                 out(light)
 
 

@@ -28,6 +28,8 @@ from pyrung.core import (
     time_drum,
 )
 
+Counter2 = Counter.clone("Counter2")
+
 
 def test_scan_steps_yields_each_rung_and_commits_at_exhaustion():
     start = Bool("Start")
@@ -306,7 +308,7 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
             count_up(Counter[1], preset=5).down(down).reset(reset)
 
         with Rung(enable):
-            count_down(Counter[2], preset=5).reset(reset)
+            count_down(Counter2, preset=5).reset(reset)
 
         with Rung(enable):
             on_delay(Timer[1], preset=50).reset(reset)

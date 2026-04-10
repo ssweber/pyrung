@@ -16,15 +16,14 @@ This is the completed version of the conveyor built across the
 import os
 
 from pyrung import (
+    PLC,
+    And,
     Bool,
     Counter,
     Int,
-    PLC,
+    Or,
     Rung,
     Timer,
-
-    And,
-    Or,
     branch,
     comment,
     copy,
@@ -77,12 +76,12 @@ SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
-DetTimer = Timer.named(1, "DetTimer")    # T001 / TD001
-HoldTimer = Timer.named(2, "HoldTimer")  # T002 / TD002
+DetTimer = Timer.clone("DetTimer")  # T001 / TD001
+HoldTimer = Timer.clone("HoldTimer")  # T002 / TD002
 
 # Counters — per bin
-BinACounter = Counter.named(1, "BinACounter")  # CT001 / CTD001
-BinBCounter = Counter.named(2, "BinBCounter")  # CT002 / CTD002
+BinACounter = Counter.clone("BinACounter")  # CT001 / CTD001
+BinBCounter = Counter.clone("BinBCounter")  # CT002 / CTD002
 
 # ---------------------------------------------------------------------------
 # Click hardware mapping

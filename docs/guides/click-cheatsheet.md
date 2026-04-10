@@ -176,7 +176,7 @@ unpack_to_words(DD[1], DS.select(1, 2))    # DINT → 2 INTs
 Built-in `Timer` type: `.Done` (Bool) + `.Acc` (Int). Units: `"Tms"`, `"Ts"`, `"Tm"`, `"Th"`, `"Td"`.
 
 ```python
-MyTimer = Timer.named(1, "MyTimer")
+MyTimer = Timer.clone("MyTimer")
 
 # TON — auto-reset when rung goes False
 on_delay(MyTimer, preset=500, unit="Tms")
@@ -193,7 +193,7 @@ off_delay(CoolDown, preset=500, unit="Tms")
 Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts every scan while True — use `rise()` for edge-triggered.
 
 ```python
-PartCounter = Counter.named(1, "PartCounter")
+PartCounter = Counter.clone("PartCounter")
 
 count_up(PartCounter, preset=100).reset(ResetBtn)
 count_down(Dispense, preset=100).reset(ResetBtn)
@@ -345,9 +345,9 @@ Use `on_delay` per state, `copy` to advance on done:
 
 ```python
 State = Char("State")
-GreenTimer  = Timer.named(1, "GreenTimer")
-YellowTimer = Timer.named(2, "YellowTimer")
-RedTimer    = Timer.named(3, "RedTimer")
+GreenTimer  = Timer.clone("GreenTimer")
+YellowTimer = Timer.clone("YellowTimer")
+RedTimer    = Timer.clone("RedTimer")
 
 with Rung(State == "g"):
     on_delay(GreenTimer, preset=3000, unit="Tms")
