@@ -6,24 +6,23 @@ Quick reference for writing pyrung programs targeting AutomationDirect Click PLC
 
 ```python
 from pyrung import (
-    Bool, Int, Dint, Real, Word, Char,         # tag types
-    Timer, Counter,                             # built-in UDTs
-    named_array, Field, auto,                    # structures
-    Program, Rung, PLC,         # structure
-    rise, fall, And, Or, system,         # conditions
-    out, latch, reset,                          # coils
-    copy, blockcopy, fill,                      # data movement
-    calc,                                       # math
-    on_delay, off_delay,                        # timers
-    count_up, count_down,                       # counters
-    shift, event_drum, time_drum, search,       # drum/shift/search
-    call, subroutine, forloop, return_early,    # program control
-    comment, branch,                            # rung structure
-    send, receive, ModbusTcpTarget,             # communication
-    Tms, Ts, Tm, Th, Td,                       # time units
-    to_value, to_ascii, to_text, to_binary,     # copy converters
-    pack_bits, pack_words, pack_text,           # pack/unpack
-    unpack_to_bits, unpack_to_words,
+    Bool, Int, Dint, Real, Word, Char,       # tag types
+    Timer, Counter,                          # built-in UDTs
+    named_array, Field, auto,                # structures
+    PLC, Program, Rung,                      # PLC skeleton
+    comment, branch,                         # rung structure
+    And, Or, rise, fall, system,             # conditions
+    out, latch, reset,                       # coils
+    calc,                                    # math
+    copy, blockcopy, fill,                   # data movement
+    to_value, to_ascii, to_text, to_binary,  # copy converters
+    pack_bits, pack_words, pack_text,        # pack
+    unpack_to_bits, unpack_to_words,         # unpack
+    on_delay, off_delay,                     # timers
+    count_up, count_down,                    # counters
+    shift, event_drum, time_drum, search,    # drum/shift/search
+    call, subroutine, forloop, return_early, # program control
+    send, receive, ModbusTcpTarget,          # communication
 )
 from pyrung.click import x, y, c, ds, dd, dh, df, t, td, ct, ctd, sc, sd, txt, xd, yd, TagMap
 ```
