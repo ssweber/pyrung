@@ -989,21 +989,35 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
     """Emit the TagMap constructor."""
     has_structures = bool(collection.structures)
     has_clones = bool(collection.timer_counter_clones)
+    has_blocks = bool(collection.plain_blocks)
     use_list_form = has_structures or has_clones
-
-    if use_list_form:
-        lines.append("mapping = TagMap([")
-    else:
-        lines.append("mapping = TagMap({")
 
     block_order = {bv: i for i, (_, _, bv) in enumerate(_OPERAND_PREFIXES)}
     sorted_tags = sorted(
         collection.tags.values(),
         key=lambda t: (block_order.get(t.block_var, 99), t.block_index),
     )
+    flat_tags = [
+        d
+        for d in sorted_tags
+        if d.operand not in collection.semantic_operands
+        and d.operand not in collection.timer_counter_operands
+    ]
+    has_flat = bool(flat_tags)
+
+    # Count non-empty sections to decide whether to add headers
+    section_count = sum([has_structures, has_clones, has_blocks, has_flat])
+    use_headers = section_count >= 2
+
+    if use_list_form:
+        lines.append("mapping = TagMap([")
+    else:
+        lines.append("mapping = TagMap({")
 
     if use_list_form:
         # Structure-level map_to entries
+        if has_structures and use_headers:
+            lines.append("    # --- Structures ---")
         for sdecl in collection.structures:
             if sdecl.structure_type == "named_array":
                 # Named arrays use a single contiguous range
@@ -1025,6 +1039,8 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
                             f"{fhw.block_var}.select({fhw.start}, {fhw.end})),"
                         )
         # Timer/counter clone map_to entries
+        if has_clones and use_headers:
+            lines.append("    # --- Timers & Counters ---")
         for decl in collection.timer_counter_clones:
             if decl.kind == "Timer":
                 lines.append(f"    {decl.var_name}.Done.map_to(t[{decl.index}]),")
@@ -1032,28 +1048,29 @@ def _emit_tag_map(lines: list[str], collection: _OperandCollection) -> None:
             else:
                 lines.append(f"    {decl.var_name}.Done.map_to(ct[{decl.index}]),")
                 lines.append(f"    {decl.var_name}.Acc.map_to(ctd[{decl.index}]),")
+        # Plain block map_to entries
+        if has_blocks and use_headers:
+            lines.append("    # --- Blocks ---")
         for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
             lines.append(
                 f"    {bdecl.var_name}.map_to({bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end})),"  # noqa: E501
             )
         # Flat tags (non-structure-owned)
-        for decl in sorted_tags:
-            if decl.operand in collection.semantic_operands:
-                continue
-            if decl.operand in collection.timer_counter_operands:
-                continue
+        if has_flat and use_headers:
+            lines.append("    # --- Tags ---")
+        for decl in flat_tags:
             lines.append(f"    {decl.var_name}.map_to({decl.block_var}[{decl.block_index}]),")
         lines.append("])")
     else:
+        if has_blocks and use_headers:
+            lines.append("    # --- Blocks ---")
         for bdecl in sorted(collection.plain_blocks, key=lambda decl: decl.var_name):
             lines.append(
                 f"    {bdecl.var_name}: {bdecl.hw_block_var}.select({bdecl.hw_start}, {bdecl.hw_end}),"
             )
-        for decl in sorted_tags:
-            if decl.operand in collection.semantic_operands:
-                continue
-            if decl.operand in collection.timer_counter_operands:
-                continue
+        if has_flat and use_headers:
+            lines.append("    # --- Tags ---")
+        for decl in flat_tags:
             lines.append(f"    {decl.var_name}: {decl.block_var}[{decl.block_index}],")
 
         lines.append("})")

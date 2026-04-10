@@ -2525,8 +2525,10 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
+                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
                 X001.map_to(x[1]),
             ])
             """,
@@ -2559,8 +2561,10 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
+                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
                 X001.map_to(x[1]),
             ])
             """,
@@ -2594,8 +2598,10 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
+                # --- Timers & Counters ---
                 PartCounter.Done.map_to(ct[1]),
                 PartCounter.Acc.map_to(ctd[1]),
+                # --- Tags ---
                 X001.map_to(x[1]),
                 X002.map_to(x[2]),
             ])
@@ -2629,8 +2635,10 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
+                # --- Timers & Counters ---
                 T1.Done.map_to(t[1]),
                 T1.Acc.map_to(td[1]),
+                # --- Tags ---
                 X001.map_to(x[1]),
             ])
             """,
@@ -2668,8 +2676,10 @@ class TestNicknameMerge:
 
             # --- Tag Map ---
             mapping = TagMap([
+                # --- Timers & Counters ---
                 OvenTimer.Done.map_to(t[1]),
                 OvenTimer.Acc.map_to(td[1]),
+                # --- Tags ---
                 X001.map_to(x[1]),
                 Y001.map_to(y[1]),
             ])
