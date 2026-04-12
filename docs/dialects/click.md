@@ -194,11 +194,11 @@ When importing ladder CSV with nicknames, a nickname on a T or CT address produc
 ```python
 # Without nickname → clone named after the operand
 T1 = Timer.clone("T1")
-on_delay(T1, preset=100, unit="Tms")
+on_delay(T1, preset=100)
 
 # With nickname {"T1": "OvenTimer"} → clone named after the nickname
 OvenTimer = Timer.clone("OvenTimer")
-on_delay(OvenTimer, preset=100, unit="Tms")
+on_delay(OvenTimer, preset=100)
 ```
 
 The T (done-bit) nickname drives the name — any nickname on the matching TD/CTD address is silently overridden. This keeps `.Done` and `.Acc` fields under a single consistent prefix.
@@ -375,10 +375,10 @@ Click timer accumulators are 16-bit signed INT (max 32,767). A literal preset ex
 
 ```python
 # Wrong — clamps silently to 32.7 seconds
-on_delay(MyTimer, preset=60000, unit="Tms")
+on_delay(MyTimer, preset=60000)
 
 # Right — use seconds
-on_delay(MyTimer, preset=60, unit="Ts")
+on_delay(MyTimer, preset=60, unit="sec")
 ```
 
 Findings are hints by default (`mode="warn"`). Use `mode="strict"` to treat hints as errors.

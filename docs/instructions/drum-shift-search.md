@@ -47,7 +47,7 @@ with Rung(Running):
     time_drum(
         outputs=[DrumOut1, DrumOut2, DrumOut3],
         presets=[50, DS[1], 75, DS[2]],
-        unit="Tms",
+        unit="ms",
         pattern=[
             [1, 0, 0],
             [0, 1, 0],

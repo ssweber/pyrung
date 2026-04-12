@@ -37,7 +37,7 @@ HoldTimer   = Timer.clone("HoldTimer")
 
 with Program() as logic:
     with Rung(EntrySensor):
-        on_delay(HoldTimer, preset=2000, unit="Tms")  # 2 seconds
+        on_delay(HoldTimer, preset=2000)  # 2 seconds
     with Rung(EntrySensor, ~HoldTimer.Done):
         out(DiverterCmd)         # Hold diverter open while timing
 ```
@@ -50,9 +50,9 @@ This reads: "While the entry sensor sees a box, accumulate time. While the senso
 
     For real programs deploying to hardware, always use `Timer.clone("Name")`. When `Timer1_Done` shows up in a fault log six months later, it tells you nothing. `HoldTimer_Done` tells you everything. `Timer[n]` (anonymous, auto-numbered) is fine for throwaway simulation tests — but named instances are the 95% case.
 
-!!! note "Why `\"Tms\"` and not `\"Milliseconds\"`?"
+!!! note "Unit aliases"
 
-    Time units in pyrung are 2–3 character strings: `"Tms"`, `"Ts"`, `"Tm"`, `"Th"`, `"Td"`. The `T` prefix mirrors IEC 61131-3 time literals, the short form fits PLC tag-name limits, and it sidesteps the `Min` ambiguity (minute vs minimum — plus shadowing Python's `min()`).
+    `unit=` accepts `"ms"`, `"sec"`, `"min"`, `"hour"`, `"day"` and their variants. Also accepted: `Tms`/`Ts`/`Tm`/`Th`/`Td` — great for tag names (`FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`).
 
 ## Test it deterministically
 
@@ -75,11 +75,11 @@ The example above is a TON — it auto-resets when the rung goes false. What if 
 
 ```python
 # TON — auto-resets when rung goes False
-on_delay(HoldTimer, preset=2000, unit="Tms")
+on_delay(HoldTimer, preset=2000)
 
 # RTON — holds accumulator across rung-false;
 # only the explicit reset clears it
-on_delay(BatchTimer, preset=3600, unit="Ts") \
+on_delay(BatchTimer, preset=3600, unit="sec") \
     .reset(BatchReset)
 ```
 

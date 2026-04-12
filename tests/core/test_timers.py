@@ -966,3 +966,138 @@ class TestTimerStructuralContract:
             with Rung(Enable):
                 with pytest.raises(TypeError, match="'Acc' to be an Int or Dint"):
                     on_delay(BadAcc[1], preset=100)
+
+
+class TestPositionalAndUnitAliases:
+    """Test positional preset/unit args and human-friendly unit strings."""
+
+    def test_on_delay_positional_preset(self):
+        """on_delay(timer, 100) works as positional preset."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], 100)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 10
+
+    def test_on_delay_positional_preset_and_unit(self):
+        """on_delay(timer, 5, 's') works — 5 seconds in Ts unit."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], 5, "s")
+
+        runner = PLC(logic, dt=1.0)
+        runner.patch({"Enable": True})
+
+        for _ in range(5):
+            runner.step()
+
+        assert runner.current_state.tags["Timer_Done"] is True
+        assert runner.current_state.tags["Timer_Acc"] == 5
+
+    def test_off_delay_positional_preset_and_unit(self):
+        """off_delay(timer, 10, 'ms') works positionally."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                off_delay(Timer[1], 10, "ms")
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_on_delay_unit_alias_minutes(self):
+        """on_delay with unit='min' normalizes to Tm."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=2, unit="min")
+
+        runner = PLC(logic, dt=60.0)
+        runner.patch({"Enable": True})
+
+        runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 1
+        runner.step()
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_on_delay_unit_alias_hours(self):
+        """on_delay with unit='h' normalizes to Th."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=1, unit="h")
+
+        runner = PLC(logic, dt=3600.0)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_on_delay_unit_canonical_still_works(self):
+        """Canonical unit strings like 'Tms' and 'Ts' still work."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], 100, "Tms")
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 10
+
+    def test_on_delay_keyword_preset_still_works(self):
+        """Keyword preset= still works after making it positional."""
+        Enable = Bool("Enable")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], preset=100)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True})
+        runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 10
+
+    def test_on_delay_positional_with_reset(self):
+        """on_delay(timer, 100, 'ms').reset(tag) works."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                on_delay(Timer[1], 100, "ms").reset(ResetBtn)
+
+        runner = PLC(logic, dt=0.050)
+        runner.patch({"Enable": True, "ResetBtn": False})
+        runner.run(cycles=3)
+        assert runner.current_state.tags["Timer_Acc"] == 150
+        assert runner.current_state.tags["Timer_Done"] is True
+
+    def test_unknown_unit_raises(self):
+        """Unknown unit string raises ValueError."""
+        Enable = Bool("Enable")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(ValueError, match="unknown time unit"):
+                    on_delay(Timer[1], 100, "furlongs")
+
+    def test_ambiguous_t_raises(self):
+        """Bare 'T' raises ValueError for ambiguity."""
+        Enable = Bool("Enable")
+
+        with Program():
+            with Rung(Enable):
+                with pytest.raises(ValueError, match="ambiguous"):
+                    on_delay(Timer[1], 100, "T")

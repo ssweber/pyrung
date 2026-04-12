@@ -65,21 +65,21 @@ def logic():
 
     # Green phase: 3 000 ms then transition to yellow
     with Rung(State == "g"):
-        on_delay(GreenTimer, preset=3000, unit="Tms")
+        on_delay(GreenTimer, 3000)
 
     with Rung(GreenTimer.Done):
         copy("y", State)
 
     # Yellow phase: 1 000 ms then transition to red
     with Rung(State == "y"):
-        on_delay(YellowTimer, preset=1000, unit="Tms")
+        on_delay(YellowTimer, 1000)
 
     with Rung(YellowTimer.Done):
         copy("r", State)
 
     # Red phase: 3 000 ms then transition to green
     with Rung(State == "r"):
-        on_delay(RedTimer, preset=3000, unit="Tms")
+        on_delay(RedTimer, 3000)
 
     with Rung(RedTimer.Done):
         copy("g", State)

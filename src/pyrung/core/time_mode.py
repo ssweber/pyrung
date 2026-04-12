@@ -48,15 +48,64 @@ class TimeUnit(Enum):
                 return dt_seconds / 86400
 
 
-TimeUnitStr = Literal["Tms", "Ts", "Tm", "Th", "Td"]
+# fmt: off
+TimeUnitStr = Literal[
+    # canonical
+    "Tms", "Ts", "Tm", "Th", "Td",
+    # short
+    "ms", "s", "min", "m", "h", "d",
+    # long
+    "milliseconds", "millisecond", "msec",
+    "seconds", "second", "sec",
+    "minutes", "minute",
+    "hours", "hour", "hr",
+    "days", "day",
+]
+# fmt: on
 
 _VALID_UNITS: dict[str, TimeUnit] = {m.name: m for m in TimeUnit}
+
+UNIT_MAP: dict[str, str] = {
+    "days": "Td",
+    "day": "Td",
+    "d": "Td",
+    "hours": "Th",
+    "hour": "Th",
+    "hr": "Th",
+    "h": "Th",
+    "minutes": "Tm",
+    "minute": "Tm",
+    "min": "Tm",
+    "m": "Tm",
+    "seconds": "Ts",
+    "second": "Ts",
+    "sec": "Ts",
+    "s": "Ts",
+    "milliseconds": "Tms",
+    "millisecond": "Tms",
+    "msec": "Tms",
+    "ms": "Tms",
+}
+
+
+def normalize_unit(unit: str) -> str:
+    """Normalize a time unit string to its canonical form.
+
+    ``"ms"``, ``"sec"``, ``"min"``, ``"hour"``, ``"day"`` (and plurals,
+    abbreviations, T-prefixed forms) → ``"Tms"``/``"Ts"``/``"Tm"``/``"Th"``/``"Td"``.
+    """
+    key = unit.lower().strip()
+    if key == "t":
+        raise ValueError("ambiguous time unit 'T' — use one of: ms, s, min, h, d")
+    # Strip leading 't' so "tms" → "ms", "ts" → "s", etc.
+    stripped = key.lstrip("t")
+    if stripped in UNIT_MAP:
+        return UNIT_MAP[stripped]
+    if key in UNIT_MAP:
+        return UNIT_MAP[key]
+    raise ValueError(f"unknown time unit '{unit}' — use one of: ms, s, min, h, d")
 
 
 def _parse_time_unit(value: str) -> TimeUnit:
     """Convert a string unit name to a TimeUnit enum member."""
-    try:
-        return _VALID_UNITS[value]
-    except KeyError:
-        valid = ", ".join(f"'{n}'" for n in _VALID_UNITS)
-        raise ValueError(f"unknown unit '{value}'; expected one of {valid}") from None
+    return _VALID_UNITS[normalize_unit(value)]

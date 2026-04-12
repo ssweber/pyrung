@@ -53,7 +53,7 @@ MyTimer  = Timer.clone("MyTimer")
 
 with Program() as logic:
     with Rung(Enable):
-        on_delay(MyTimer, preset=100, unit="Tms")
+        on_delay(MyTimer, preset=100)
 
 def test_timer_fires_at_preset():
     with PLC(logic, dt=0.001) as plc:

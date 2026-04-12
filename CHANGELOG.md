@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.2 — Friendlier timer/counter API
+
+### New features
+
+- **Positional `preset` and `unit`** — `on_delay`, `off_delay`, `count_up`, and `count_down` now accept positional arguments: `on_delay(MyTimer, 3000)`, `on_delay(MyTimer, 5, "sec")`. Keyword form still works.
+- **Human-friendly time units** — `unit=` accepts `"ms"`, `"sec"`, `"min"`, `"hour"`, `"day"` (and plurals, abbreviations). Default is `"ms"`. Tag-name suffixes `Tms`/`Ts`/`Tm`/`Th`/`Td` still accepted — `FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`.
+- **`DoneAccUDT` protocol** — Timer/counter functions now type as `timer: DoneAccUDT` instead of `InstanceView | _StructRuntime`. IDE hover shows the contract, not the implementation.
+- **`normalize_unit()` exported** — Converts any unit alias to canonical form. Available from `pyrung.core`.
+- **`TimeUnitStr` Literal type** — All valid unit strings in one type for IDE autocomplete.
+
+### Migration
+
+- No breaking changes. Existing `preset=` keyword and `unit="Tms"` code works unchanged.
+
 ## v0.5.0 — Timer/Counter cleanup
 
 v0.4.0 introduced `Timer` and `Counter` as built-in UDTs with `.named()` for creating instances. That was one special case too many — `.named()` is gone, replaced by `.clone()` which matches how the rest of the tag system works.

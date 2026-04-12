@@ -46,10 +46,10 @@ Valve1 = Bool("Valve1")
 
 def task_logic() -> None:
     # 1) Global and step timers run while task is active.
-    #    Add other units to suit (e.g., StepTime_Min with unit=Tm).
+    #    Add other units to suit (e.g., StepTime_Min with unit="min").
     with Rung(Task.Active == 1):
-        on_delay(ElapsedTimer, preset=9999, unit="Ts")
-        on_delay(StepTimer, preset=9999, unit="Ts")
+        on_delay(ElapsedTimer, 9999, "sec")
+        on_delay(StepTimer, 9999, "sec")
 
     # 2) Step logic (odd numbered active steps).
     with Rung(Task.Step == 1):

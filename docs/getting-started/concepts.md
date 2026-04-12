@@ -58,7 +58,7 @@ with Rung(Temp > 150.0):          # Comparison
     out(OverTempAlarm)
 
 with Rung(State == "g"):          # Equality
-    on_delay(GreenTimer, preset=3000, unit="Tms")
+    on_delay(GreenTimer, preset=3000)
 ```
 
 ### Branches
@@ -91,7 +91,7 @@ reset(Motor)                  # Clear a latched tag
 copy("g", State)              # Copy a value into a tag
 calc(Step + 1, Step)          # Evaluate an expression, store the result
 
-on_delay(MyTimer, preset=3000, unit="Tms")   # Timer: accumulate while rung is true
+on_delay(MyTimer, preset=3000)               # Timer: accumulate while rung is true
 count_up(MyCounter, preset=100)              # Counter: increment each scan
 ```
 
@@ -109,10 +109,10 @@ from pyrung import Timer, Counter
 GreenTimer = Timer.clone("GreenTimer")
 
 with Rung(State == "g"):
-    on_delay(GreenTimer, preset=3000, unit="Tms")  # 3000 ms
+    on_delay(GreenTimer, preset=3000)  # 3000 ms (default unit)
 ```
 
-The accumulator tracks progress in the unit you specify (`"Tms"` for milliseconds). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
+The accumulator tracks progress in the unit you specify (milliseconds by default). If the rung goes false before the preset, the accumulator resets (that's `on_delay` — use `off_delay` for the inverse behavior).
 
 Counters increment once per scan while enabled. Use `rise()` on the rung condition if you want one increment per leading edge:
 
@@ -143,7 +143,7 @@ The rung condition powers the instruction (top wire). Other pins are wired with 
  State == "g" ────────▶│   on_delay       │
                        │                  │──▶ .Done
                        │  preset: 3000    │──▶ .Acc
- StopBtn, Fault .reset()▶│  unit: "Tms"     │
+ StopBtn, Fault .reset()▶│  unit: "ms"      │
                        └─────────────────┘
 ```
 

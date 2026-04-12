@@ -95,6 +95,7 @@ from pyrung.core.state import SystemState
 from pyrung.core.structure import (
     AutoDefault,
     Counter,
+    DoneAccUDT,
     Field,
     InstanceView,
     Timer,
@@ -120,6 +121,7 @@ from pyrung.core.tag import (
 from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not in __all__)
     TimeMode,
     TimeUnit,
+    normalize_unit,
 )
 
 __all__ = [
@@ -130,7 +132,9 @@ __all__ = [
     "RungTraceEvent",
     "system",
     "TimeUnit",
+    "normalize_unit",
     # Structured factories
+    "DoneAccUDT",
     "Field",
     "AutoDefault",
     "auto",

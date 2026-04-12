@@ -12,17 +12,17 @@ YellowTimer = Timer.clone("YellowTimer")
 
 with Program() as logic:
     with Rung(State == "r"):
-        on_delay(RedTimer, preset=3000, unit="Tms")
+        on_delay(RedTimer, 3000)
     with Rung(RedTimer.Done):
         copy("g", State)
 
     with Rung(State == "g"):
-        on_delay(GreenTimer, preset=3000, unit="Tms")
+        on_delay(GreenTimer, 3000)
     with Rung(GreenTimer.Done):
         copy("y", State)
 
     with Rung(State == "y"):
-        on_delay(YellowTimer, preset=1000, unit="Tms")
+        on_delay(YellowTimer, 1000)
     with Rung(YellowTimer.Done):
         copy("r", State)
 

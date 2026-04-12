@@ -22,19 +22,21 @@ from pyrung.core.instruction import (
     TimeDrumInstruction,
 )
 from pyrung.core.memory_block import BlockRange
-from pyrung.core.structure import InstanceView, _StructRuntime
+from pyrung.core.structure import DoneAccUDT
 from pyrung.core.tag import Tag, TagType
+from pyrung.core.time_mode import normalize_unit
 
 from .context import _require_rung_context
 
 if TYPE_CHECKING:
     from pyrung.core.memory_block import IndirectBlockRange
+    from pyrung.core.time_mode import TimeUnitStr
 
 
 _ACC_TYPES = frozenset({TagType.INT, TagType.DINT})
 
 
-def _extract_done_acc(instance: InstanceView | _StructRuntime, func_name: str) -> tuple[Tag, Tag]:
+def _extract_done_acc(instance: DoneAccUDT, func_name: str) -> tuple[Tag, Tag]:
     """Extract ``Done`` and ``Acc`` tags from a Timer/Counter instance.
 
     Any structured type with a ``Done`` (Bool) field and an ``Acc``
@@ -503,17 +505,18 @@ def time_drum(
     *,
     outputs: Sequence[Tag],
     presets: Sequence[Tag | int],
-    unit: str = "Tms",
+    unit: TimeUnitStr = "ms",
     pattern: Sequence[Sequence[bool | int]],
     current_step: Tag,
     accumulator: Tag,
     completion_flag: Tag,
 ) -> TimeDrumBuilder:
+    canonical_unit = normalize_unit(unit)
     auto_condition, source_file, source_line = _capture_rung_condition_and_source("time_drum")
     return TimeDrumBuilder(
         outputs,
         presets,
-        unit,
+        canonical_unit,
         pattern,
         current_step,
         accumulator,
@@ -716,8 +719,7 @@ class CountDownBuilder(_BuilderBase):
 
 
 def count_up(
-    counter: InstanceView | _StructRuntime,
-    *,
+    counter: DoneAccUDT,
     preset: Tag | int,
 ) -> CountUpBuilder:
     """Count Up instruction (CTU).
@@ -751,8 +753,7 @@ def count_up(
 
 
 def count_down(
-    counter: InstanceView | _StructRuntime,
-    *,
+    counter: DoneAccUDT,
     preset: Tag | int,
 ) -> CountDownBuilder:
     """Count Down instruction (CTD).
@@ -911,10 +912,9 @@ class OffDelayBuilder(_AutoFinalizeBuilderBase):
 
 
 def on_delay(
-    timer: InstanceView | _StructRuntime,
-    *,
+    timer: DoneAccUDT,
     preset: Tag | int,
-    unit: str = "Tms",
+    unit: TimeUnitStr = "ms",
 ) -> OnDelayBuilder:
     """On-Delay Timer instruction (TON/RTON).
 
@@ -922,7 +922,9 @@ def on_delay(
 
     Example:
         with Rung(MotorRunning):
-            on_delay(Timer[1], preset=5000)                 # TON
+            on_delay(Timer[1], preset=5000)                 # TON keyword
+            on_delay(Timer[1], 5000)                        # TON positional
+            on_delay(Timer[1], 5, "s")                      # TON 5 seconds
             on_delay(Timer[1], preset=5000).reset(ResetBtn) # RTON
 
     Without .reset(), this is TON and remains composable in-rung.
@@ -931,11 +933,14 @@ def on_delay(
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).
         preset: Target value in time units (Tag or int).
-        unit: Time unit for accumulator (default: Tms).
+        unit: Time unit for accumulator (default: ``"ms"``).
+            Accepts ``"ms"``, ``"sec"``, ``"min"``, ``"hour"``, ``"day"``
+            and their variants (see :func:`normalize_unit`).
 
     Returns:
         Builder for optional .reset() chaining.
     """
+    canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "on_delay")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("on_delay")
     return OnDelayBuilder(
@@ -943,17 +948,16 @@ def on_delay(
         accumulator,
         preset,
         enable_condition,
-        unit,
+        canonical_unit,
         source_file=source_file,
         source_line=source_line,
     )
 
 
 def off_delay(
-    timer: InstanceView | _StructRuntime,
-    *,
+    timer: DoneAccUDT,
     preset: Tag | int,
-    unit: str = "Tms",
+    unit: TimeUnitStr = "ms",
 ) -> OffDelayBuilder:
     """Off-Delay Timer instruction (TOF).
 
@@ -963,17 +967,21 @@ def off_delay(
     Example:
         with Rung(MotorCommand):
             off_delay(Timer[2], preset=10000)
+            off_delay(Timer[2], 10, "s")       # 10 seconds
 
     Off-delay timers are composable in-rung (not terminal).
 
     Args:
         timer: Timer instance (must have ``done`` and ``acc`` fields).
         preset: Delay time in time units (Tag or int).
-        unit: Time unit for accumulator (default: Tms).
+        unit: Time unit for accumulator (default: ``"ms"``).
+            Accepts ``"ms"``, ``"sec"``, ``"min"``, ``"hour"``, ``"day"``
+            and their variants (see :func:`normalize_unit`).
 
     Returns:
         Builder for the off_delay instruction.
     """
+    canonical_unit = normalize_unit(unit)
     done_bit, accumulator = _extract_done_acc(timer, "off_delay")
     enable_condition, source_file, source_line = _capture_rung_condition_and_source("off_delay")
     return OffDelayBuilder(
@@ -981,7 +989,7 @@ def off_delay(
         accumulator,
         preset,
         enable_condition,
-        unit,
+        canonical_unit,
         source_file=source_file,
         source_line=source_line,
     )
