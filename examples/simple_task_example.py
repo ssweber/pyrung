@@ -45,7 +45,7 @@ def task_logic() -> None:
 
     # Everything under this rung auto-resets when Active drops to 0.
     with Rung(Task.Active == 1):
-        on_delay(StepTimer, preset=9999, unit="Ts")
+        on_delay(StepTimer, 9999, "sec")
 
         # Step 1: open valve for 5 seconds then advance.
         with branch(Task.Step == 1):

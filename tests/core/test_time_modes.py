@@ -143,6 +143,73 @@ class TestRunFor:
         assert runner.current_state.scan_id == 4
 
 
+class TestNormalizeUnit:
+    """Test normalize_unit() accepts various human-friendly unit strings."""
+
+    def test_canonical_forms(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("Tms") == "Tms"
+        assert normalize_unit("Ts") == "Ts"
+        assert normalize_unit("Tm") == "Tm"
+        assert normalize_unit("Th") == "Th"
+        assert normalize_unit("Td") == "Td"
+
+    def test_short_forms(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("ms") == "Tms"
+        assert normalize_unit("s") == "Ts"
+        assert normalize_unit("min") == "Tm"
+        assert normalize_unit("h") == "Th"
+        assert normalize_unit("d") == "Td"
+
+    def test_long_forms(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("milliseconds") == "Tms"
+        assert normalize_unit("seconds") == "Ts"
+        assert normalize_unit("minutes") == "Tm"
+        assert normalize_unit("hours") == "Th"
+        assert normalize_unit("days") == "Td"
+
+    def test_singular_forms(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("millisecond") == "Tms"
+        assert normalize_unit("second") == "Ts"
+        assert normalize_unit("minute") == "Tm"
+        assert normalize_unit("hour") == "Th"
+        assert normalize_unit("day") == "Td"
+
+    def test_case_insensitive(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("MS") == "Tms"
+        assert normalize_unit("Seconds") == "Ts"
+        assert normalize_unit("MIN") == "Tm"
+
+    def test_extra_aliases(self):
+        from pyrung.core import normalize_unit
+
+        assert normalize_unit("sec") == "Ts"
+        assert normalize_unit("hr") == "Th"
+        assert normalize_unit("msec") == "Tms"
+        assert normalize_unit("m") == "Tm"
+
+    def test_ambiguous_t_raises(self):
+        from pyrung.core import normalize_unit
+
+        with pytest.raises(ValueError, match="ambiguous"):
+            normalize_unit("T")
+
+    def test_unknown_unit_raises(self):
+        from pyrung.core import normalize_unit
+
+        with pytest.raises(ValueError, match="unknown time unit"):
+            normalize_unit("fortnights")
+
+
 class TestRunUntil:
     """Test run_until_fn() callable predicates and run_until() behavior."""
 

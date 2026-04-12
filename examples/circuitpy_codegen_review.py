@@ -124,9 +124,9 @@ with Program(strict=False) as logic:
 
     # Timers + counters.
     with Rung(Running):
-        on_delay(RTon, preset=250).reset(ShiftReset)
+        on_delay(RTon, 250).reset(ShiftReset)
     with Rung(Running):
-        off_delay(Tof, preset=100)
+        off_delay(Tof, 100)
     with Rung(Running):
         count_up(Ctu, preset=50).reset(Stop)
     with Rung(Running):

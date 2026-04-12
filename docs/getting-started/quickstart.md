@@ -27,19 +27,19 @@ RedTimer    = Timer.clone("RedTimer")
 with Program() as logic:
     # Green for 3 seconds, then yellow
     with Rung(State == "g"):
-        on_delay(GreenTimer, preset=3000, unit="Tms")
+        on_delay(GreenTimer, preset=3000)
     with Rung(GreenTimer.Done):
         copy("y", State)
 
     # Yellow for 1 second, then red
     with Rung(State == "y"):
-        on_delay(YellowTimer, preset=1000, unit="Tms")
+        on_delay(YellowTimer, preset=1000)
     with Rung(YellowTimer.Done):
         copy("r", State)
 
     # Red for 3 seconds, then green
     with Rung(State == "r"):
-        on_delay(RedTimer, preset=3000, unit="Tms")
+        on_delay(RedTimer, preset=3000)
     with Rung(RedTimer.Done):
         copy("g", State)
 ```

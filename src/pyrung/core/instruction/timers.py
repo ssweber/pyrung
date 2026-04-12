@@ -39,7 +39,7 @@ class OnDelayInstruction(Instruction):
         preset: Target value (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
         reset_condition: Optional condition to reset acc+done (creates RTON).
-        unit: Time unit for accumulator. Default ``"Tms"`` (milliseconds).
+        unit: Time unit for accumulator. Default ``"ms"`` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True
@@ -130,7 +130,7 @@ class OffDelayInstruction(Instruction):
         accumulator: INT tag storing elapsed off-time in `unit` ticks.
         preset: Delay duration (constant or INT tag).
         enable_condition: Rung power condition (injected automatically by DSL).
-        unit: Time unit for accumulator. Default ``"Tms"`` (milliseconds).
+        unit: Time unit for accumulator. Default ``"ms"`` (milliseconds).
     """
 
     ALWAYS_EXECUTES = True

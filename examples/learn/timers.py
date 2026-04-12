@@ -10,7 +10,7 @@ HoldTimer = Timer.clone("HoldTimer")
 
 with Program() as logic:
     with Rung(EntrySensor):
-        on_delay(HoldTimer, preset=2000, unit="Tms")  # 2 seconds
+        on_delay(HoldTimer, 2000)  # 2 seconds
     with Rung(EntrySensor, ~HoldTimer.Done):
         out(DiverterCmd)  # Hold diverter open while timing
 

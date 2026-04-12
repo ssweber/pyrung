@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
-from typing import Any, ClassVar, get_origin
+from typing import Any, ClassVar, Protocol, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.tag import LiveTag, MappingEntry, Tag, TagType, _TagTypeBase
@@ -111,6 +111,17 @@ def resolve_default(spec: object, index: int) -> object:
     if spec is UNSET:
         return None
     return spec
+
+
+class DoneAccUDT(Protocol):
+    """Any structured type with ``Done`` (Bool) and ``Acc`` (Int/Dint) fields.
+
+    Satisfied by ``Timer[1]``, ``Counter[1]``, ``Timer.clone("Name")``,
+    ``Counter.clone("Name")``, and any ``@udt()`` with matching fields.
+    """
+
+    Done: Tag
+    Acc: Tag
 
 
 class InstanceView:

@@ -172,19 +172,19 @@ unpack_to_words(DD[1], DS.select(1, 2))    # DINT → 2 INTs
 
 ## Timers
 
-Built-in `Timer` type: `.Done` (Bool) + `.Acc` (Int). Units: `"Tms"`, `"Ts"`, `"Tm"`, `"Th"`, `"Td"`.
+Built-in `Timer` type: `.Done` (Bool) + `.Acc` (Int). Units: `"ms"`, `"sec"`, `"min"`, `"hour"`, `"day"` (default: `"ms"`).
 
 ```python
 MyTimer = Timer.clone("MyTimer")
 
 # TON — auto-reset when rung goes False
-on_delay(MyTimer, preset=500, unit="Tms")
+on_delay(MyTimer, 500)
 
 # RTON — retentive, needs manual reset
-on_delay(MyTimer, preset=500).reset(ResetBtn)
+on_delay(MyTimer, 500).reset(ResetBtn)
 
 # TOF — off-delay
-off_delay(CoolDown, preset=500, unit="Tms")
+off_delay(CoolDown, 500)
 ```
 
 ## Counters
@@ -194,15 +194,15 @@ Built-in `Counter` type: `.Done` (Bool) + `.Acc` (Dint). Counts every scan while
 ```python
 PartCounter = Counter.clone("PartCounter")
 
-count_up(PartCounter, preset=100).reset(ResetBtn)
-count_down(Dispense, preset=100).reset(ResetBtn)
+count_up(PartCounter, 100).reset(ResetBtn)
+count_down(Dispense, 100).reset(ResetBtn)
 
 # Edge-triggered counting
 with Rung(rise(Sensor)):
-    count_up(PartCounter, preset=9999).reset(CountReset)
+    count_up(PartCounter, 9999).reset(CountReset)
 
 # Bidirectional
-count_up(ZoneCounter, preset=100).down(DownCondition).reset(ResetBtn)
+count_up(ZoneCounter, 100).down(DownCondition).reset(ResetBtn)
 ```
 
 ## Program structure
@@ -349,17 +349,17 @@ YellowTimer = Timer.clone("YellowTimer")
 RedTimer    = Timer.clone("RedTimer")
 
 with Rung(State == "g"):
-    on_delay(GreenTimer, preset=3000, unit="Tms")
+    on_delay(GreenTimer, 3000)
 with Rung(GreenTimer.Done):
     copy("y", State)
 
 with Rung(State == "y"):
-    on_delay(YellowTimer, preset=1000, unit="Tms")
+    on_delay(YellowTimer, 1000)
 with Rung(YellowTimer.Done):
     copy("r", State)
 
 with Rung(State == "r"):
-    on_delay(RedTimer, preset=3000, unit="Tms")
+    on_delay(RedTimer, 3000)
 with Rung(RedTimer.Done):
     copy("g", State)
 ```

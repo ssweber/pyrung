@@ -73,13 +73,13 @@ with Program() as logic:
     with Rung(State == IDLE, rise(EntrySensor)):
         copy(DETECTING, State)
     with Rung(State == DETECTING):
-        on_delay(DetTimer, preset=500, unit="Tms")
+        on_delay(DetTimer, 500)
     with Rung(State == DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetTimer.Done):
         copy(SORTING, State)
     with Rung(State == SORTING):
-        on_delay(HoldTimer, preset=2000, unit="Tms")
+        on_delay(HoldTimer, 2000)
     with Rung(HoldTimer.Done):
         copy(RESETTING, State)
     with Rung(State == RESETTING):

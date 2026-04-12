@@ -41,7 +41,7 @@ class MyCounter:
 
 ```python
 # TON: auto-reset when rung goes False
-on_delay(OvenTimer, preset=100, unit="Tms")
+on_delay(OvenTimer, preset=100)
 
 # RTON: hold accumulator when rung goes False (manual reset required)
 on_delay(OvenTimer, preset=100) \
@@ -62,7 +62,7 @@ on_delay(OvenTimer, preset=100) \
 ### Off-delay timer (TOF)
 
 ```python
-off_delay(CoolDown, preset=100, unit="Tms")
+off_delay(CoolDown, preset=100)
 ```
 
 **TOF behavior:**
@@ -73,13 +73,15 @@ TOF is non-terminal — instructions can follow it in the same rung.
 
 ### Time units
 
-| Symbol | Unit |
-|--------|------|
-| `"Tms"` | Milliseconds (default) |
-| `"Ts"` | Seconds |
-| `"Tm"` | Minutes |
-| `"Th"` | Hours |
-| `"Td"` | Days |
+| Argument | Aliases | Unit |
+|----------|---------|------|
+| `"ms"` | `"milliseconds"`, `"msec"` | Milliseconds (default) |
+| `"sec"` | `"s"`, `"seconds"` | Seconds |
+| `"min"` | `"m"`, `"minutes"` | Minutes |
+| `"hour"` | `"h"`, `"hr"`, `"hours"` | Hours |
+| `"day"` | `"d"`, `"days"` | Days |
+
+Also accepted: `Tms`/`Ts`/`Tm`/`Th`/`Td` — great for tag names (`FillTimeTm` stays short, and `Tm` sidesteps the minute-vs-minimum ambiguity of `Min`).
 
 The accumulator stores integer ticks in the selected unit. The time unit controls how `dt` is converted to accumulator ticks.
 
@@ -91,9 +93,9 @@ YellowTimer = Timer.clone("YellowTimer")
 RedTimer    = Timer.clone("RedTimer")
 
 with Rung(State == "g"):
-    on_delay(GreenTimer, preset=3000, unit="Tms")
+    on_delay(GreenTimer, preset=3000)
 with Rung(State == "y"):
-    on_delay(YellowTimer, preset=1000, unit="Tms")
+    on_delay(YellowTimer, preset=1000)
 ```
 
 See [Structured Tags](../learn/structured-tags.md) for the full UDT pattern.

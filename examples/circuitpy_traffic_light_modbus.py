@@ -53,17 +53,17 @@ RxExCode = Int("RxExCode", retentive=False)
 with Program() as logic:
     # --- State machine (frozen when ManualOverride is ON) ---
     with Rung(State == "r", ~ManualOverride):
-        on_delay(RedTimer, preset=5000, unit="Tms")
+        on_delay(RedTimer, 5000)
     with Rung(RedTimer.Done):
         copy("g", State)
 
     with Rung(State == "g", ~ManualOverride):
-        on_delay(GreenTimer, preset=4000, unit="Tms")
+        on_delay(GreenTimer, 4000)
     with Rung(GreenTimer.Done):
         copy("y", State)
 
     with Rung(State == "y", ~ManualOverride):
-        on_delay(YellowTimer, preset=1500, unit="Tms")
+        on_delay(YellowTimer, 1500)
     with Rung(YellowTimer.Done):
         copy("r", State)
 
