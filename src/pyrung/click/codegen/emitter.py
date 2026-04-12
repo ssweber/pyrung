@@ -849,7 +849,6 @@ def _render_search_token(
 
 
 def _merge_timer_counter_args(
-    func_name: str,
     done_bit_operand: str,
     collection: _OperandCollection,
 ) -> str | None:
@@ -861,6 +860,57 @@ def _merge_timer_counter_args(
         if decl.done_operand == done_bit_operand:
             return decl.var_name
     return None
+
+
+_FRIENDLY_TIMER_UNITS: dict[str, str] = {
+    "Ts": "sec",
+    "Tm": "min",
+    "Th": "hour",
+    "Td": "day",
+}
+
+
+def _render_timer_counter_call(
+    py_func: str,
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str | None:
+    """Render timer/counter calls using pyrung's modern positional syntax."""
+    if len(args) < 2:
+        return None
+
+    udt_ref = _merge_timer_counter_args(args[0], collection)
+    if udt_ref is None:
+        return None
+
+    rendered_parts: list[str] = [udt_ref]
+    remaining_kwargs: list[str] = []
+    preset_arg: str | None = None
+    unit_arg: str | None = None
+
+    for key, value in kwargs:
+        if key in _DROP_KWARGS:
+            continue
+        if key == "preset":
+            preset_arg = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+            continue
+        if key == "unit":
+            if value != "Tms":
+                friendly = _FRIENDLY_TIMER_UNITS.get(value, value)
+                unit_arg = f'"{friendly}"'
+            continue
+        rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+        remaining_kwargs.append(f"{key}={rendered_v}")
+
+    if preset_arg is not None:
+        rendered_parts.append(preset_arg)
+    if unit_arg is not None:
+        rendered_parts.append(unit_arg)
+    rendered_parts.extend(remaining_kwargs)
+    return f"{py_func}({', '.join(rendered_parts)})"
 
 
 def _render_af_token(
@@ -918,15 +968,16 @@ def _render_af_token(
 
     # Timer/counter instructions: merge done_bit + accumulator into Timer[n]/Counter[n]
     if func_name in {"on_delay", "off_delay", "count_up", "count_down"} and len(args) >= 2:
-        udt_ref = _merge_timer_counter_args(func_name, args[0], collection)
-        if udt_ref is not None:
-            rendered_parts: list[str] = [udt_ref]
-            for key, value in kwargs:
-                if key in _DROP_KWARGS:
-                    continue
-                rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
-                rendered_parts.append(f"{key}={rendered_v}")
-            return f"{py_func}({', '.join(rendered_parts)})"
+        rendered_timer_counter = _render_timer_counter_call(
+            py_func,
+            args,
+            kwargs,
+            collection,
+            nicknames,
+            structured_map,
+        )
+        if rendered_timer_counter is not None:
+            return rendered_timer_counter
 
     rendered_parts = []
     for arg in args:

@@ -6,6 +6,8 @@
 
 `ladder_to_pyrung()` accepts a file path (to a CSV or directory) or a `LadderBundle` for in-memory round-trip without disk I/O.
 
+Generated timer and counter calls use pyrung's modern surface syntax: presets render positionally, the default millisecond unit is omitted, and non-default timer units use friendly strings like `"sec"` and `"hour"`.
+
 ```python
 from pyrung.click import ladder_to_pyrung
 

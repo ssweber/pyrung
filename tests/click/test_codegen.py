@@ -1357,7 +1357,21 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                on_delay(T1, preset=100, unit="Tms").reset(X002)
+                on_delay(T1, 100).reset(X002)
+            """,
+        )
+
+    def test_timer_non_default_unit_uses_friendly_positional_args(self):
+        """Non-default timer units emit friendly positional syntax."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    on_delay(Timer[1], preset=5, unit="Ts")
+            """,
+            """
+            with Rung(X001):
+                on_delay(T1, 5, "sec")
             """,
         )
 
@@ -1371,7 +1385,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                count_up(CT1, preset=10).down(X002).reset(X003)
+                count_up(CT1, 10).down(X002).reset(X003)
             """,
         )
 
@@ -2521,7 +2535,7 @@ class TestNicknameMerge:
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2557,7 +2571,7 @@ class TestNicknameMerge:
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2594,7 +2608,7 @@ class TestNicknameMerge:
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    count_up(PartCounter, preset=10).reset(X002)
+                    count_up(PartCounter, 10).reset(X002)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2631,7 +2645,7 @@ class TestNicknameMerge:
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    on_delay(T1, preset=100, unit="Tms")
+                    on_delay(T1, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2669,7 +2683,7 @@ class TestNicknameMerge:
             # --- Program ---
             with Program(strict=False) as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
                 with Rung(OvenTimer.Done):
                     out(Y001)
