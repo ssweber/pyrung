@@ -102,72 +102,66 @@ Three sentences. They apply to the main program and to subroutines.
 
 ## Coverage checklist
 
-The first tests are the start. Things to add sentences for as we go.
+Each line becomes a sentence, then a ladder, then a row in the report.
 
-**Execution and memory model**
+**Scan**
+- patch values consumed after one scan
+- patch applied before logic, on the same scan
+- forces persist across scans
+- fault flags (SC40/SC43/SC44) auto-clear at scan start
+- fault flags auto-clear only if NOT retriggered same scan
+- first_scan true once
+- first_scan true on scan 0, false on scan 1
+- first_scan re-triggers on STOP→RUN (not just once at power-on)
+- scan clock initial state is False on first scan
+- scan_counter resets on STOP→RUN
+- clock toggles fire at their nominal rate under fixed dt
+- mode_run readable from ladder, false in STOP
+- RTC advances with sim time after set_rtc
+- STOP→RUN clears scan_id and scan_counter
+
+**Rung semantics**
 - rung snapshot on entry
 - conditions before instructions
 - source order within a rung
 - branches AND with parent
 - nested branches all see the same rung-entry snapshot
 - last rung wins on shared coil
-- rung N+1 sees rung N's writes, same scan
-- subroutines: same rules
 - continued rungs share snapshot
 - continued chain breaks on a normal rung
 - empty rung (NOP) executes and survives round-trip
+- subroutines: same rules
+- call into subroutine
+- subroutine memory writes visible immediately (calling rung evaluated, but memory sees writes)
 - forloop runs N times in one scan
 - forloop body sees its own prior-iteration writes
-- NOT CLICK forloop loop.idx for indirect addressing
-- one-shot fires once
-- rise / fall fire one scan
-- rise/fall see the value carried from end of previous scan
-- patch values consumed after one scan
-- patch applied before logic, on the same scan
-- forces persist across scans
-- fault flags (SC40/SC43/SC44) auto-clear at scan start
+- forloop loop.idx indirect addressing
 
-**Numerical limits**
-- Int wrap at 32767
-- Dint wrap at 2^31
-- Word wrap at 65535
-- Real precision (32-bit)
-- timer Acc clamp at 32767
-- counter Acc clamp at Dint range
-- division by zero → 0 + fault
-
-**Defaults and initial values**
+**Memory**
+- rung N+1 sees rung N's writes, same scan
 - Bool default False
 - Int default 0
 - per-slot default override
 - default_factory by address
-- first_scan true once
-- first_scan true on scan 0, false on scan 1
-
-**Retentive**
 - Bool non-retentive by default
 - Int / Dint / Real retentive by default
 - retentive survives STOP→RUN
 - non-retentive resets on STOP→RUN
 - both reset on cold (no battery) reboot
-- STOP→RUN clears scan_id and scan_counter
 
-**calc vs copy**
+**Numerical handling**
+- Int wrap at 32767
+- Dint wrap at 2^31
+- Word wrap at 65535
+- Real precision (32-bit)
+- division by zero → 0 + fault
+- non-finite float (NaN, ±Inf) → 0 + fault
 - copy clamps
 - calc wraps
 - copy argument order is source → dest
 - calc mode inference (hex vs decimal)
 - calc WORD-only infers hex mode
 - calc mixing WORD and non-WORD: validator finding `CLK_CALC_MODE_MIXED`
-- copy converters: to_value, to_ascii, to_text, to_binary
-- to_value vs to_ascii on the same CHAR ('5' → 5 vs 53)
-- to_text suppress_zero default vs fixed-width
-- to_text with termination_code appends one char after the digits
-- blockcopy only supports to_value / to_ascii converters
-- blockcopy length match
-- fill writes constant
-
-**calc intermediates**
 - pyrung uses Python-precision intermediates
 - Click uses 32-bit intermediates
 - agree when intermediates fit in 32 bits
@@ -178,6 +172,9 @@ The first tests are the start. Things to add sentences for as we go.
 **Per instruction**
 - out follows rung
 - out oneshot fires once
+- one-shot fires once
+- rise / fall fire one scan
+- rise/fall see the value carried from end of previous scan
 - latch / reset stickiness
 - on_delay (TON) auto-reset
 - TON drops Acc and Done together when rung goes false
@@ -186,35 +183,47 @@ The first tests are the start. Things to add sentences for as we go.
 - off_delay (TOF) inverse
 - TOF: Done True and Acc 0 while rung True; Acc counts only when rung false
 - off_delay keeps counting after .Done flips, down to Int min
+- timer Acc clamp at 32767
+- timer Acc continues past preset up to 32767 clamp (not just stops at preset)
+- timer fractional ms accumulation across scans — does Click track remainders?
 - timer resumes if preset raised mid-count
 - timer fires immediately if preset lowered below Acc
+- TOF Done flips False when Acc reaches preset (the actual transition)
 - counter increments every scan the rung is true (not per edge)
 - counter resumes if preset raised mid-count
 - counter survives rung going false (no auto-reset)
+- counter Acc clamp at Dint range
 - count_up edge vs level
 - count_down starts at 0, counts negative
-- shift register direction by range order
-- drum events are edge-based
-- search hit / miss / continuous
+- copy converters: to_value, to_ascii, to_text, to_binary
+- to_value vs to_ascii on the same CHAR ('5' → 5 vs 53)
+- to_text suppress_zero default vs fixed-width
+- to_text with termination_code appends one char after the digits
 - copy literal string fans out across consecutive txt slots
 - copy literal string starting at last txt slot — what happens?
+- blockcopy only supports to_value / to_ascii converters
+- blockcopy length match
+- fill writes constant
 - pack_bits / unpack_to_bits
 - pack_bits into REAL stores the raw IEEE-754 bit pattern
 - pack_words / unpack_to_words
 - pack_words first source is the low word
 - pack_text into WORD parses hex; into INT/DINT parses signed decimal
 - pack_text on numeric with leading whitespace faults unless allow_whitespace
+- copy/fill executes every scan while rung true (not edge-triggered)
+- shift register direction by range order
+- shift register: reset takes precedence over clock if both true same scan
+- shift register: rung power is the shift-in value (not a separate input)
+- drum events are edge-based
+- drum pause/reset/jump precedence order
+- drum accumulator resets on step transition
+- search hit / miss / continuous
+- search returns 1-based address (not 0-based), -1 on miss
+- search continuous resumes from last position; result=0 restarts
+- search rung false preserves result and found (no reset)
 - send / receive status tags
 - send/receive success and error pulse for one scan
 - send/receive status tags reset to defaults when rung goes false
+- send/receive values applied atomically (all or none on error)
+- send sparse addresses split into multiple writes
 - exception_response holds last code until next transaction
-- call into subroutine
-- forloop loop.idx indirect addressing
-
-**System points**
-- scan_counter resets on STOP→RUN
-- clock toggles fire at their nominal rate under fixed dt
-- mode_run readable from ladder, false in STOP
-- RTC advances with sim time after set_rtc
-
-Each line becomes a sentence, then a ladder, then a row in the report.
