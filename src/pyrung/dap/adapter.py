@@ -19,6 +19,7 @@ from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
 from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
+    force_patch,
     history_seek,
     lifecycle_launch,
     monitor_data_breakpoints,
@@ -365,6 +366,21 @@ class DAPAdapter:
     def _on_pyrungSeek(self, args: dict[str, Any]) -> HandlerResult:
         return history_seek.on_pyrung_seek(self, args)
 
+    def _on_pyrungForce(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_force(self, args)
+
+    def _on_pyrungUnforce(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_unforce(self, args)
+
+    def _on_pyrungClearForces(self, _args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_clear_forces(self, _args)
+
+    def _on_pyrungPatch(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_patch(self, args)
+
+    def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_list_forces(self, _args)
+
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)
 
@@ -503,13 +519,16 @@ class DAPAdapter:
         if runner is None:
             return None
 
-        return self._formatter.current_trace_body(
+        body = self._formatter.current_trace_body(
             event_result=runner.debug.last_event(),
             current_scan_id=runner.current_state.scan_id,
             trace_version=self.TRACE_VERSION,
             canonical_path=self._canonical_path,
             format_value=self._format_value,
         )
+        if body is not None:
+            body["forces"] = force_patch.json_safe_forces(runner.forces)
+        return body
 
     def _live_trace_body_locked(self) -> dict[str, Any] | None:
         """Build a single merged trace body from the last committed scan."""
@@ -543,6 +562,7 @@ class DAPAdapter:
             "rungId": None,
             "step": None,
             "regions": all_regions,
+            "forces": force_patch.json_safe_forces(runner.forces),
         }
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
