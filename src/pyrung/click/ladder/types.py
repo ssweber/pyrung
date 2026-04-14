@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -109,15 +108,14 @@ class LadderBundle:
             subroutine_dir = output_dir / "subroutines"
             subroutine_dir.mkdir(parents=True, exist_ok=True)
 
-            slug_counts: dict[str, int] = {}
+            name_counts: dict[str, int] = {}
             for subroutine_name, rows in self.subroutine_rows:
-                base_slug = _slugify(subroutine_name)
-                count = slug_counts.get(base_slug, 0)
-                slug_counts[base_slug] = count + 1
-                # Keep filenames unique when multiple subroutines slugify to the same value.
-                slug = base_slug if count == 0 else f"{base_slug}_{count + 1}"
+                count = name_counts.get(subroutine_name, 0)
+                name_counts[subroutine_name] = count + 1
+                # Keep filenames unique when multiple entries share the same name.
+                stem = subroutine_name if count == 0 else f"{subroutine_name}_{count + 1}"
 
-                with (subroutine_dir / f"{slug}.csv").open(
+                with (subroutine_dir / f"{stem}.csv").open(
                     "w", encoding="utf-8", newline=""
                 ) as handle:
                     writer = csv.writer(handle)
@@ -152,15 +150,6 @@ class _ConditionRow:
 class _OutputSlot:
     output_token: str
     local_conditions: tuple[Condition, ...] = ()
-
-
-# ---- Internal helpers ----
-def _slugify(name: str) -> str:
-    # Insert underscores at CamelCase boundaries (e.g. AlarmHandler → Alarm_Handler)
-    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
-    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
-    slug = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
-    return slug if slug else "subroutine"
 
 
 __all__ = [

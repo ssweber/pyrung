@@ -431,7 +431,7 @@ def test_forloop_lowers_to_for_body_and_next_rows():
     )
 
 
-def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
+def test_subroutine_files_sorted_and_return_tailed(tmp_path: Path):
     Start = Bool("Start")
     SubOut = Bool("SubOut")
 
@@ -475,7 +475,7 @@ def test_subroutine_files_sorted_slugged_and_return_tailed(tmp_path: Path):
     bundle.write(out_dir)
     assert (out_dir / "main.csv").exists()
     assert (out_dir / "subroutines" / "alpha.csv").exists()
-    assert (out_dir / "subroutines" / "beta_two.csv").exists()
+    assert (out_dir / "subroutines" / "beta-two.csv").exists()
 
 
 def test_string_token_rendering_uses_doubled_quotes_without_backslash_escapes():
