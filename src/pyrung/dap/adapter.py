@@ -528,6 +528,11 @@ class DAPAdapter:
         )
         if body is not None:
             body["forces"] = force_patch.json_safe_forces(runner.forces)
+            body["tagValues"] = {
+                name: self._format_value(value) for name, value in runner.current_state.tags.items()
+            }
+            body["tagTypes"] = self._tag_types_locked(runner)
+            body["tagGroups"] = self._tag_groups_locked(runner)
         return body
 
     def _live_trace_body_locked(self) -> dict[str, Any] | None:
@@ -544,8 +549,11 @@ class DAPAdapter:
                 continue
             if not trace.events:
                 continue
+            # Use the first event (parent rung step) which contains regions
+            # for the rung itself and all its branches.  The later events are
+            # individual branch steps that duplicate subsets of the same regions.
             body = self._formatter.current_trace_body(
-                event_result=(scan_id, rung_id, trace.events[-1]),
+                event_result=(scan_id, rung_id, trace.events[0]),
                 current_scan_id=scan_id,
                 trace_version=self.TRACE_VERSION,
                 canonical_path=self._canonical_path,
@@ -563,6 +571,11 @@ class DAPAdapter:
             "step": None,
             "regions": all_regions,
             "forces": force_patch.json_safe_forces(runner.forces),
+            "tagValues": {
+                name: self._format_value(value) for name, value in runner.current_state.tags.items()
+            },
+            "tagTypes": self._tag_types_locked(runner),
+            "tagGroups": self._tag_groups_locked(runner),
         }
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
@@ -586,6 +599,22 @@ class DAPAdapter:
         if isinstance(value, str):
             return value
         return repr(value)
+
+    @staticmethod
+    def _tag_types_locked(runner: Any) -> dict[str, str]:
+        return {
+            name: tag.type.value
+            for name, tag in runner._known_tags_by_name.items()
+        }
+
+    @staticmethod
+    def _tag_groups_locked(runner: Any) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {}
+        for name, tag in runner._known_tags_by_name.items():
+            group = getattr(tag, "_pyrung_structure_name", None)
+            if group is not None:
+                groups.setdefault(group, []).append(name)
+        return groups
 
     def _parse_literal(self, raw_value: str) -> bool | int | float | str:
         text = raw_value.strip()

@@ -3019,7 +3019,7 @@ def test_pyrung_force_requires_bool_or_number_value(tmp_path: Path):
     assert "must be a bool or number" in response["message"]
 
 
-def test_pyrung_unforce_unknown_tag_returns_error(tmp_path: Path):
+def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3031,8 +3031,7 @@ def test_pyrung_unforce_unknown_tag_returns_error(tmp_path: Path):
         adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Nonexistent"}
     )
     response = _single_response(messages)
-    assert response["success"] is False
-    assert "unknown tag: Nonexistent" in response["message"]
+    assert response["success"] is True
 
 
 def test_pyrung_unforce_requires_tag(tmp_path: Path):
@@ -3083,6 +3082,85 @@ def test_pyrung_patch_requires_bool_or_number_value(tmp_path: Path):
     assert "must be a bool or number" in response["message"]
 
 
+def test_pyrung_patch_batch_applies_multiple_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungPatch",
+        arguments={"patches": {"Button": True, "Light": True}},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    # Patches do NOT appear in forces
+    assert "Button" not in adapter._runner.forces
+    assert "Light" not in adapter._runner.forces
+
+
+def test_pyrung_patch_batch_empty_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"patches": {}}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must not be empty" in response["message"]
+
+
+def test_pyrung_patch_batch_invalid_value_type_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungPatch",
+        arguments={"patches": {"Button": "yes"}},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be a bool or number" in response["message"]
+
+
+def test_pyrung_patch_batch_not_a_dict_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"patches": [1, 2]}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be an object" in response["message"]
+
+
 def test_trace_forces_field_empty_when_no_forces(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
@@ -3131,6 +3209,103 @@ def test_trace_forces_field_present_after_force_and_unforce(tmp_path: Path):
     traces = _trace_events(messages)
     assert traces
     assert traces[0]["body"]["forces"] == {}
+
+
+def test_trace_tag_values_present_on_step(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert "tagValues" in body
+    tag_values = body["tagValues"]
+    assert isinstance(tag_values, dict)
+    assert "Button" in tag_values
+    assert "Light" in tag_values
+
+
+def test_trace_tag_values_reflect_forced_state(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force Button to True
+    _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+
+    messages = _send_request(adapter, out_stream, seq=5, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    tag_values = traces[0]["body"]["tagValues"]
+    # Forced value should be reflected in tagValues
+    assert tag_values["Button"] == "True"
+
+
+def test_trace_tag_groups_for_structured_tags(tmp_path: Path):
+    """tagGroups maps structure name to its member tag names."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _chained_builder_debug_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert "tagGroups" in body
+    tag_groups = body["tagGroups"]
+    assert isinstance(tag_groups, dict)
+
+    # Counter[1] and Timer[1] are structured UDTs — they should produce groups
+    assert "Counter" in tag_groups
+    assert "Timer" in tag_groups
+    assert "Counter2" in tag_groups
+
+    # Each group should list its member tag names (Done, Acc, etc.)
+    counter_members = tag_groups["Counter"]
+    assert isinstance(counter_members, list)
+    assert len(counter_members) >= 2  # at least Done + Acc
+    assert any("Done" in m for m in counter_members)
+    assert any("Acc" in m for m in counter_members)
+
+
+def test_trace_tag_groups_empty_for_plain_tags(tmp_path: Path):
+    """Programs with only plain tags should have an empty tagGroups."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert body["tagGroups"] == {}
 
 
 def test_existing_debug_console_force_commands_still_work(tmp_path: Path):

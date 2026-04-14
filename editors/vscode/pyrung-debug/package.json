@@ -23,7 +23,8 @@
     "onCommand:pyrung.findLabel",
     "onCommand:pyrung.monitorMenu",
     "onCommand:pyrung.toggleRapidStep",
-    "onCommand:pyrung.configureRapidStep"
+    "onCommand:pyrung.configureRapidStep",
+    "onCommand:pyrung.addToDataView"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -51,6 +52,10 @@
       {
         "command": "pyrung.configureRapidStep",
         "title": "pyrung: Configure Rapid Step"
+      },
+      {
+        "command": "pyrung.addToDataView",
+        "title": "pyrung: Add to Data View"
       }
     ],
     "views": {
@@ -60,6 +65,21 @@
           "id": "pyrung.historySlider",
           "name": "History",
           "when": "debugType == 'pyrung'"
+        },
+        {
+          "type": "webview",
+          "id": "pyrung.dataView",
+          "name": "Data View",
+          "when": "debugType == 'pyrung'"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "pyrung.addToDataView",
+          "when": "debugType == 'pyrung'",
+          "group": "pyrung"
         }
       ]
     },

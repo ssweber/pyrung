@@ -74,13 +74,13 @@ def on_pyrung_unforce(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         runner = adapter._require_runner_locked()
         try:
             runner.unforce(tag_name)
-        except KeyError as exc:
-            raise adapter.DAPAdapterError(f"unknown tag: {tag_name}") from exc
+        except KeyError:
+            pass  # already not forced — idempotent
         except ValueError as exc:
-            raise adapter.DAPAdapterError(f"cannot force: {exc}") from exc
+            raise adapter.DAPAdapterError(f"cannot unforce: {exc}") from exc
         except Exception as exc:
             raise adapter.DAPAdapterError(
-                f"force operation failed: {type(exc).__name__}: {exc}"
+                f"unforce operation failed: {type(exc).__name__}: {exc}"
             ) from exc
     return {}, []
 
@@ -98,6 +98,11 @@ def on_pyrung_clear_forces(adapter: Any, _args: dict[str, Any]) -> HandlerResult
 
 
 def on_pyrung_patch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
+    # Batch form: {patches: {tag: value, ...}}
+    if isinstance(args, dict) and "patches" in args:
+        return _on_pyrung_patch_batch(adapter, args)
+
+    # Single-tag form: {tag, value}
     parsed = adapter._parse_request_args(_PatchRequestArgs, args)
     tag_name = _require_tag(parsed, prefix="pyrungPatch", error=adapter.DAPAdapterError)
     value = _require_value(parsed, prefix="pyrungPatch", error=adapter.DAPAdapterError)
@@ -108,6 +113,38 @@ def on_pyrung_patch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             runner.patch({tag_name: value})
         except KeyError as exc:
             raise adapter.DAPAdapterError(f"unknown tag: {tag_name}") from exc
+        except ValueError as exc:
+            raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
+        except TypeError as exc:
+            raise adapter.DAPAdapterError(str(exc)) from exc
+        except Exception as exc:
+            raise adapter.DAPAdapterError(
+                f"patch operation failed: {type(exc).__name__}: {exc}"
+            ) from exc
+    return {}, []
+
+
+def _on_pyrung_patch_batch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
+    patches = args["patches"]
+    if not isinstance(patches, dict):
+        raise adapter.DAPAdapterError("pyrungPatch.patches must be an object")
+    if not patches:
+        raise adapter.DAPAdapterError("pyrungPatch.patches must not be empty")
+    for tag_name, value in patches.items():
+        if not isinstance(tag_name, str) or not tag_name.strip():
+            raise adapter.DAPAdapterError("pyrungPatch.patches keys must be non-empty strings")
+        if not isinstance(value, (bool, int, float)):
+            raise adapter.DAPAdapterError(
+                f"pyrungPatch.patches[{tag_name!r}] must be a bool or number"
+            )
+    cleaned = {k.strip(): v for k, v in patches.items()}
+
+    with adapter._state_lock:
+        runner = adapter._require_runner_locked()
+        try:
+            runner.patch(cleaned)
+        except KeyError as exc:
+            raise adapter.DAPAdapterError(f"unknown tag: {exc}") from exc
         except ValueError as exc:
             raise adapter.DAPAdapterError(f"cannot patch: {exc}") from exc
         except TypeError as exc:

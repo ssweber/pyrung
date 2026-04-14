@@ -1,5 +1,11 @@
 const path = require("path");
 const vscode = require("vscode");
+const {
+  stripCommentsAndStrings,
+  extractReferences,
+  lookupName,
+  isLookupCandidate,
+} = require("./inlineValuesProvider");
 
 // --- Configuration ---
 // Centralized settings to easily adjust colors, borders, and opacities
@@ -39,6 +45,10 @@ const DECORATION_SETTINGS = {
     margin: "0 0 0 2em",
     color: "testing.iconSkipped",
     fontStyle: "italic",
+  },
+  tagValue: {
+    margin: "0 0 0 1em",
+    color: "editorCodeLens.foreground",
   },
 };
 
@@ -83,6 +93,13 @@ class PyrungDecorationController {
         color: new vscode.ThemeColor(DECORATION_SETTINGS.conditionSkipped.color),
       },
     });
+
+    this._tagValueDecoration = vscode.window.createTextEditorDecorationType({
+      after: {
+        ...DECORATION_SETTINGS.tagValue,
+        color: new vscode.ThemeColor(DECORATION_SETTINGS.tagValue.color),
+      },
+    });
   }
 
   dispose() {
@@ -92,6 +109,7 @@ class PyrungDecorationController {
     this._conditionTrueDecoration.dispose();
     this._conditionFalseDecoration.dispose();
     this._conditionSkippedDecoration.dispose();
+    this._tagValueDecoration.dispose();
   }
 
   handleAdapterMessage(message) {
@@ -175,6 +193,7 @@ class PyrungDecorationController {
       editor.setDecorations(this._conditionTrueDecoration, []);
       editor.setDecorations(this._conditionFalseDecoration, []);
       editor.setDecorations(this._conditionSkippedDecoration, []);
+      editor.setDecorations(this._tagValueDecoration, []);
       return;
     }
 
@@ -257,6 +276,110 @@ class PyrungDecorationController {
     editor.setDecorations(this._conditionTrueDecoration, this._annotationOptions(conditionBuckets.true));
     editor.setDecorations(this._conditionFalseDecoration, this._annotationOptions(conditionBuckets.false));
     editor.setDecorations(this._conditionSkippedDecoration, this._annotationOptions(conditionBuckets.skipped));
+    editor.setDecorations(this._tagValueDecoration, this._tagValueOptions(editor, trace, conditionLines));
+  }
+
+  _tagValueOptions(editor, trace, conditionLines) {
+    const tagValues = trace.tagValues;
+    if (!tagValues || typeof tagValues !== "object") {
+      return [];
+    }
+
+    const tagGroups = trace.tagGroups || {};
+
+    // Only show tag values inside Rung blocks
+    const rungBodyLines = this._rungBodyLines(editor);
+
+    const options = [];
+    for (const lineIdx of rungBodyLines) {
+      const lineNum = lineIdx + 1;
+      if (conditionLines.has(lineNum)) continue;
+
+      const sourceLine = editor.document.lineAt(lineIdx).text;
+      const code = stripCommentsAndStrings(sourceLine);
+      const refs = extractReferences(code);
+      const lineValues = [];
+      const seenNames = new Set();
+
+      for (const ref of refs) {
+        if (!isLookupCandidate(code, ref.name, ref.startCol, ref.endCol)) continue;
+        const name = lookupName(ref.name);
+        if (seenNames.has(name)) continue;
+        seenNames.add(name);
+
+        if (name in tagValues) {
+          lineValues.push(`${ref.name} = ${tagValues[name]}`);
+        } else {
+          // Expand structured tag groups (Timer, Counter UDTs)
+          const members = this._resolveGroupMembers(name, tagGroups);
+          if (members) {
+            for (const { field, tagName } of members) {
+              if (tagName in tagValues) {
+                lineValues.push(`.${field} = ${tagValues[tagName]}`);
+              }
+            }
+          }
+        }
+      }
+
+      if (lineValues.length > 0) {
+        options.push({
+          range: new vscode.Range(lineIdx, Number.MAX_VALUE, lineIdx, Number.MAX_VALUE),
+          renderOptions: {
+            after: {
+              contentText: `  ${lineValues.join(" ; ")}`,
+            },
+          },
+        });
+      }
+    }
+    return options;
+  }
+
+  _rungBodyLines(editor) {
+    const lines = new Set();
+    let rungIndent = -1;
+    const lineCount = editor.document.lineCount;
+
+    for (let lineIdx = 0; lineIdx < lineCount; lineIdx++) {
+      const text = editor.document.lineAt(lineIdx).text;
+      const indent = text.search(/\S/);
+      if (indent === -1) continue;
+      if (/^\s*with\s+Rung\s*\(/.test(text)) {
+        rungIndent = indent;
+        lines.add(lineIdx);
+      } else if (rungIndent >= 0 && indent > rungIndent) {
+        lines.add(lineIdx);
+      } else {
+        rungIndent = -1;
+      }
+    }
+    return lines;
+  }
+
+  _resolveGroupMembers(name, tagGroups) {
+    // Exact match: "HoldTimer" is a group key
+    if (name in tagGroups) {
+      return tagGroups[name].map((member) => {
+        const suffix = member.slice(name.length).replace(/^\d*_/, "");
+        return { field: suffix, tagName: member };
+      });
+    }
+    // Indexed match: "Counter1" → group "Counter", filter members starting with "Counter1_"
+    for (const groupKey of Object.keys(tagGroups)) {
+      const tail = name.slice(groupKey.length);
+      if (name.startsWith(groupKey) && /^\d+$/.test(tail)) {
+        const prefix = name + "_";
+        const filtered = tagGroups[groupKey]
+          .filter((m) => m.startsWith(prefix))
+          .map((member) => ({
+            field: member.slice(prefix.length),
+            tagName: member,
+          }));
+        if (filtered.length > 0) return filtered;
+      }
+    }
+    return null;
   }
 
   _conditionText(condition) {

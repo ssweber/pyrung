@@ -1,9 +1,16 @@
 const vscode = require("vscode");
 
 const { PyrungAdapterFactory } = require("./adapterFactory");
+const { PyrungDataViewProvider } = require("./dataViewProvider");
 const { PyrungDecorationController } = require("./decorationController");
 const { PyrungHistorySliderProvider } = require("./historySlider");
-const { PyrungInlineValuesProvider } = require("./inlineValuesProvider");
+const {
+  PyrungInlineValuesProvider,
+  lookupName,
+  stripCommentsAndStrings,
+  extractReferences,
+  isLookupCandidate,
+} = require("./inlineValuesProvider");
 
 function isPyrungSession(session) {
   return Boolean(session) && session.type === "pyrung";
@@ -28,8 +35,12 @@ exports.activate = function (context) {
     getConditionLinesForDocument: (document) => decorator.conditionLinesForDocument(document),
   });
   const historySlider = new PyrungHistorySliderProvider();
+  const dataView = new PyrungDataViewProvider();
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("pyrung.historySlider", historySlider)
+  );
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("pyrung.dataView", dataView)
   );
 
   const output = vscode.window.createOutputChannel("pyrung: Debug Events");
@@ -474,7 +485,12 @@ exports.activate = function (context) {
               return;
             }
 
-            if (message.event === "pyrungMonitor") {
+            if (message.event === "pyrungTrace") {
+              const body = message.body || {};
+              if (body.tagValues) {
+                dataView.updateTrace(body.tagValues, body.forces || {}, body.tagTypes || {}, body.tagGroups || {});
+              }
+            } else if (message.event === "pyrungMonitor") {
               const body = message.body || {};
               output.appendLine(
                 `[scan ${body.scanId}] ${body.tag}: ${body.previous} -> ${body.current}`
@@ -486,6 +502,7 @@ exports.activate = function (context) {
               sessionExecutionState.set(session.id, "stopped");
               historySlider.setSession(session);
               historySlider.refresh();
+              dataView.setSession(session);
               if (
                 rapidState.enabled &&
                 rapidState.sessionId === session.id &&
@@ -511,6 +528,7 @@ exports.activate = function (context) {
               }
               setMonitorStatus(0);
               historySlider.setSession(null);
+              dataView.setSession(null);
             }
           },
         };
@@ -541,6 +559,7 @@ exports.activate = function (context) {
         }
         setMonitorStatus(0);
         historySlider.setSession(null);
+        dataView.setSession(null);
       }
     })
   );
@@ -561,6 +580,55 @@ exports.activate = function (context) {
   context.subscriptions.push(vscode.commands.registerCommand("pyrung.toggleRapidStep", toggleRapidStep));
   context.subscriptions.push(
     vscode.commands.registerCommand("pyrung.configureRapidStep", configureRapidStep)
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pyrung.addToDataView", () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) return;
+      const selection = editor.selection;
+
+      if (selection.isEmpty) {
+        // Single cursor: add the tag under the cursor
+        const wordRange = editor.document.getWordRangeAtPosition(
+          selection.active,
+          /[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?)*/
+        );
+        if (!wordRange) return;
+        const word = editor.document.getText(wordRange);
+        dataView.addTag(lookupName(word));
+      } else {
+        // Selection: add tags only from lines inside Rung blocks
+        const rungLines = new Set();
+        let rungIndent = -1;
+        for (let lineIdx = selection.start.line; lineIdx <= selection.end.line; lineIdx++) {
+          const text = editor.document.lineAt(lineIdx).text;
+          const indent = text.search(/\S/);
+          if (indent === -1) continue;
+          if (/^\s*with\s+Rung\s*\(/.test(text)) {
+            rungIndent = indent;
+            rungLines.add(lineIdx);
+          } else if (rungIndent >= 0 && indent > rungIndent) {
+            rungLines.add(lineIdx);
+          } else {
+            rungIndent = -1;
+          }
+        }
+
+        const added = new Set();
+        for (const lineIdx of rungLines) {
+          const sourceLine = editor.document.lineAt(lineIdx).text;
+          const code = stripCommentsAndStrings(sourceLine);
+          const refs = extractReferences(code);
+          for (const ref of refs) {
+            if (!isLookupCandidate(code, ref.name, ref.startCol, ref.endCol)) continue;
+            const name = lookupName(ref.name);
+            if (added.has(name)) continue;
+            added.add(name);
+            dataView.addTag(name);
+          }
+        }
+      }
+    })
   );
 };
 
