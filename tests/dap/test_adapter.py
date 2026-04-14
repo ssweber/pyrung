@@ -2730,3 +2730,100 @@ def test_pyrung_seek_updates_playhead(tmp_path: Path):
     messages = _send_request(adapter, out_stream, seq=5, command="pyrungHistoryInfo")
     info_after_seek = _single_response(messages)["body"]
     assert info_after_seek["playhead"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Live trace emission during continue
+# ---------------------------------------------------------------------------
+
+
+def test_continue_emits_live_traces_with_step_none(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    # Let the continue thread complete some scans before pausing.
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+
+    # Collect all messages until the pause stop.
+    live_traces: list[dict[str, Any]] = []
+    on_stop_traces: list[dict[str, Any]] = []
+    stopped = False
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        live_traces.extend(
+            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is None
+        )
+        on_stop_traces.extend(
+            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is not None
+        )
+        if _stopped_events(flushed):
+            stopped = True
+            break
+
+    assert stopped, "Expected pause stop"
+    assert len(live_traces) >= 1, "Expected at least one live trace with step=None"
+    for trace in live_traces:
+        assert trace["body"]["step"] is None
+    assert len(on_stop_traces) >= 1, "Expected on-stop trace with step populated"
+
+
+def test_continue_live_trace_requires_configuration_done(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    # Deliberately omit configurationDone.
+
+    _send_request(adapter, out_stream, seq=2, command="continue")
+    _drain_messages(out_stream)
+
+    # Let the continue thread run — scans complete, but no live traces should emit.
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=3, command="pause")
+    _drain_messages(out_stream)
+
+    live_traces: list[dict[str, Any]] = []
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        live_traces.extend(
+            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is None
+        )
+        if _stopped_events(flushed):
+            break
+
+    assert live_traces == [], "No live traces should emit without configurationDone"
+
+
+def test_continue_live_trace_not_emitted_during_step(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    # Perform several step-next commands.
+    for seq_num in range(3, 8):
+        messages = _send_request(adapter, out_stream, seq=seq_num, command="next")
+        traces = _trace_events(messages)
+        for trace in traces:
+            assert trace["body"]["step"] is not None, (
+                "Step commands should never emit traces with step=None"
+            )

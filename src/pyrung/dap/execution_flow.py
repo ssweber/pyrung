@@ -93,16 +93,36 @@ def on_pause(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def continue_worker(adapter: Any) -> None:
+    last_emit_time = 0.0
+
+    def _emit_live_trace(*, force: bool = False) -> None:
+        nonlocal last_emit_time
+        if not adapter._configuration_done:
+            return
+        now = time.monotonic()
+        if not force and (now - last_emit_time) < 0.033:
+            return
+        with adapter._state_lock:
+            bodies = adapter._live_trace_bodies_locked()
+        if not bodies:
+            return
+        for body in bodies:
+            body["step"] = None
+            adapter._enqueue_internal_event("pyrungTrace", body)
+        last_emit_time = now
+
     try:
         adapter._pending_predicate_pause = False
         while not adapter._stop_event.is_set():
             if adapter._pause_event.is_set():
+                _emit_live_trace(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("pause"))
                 return
 
             with adapter._state_lock:
                 if adapter._runner is None:
                     return
+                old_scan_id = adapter._current_scan_id
                 advanced = adapter._advance_one_step_locked()
                 adapter._flush_pending_snapshots_locked()
                 hit_breakpoint = adapter._current_rung_hits_breakpoint_locked()
@@ -110,17 +130,27 @@ def continue_worker(adapter: Any) -> None:
                 hit_data_breakpoint = adapter._pending_predicate_pause
                 if hit_data_breakpoint:
                     adapter._pending_predicate_pause = False
+                scan_completed = (
+                    advanced and old_scan_id is not None and adapter._current_scan_id != old_scan_id
+                )
+
+            if scan_completed:
+                _emit_live_trace()
 
             if hit_breakpoint:
+                _emit_live_trace(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("breakpoint"))
                 return
 
             if hit_data_breakpoint:
+                _emit_live_trace(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("data breakpoint"))
                 return
 
             if not advanced:
                 time.sleep(0.005)
+
+        _emit_live_trace(force=True)
     finally:
         with adapter._state_lock:
             adapter._continue_thread = None

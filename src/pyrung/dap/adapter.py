@@ -153,6 +153,14 @@ class DAPAdapter:
     def _pending_predicate_pause(self, value: bool) -> None:
         self._session.pending_predicate_pause = value
 
+    @property
+    def _configuration_done(self) -> bool:
+        return self._session.configuration_done
+
+    @_configuration_done.setter
+    def _configuration_done(self, value: bool) -> None:
+        self._session.configuration_done = value
+
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
         self._reader_thread = threading.Thread(
@@ -502,6 +510,31 @@ class DAPAdapter:
             canonical_path=self._canonical_path,
             format_value=self._format_value,
         )
+
+    def _live_trace_bodies_locked(self) -> list[dict[str, Any]]:
+        """Build per-rung trace bodies from the last committed scan."""
+        runner = self._runner
+        if runner is None:
+            return []
+        scan_id = runner.current_state.scan_id
+        bodies: list[dict[str, Any]] = []
+        for rung_id, _rung in enumerate(runner.debug.iter_top_level_rungs()):
+            try:
+                trace = runner.debug.rung_trace(rung_id, scan_id)
+            except KeyError:
+                continue
+            if not trace.events:
+                continue
+            body = self._formatter.current_trace_body(
+                event_result=(scan_id, rung_id, trace.events[-1]),
+                current_scan_id=scan_id,
+                trace_version=self.TRACE_VERSION,
+                canonical_path=self._canonical_path,
+                format_value=self._format_value,
+            )
+            if body is not None:
+                bodies.append(body)
+        return bodies
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
         return {"reason": reason, "threadId": self.THREAD_ID, "allThreadsStopped": True}

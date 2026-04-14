@@ -22,3 +22,4 @@ class DebugSession:
     current_ctx: ScanContext | None = None
     program_path: str | None = None
     pending_predicate_pause: bool = False
+    configuration_done: bool = False
