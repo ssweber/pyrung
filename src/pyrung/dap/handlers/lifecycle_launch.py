@@ -33,6 +33,7 @@ def on_initialize(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def on_configuration_done(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._configuration_done = True
     return {}, []
 
 
@@ -80,6 +81,7 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         adapter._current_rung_index = None
         adapter._current_rung = None
         adapter._current_ctx = None
+        adapter._configuration_done = False
         adapter._program_path = str(program_path)
         adapter._breakpoints.clear()
         adapter._pending_predicate_pause = False
@@ -117,6 +119,7 @@ def shutdown(adapter: Any) -> HandlerResult:
         adapter._current_rung_index = None
         adapter._current_rung = None
         adapter._current_ctx = None
+        adapter._configuration_done = False
     adapter._stop_event.set()
     adapter._pause_event.set()
     return {}, [("terminated", {})]
