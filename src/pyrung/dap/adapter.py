@@ -394,6 +394,9 @@ class DAPAdapter:
     def _on_pyrungSlice(self, args: dict[str, Any]) -> HandlerResult:
         return graph_slice.on_pyrung_slice(self, args)
 
+    def _on_pyrungQuery(self, args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_query(self, args)
+
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)
 

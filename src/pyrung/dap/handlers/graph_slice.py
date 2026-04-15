@@ -1,6 +1,6 @@
-"""Program graph and slice request handling for the DAP adapter.
+"""Program graph, slice, and query request handling for the DAP adapter.
 
-Owns pyrungGraph and pyrungSlice custom requests.
+Owns pyrungGraph, pyrungSlice, and pyrungQuery custom requests.
 """
 
 from __future__ import annotations
@@ -8,13 +8,63 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from pyrung.core.analysis.dataview import DataView
+
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
+
+_ROLE_PREFIXES = {
+    "i": "inputs",
+    "p": "pivots",
+    "t": "terminals",
+    "x": "isolated",
+}
+
+_SLICE_PREFIXES = {"upstream", "downstream"}
+
+
+def _parse_query(query: str, view: DataView) -> DataView:
+    """Parse a query string and chain DataView operations.
+
+    Syntax (space-separated tokens, applied left to right):
+    - ``btn``                bare text → ``.contains("btn")``
+    - ``i:``                 role prefix → ``.inputs()``
+    - ``i:btn``              role + text → ``.inputs().contains("btn")``
+    - ``upstream:Running``   slice → ``.upstream("Running")``
+    - ``downstream:Tag``     slice → ``.downstream("Tag")``
+    """
+    tokens = query.split()
+    for token in tokens:
+        if ":" in token:
+            prefix, _, arg = token.partition(":")
+            prefix_lower = prefix.lower()
+
+            if prefix_lower in _ROLE_PREFIXES:
+                method = getattr(view, _ROLE_PREFIXES[prefix_lower])
+                view = method()
+                if arg:
+                    view = view.contains(arg)
+            elif prefix_lower in _SLICE_PREFIXES:
+                if not arg:
+                    continue
+                method = getattr(view, prefix_lower)
+                view = method(arg)
+            else:
+                # Unknown prefix — treat whole token as contains text
+                view = view.contains(token)
+        else:
+            view = view.contains(token)
+    return view
 
 
 @dataclass(frozen=True)
 class _SliceRequestArgs:
     tag: Any = None
     direction: Any = None
+
+
+@dataclass(frozen=True)
+class _QueryRequestArgs:
+    query: Any = None
 
 
 def on_pyrung_graph(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
@@ -76,3 +126,23 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
                 slice_edges.append(edge)
 
     return {"tags": sorted(all_tags), "edges": slice_edges}, []
+
+
+def on_pyrung_query(adapter: Any, args: dict[str, Any]) -> HandlerResult:
+    """Execute a DataView query and return matching tags with roles."""
+    parsed = adapter._parse_request_args(_QueryRequestArgs, args)
+
+    if not isinstance(parsed.query, str) or not parsed.query.strip():
+        raise adapter.DAPAdapterError("pyrungQuery.query must be a non-empty string")
+
+    with adapter._state_lock:
+        runner = adapter._require_runner_locked()
+
+    view = runner.program.dataview()
+    result = _parse_query(parsed.query.strip(), view)
+    roles = result.roles()
+
+    return {
+        "tags": sorted(result.tags),
+        "roles": {name: role.value for name, role in sorted(roles.items())},
+    }, []

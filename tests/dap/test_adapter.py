@@ -3854,3 +3854,131 @@ def test_pyrung_slice_requires_valid_direction(tmp_path: Path):
     )
     response = _single_response(messages)
     assert response["success"] is False
+
+
+# ------------------------------------------------------------------
+# pyrungQuery
+# ------------------------------------------------------------------
+
+
+def _query_adapter(tmp_path: Path):
+    """Set up an adapter with the graph script launched, return (adapter, out_stream)."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+def test_pyrung_query_bare_contains(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "Relay"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Relay" in response["body"]["tags"]
+    assert "Button" not in response["body"]["tags"]
+
+
+def test_pyrung_query_role_filter(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # i: should return only inputs (Button)
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "i:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" in response["body"]["tags"]
+    assert "Relay" not in response["body"]["tags"]
+    assert "Light" not in response["body"]["tags"]
+
+
+def test_pyrung_query_role_with_contains(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # t:Light — terminals matching "Light"
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "t:Light"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["tags"] == ["Light"]
+
+
+def test_pyrung_query_upstream_slice(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "upstream:Light"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" in response["body"]["tags"]
+    assert "Relay" in response["body"]["tags"]
+    # upstream excludes the tag itself
+    assert "Light" not in response["body"]["tags"]
+
+
+def test_pyrung_query_downstream_slice(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungQuery",
+        arguments={"query": "downstream:Button"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Relay" in response["body"]["tags"]
+    assert "Light" in response["body"]["tags"]
+
+
+def test_pyrung_query_chained(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # upstream:Light + p: — upstream of Light, filtered to pivots only
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungQuery",
+        arguments={"query": "upstream:Light p:"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["tags"] == ["Relay"]
+
+
+def test_pyrung_query_returns_roles(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "i:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["roles"]["Button"] == "input"
+
+
+def test_pyrung_query_empty_string_fails(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": ""}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_query_missing_query_fails(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungQuery", arguments={})
+    response = _single_response(messages)
+    assert response["success"] is False

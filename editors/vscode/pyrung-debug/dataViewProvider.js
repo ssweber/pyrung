@@ -6,6 +6,7 @@ class PyrungDataViewProvider {
   constructor(options = {}) {
     this._view = null;
     this._session = null;
+    this._graphData = null;
     this._watchedTags = new Set();
     this._watchedGroups = new Set();
     this._watchedItems = [];
@@ -147,6 +148,17 @@ class PyrungDataViewProvider {
         } catch (error) {
           this._postError(`Patch failed: ${error}`);
         }
+      } else if (message.type === "addTagFromQuery" && message.tag) {
+        this.addTag(message.tag);
+      } else if (message.type === "query" && message.query && this._session) {
+        try {
+          const result = await this._session.customRequest("pyrungQuery", {
+            query: message.query,
+          });
+          this._postMessage({ type: "queryResults", query: message.query, ...result });
+        } catch (error) {
+          this._postMessage({ type: "queryResults", query: message.query, tags: [], roles: {} });
+        }
       }
     });
 
@@ -162,13 +174,24 @@ class PyrungDataViewProvider {
         this._postMessage({ type: "addTag", tag: item.name });
       }
     }
+
+    // Send cached graph data if available
+    if (this._graphData) {
+      this._postMessage({ type: "graphData", data: this._graphData });
+    }
   }
 
   setSession(session) {
     this._session = session;
     if (!session) {
+      this._graphData = null;
       this._postMessage({ type: "reset" });
     }
+  }
+
+  updateGraph(graphData) {
+    this._graphData = graphData;
+    this._postMessage({ type: "graphData", data: graphData });
   }
 
   addTag(tagName) {
@@ -456,9 +479,79 @@ class PyrungDataViewProvider {
     font-size: 0.9em;
     padding: 4px 0;
   }
+  /* Query search bar */
+  .search-bar {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+    align-items: center;
+  }
+  .search-input {
+    flex: 1;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #444));
+    padding: 3px 6px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--vscode-editor-font-size);
+  }
+  .search-input:focus { outline: 1px solid var(--vscode-focusBorder); }
+  .search-input::placeholder { color: var(--vscode-input-placeholderForeground); }
+  /* Query results */
+  .query-results {
+    margin-bottom: 6px;
+    max-height: 150px;
+    overflow-y: auto;
+  }
+  .query-result-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 4px;
+    cursor: pointer;
+    font-family: var(--vscode-editor-font-family);
+    font-size: var(--vscode-editor-font-size);
+  }
+  .query-result-item:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
+  .query-role {
+    font-size: 0.75em;
+    padding: 0 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+  .query-role.input { color: #4A90D9; }
+  .query-role.pivot { color: #D9A441; }
+  .query-role.terminal { color: #5CB85C; }
+  .query-role.isolated { color: #888; }
+  /* Edge expansion */
+  .edge-row td {
+    padding: 1px 4px 1px 2em;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    border: none;
+  }
+  .edge-row .edge-arrow { opacity: 0.6; }
+  .edge-row .edge-tag {
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+  }
+  .edge-row .edge-tag:hover {
+    color: var(--vscode-foreground);
+  }
+  .edge-row.decay-1 { opacity: 0.6; }
+  .edge-row.decay-2 { opacity: 0.35; }
 </style>
 </head>
 <body>
+  <div class="search-bar" id="search-bar">
+    <input class="search-input" id="search-input" type="text" placeholder="Search tags... (i: p: t: upstream: downstream:)" />
+  </div>
+  <div class="query-results" id="query-results"></div>
   <div class="toolbar" id="toolbar" style="display:none;">
     <button class="toolbar-btn" id="write-btn" title="Patch all pending new values (one-scan)">Write Values</button>
     <button class="toolbar-btn" id="clear-btn" title="Clear all pending new values">Clear</button>
@@ -475,6 +568,8 @@ ${sortableScript}
   const clearBtn = document.getElementById("clear-btn");
   const content = document.getElementById("content");
   const errorEl = document.getElementById("error");
+  const searchInput = document.getElementById("search-input");
+  const queryResultsEl = document.getElementById("query-results");
 
   // Individual tags: tag -> entry
   const tagEntries = new Map();
@@ -482,6 +577,190 @@ ${sortableScript}
   const groupEntries = new Map();
   let sortable = null;
   let hiddenDraggedRows = [];
+
+  // Graph data for edge expansion
+  let graphData = null;
+  // Neighbor index: { tagName: { upstream: [name,...], downstream: [name,...] } }
+  let neighborIndex = {};
+  // Recent focus ring for decay: [{tag, edgeRows}]
+  const focusRing = [];
+  const FOCUS_RING_MAX = 3;
+
+  function buildNeighborIndex(data) {
+    const index = {};
+    if (!data || !data.rungNodes) return index;
+    for (const rn of data.rungNodes) {
+      const reads = [].concat(rn.conditionReads || [], rn.dataReads || []);
+      const writes = rn.writes || [];
+      // For each written tag, its upstream is all reads of this rung
+      for (const w of writes) {
+        if (!index[w]) index[w] = { upstream: new Set(), downstream: new Set() };
+        for (const r of reads) index[w].upstream.add(r);
+      }
+      // For each read tag, its downstream is all writes of this rung
+      for (const r of reads) {
+        if (!index[r]) index[r] = { upstream: new Set(), downstream: new Set() };
+        for (const w of writes) index[r].downstream.add(w);
+      }
+    }
+    // Convert sets to sorted arrays
+    for (const key of Object.keys(index)) {
+      index[key].upstream = Array.from(index[key].upstream).sort();
+      index[key].downstream = Array.from(index[key].downstream).sort();
+    }
+    return index;
+  }
+
+  // --- Search / query ---
+  let queryTimer = null;
+  searchInput.addEventListener("input", () => {
+    clearTimeout(queryTimer);
+    const q = searchInput.value.trim();
+    if (!q) {
+      queryResultsEl.innerHTML = "";
+      return;
+    }
+    queryTimer = setTimeout(() => {
+      vscode.postMessage({ type: "query", query: q });
+    }, 250);
+  });
+
+  function renderQueryResults(tags, roles) {
+    queryResultsEl.innerHTML = "";
+    if (!tags || tags.length === 0) {
+      if (searchInput.value.trim()) {
+        queryResultsEl.textContent = "No matches";
+      }
+      return;
+    }
+    for (const tag of tags) {
+      const item = document.createElement("div");
+      item.className = "query-result-item";
+      const role = roles[tag] || "";
+      if (role) {
+        const badge = document.createElement("span");
+        badge.className = "query-role " + role;
+        badge.textContent = role.charAt(0).toUpperCase();
+        item.appendChild(badge);
+      }
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = tag;
+      item.appendChild(nameSpan);
+      item.title = "Click to add to Data View";
+      item.addEventListener("click", () => {
+        vscode.postMessage({ type: "addTagFromQuery", tag });
+      });
+      queryResultsEl.appendChild(item);
+    }
+  }
+
+  // --- Edge expansion ---
+  function clearEdgeRows(decayLevel) {
+    const rows = document.querySelectorAll(".edge-row" + (decayLevel != null ? ".decay-" + decayLevel : ""));
+    rows.forEach((r) => r.remove());
+  }
+
+  function insertEdgeRows(tagName, afterRow) {
+    const neighbors = neighborIndex[tagName];
+    if (!neighbors) return [];
+    const rows = [];
+    const tbody = afterRow.parentNode;
+    let insertPoint = afterRow;
+
+    if (neighbors.upstream.length > 0) {
+      const row = document.createElement("tr");
+      row.className = "edge-row";
+      row.dataset.edgeOwner = tagName;
+      const td = document.createElement("td");
+      td.colSpan = 7;
+      const arrow = document.createElement("span");
+      arrow.className = "edge-arrow";
+      arrow.textContent = "\u2190 ";
+      td.appendChild(arrow);
+      for (let i = 0; i < neighbors.upstream.length; i++) {
+        if (i > 0) td.appendChild(document.createTextNode(", "));
+        const link = document.createElement("span");
+        link.className = "edge-tag";
+        link.textContent = neighbors.upstream[i];
+        link.addEventListener("click", () => {
+          handleEdgeTagClick(neighbors.upstream[i]);
+        });
+        td.appendChild(link);
+      }
+      row.appendChild(td);
+      insertPoint.after(row);
+      insertPoint = row;
+      rows.push(row);
+    }
+
+    if (neighbors.downstream.length > 0) {
+      const row = document.createElement("tr");
+      row.className = "edge-row";
+      row.dataset.edgeOwner = tagName;
+      const td = document.createElement("td");
+      td.colSpan = 7;
+      const arrow = document.createElement("span");
+      arrow.className = "edge-arrow";
+      arrow.textContent = "\u2192 ";
+      td.appendChild(arrow);
+      for (let i = 0; i < neighbors.downstream.length; i++) {
+        if (i > 0) td.appendChild(document.createTextNode(", "));
+        const link = document.createElement("span");
+        link.className = "edge-tag";
+        link.textContent = neighbors.downstream[i];
+        link.addEventListener("click", () => {
+          handleEdgeTagClick(neighbors.downstream[i]);
+        });
+        td.appendChild(link);
+      }
+      row.appendChild(td);
+      insertPoint.after(row);
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function handleEdgeTagClick(tagName) {
+    // Add to watch list if not already there, then select it
+    if (!tagEntries.has(tagName)) {
+      addTag(tagName);
+      vscode.postMessage({ type: "addTagFromQuery", tag: tagName });
+    }
+    selectTagForEdges(tagName);
+  }
+
+  function selectTagForEdges(tagName) {
+    const entry = tagEntries.get(tagName);
+    if (!entry || !entry.row) return;
+
+    // Age existing focus ring entries
+    for (const focus of focusRing) {
+      for (const row of focus.edgeRows) {
+        if (row.classList.contains("decay-1")) {
+          row.classList.remove("decay-1");
+          row.classList.add("decay-2");
+        } else if (!row.classList.contains("decay-2")) {
+          row.classList.add("decay-1");
+        }
+      }
+    }
+    // Remove oldest if at capacity
+    while (focusRing.length >= FOCUS_RING_MAX) {
+      const oldest = focusRing.shift();
+      for (const row of oldest.edgeRows) row.remove();
+    }
+    // Remove existing edge rows for this tag (if re-selected)
+    const existing = focusRing.findIndex((f) => f.tag === tagName);
+    if (existing >= 0) {
+      const old = focusRing.splice(existing, 1)[0];
+      for (const row of old.edgeRows) row.remove();
+    }
+
+    const edgeRows = insertEdgeRows(tagName, entry.row);
+    if (edgeRows.length > 0) {
+      focusRing.push({ tag: tagName, edgeRows });
+    }
+  }
 
   function normalizeHintKey(value) {
     if (value === undefined || value === null) return "";
@@ -797,6 +1076,10 @@ ${sortableScript}
     nameCell.appendChild(nameLabel);
     nameCell.appendChild(readonlyBadge);
     nameCell.title = tag;
+    nameCell.style.cursor = "pointer";
+    nameCell.addEventListener("click", () => {
+      selectTagForEdges(tag);
+    });
 
     const typeCell = document.createElement("td");
     typeCell.className = "tag-type";
@@ -1089,11 +1372,20 @@ ${sortableScript}
         updateForceState(entry, tag in msg.forces);
       }
       errorEl.textContent = "";
+    } else if (msg.type === "queryResults") {
+      renderQueryResults(msg.tags, msg.roles);
+    } else if (msg.type === "graphData") {
+      graphData = msg.data;
+      neighborIndex = buildNeighborIndex(msg.data);
     } else if (msg.type === "addTag") {
       addTag(msg.tag);
     } else if (msg.type === "addGroup") {
       addGroup(msg.group);
     } else if (msg.type === "reset") {
+      graphData = null;
+      neighborIndex = {};
+      focusRing.length = 0;
+      document.querySelectorAll(".edge-row").forEach((r) => r.remove());
       for (const entry of tagEntries.values()) {
         entry.valueEl.textContent = "--";
         entry.rawValue = "--";

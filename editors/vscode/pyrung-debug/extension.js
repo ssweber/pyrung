@@ -502,7 +502,10 @@ exports.activate = function (context) {
             ) {
               session
                 .customRequest("pyrungGraph", {})
-                .then((data) => graphPanel.updateGraph(data))
+                .then((data) => {
+                  graphPanel.updateGraph(data);
+                  dataView.updateGraph(data);
+                })
                 .catch(() => {});
             }
 
