@@ -1,9 +1,9 @@
 # Causal Chains Implementation Checklist
 
 ## Section A: Prerequisite Infrastructure
-- [ ] **A1.** Add `rung_firings` to scan snapshots — `PMap[int, PMap[Tag, value]]` tracking which rungs fired and what they wrote, per scan
-- [ ] **A2.** Wire `rung_firings` into the engine's execute-logic phase so it's populated during simulation
-- [ ] **A3.** Tests: verify `rung_firings` is correct for simple programs, empty for non-firing rungs, sparse across scans
+- [x] **A1.** Add `rung_firings` to scan snapshots — `PMap[int, PMap[Tag, value]]` tracking which rungs fired and what they wrote, per scan
+- [x] **A2.** Wire `rung_firings` into the engine's execute-logic phase so it's populated during simulation
+- [x] **A3.** Tests: verify `rung_firings` is correct for simple programs, empty for non-firing rungs, sparse across scans
 
 ## Section B: SP Tree Exposure
 - [ ] **B1.** Hand-written path: wrap `And`/`Or`/`~` expression AST behind a uniform SP-tree interface on rung objects

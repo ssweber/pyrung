@@ -33,6 +33,7 @@ from pyrung.core.system_points import (
     SystemPointRuntime,
 )
 from pyrung.core.time_mode import TimeMode
+from pyrsistent import PMap, pmap
 from pyrung.core.trace_formatter import TraceFormatter
 
 if TYPE_CHECKING:
@@ -232,6 +233,10 @@ class _DebugNamespace:
         """Return retained rung-level debug trace for one scan."""
         return self._plc._inspect(rung_id, scan_id)
 
+    def rung_firings(self, scan_id: int | None = None) -> PMap:
+        """Return rung firings for the given scan (default: playhead)."""
+        return self._plc.rung_firings(scan_id)
+
     def last_event(self) -> tuple[int, int, RungTraceEvent] | None:
         """Return the latest debug-trace event."""
         return self._plc._inspect_event()
@@ -313,6 +318,7 @@ class PLC:
         )
         self._history = History(self._state, limit=history_limit)
         self._rung_traces_by_scan: dict[int, dict[int, RungTrace]] = {}
+        self._rung_firings_by_scan: dict[int, PMap] = {}
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
@@ -397,6 +403,29 @@ class PLC:
 
         self._playhead = target_state.scan_id
         return target_state
+
+    def rung_firings(self, scan_id: int | None = None) -> PMap:
+        """Return rung firings for the given scan (default: playhead).
+
+        Returns ``PMap[int, PMap[str, Any]]`` mapping each rung index that
+        wrote at least one tag during the scan to a map of
+        ``{tag_name: value_written}``.
+
+        .. note::
+
+            Only populated for scans executed via the non-debug path
+            (``step()``, ``run()``, ``run_for()``, ``run_until()``).
+
+        .. todo::
+
+            A rung whose condition is True but whose writes are identical to
+            the already-pending values will not appear here.  This is an
+            acceptable approximation for causal-chain attribution; for
+            accurate cold-rung detection a ``_last_condition_result`` field
+            on ``Rung`` may be needed later.
+        """
+        target = self._playhead if scan_id is None else scan_id
+        return self._rung_firings_by_scan.get(target, pmap())
 
     def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
         """Return changed tag values between two retained historical scans."""
@@ -998,7 +1027,9 @@ class PLC:
             if name not in self._state.tags:
                 ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
 
-    def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
+    def _commit_scan(
+        self, ctx: ScanContext, dt: float, *, rung_firings: PMap | None = None
+    ) -> None:
         """Finalize one scan and commit all batched writes."""
         previous_state = self._state
         previous_tip_scan_id = previous_state.scan_id
@@ -1007,9 +1038,12 @@ class PLC:
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
+        if rung_firings is not None:
+            self._rung_firings_by_scan[self._state.scan_id] = rung_firings
         evicted_scan_ids = self._history._append(self._state)
         for evicted_scan_id in evicted_scan_ids:
             self._rung_traces_by_scan.pop(evicted_scan_id, None)
+            self._rung_firings_by_scan.pop(evicted_scan_id, None)
             if (
                 self._latest_committed_trace_event is not None
                 and self._latest_committed_trace_event[0] == evicted_scan_id
@@ -1088,11 +1122,22 @@ class PLC:
         ctx, dt = self._prepare_scan()
 
         # Evaluate logic rung-by-rung, yielding at rung boundaries.
+        # Capture per-rung tag writes by diffing _tags_pending before/after.
+        firings: dict[int, dict[str, Any]] = {}
         for i, rung in enumerate(self._logic):
+            tags_before = dict(ctx._tags_pending)
             rung.evaluate(ctx)
+            writes = {
+                name: ctx._tags_pending[name]
+                for name in ctx._tags_pending
+                if name not in tags_before or tags_before[name] != ctx._tags_pending[name]
+            }
+            if writes:
+                firings[i] = writes
             yield i, rung, ctx
 
-        self._commit_scan(ctx, dt)
+        rung_firings = pmap({i: pmap(w) for i, w in firings.items()})
+        self._commit_scan(ctx, dt, rung_firings=rung_firings)
 
     def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle and yield ``ScanStep`` objects at all boundaries.
