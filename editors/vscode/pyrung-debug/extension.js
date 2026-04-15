@@ -3,7 +3,7 @@ const vscode = require("vscode");
 const { PyrungAdapterFactory } = require("./adapterFactory");
 const { PyrungDataViewProvider } = require("./dataViewProvider");
 const { PyrungDecorationController } = require("./decorationController");
-const { PyrungHistorySliderProvider } = require("./historySlider");
+const { PyrungHistoryPanelProvider } = require("./historyPanel");
 const {
   PyrungInlineValuesProvider,
   lookupName,
@@ -34,10 +34,15 @@ exports.activate = function (context) {
   const inlineValuesProvider = new PyrungInlineValuesProvider({
     getConditionLinesForDocument: (document) => decorator.conditionLinesForDocument(document),
   });
-  const historySlider = new PyrungHistorySliderProvider();
-  const dataView = new PyrungDataViewProvider();
+  const historyPanel = new PyrungHistoryPanelProvider();
+  const dataView = new PyrungDataViewProvider({
+    onWatchHistory: async (tagName) => {
+      historyPanel.addTag(tagName);
+      await vscode.commands.executeCommand("pyrung.historySlider.focus");
+    },
+  });
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider("pyrung.historySlider", historySlider)
+    vscode.window.registerWebviewViewProvider("pyrung.historySlider", historyPanel)
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("pyrung.dataView", dataView)
@@ -487,6 +492,7 @@ exports.activate = function (context) {
 
             if (message.event === "pyrungTrace") {
               const body = message.body || {};
+              historyPanel.updateHints(body.tagHints || {});
               if (body.tagValues) {
                 dataView.updateTrace(
                   body.tagValues,
@@ -506,8 +512,8 @@ exports.activate = function (context) {
               output.appendLine(`[scan ${body.scanId}] snapshot: ${body.label}`);
             } else if (message.event === "stopped") {
               sessionExecutionState.set(session.id, "stopped");
-              historySlider.setSession(session);
-              historySlider.refresh();
+              historyPanel.setSession(session);
+              historyPanel.refresh();
               dataView.setSession(session);
               if (
                 rapidState.enabled &&
@@ -533,7 +539,7 @@ exports.activate = function (context) {
                 updateRapidStatus();
               }
               setMonitorStatus(0);
-              historySlider.setSession(null);
+              historyPanel.setSession(null);
               dataView.setSession(null);
             }
           },
@@ -564,7 +570,7 @@ exports.activate = function (context) {
           updateRapidStatus();
         }
         setMonitorStatus(0);
-        historySlider.setSession(null);
+        historyPanel.setSession(null);
         dataView.setSession(null);
       }
     })

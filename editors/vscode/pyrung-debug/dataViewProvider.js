@@ -3,7 +3,7 @@ const path = require("path");
 const vscode = require("vscode");
 
 class PyrungDataViewProvider {
-  constructor() {
+  constructor(options = {}) {
     this._view = null;
     this._session = null;
     this._watchedTags = new Set();
@@ -11,6 +11,8 @@ class PyrungDataViewProvider {
     this._watchedItems = [];
     this._latestTagGroups = {};
     this._latestTagHints = {};
+    this._onWatchHistory =
+      typeof options.onWatchHistory === "function" ? options.onWatchHistory : null;
     this._sortableScript = this._loadSortableScript();
   }
 
@@ -102,6 +104,14 @@ class PyrungDataViewProvider {
         this._replaceWatchedItem("tag", message.tag, "group", message.tag);
       } else if (message.type === "reorderItems" && Array.isArray(message.items)) {
         this._reorderWatchedItems(message.items);
+      } else if (message.type === "watchHistory" && message.tag) {
+        if (this._onWatchHistory) {
+          try {
+            await this._onWatchHistory(message.tag);
+          } catch (error) {
+            this._postError(`History failed: ${error}`);
+          }
+        }
       } else if (!this._session) {
         return;
       } else if (message.type === "force" && message.tag) {
@@ -410,6 +420,22 @@ class PyrungDataViewProvider {
   .force-btn.readonly-hint {
     opacity: 0.7;
   }
+  .row-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .history-btn {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid transparent;
+    padding: 1px 5px;
+    cursor: pointer;
+    font-size: 0.95em;
+    line-height: 1.1;
+    min-width: 2.25em;
+  }
+  .history-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
   .btn-remove {
     opacity: 0.4;
     cursor: pointer;
@@ -495,7 +521,7 @@ ${sortableScript}
         "<thead><tr>" +
         '<th class="row-num">No.</th>' +
         "<th>Tag</th><th>Type</th><th>Value</th>" +
-        "<th>New Value</th><th>Force</th><th></th>" +
+        "<th>New Value</th><th>Actions</th><th></th>" +
         "</tr></thead>" +
         '<tbody id="tag-body"></tbody></table>';
       toolbar.style.display = "flex";
@@ -784,6 +810,8 @@ ${sortableScript}
     newValueCell.className = "new-value-cell";
 
     const forceCell = document.createElement("td");
+    const actionButtons = document.createElement("div");
+    actionButtons.className = "row-actions";
     const forceBtn = document.createElement("button");
     forceBtn.className = "force-btn";
     forceBtn.textContent = "Force";
@@ -799,7 +827,16 @@ ${sortableScript}
         vscode.postMessage({ type: "force", tag, value: val });
       }
     });
-    forceCell.appendChild(forceBtn);
+    const historyBtn = document.createElement("button");
+    historyBtn.className = "history-btn";
+    historyBtn.textContent = "\u23f1";
+    historyBtn.title = "Watch tag history";
+    historyBtn.addEventListener("click", () => {
+      vscode.postMessage({ type: "watchHistory", tag });
+    });
+    actionButtons.appendChild(forceBtn);
+    actionButtons.appendChild(historyBtn);
+    forceCell.appendChild(actionButtons);
 
     const removeCell = document.createElement("td");
     if (!isGroupMember) {

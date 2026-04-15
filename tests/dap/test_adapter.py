@@ -236,6 +236,35 @@ def _tag_hints_script() -> str:
     )
 
 
+def _history_changes_script() -> str:
+    return (
+        "from enum import IntEnum\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "\n"
+        "class ConveyorState(IntEnum):\n"
+        "    IDLE = 0\n"
+        "    DETECTING = 1\n"
+        "    SORTING = 2\n"
+        "\n"
+        "StepCount = Int('StepCount')\n"
+        "State = Int('State', choices=ConveyorState)\n"
+        "Running = Bool('Running')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(StepCount + 1, StepCount)\n"
+        "    with Rung(StepCount == 1):\n"
+        "        copy(1, State)\n"
+        "        copy(True, Running)\n"
+        "    with Rung(StepCount == 3):\n"
+        "        copy(2, State)\n"
+        "    with Rung(StepCount == 5):\n"
+        "        copy(False, Running)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
 def _char_runner_script() -> str:
     return (
         "from pyrung.core import Char, PLC, Program, Rung, copy\n"
@@ -2767,6 +2796,120 @@ def test_pyrung_seek_updates_playhead(tmp_path: Path):
     messages = _send_request(adapter, out_stream, seq=5, command="pyrungHistoryInfo")
     info_after_seek = _single_response(messages)["body"]
     assert info_after_seek["playhead"] == 0
+
+
+def test_pyrung_tag_changes_returns_only_matching_scans_and_supports_pagination(
+    tmp_path: Path,
+):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    for seq in range(2, 7):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=7,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 2},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [5, 3]
+    assert [entry["prevScanId"] for entry in entries] == [4, 2]
+    assert entries[0]["changes"] == {"Running": ["True", "False"]}
+    assert entries[1]["changes"] == {"State": ["1", "2"]}
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=8,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 2, "beforeScan": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [1]
+    assert [entry["prevScanId"] for entry in entries] == [0]
+    assert entries[0]["changes"] == {
+        "State": ["0", "1"],
+        "Running": ["False", "True"],
+    }
+
+
+def test_pyrung_fork_at_replaces_runner_and_can_step_from_branch(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    for seq in range(2, 7):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=7,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Running"},
+    )
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=8,
+        command="setDataBreakpoints",
+        arguments={"breakpoints": [{"dataId": "tag:Running"}]},
+    )
+    _drain_messages(out_stream)
+    assert adapter._monitor_handles
+    assert adapter._data_bp_handles
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=9,
+        command="pyrungForkAt",
+        arguments={"scanId": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["scanId"] == 3
+    assert adapter._runner is not None
+    assert response["body"]["timestamp"] == adapter._runner.current_state.timestamp
+    assert adapter._runner.current_state.scan_id == 3
+    assert _stopped_events(messages)[0]["body"]["reason"] == "pause"
+    assert adapter._monitor_handles == {}
+    assert adapter._monitor_meta == {}
+    assert adapter._monitor_values == {}
+    assert adapter._data_bp_handles == {}
+    assert adapter._data_bp_meta == {}
+    assert adapter._scan_gen is None
+    assert adapter._current_step is None
+
+    _send_request(adapter, out_stream, seq=10, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    assert adapter._runner.current_state.scan_id == 4
+    assert adapter._runner.current_state.tags["StepCount"] == 4
+    assert adapter._runner.current_state.tags["State"] == 2
+    assert adapter._runner.current_state.tags["Running"] is True
+
+    _send_request(adapter, out_stream, seq=11, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    assert adapter._runner.current_state.scan_id == 5
+    assert adapter._runner.current_state.tags["StepCount"] == 5
+    assert adapter._runner.current_state.tags["Running"] is False
 
 
 # ---------------------------------------------------------------------------

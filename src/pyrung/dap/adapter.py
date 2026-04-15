@@ -366,6 +366,12 @@ class DAPAdapter:
     def _on_pyrungSeek(self, args: dict[str, Any]) -> HandlerResult:
         return history_seek.on_pyrung_seek(self, args)
 
+    def _on_pyrungTagChanges(self, args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_tag_changes(self, args)
+
+    def _on_pyrungForkAt(self, args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_fork_at(self, args)
+
     def _on_pyrungForce(self, args: dict[str, Any]) -> HandlerResult:
         return force_patch.on_pyrung_force(self, args)
 

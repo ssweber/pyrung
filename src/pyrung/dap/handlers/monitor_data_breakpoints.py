@@ -381,7 +381,9 @@ def tag_from_data_id(adapter: Any, data_id: str) -> str | None:
     return tag_name or None
 
 
-def clear_debug_registrations_locked(adapter: Any) -> None:
+def clear_debug_registrations_locked(
+    adapter: Any, *, clear_source_breakpoints: bool = True
+) -> None:
     for handle in adapter._monitor_handles.values():
         try:
             handle.remove()
@@ -397,6 +399,7 @@ def clear_debug_registrations_locked(adapter: Any) -> None:
     adapter._monitor_values.clear()
     adapter._data_bp_handles.clear()
     adapter._data_bp_meta.clear()
-    adapter._breakpoints.clear_source_breakpoints()
+    if clear_source_breakpoints:
+        adapter._breakpoints.clear_source_breakpoints()
     adapter._pending_snapshot_labels_by_scan.clear()
     adapter._pending_predicate_pause = False
