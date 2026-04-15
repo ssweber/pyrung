@@ -11,6 +11,8 @@ class PyrungHistoryPanelProvider {
     this._activeScanId = null;
     this._hasMore = false;
     this._pageSize = 50;
+    this._liveTimer = null;
+    this._liveIntervalMs = 500;
   }
 
   resolveWebviewView(webviewView) {
@@ -91,6 +93,7 @@ class PyrungHistoryPanelProvider {
   }
 
   setSession(session) {
+    this._cancelLiveRefresh();
     this._session = session;
     if (!session) {
       this._entries = [];
@@ -123,6 +126,7 @@ class PyrungHistoryPanelProvider {
   }
 
   async refresh() {
+    this._cancelLiveRefresh();
     if (!this._session) {
       this._postState();
       return;
@@ -147,6 +151,54 @@ class PyrungHistoryPanelProvider {
       append: true,
       beforeScan: this._entries[this._entries.length - 1].scanId,
     });
+  }
+
+  liveRefresh() {
+    if (!this._session || !this._watchedTags.size) {
+      return;
+    }
+    if (this._liveTimer) {
+      return;
+    }
+    this._liveTimer = setTimeout(async () => {
+      this._liveTimer = null;
+      await this._fetchNewEntries();
+    }, this._liveIntervalMs);
+  }
+
+  _cancelLiveRefresh() {
+    if (this._liveTimer) {
+      clearTimeout(this._liveTimer);
+      this._liveTimer = null;
+    }
+  }
+
+  async _fetchNewEntries() {
+    if (!this._session || !this._watchedTags.size) {
+      return;
+    }
+
+    const afterScan = this._entries.length ? this._entries[0].scanId : undefined;
+
+    try {
+      const result = await this._session.customRequest("pyrungTagChanges", {
+        tags: Array.from(this._watchedTags),
+        count: this._pageSize,
+        afterScan,
+      });
+      const newEntries = Array.isArray(result?.entries) ? result.entries : [];
+      if (!afterScan) {
+        this._entries = newEntries;
+        this._hasMore = newEntries.length === this._pageSize;
+      } else if (newEntries.length) {
+        this._entries = newEntries.concat(this._entries);
+      } else {
+        return;
+      }
+      this._postState();
+    } catch (_error) {
+      // Session may have ended between the trace event and the request.
+    }
   }
 
   async _fetchEntries({ append, beforeScan } = {}) {

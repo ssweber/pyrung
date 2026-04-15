@@ -24,6 +24,7 @@ class _TagChangesRequestArgs:
     tags: Any = None
     count: Any = 50
     beforeScan: Any = None
+    afterScan: Any = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,10 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     if raw_before_scan is not None and not isinstance(raw_before_scan, int):
         raise adapter.DAPAdapterError("pyrungTagChanges.beforeScan must be an integer")
 
+    raw_after_scan = parsed.afterScan
+    if raw_after_scan is not None and not isinstance(raw_after_scan, int):
+        raise adapter.DAPAdapterError("pyrungTagChanges.afterScan must be an integer")
+
     if not tags:
         return {"entries": []}, []
 
@@ -135,6 +140,8 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             scan_id = retained_scan_ids[index]
             if raw_before_scan is not None and scan_id >= raw_before_scan:
                 continue
+            if raw_after_scan is not None and scan_id <= raw_after_scan:
+                break
 
             prev_scan_id = retained_scan_ids[index - 1]
             previous_state = runner.history.at(prev_scan_id)

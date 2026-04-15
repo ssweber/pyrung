@@ -493,6 +493,7 @@ exports.activate = function (context) {
             if (message.event === "pyrungTrace") {
               const body = message.body || {};
               historyPanel.updateHints(body.tagHints || {});
+              historyPanel.liveRefresh();
               if (body.tagValues) {
                 dataView.updateTrace(
                   body.tagValues,

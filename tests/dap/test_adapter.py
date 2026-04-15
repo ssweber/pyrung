@@ -2844,6 +2844,51 @@ def test_pyrung_tag_changes_returns_only_matching_scans_and_supports_pagination(
         "Running": ["False", "True"],
     }
 
+    # afterScan: only entries newer than scan 3
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=9,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 50, "afterScan": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [5]
+    assert entries[0]["changes"] == {"Running": ["True", "False"]}
+
+    # afterScan + beforeScan: window between scan 1 and scan 5
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungTagChanges",
+        arguments={
+            "tags": ["State", "Running"],
+            "count": 50,
+            "afterScan": 1,
+            "beforeScan": 5,
+        },
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [3]
+    assert entries[0]["changes"] == {"State": ["1", "2"]}
+
+    # afterScan at latest: no new entries
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=11,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 50, "afterScan": 5},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["entries"] == []
+
 
 def test_pyrung_fork_at_replaces_runner_and_can_step_from_branch(tmp_path: Path):
     out_stream = io.BytesIO()
