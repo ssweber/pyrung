@@ -24,6 +24,7 @@
     "onCommand:pyrung.monitorMenu",
     "onCommand:pyrung.toggleRapidStep",
     "onCommand:pyrung.configureRapidStep",
+    "onCommand:pyrung.openGraph",
     "onCommand:pyrung.addToDataView"
   ],
   "main": "./extension.js",
@@ -52,6 +53,10 @@
       {
         "command": "pyrung.configureRapidStep",
         "title": "pyrung: Configure Rapid Step"
+      },
+      {
+        "command": "pyrung.openGraph",
+        "title": "pyrung: Open Graph View"
       },
       {
         "command": "pyrung.addToDataView",

@@ -3714,3 +3714,143 @@ def test_pyrung_force_numeric_value_types(tmp_path: Path):
     response = _single_response(messages)
     assert response["success"] is True
     assert adapter._runner.forces["Counter"] == 3.14
+
+
+# ------------------------------------------------------------------
+# pyrungGraph / pyrungSlice
+# ------------------------------------------------------------------
+
+
+def _graph_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "relay = Bool('Relay')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        latch(relay)\n"
+        "    with Rung(relay):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def test_pyrung_graph_returns_valid_json(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungGraph")
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert isinstance(body["rungNodes"], list)
+    assert isinstance(body["tagRoles"], dict)
+    assert isinstance(body["graphEdges"], list)
+    assert "Button" in body["tagRoles"]
+    assert "Relay" in body["tagRoles"]
+    assert "Light" in body["tagRoles"]
+
+    # Check that graph edges are bipartite
+    for edge in body["graphEdges"]:
+        assert edge["type"] in ("condition", "data", "write")
+        if edge["type"] in ("condition", "data"):
+            assert not edge["source"].startswith("rung:")
+            assert edge["target"].startswith("rung:")
+        else:
+            assert edge["source"].startswith("rung:")
+            assert not edge["target"].startswith("rung:")
+
+
+def test_pyrung_slice_upstream(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Light", "direction": "upstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert "Light" in body["tags"]
+    assert "Relay" in body["tags"]
+    assert "Button" in body["tags"]
+
+
+def test_pyrung_slice_downstream(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Button", "direction": "downstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert "Button" in body["tags"]
+    assert "Relay" in body["tags"]
+    assert "Light" in body["tags"]
+
+
+def test_pyrung_slice_requires_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"direction": "upstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_slice_requires_valid_direction(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Light", "direction": "sideways"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False

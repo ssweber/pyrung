@@ -287,6 +287,7 @@ class PLC:
             raise ValueError("history_limit must be >= 1 or None")
 
         self._logic: list[Rung]
+        self._program: Any = None
         # Handle different logic types
         # Import Program here to avoid circular import at module level
         from pyrung.core.program import Program
@@ -295,6 +296,7 @@ class PLC:
             self._logic = []
         elif isinstance(logic, Program):
             self._logic = logic.rungs
+            self._program = logic
         elif isinstance(logic, list):
             self._logic = logic
         else:
@@ -354,6 +356,11 @@ class PLC:
         if seed:
             self._state = self._state.with_tags(seed)
             self._history = History(self._state, limit=history_limit)
+
+    @property
+    def program(self) -> Any:
+        """The Program object if the PLC was constructed from one, else None."""
+        return self._program
 
     @property
     def current_state(self) -> SystemState:
@@ -468,7 +475,7 @@ class PLC:
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
         historical_state = self.history.at(target_scan_id)
         fork = PLC(
-            logic=list(self._logic),
+            logic=self._program if self._program is not None else list(self._logic),
             initial_state=historical_state,
             history_limit=self._history_limit,
         )

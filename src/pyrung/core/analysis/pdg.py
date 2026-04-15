@@ -78,6 +78,24 @@ class ProgramGraph:
         """Return whether ``tag_name`` resolves to a physical output tag."""
         return isinstance(self.tags.get(tag_name), OutputTag)
 
+    def graph_edges(self) -> list[dict[str, Any]]:
+        """Bipartite edges for visualization: tag→rung (reads) and rung→tag (writes).
+
+        Returns list of ``{source, target, type}`` where *type* is
+        ``"condition"`` | ``"data"`` | ``"write"``.  Sources and targets are
+        tag names or ``"rung:<index>"`` identifiers.
+        """
+        edges: list[dict[str, Any]] = []
+        for idx, node in enumerate(self.rung_nodes):
+            rung_id = f"rung:{idx}"
+            for tag_name in sorted(node.condition_reads):
+                edges.append({"source": tag_name, "target": rung_id, "type": "condition"})
+            for tag_name in sorted(node.data_reads):
+                edges.append({"source": tag_name, "target": rung_id, "type": "data"})
+            for tag_name in sorted(node.writes):
+                edges.append({"source": rung_id, "target": tag_name, "type": "write"})
+        return edges
+
     def upstream_slice(self, tag_name: str) -> frozenset[str]:
         """Return all tags transitively upstream of *tag_name*."""
         visited_tags: set[str] = set()
@@ -150,6 +168,7 @@ class ProgramGraph:
             "writersOf": {
                 name: sorted(indices) for name, indices in sorted(self.writers_of.items())
             },
+            "graphEdges": self.graph_edges(),
         }
 
 

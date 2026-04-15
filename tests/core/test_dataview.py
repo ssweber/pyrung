@@ -278,6 +278,70 @@ class TestIteration:
 
 
 # ------------------------------------------------------------------
+# Graph edges tests
+# ------------------------------------------------------------------
+
+
+class TestGraphEdges:
+    def test_returns_list_of_dicts(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        assert isinstance(edges, list)
+        assert all(isinstance(e, dict) for e in edges)
+
+    def test_edge_keys(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        for edge in edges:
+            assert set(edge.keys()) == {"source", "target", "type"}
+
+    def test_edge_types_valid(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        valid_types = {"condition", "data", "write"}
+        for edge in edges:
+            assert edge["type"] in valid_types
+
+    def test_condition_edges_point_tag_to_rung(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        condition_edges = [e for e in edges if e["type"] == "condition"]
+        assert len(condition_edges) > 0
+        for edge in condition_edges:
+            assert not edge["source"].startswith("rung:")
+            assert edge["target"].startswith("rung:")
+
+    def test_write_edges_point_rung_to_tag(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        write_edges = [e for e in edges if e["type"] == "write"]
+        assert len(write_edges) > 0
+        for edge in write_edges:
+            assert edge["source"].startswith("rung:")
+            assert not edge["target"].startswith("rung:")
+
+    def test_start_btn_has_condition_edge(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        start_btn_edges = [e for e in edges if e["source"] == "StartBtn"]
+        assert len(start_btn_edges) > 0
+        assert all(e["type"] == "condition" for e in start_btn_edges)
+
+    def test_conveyor_motor_has_write_edge(self, conveyor_graph) -> None:
+        edges = conveyor_graph.graph_edges()
+        motor_writes = [e for e in edges if e["target"] == "ConveyorMotor" and e["type"] == "write"]
+        assert len(motor_writes) > 0
+
+    def test_edges_consistent_with_rung_nodes(self, conveyor_graph) -> None:
+        """Every edge endpoint references an existing tag or rung index."""
+        edges = conveyor_graph.graph_edges()
+        all_tags = set(conveyor_graph.tag_roles.keys())
+        max_rung_idx = len(conveyor_graph.rung_nodes) - 1
+
+        for edge in edges:
+            for endpoint in (edge["source"], edge["target"]):
+                if endpoint.startswith("rung:"):
+                    idx = int(endpoint.split(":")[1])
+                    assert 0 <= idx <= max_rung_idx, f"Invalid rung index {idx}"
+                else:
+                    assert endpoint in all_tags, f"Unknown tag {endpoint}"
+
+
+# ------------------------------------------------------------------
 # Serialization tests
 # ------------------------------------------------------------------
 
@@ -290,6 +354,7 @@ class TestSerialization:
         assert isinstance(d["tags"], list)
         assert isinstance(d["readersOf"], dict)
         assert isinstance(d["writersOf"], dict)
+        assert isinstance(d["graphEdges"], list)
 
     def test_to_json_dict_role_values(self, conveyor_graph) -> None:
         d = conveyor_graph.to_json_dict()

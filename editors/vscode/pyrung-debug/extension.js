@@ -3,6 +3,7 @@ const vscode = require("vscode");
 const { PyrungAdapterFactory } = require("./adapterFactory");
 const { PyrungDataViewProvider } = require("./dataViewProvider");
 const { PyrungDecorationController } = require("./decorationController");
+const { PyrungGraphPanelProvider } = require("./graphPanel");
 const { PyrungHistoryPanelProvider } = require("./historyPanel");
 const {
   PyrungInlineValuesProvider,
@@ -37,6 +38,13 @@ exports.activate = function (context) {
   const historyPanel = new PyrungHistoryPanelProvider();
   const dataView = new PyrungDataViewProvider({
     onWatchHistory: async (tagName) => {
+      historyPanel.addTag(tagName);
+      await vscode.commands.executeCommand("pyrung.historySlider.focus");
+    },
+  });
+  const graphPanel = new PyrungGraphPanelProvider({
+    onAddToDataView: (tagName) => dataView.addTag(tagName),
+    onAddToHistory: async (tagName) => {
       historyPanel.addTag(tagName);
       await vscode.commands.executeCommand("pyrung.historySlider.focus");
     },
@@ -486,6 +494,18 @@ exports.activate = function (context) {
           onDidSendMessage: (message) => {
             decorator.handleAdapterMessage(message);
 
+            // Auto-fetch graph data when configurationDone succeeds
+            if (
+              message?.type === "response" &&
+              message.command === "configurationDone" &&
+              message.success
+            ) {
+              session
+                .customRequest("pyrungGraph", {})
+                .then((data) => graphPanel.updateGraph(data))
+                .catch(() => {});
+            }
+
             if (message?.type !== "event") {
               return;
             }
@@ -502,6 +522,7 @@ exports.activate = function (context) {
                   body.tagGroups || {},
                   body.tagHints || {}
                 );
+                graphPanel.updateTrace(body.tagValues, body.forces || {});
               }
             } else if (message.event === "pyrungMonitor") {
               const body = message.body || {};
@@ -542,6 +563,7 @@ exports.activate = function (context) {
               setMonitorStatus(0);
               historyPanel.setSession(null);
               dataView.setSession(null);
+              graphPanel.dispose();
             }
           },
         };
@@ -573,6 +595,7 @@ exports.activate = function (context) {
         setMonitorStatus(0);
         historyPanel.setSession(null);
         dataView.setSession(null);
+        graphPanel.dispose();
       }
     })
   );
@@ -593,6 +616,13 @@ exports.activate = function (context) {
   context.subscriptions.push(vscode.commands.registerCommand("pyrung.toggleRapidStep", toggleRapidStep));
   context.subscriptions.push(
     vscode.commands.registerCommand("pyrung.configureRapidStep", configureRapidStep)
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pyrung.openGraph", () => {
+      const session = requireSession();
+      if (!session) return;
+      graphPanel.show(session);
+    })
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("pyrung.addToDataView", () => {

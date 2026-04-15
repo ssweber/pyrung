@@ -2,9 +2,19 @@
 
 ## Unreleased
 
+### New features
+
+- **VS Code Graph View** — new `Pyrung: Open Graph View` command opens an interactive tag dependency graph in the editor area. Cytoscape.js + dagre renders a left-to-right bipartite layout (tag nodes + rung nodes) with role-based coloring (blue inputs, amber pivots, green terminals). Click a tag to highlight neighbors, double-click to slice upstream (blue) / downstream (green), right-click to add to Data View or History. Includes abbreviation-aware search, role filter toggles, pin/hide with workspace persistence, and live value badges during debugging.
+- **Static program graph analysis** — new `pyrung.core.analysis.build_program_graph()` builds a `ProgramGraph` with rung summaries, `TagRole` classification, and SSA-style `TagVersion` def-use chains for whole-program tooling.
+- **VS Code Data View and live debugger updates** — the debugger now adds a Data View panel for watching, forcing, unforcing, and patching tags, live inline tag values, drag-to-reorder, and live History updates while a program is running. DAP now also emits live `pyrungTrace` events during `continue` runs and structured force/patch requests for UI integrations.
+- **`choices` / `readonly` tag metadata** — tags, blocks, UDT fields, and named arrays can now carry `choices` and `readonly` hints through DAP traces and Click TagMeta CSV round-trip. The VS Code debugger surfaces dropdowns and read-only fields, and `count=1` structures can be used as `choices=` sources.
+- **Modern Click timer/counter codegen syntax** — `ladder_to_pyrung()` now emits positional timer/counter presets and omits the default millisecond unit, using friendly unit strings only when needed.
+
 ### Bug fixes
 
 - **Snapshot-stable instruction helper conditions** — embedded helper conditions such as `.reset(...)`, counter `.down(...)`, shift `.clock()` / `.reset()`, and drum event/jump/jog/reset inputs now evaluate against the rung's frozen `ConditionView` instead of live mid-rung writes. `.continued()` snapshot reuse is now explicitly fenced to the same execution scope, so snapshots cannot leak across subroutine boundaries.
+- **Click subroutine export filenames** — `LadderBundle.write()` now preserves original subroutine CSV filenames instead of slugifying them, matching Click Programming Software expectations.
+- **VS Code webview script regressions** — fixed template-literal escaping bugs that could break the Data View or History panel, and `make lint` now syntax-checks embedded webview scripts to catch similar failures earlier.
 
 ## v0.5.2 — Friendlier timer/counter API
 

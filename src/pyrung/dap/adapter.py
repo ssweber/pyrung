@@ -20,6 +20,7 @@ from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
     force_patch,
+    graph_slice,
     history_seek,
     lifecycle_launch,
     monitor_data_breakpoints,
@@ -386,6 +387,12 @@ class DAPAdapter:
 
     def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
         return force_patch.on_pyrung_list_forces(self, _args)
+
+    def _on_pyrungGraph(self, _args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_graph(self, _args)
+
+    def _on_pyrungSlice(self, args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_slice(self, args)
 
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)
