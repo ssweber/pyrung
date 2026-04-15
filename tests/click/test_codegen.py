@@ -48,7 +48,12 @@ from pyrung.core.program import (
     out,
     reset,
 )
-from tests.click.helpers import build_program, normalize_pyrung, strip_pyrung_boilerplate
+from tests.click.helpers import (
+    build_program,
+    exec_with_source,
+    normalize_pyrung,
+    strip_pyrung_boilerplate,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,7 +92,7 @@ def _round_trip(
 
     # Execute the generated code
     ns: dict = {}
-    exec(code, ns)
+    exec_with_source(code, ns)
 
     # Re-export
     logic2 = ns["logic"]
@@ -1728,7 +1733,7 @@ class TestRoundTrip:
 
         # Generated code must be valid Python
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_click_hex_literal_in_calc(self, tmp_path: Path):
         """Click hex literal in a calc expression becomes ``0x`` in Python."""
@@ -1761,7 +1766,7 @@ class TestRoundTrip:
         )
 
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_pointer_indirect_addressing(self, tmp_path: Path):
         """Click pointer syntax DH[DS134] renders as dh[tag_var] with correct import."""
@@ -1793,7 +1798,7 @@ class TestRoundTrip:
             DH051 = Word("DH051")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung():
                     copy(dh[DS134], DH051)
 
@@ -1806,7 +1811,7 @@ class TestRoundTrip:
         )
         # Must be valid Python
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_calc_sum_codegen(self):
         """Calc with SUM(range) round-trips through colon-range syntax."""
@@ -2147,7 +2152,7 @@ class TestRoundTrip:
                 out(Y001)
                 call("init")
 
-            with subroutine("init", strict=False):
+            with subroutine("init"):
                 with Rung():
                     out(Y002)
             """,
@@ -2170,7 +2175,7 @@ class TestRoundTrip:
             with Rung(X001):
                 call("worker")
 
-            with subroutine("worker", strict=False):
+            with subroutine("worker"):
                 with Rung(X002):
                     out(Y001)
 
@@ -2198,7 +2203,7 @@ class TestRoundTrip:
                 copy(C2, C4)
                 call("SubName")
 
-            with subroutine("SubName", strict=False):
+            with subroutine("SubName"):
                 with Rung():
                     out(C4)
             """,
@@ -2225,7 +2230,7 @@ class TestInMemoryRoundTrip:
         code = ladder_to_pyrung(bundle)
 
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
         logic2 = ns["logic"]
         mapping2 = ns["mapping"]
@@ -2352,7 +2357,7 @@ class TestNicknameMerge:
             motor_out = Bool("motor_out")  # Y001
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(start_button):
                     out(motor_out)
 
@@ -2383,7 +2388,7 @@ class TestNicknameMerge:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     copy(_True, _False)
 
@@ -2424,7 +2429,7 @@ class TestNicknameMerge:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     copy(_True, _True_2)
 
@@ -2455,7 +2460,7 @@ class TestNicknameMerge:
             motor_out = Bool("motor_out")  # Y001
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(start_button):
                     out(motor_out)
 
@@ -2493,7 +2498,7 @@ class TestNicknameMerge:
             Y001 = Bool("Y001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     out(Y001)
 
@@ -2533,7 +2538,7 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     on_delay(OvenTimer, 100)
 
@@ -2569,7 +2574,7 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     on_delay(OvenTimer, 100)
 
@@ -2606,7 +2611,7 @@ class TestNicknameMerge:
             PartCounter = Counter.clone("PartCounter")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     count_up(PartCounter, 10).reset(X002)
 
@@ -2643,7 +2648,7 @@ class TestNicknameMerge:
             T1 = Timer.clone("T1")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     on_delay(T1, 100)
 
@@ -2681,7 +2686,7 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     on_delay(OvenTimer, 100)
 
@@ -2866,7 +2871,7 @@ class TestContinuedRoundTrip:
         """Nested shared prefixes should come back as nested branch() blocks."""
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2):
                         with branch(X3):
@@ -2899,7 +2904,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3, X5):
                         out(Y1)
@@ -2929,7 +2934,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -2959,7 +2964,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -2988,7 +2993,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -3474,7 +3479,7 @@ class TestStructuredCodegen:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     reset(c.select(1004, 1006))
 

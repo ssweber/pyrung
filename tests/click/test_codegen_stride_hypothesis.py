@@ -15,6 +15,7 @@ from pyrung.click import TagMap, ds, ladder_to_pyrung, pyrung_to_ladder, x
 from pyrung.core import Bool, Program, Rung, TagType
 from pyrung.core.program import copy
 from pyrung.core.structure import _FieldSpec, _NamedArrayRuntime
+from tests.click.helpers import exec_with_source
 
 
 def _field_name(i: int) -> str:
@@ -113,6 +114,6 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
 
     # Assertion 3: generated code executes and map_to succeeds
     ns: dict = {}
-    exec(code, ns)
+    exec_with_source(code, ns)
     assert "logic" in ns, "Generated code must define 'logic'"
     assert "mapping" in ns, "Generated code must define 'mapping'"
