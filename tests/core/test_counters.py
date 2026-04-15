@@ -15,6 +15,7 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    copy,
     count_down,
     count_up,
     latch,
@@ -158,6 +159,45 @@ class TestCountUpInstruction:
         runner.patch({"Exit": True})
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 0
+
+    def test_count_up_reset_condition_uses_rung_entry_snapshot(self):
+        """Same-rung writes do not fire reset() until the next snapshot."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, ResetBtn)
+                count_up(Counter[1], preset=5).reset(ResetBtn)
+
+        runner = PLC(logic)
+        runner.patch({"Enable": True, "ResetBtn": False})
+
+        runner.step()
+        assert runner.current_state.tags["ResetBtn"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 1
+
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is False
+
+    def test_count_up_down_condition_uses_rung_entry_snapshot(self):
+        """Same-rung writes do not affect bidirectional down() until next scan."""
+        Enable = Bool("Enable")
+        Down = Bool("Down")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, Down)
+                count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
+
+        runner = PLC(logic)
+        runner.patch({"Enable": True, "Down": False, "ResetBtn": False})
+
+        runner.step()
+        assert runner.current_state.tags["Down"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 1
 
 
 class TestCountDownInstruction:

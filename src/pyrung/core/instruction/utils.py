@@ -7,7 +7,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.tag import Tag, TagType
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -53,6 +53,22 @@ def to_condition(obj: Any) -> Any:
         empty_error="condition requires at least one condition",
         group_empty_error="condition group cannot be empty",
     )
+
+
+def instruction_condition_view(ctx: ScanContext) -> ConditionView:
+    """Return the frozen condition snapshot visible to instruction helper inputs.
+
+    Helper conditions such as ``.reset(...)`` and ``.jump(...)`` should read from
+    the active rung snapshot when one exists. Direct instruction unit tests may
+    execute outside a rung, so we fall back to a one-off frozen snapshot taken at
+    instruction entry.
+    """
+    from pyrung.core.context import ConditionView
+
+    snapshot = ctx._condition_snapshot
+    if snapshot is not None:
+        return snapshot
+    return ConditionView(ctx)
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:

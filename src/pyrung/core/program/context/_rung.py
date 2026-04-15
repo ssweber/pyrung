@@ -77,7 +77,8 @@ class Rung:
         All conditions in this rung will evaluate against the same frozen
         state as the prior rung, rather than taking a fresh snapshot. This
         models multiple independent wires on the same visual rung in Click's
-        ladder editor.
+        ladder editor. The reused snapshot must come from the prior rung in
+        the same execution scope (main or the current subroutine).
 
         Returns:
             self, for chaining: ``with Rung(B).continued(): ...``

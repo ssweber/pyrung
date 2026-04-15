@@ -255,6 +255,27 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
+    def test_rton_reset_condition_uses_rung_entry_snapshot(self):
+        """Same-rung writes do not trip the helper reset until the next snapshot."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, ResetBtn)
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True, "ResetBtn": False})
+
+        runner.step()
+        assert runner.current_state.tags["ResetBtn"] is True
+        assert runner.current_state.tags["Timer_Acc"] == 10
+
+        runner.step()
+        assert runner.current_state.tags["Timer_Acc"] == 0
+        assert runner.current_state.tags["Timer_Done"] is False
+
     def test_rton_retentive_accumulator_survives_stop_to_run_transition(self):
         """RTON accumulator preserves value across STOP->RUN when retentive."""
         Enable = Bool("Enable")

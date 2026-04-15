@@ -386,3 +386,30 @@ def test_scan_steps_debug_emits_chained_builder_substeps_with_substep_only_trace
         condition = conditions[0]
         assert condition.source_line == step.source_line
         assert isinstance(condition.expression, str) and condition.expression
+
+
+def test_scan_steps_debug_instruction_helper_trace_uses_rung_snapshot():
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            copy(True, reset)
+            on_delay(Timer[1], preset=50).reset(reset)
+
+    runner = PLC(logic, dt=0.010)
+    runner.patch({"Enable": True, "Reset": False})
+
+    steps = list(runner.debug.scan_steps_debug())
+    reset_steps = [
+        step for step in steps if step.kind == "instruction" and step.instruction_kind == "Reset"
+    ]
+
+    assert len(reset_steps) == 1
+    reset_step = reset_steps[0]
+    assert reset_step.trace is not None
+    condition = reset_step.trace.regions[0].conditions[0]
+    assert condition.status == "false"
+    assert condition.value is False
+    assert runner.current_state.tags["Reset"] is True
+    assert runner.current_state.tags["Timer_Acc"] == 10

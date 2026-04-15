@@ -11,6 +11,7 @@ from .conversions import (
     _clamp_dint,
 )
 from .utils import (
+    instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
 )
@@ -69,9 +70,11 @@ class CountUpInstruction(Instruction):
         self.down_condition = to_condition(down_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        condition_view = instruction_condition_view(ctx)
+
         # Check reset condition first
         if self.reset_condition is not None:
-            reset_active = self.reset_condition.evaluate(ctx)
+            reset_active = self.reset_condition.evaluate(condition_view)
             if reset_active:
                 # Reset clears everything
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})
@@ -87,7 +90,7 @@ class CountUpInstruction(Instruction):
 
         # Check DOWN condition (counts every scan when true, optional)
         if self.down_condition is not None:
-            down_curr = self.down_condition.evaluate(ctx)
+            down_curr = self.down_condition.evaluate(condition_view)
             if down_curr:
                 delta -= 1
 
@@ -151,9 +154,11 @@ class CountDownInstruction(Instruction):
         self.reset_condition = to_condition(reset_condition)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        condition_view = instruction_condition_view(ctx)
+
         # Check reset condition first
         if self.reset_condition is not None:
-            reset_active = self.reset_condition.evaluate(ctx)
+            reset_active = self.reset_condition.evaluate(condition_view)
             if reset_active:
                 # CTD reset clears accumulator to 0
                 ctx.set_tags({self.done_bit.name: False, self.accumulator.name: 0})

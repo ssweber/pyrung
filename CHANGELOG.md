@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug fixes
+
+- **Snapshot-stable instruction helper conditions** — embedded helper conditions such as `.reset(...)`, counter `.down(...)`, shift `.clock()` / `.reset()`, and drum event/jump/jog/reset inputs now evaluate against the rung's frozen `ConditionView` instead of live mid-rung writes. `.continued()` snapshot reuse is now explicitly fenced to the same execution scope, so snapshots cannot leak across subroutine boundaries.
+
 ## v0.5.2 — Friendlier timer/counter API
 
 ### New features

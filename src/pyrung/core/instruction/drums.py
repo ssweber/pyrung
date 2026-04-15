@@ -9,7 +9,7 @@ from pyrung.core.tag import Tag, TagType
 from pyrung.core.time_mode import _parse_time_unit
 
 from .base import Instruction
-from .utils import to_condition
+from .utils import instruction_condition_view, to_condition
 
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
@@ -167,17 +167,17 @@ class _DrumBaseInstruction(Instruction):
         row = self.pattern[step - 1]
         ctx.set_tags({tag.name: bool(row[idx]) for idx, tag in enumerate(self.outputs)})
 
-    def _resolve_jump_edge(self, ctx: ScanContext) -> tuple[bool, bool]:
+    def _resolve_jump_edge(self, ctx: ScanContext, condition_view: Any) -> tuple[bool, bool]:
         if self.jump_condition is None:
             return False, False
-        jump_curr = bool(self.jump_condition.evaluate(ctx))
+        jump_curr = bool(self.jump_condition.evaluate(condition_view))
         jump_prev = bool(ctx.get_memory(self._jump_prev_key, False))
         return jump_curr, jump_curr and not jump_prev
 
-    def _resolve_jog_edge(self, ctx: ScanContext) -> tuple[bool, bool]:
+    def _resolve_jog_edge(self, ctx: ScanContext, condition_view: Any) -> tuple[bool, bool]:
         if self.jog_condition is None:
             return False, False
-        jog_curr = bool(self.jog_condition.evaluate(ctx))
+        jog_curr = bool(self.jog_condition.evaluate(condition_view))
         jog_prev = bool(ctx.get_memory(self._jog_prev_key, False))
         return jog_curr, jog_curr and not jog_prev
 
@@ -231,6 +231,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
         self._last_step_key = f"_drum_last_step:{id(self)}"
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        condition_view = instruction_condition_view(ctx)
         step_raw = _read_step_tag_value(ctx, self.current_step)
         step = step_raw
         step_changed = False
@@ -242,13 +243,13 @@ class EventDrumInstruction(_DrumBaseInstruction):
         elif not self._step_is_valid(step):
             step = 1
 
-        jump_curr, jump_edge = self._resolve_jump_edge(ctx)
-        jog_curr, jog_edge = self._resolve_jog_edge(ctx)
+        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
+        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
 
-        reset_active = bool(self.reset_condition.evaluate(ctx))
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
 
         if enabled:
-            event_curr = bool(self.events[step - 1].evaluate(ctx))
+            event_curr = bool(self.events[step - 1].evaluate(condition_view))
             last_step = int(ctx.get_memory(self._last_step_key, 0))
             event_ready = bool(ctx.get_memory(self._event_ready_key, True))
             event_prev = bool(ctx.get_memory(self._event_prev_key, False))
@@ -291,7 +292,7 @@ class EventDrumInstruction(_DrumBaseInstruction):
         if enabled or reset_active:
             self._apply_outputs(ctx, step)
 
-        final_event_curr = bool(self.events[step - 1].evaluate(ctx))
+        final_event_curr = bool(self.events[step - 1].evaluate(condition_view))
         event_ready = bool(ctx.get_memory(self._event_ready_key, True))
         if step_changed:
             event_ready = not final_event_curr
@@ -365,6 +366,7 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         return _INT_MAX if self.accumulator.type == TagType.INT else _DINT_MAX
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        condition_view = instruction_condition_view(ctx)
         step_raw = _read_step_tag_value(ctx, self.current_step)
         step = step_raw
         step_changed = False
@@ -381,9 +383,9 @@ class TimeDrumInstruction(_DrumBaseInstruction):
         acc_value = _read_step_tag_value(ctx, self.accumulator, fallback=0)
         frac = float(ctx.get_memory(self._frac_key, 0.0))
 
-        jump_curr, jump_edge = self._resolve_jump_edge(ctx)
-        jog_curr, jog_edge = self._resolve_jog_edge(ctx)
-        reset_active = bool(self.reset_condition.evaluate(ctx))
+        jump_curr, jump_edge = self._resolve_jump_edge(ctx, condition_view)
+        jog_curr, jog_edge = self._resolve_jog_edge(ctx, condition_view)
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
 
         if enabled:
             dt = float(ctx.get_memory("_dt", 0.0))

@@ -118,31 +118,42 @@ class Rung:
         """Evaluate this rung within a ScanContext.
 
         Writes are batched in the context and committed at scan end.
-        A ConditionView is frozen at rung entry so that all branch conditions
-        — at every nesting depth — evaluate against the same snapshot.
+        A ConditionView is frozen at rung entry so that all rung conditions,
+        branch conditions, and instruction helper conditions evaluate against
+        the same snapshot.
 
         If ``_use_prior_snapshot`` is set (via ``.continued()``), the
         ConditionView from the previous rung is reused instead of creating
         a fresh one — all conditions evaluate against the same pre-instruction
-        state as that earlier rung.
+        state as that earlier rung, but only within the same execution scope.
 
         Args:
             ctx: ScanContext for reading/writing with batched updates.
         """
+        condition_view = self._resolve_condition_view(ctx)
+        conditions_true = self._evaluate_conditions(condition_view)
+        self.execute(ctx, conditions_true, condition_view=condition_view)
+
+    def _resolve_condition_view(self, ctx: ScanContext) -> ConditionView:
+        """Resolve the frozen snapshot this rung should use for conditions."""
         from pyrung.core.context import ConditionView
 
         if self._use_prior_snapshot:
             condition_view = ctx._condition_snapshot
-            if condition_view is None:
+            if (
+                condition_view is None
+                or condition_view.scope_token is not ctx._condition_scope_token
+            ):
                 raise RuntimeError(
-                    "Rung.continued() used but no prior condition snapshot exists. "
-                    "continued() cannot be used on the first rung."
+                    "Rung.continued() used but no prior condition snapshot exists in the "
+                    "same execution scope. continued() cannot be used on the first rung in "
+                    "a program or subroutine, and cannot cross into or out of a subroutine."
                 )
         else:
             condition_view = ConditionView(ctx)
-            ctx._condition_snapshot = condition_view
-        conditions_true = self._evaluate_conditions(condition_view)
-        self.execute(ctx, conditions_true, condition_view=condition_view)
+
+        ctx._condition_snapshot = condition_view
+        return condition_view
 
     def _evaluate_conditions(self, ctx: ScanContext | ConditionView) -> bool:
         """Evaluate all conditions (AND logic).
@@ -201,9 +212,9 @@ class Rung:
                 If None, a fresh snapshot is created (top-level entry via evaluate()).
         """
         if condition_view is None:
-            from pyrung.core.context import ConditionView
-
-            condition_view = ConditionView(ctx)
+            condition_view = self._resolve_condition_view(ctx)
+        else:
+            ctx._condition_snapshot = condition_view
 
         branch_enable_map = self._compute_branch_enable_map(condition_view, parent_enabled=enabled)
 

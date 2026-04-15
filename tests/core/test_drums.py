@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, event_drum, out, time_drum
+from pyrung.core import PLC, Bool, Int, Program, Rung, copy, event_drum, out, time_drum
 
 
 def test_event_drum_requires_reset_builder() -> None:
@@ -167,6 +167,37 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry() -> None:
     assert runner.current_state.tags["Step"] == 3
 
 
+def test_event_drum_events_use_rung_entry_snapshot() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    event = Bool("Event")
+    step = Int("Step")
+    done = Bool("Done")
+    y1 = Bool("Y1")
+    y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(enable):
+            copy(True, event)
+            event_drum(
+                outputs=[y1, y2],
+                events=[event, event],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset)
+
+    runner = PLC(logic)
+    runner.patch({"Enable": True, "Reset": False, "Event": False})
+
+    runner.step()
+    assert runner.current_state.tags["Event"] is True
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
+
+
 def test_time_drum_precedence_auto_reset_jump_jog() -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
@@ -206,6 +237,39 @@ def test_time_drum_precedence_auto_reset_jump_jog() -> None:
     assert runner.current_state.tags["Step"] == 4
     assert runner.current_state.tags["Acc"] == 0
     assert runner.current_state.tags["Y4"] is True
+
+
+def test_time_drum_jump_uses_rung_entry_snapshot() -> None:
+    enable = Bool("Enable")
+    reset = Bool("Reset")
+    jump = Bool("Jump")
+    step = Int("Step")
+    acc = Int("Acc")
+    done = Bool("Done")
+    y1 = Bool("Y1")
+    y2 = Bool("Y2")
+
+    with Program() as logic:
+        with Rung(enable):
+            copy(True, jump)
+            time_drum(
+                outputs=[y1, y2],
+                presets=[1000, 1000],
+                pattern=[[1, 0], [0, 1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset).jump(jump, step=2)
+
+    runner = PLC(logic, dt=0.010)
+    runner.patch({"Enable": True, "Reset": False, "Jump": False})
+
+    runner.step()
+    assert runner.current_state.tags["Jump"] is True
+    assert runner.current_state.tags["Step"] == 1
+
+    runner.step()
+    assert runner.current_state.tags["Step"] == 2
 
 
 def test_time_drum_ignores_jump_target_out_of_range() -> None:

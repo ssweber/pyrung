@@ -24,13 +24,14 @@ class ConditionView:
     by instructions that execute between branch evaluations.
     """
 
-    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver")
+    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver", "_scope_token")
 
     def __init__(self, ctx: ScanContext) -> None:
         self._state: SystemState = ctx._state
         self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
         self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
         self._resolver = ctx._resolver
+        self._scope_token = ctx._condition_scope_token
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         if name in self._tags_snapshot:
@@ -76,6 +77,10 @@ class ConditionView:
     def original_state(self) -> SystemState:
         return self._state
 
+    @property
+    def scope_token(self) -> object:
+        return self._scope_token
+
 
 class ScanContext:
     """Batched write context for a single scan cycle.
@@ -101,6 +106,7 @@ class ScanContext:
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
+        "_condition_scope_token",
     )
 
     def __init__(
@@ -123,6 +129,7 @@ class ScanContext:
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
+        self._condition_scope_token = object()
 
     # =========================================================================
     # Read operations (with pending visibility)

@@ -74,7 +74,7 @@ class Program:
             )
             raise RuntimeError(
                 f"Rung.continued() cannot be the first rung in a {scope}. "
-                "There is no prior condition snapshot to reuse."
+                "It can only reuse the prior rung snapshot in the same execution scope."
             )
         target.append(rung)
 
@@ -93,7 +93,9 @@ class Program:
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
         saved_snapshot = ctx._condition_snapshot
+        saved_scope_token = ctx._condition_scope_token
         ctx._condition_snapshot = None
+        ctx._condition_scope_token = object()
         try:
             for rung in self.subroutines[name]:
                 rung.evaluate(ctx)
@@ -101,6 +103,7 @@ class Program:
             pass
         finally:
             ctx._condition_snapshot = saved_snapshot
+            ctx._condition_scope_token = saved_scope_token
 
     @classmethod
     def _current(cls) -> Program | None:

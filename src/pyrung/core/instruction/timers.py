@@ -9,6 +9,7 @@ from pyrung.core.time_mode import _parse_time_unit
 
 from .base import Instruction
 from .utils import (
+    instruction_condition_view,
     resolve_preset_ctx,
     to_condition,
 )
@@ -70,10 +71,11 @@ class OnDelayInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         frac_key = f"_frac:{self.accumulator.name}"
+        condition_view = instruction_condition_view(ctx)
 
         # Check reset condition first
         if self.reset_condition is not None:
-            reset_active = self.reset_condition.evaluate(ctx)
+            reset_active = self.reset_condition.evaluate(condition_view)
             if reset_active:
                 # Clear fractional accumulator too
                 ctx.set_memory(frac_key, 0.0)

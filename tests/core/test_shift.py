@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, SystemState, TagType, shift
+from pyrung.core import PLC, Block, Bool, Int, Program, Rung, SystemState, TagType, copy, shift
 from tests.conftest import evaluate_program
 
 
@@ -48,6 +48,30 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C1"] is True
         assert runner.current_state.tags["C2"] is True
         assert runner.current_state.tags["C3"] is False
+
+    def test_clock_condition_uses_rung_entry_snapshot(self):
+        """Same-rung writes do not trigger the shift clock until next scan."""
+        Data = Bool("Data")
+        Clock = Bool("Clock")
+        Reset = Bool("Reset")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as logic:
+            with Rung(Data):
+                copy(True, Clock)
+                shift(C.select(1, 3)).clock(Clock).reset(Reset)
+
+        runner = PLC(logic)
+        runner.patch(
+            {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False}
+        )
+
+        runner.step()
+        assert runner.current_state.tags["Clock"] is True
+        assert runner.current_state.tags["C1"] is False
+
+        runner.step()
+        assert runner.current_state.tags["C1"] is True
 
     def test_reset_clears_full_range(self):
         """Reset condition clears every bit in the selected range."""
