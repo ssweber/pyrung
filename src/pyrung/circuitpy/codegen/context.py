@@ -41,7 +41,7 @@ from pyrung.core.memory_block import (
 from pyrung.core.program import Program
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation.walker import _INSTRUCTION_FIELDS, _condition_children
+from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 
 @dataclass(frozen=True)
@@ -202,7 +202,7 @@ class CodegenContext:
                     walk_instruction(item)
 
         def walk_instruction(instr: Any) -> None:
-            fields = _INSTRUCTION_FIELDS.get(type(instr).__name__)
+            fields = _instruction_fields(instr)
             if fields is None:
                 for key in sorted(vars(instr)):
                     if key.startswith("_"):

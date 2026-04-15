@@ -186,6 +186,11 @@ class ModbusSendInstruction(Instruction):
     instruction is a simulation-inert placeholder for code generation.
     """
 
+    _reads = ("source",)
+    _writes = ("sending", "success", "error", "exception_response")
+    _conditions = ()
+    _structural_fields = ("target_name", "bank", "start", "addresses")
+
     target_name: str
     bank: str | None
     start: int
@@ -303,6 +308,11 @@ class ModbusReceiveInstruction(Instruction):
     Click TCP, ``raw_target`` for raw Modbus).  When neither is set the
     instruction is a simulation-inert placeholder for code generation.
     """
+
+    _reads = ()
+    _writes = ("dest", "receiving", "success", "error", "exception_response")
+    _conditions = ()
+    _structural_fields = ("target_name", "bank", "start", "addresses")
 
     target_name: str
     bank: str | None

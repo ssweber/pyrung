@@ -45,6 +45,10 @@ class CountUpInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("preset",)
+    _writes = ("done_bit", "accumulator")
+    _conditions = ("up_condition", "down_condition", "reset_condition")
+    _structural_fields = ()
 
     def __init__(
         self,
@@ -125,6 +129,10 @@ class CountDownInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("preset",)
+    _writes = ("done_bit", "accumulator")
+    _conditions = ("down_condition", "reset_condition")
+    _structural_fields = ()
 
     def __init__(
         self,

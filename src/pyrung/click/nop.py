@@ -33,6 +33,10 @@ class NopInstruction(Instruction):
     """
 
     INERT_WHEN_DISABLED = True
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """No-op — NOP instructions have no runtime behaviour."""

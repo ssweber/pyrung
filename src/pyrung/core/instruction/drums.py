@@ -191,6 +191,11 @@ class _DrumBaseInstruction(Instruction):
 
 
 class EventDrumInstruction(_DrumBaseInstruction):
+    _reads = ("jump_step",)
+    _writes = ("outputs", "current_step", "completion_flag")
+    _conditions = ("events", "auto_condition", "reset_condition", "jump_condition", "jog_condition")
+    _structural_fields = ("pattern",)
+
     def __init__(
         self,
         outputs: Sequence[Tag],
@@ -300,6 +305,11 @@ class EventDrumInstruction(_DrumBaseInstruction):
 
 
 class TimeDrumInstruction(_DrumBaseInstruction):
+    _reads = ("presets", "jump_step")
+    _writes = ("outputs", "current_step", "accumulator", "completion_flag")
+    _conditions = ("auto_condition", "reset_condition", "jump_condition", "jog_condition")
+    _structural_fields = ("pattern", "unit")
+
     def __init__(
         self,
         outputs: Sequence[Tag],

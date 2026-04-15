@@ -59,6 +59,11 @@ class SearchInstruction(OneShotMixin, Instruction):
         oneshot: Execute only on rung rising edge. Default False.
     """
 
+    _reads = ("value", "search_range")
+    _writes = ("result", "found")
+    _conditions = ()
+    _structural_fields = ("condition", "continuous")  # condition is RangeComparison, not a Condition tree
+
     def __init__(
         self,
         comparison: RangeComparison,
@@ -256,6 +261,10 @@ class ShiftInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("bit_range",)
+    _writes = ("bit_range",)
+    _conditions = ("data_condition", "clock_condition", "reset_condition")
+    _structural_fields = ()
 
     def __init__(
         self,

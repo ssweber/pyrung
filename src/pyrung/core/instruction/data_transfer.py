@@ -56,6 +56,11 @@ class CopyInstruction(OneShotMixin, Instruction):
             False→True transition). Default False.
     """
 
+    _reads = ("source",)
+    _writes = ("target",)
+    _conditions = ()
+    _structural_fields = ("convert",)
+
     def __init__(
         self,
         source: Tag | IndirectRef | IndirectExprRef | str | Any,
@@ -266,6 +271,11 @@ class BlockCopyInstruction(OneShotMixin, Instruction):
     modes are supported for block copy.
     """
 
+    _reads = ("source",)
+    _writes = ("dest",)
+    _conditions = ()
+    _structural_fields = ("convert",)
+
     def __init__(
         self,
         source: Any,
@@ -337,6 +347,11 @@ class FillInstruction(OneShotMixin, Instruction):
     Value can be a literal, Tag, or Expression (resolved once, written to all).
     Dest can be BlockRange or IndirectBlockRange (resolved at scan time).
     """
+
+    _reads = ("value",)
+    _writes = ("dest",)
+    _conditions = ()
+    _structural_fields = ()
 
     def __init__(self, value: Any, dest: Any, *, oneshot: bool = False):
         OneShotMixin.__init__(self, oneshot)

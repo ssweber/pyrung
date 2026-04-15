@@ -130,6 +130,11 @@ class CalcInstruction(OneShotMixin, Instruction):
         oneshot: When True, execute only on the rung's rising edge. Default False.
     """
 
+    _reads = ("expression",)
+    _writes = ("dest",)
+    _conditions = ()
+    _structural_fields = ("mode",)
+
     def __init__(
         self,
         expression: Any,

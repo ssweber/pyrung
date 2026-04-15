@@ -10,6 +10,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from pyrung.core.context import ScanContext
 from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent
+from pyrung.core.analysis import ProgramGraph, TagRole, TagVersion, build_program_graph
 from pyrung.core.expression import (
     PI,
     Expression,
@@ -128,10 +129,14 @@ __all__ = [
     "PLC",
     "ScanContext",
     "SystemState",
+    "ProgramGraph",
     "RungTrace",
     "RungTraceEvent",
+    "TagRole",
     "system",
+    "TagVersion",
     "TimeUnit",
+    "build_program_graph",
     "normalize_unit",
     # Structured factories
     "DoneAccUDT",

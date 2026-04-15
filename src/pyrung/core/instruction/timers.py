@@ -44,6 +44,10 @@ class OnDelayInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("preset",)
+    _writes = ("done_bit", "accumulator")
+    _conditions = ("enable_condition", "reset_condition")
+    _structural_fields = ("unit",)
 
     def __init__(
         self,
@@ -135,6 +139,10 @@ class OffDelayInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("preset",)
+    _writes = ("done_bit", "accumulator")
+    _conditions = ("enable_condition",)
+    _structural_fields = ("unit",)
 
     def __init__(
         self,

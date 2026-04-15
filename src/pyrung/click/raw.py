@@ -33,6 +33,10 @@ class RawInstruction(Instruction):
     """
 
     INERT_WHEN_DISABLED = True
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ("class_name", "fields")
 
     def __init__(self, class_name: str, fields: str) -> None:
         self.class_name = class_name
