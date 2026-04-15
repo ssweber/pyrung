@@ -319,7 +319,9 @@ def _extract_rung_node(
     )
 
 
-def _extract_instruction_event(instr: Any, node_index: int, tag_refs: dict[str, Tag]) -> _AccessEvent:
+def _extract_instruction_event(
+    instr: Any, node_index: int, tag_refs: dict[str, Tag]
+) -> _AccessEvent:
     """Extract one instruction's ordered reads/writes."""
     condition_reads: set[str] = set()
     data_reads: set[str] = set()
@@ -357,9 +359,7 @@ def _rung_condition_reads(
     returns just the branch-local slice used during the branch prepass.
     """
     conditions = (
-        rung._conditions[rung._branch_condition_start :]
-        if local_only
-        else rung._conditions
+        rung._conditions[rung._branch_condition_start :] if local_only else rung._conditions
     )
     reads: set[str] = set()
     for condition in conditions:
@@ -390,7 +390,9 @@ def _build_access_sequence(
         if emit_own_conditions:
             own_condition_reads = _rung_condition_reads(rung, tag_refs)
             if own_condition_reads:
-                events.append(_AccessEvent(node_index=node_index, condition_reads=own_condition_reads))
+                events.append(
+                    _AccessEvent(node_index=node_index, condition_reads=own_condition_reads)
+                )
 
         # All branch local conditions conceptually read the same rung-entry
         # snapshot, so we emit the whole branch tree's condition prepass before
@@ -549,9 +551,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
             tag_refs=tag_refs,
         )
         node_index_by_rung[id(rung)] = len(rung_nodes)
-        rung_nodes.append(
-            node
-        )
+        rung_nodes.append(node)
         for branch_index, branch_rung in enumerate(rung._branches):
             walk_rung(
                 branch_rung,

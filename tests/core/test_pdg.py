@@ -256,7 +256,9 @@ def test_def_use_chains_inline_subroutines_at_call_site() -> None:
     # version, not the scan-entry version.
     sub_node = next(i for i, n in enumerate(graph.rung_nodes) if n.scope == "subroutine")
     main_reader = next(
-        i for i, n in enumerate(graph.rung_nodes) if "Flag" in n.condition_reads and n.scope == "main"
+        i
+        for i, n in enumerate(graph.rung_nodes)
+        if "Flag" in n.condition_reads and n.scope == "main"
     )
 
     chain = graph.def_use_chains["Flag"]

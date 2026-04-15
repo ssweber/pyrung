@@ -128,6 +128,7 @@ def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
     )
     return tuple(dict.fromkeys(fields))
 
+
 # ---------------------------------------------------------------------------
 # Value classification
 # ---------------------------------------------------------------------------
