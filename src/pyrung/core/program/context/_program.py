@@ -11,8 +11,8 @@ from pyrung.core.rung import Rung as RungLogic
 from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.dataview import DataView
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.context import ScanContext
 
     from ..validation import DialectValidator
