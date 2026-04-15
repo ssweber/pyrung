@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const vscode = require("vscode");
 
 class PyrungDataViewProvider {
@@ -6,8 +8,80 @@ class PyrungDataViewProvider {
     this._session = null;
     this._watchedTags = new Set();
     this._watchedGroups = new Set();
+    this._watchedItems = [];
     this._latestTagGroups = {};
     this._latestTagHints = {};
+    this._sortableScript = this._loadSortableScript();
+  }
+
+  _loadSortableScript() {
+    try {
+      return fs.readFileSync(path.join(__dirname, "vendor", "Sortable.min.js"), "utf8");
+    } catch (error) {
+      console.error("Failed to load SortableJS vendor bundle:", error);
+      return "";
+    }
+  }
+
+  _itemKey(type, name) {
+    return `${type}:${name}`;
+  }
+
+  _addWatchedItem(type, name) {
+    if (!name) return;
+    const key = this._itemKey(type, name);
+    if (this._watchedItems.some((item) => this._itemKey(item.type, item.name) === key)) {
+      return;
+    }
+    this._watchedItems.push({ type, name });
+  }
+
+  _removeWatchedItem(type, name) {
+    const key = this._itemKey(type, name);
+    this._watchedItems = this._watchedItems.filter(
+      (item) => this._itemKey(item.type, item.name) !== key
+    );
+  }
+
+  _replaceWatchedItem(oldType, oldName, newType, newName) {
+    const oldKey = this._itemKey(oldType, oldName);
+    const newKey = this._itemKey(newType, newName);
+    const nextItems = [];
+    let replaced = false;
+    for (const item of this._watchedItems) {
+      const itemKey = this._itemKey(item.type, item.name);
+      if (itemKey === oldKey && !replaced) {
+        nextItems.push({ type: newType, name: newName });
+        replaced = true;
+        continue;
+      }
+      if (itemKey === oldKey || itemKey === newKey) {
+        continue;
+      }
+      nextItems.push(item);
+    }
+    if (!replaced) {
+      nextItems.push({ type: newType, name: newName });
+    }
+    this._watchedItems = nextItems;
+  }
+
+  _reorderWatchedItems(items) {
+    const currentItems = new Map(
+      this._watchedItems.map((item) => [this._itemKey(item.type, item.name), item])
+    );
+    const reordered = [];
+    for (const item of items || []) {
+      if (!item || (item.type !== "tag" && item.type !== "group") || !item.name) {
+        continue;
+      }
+      const key = this._itemKey(item.type, item.name);
+      const current = currentItems.get(key);
+      if (!current) continue;
+      reordered.push(current);
+      currentItems.delete(key);
+    }
+    this._watchedItems = reordered.concat(Array.from(currentItems.values()));
   }
 
   resolveWebviewView(webviewView) {
@@ -16,8 +90,21 @@ class PyrungDataViewProvider {
     webviewView.webview.html = this._html();
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
-      if (!this._session) return;
-      if (message.type === "force" && message.tag) {
+      if (message.type === "removeTag") {
+        this._watchedTags.delete(message.tag);
+        this._removeWatchedItem("tag", message.tag);
+      } else if (message.type === "removeGroup") {
+        this._watchedGroups.delete(message.group);
+        this._removeWatchedItem("group", message.group);
+      } else if (message.type === "promoteToGroup" && message.tag) {
+        this._watchedTags.delete(message.tag);
+        this._watchedGroups.add(message.tag);
+        this._replaceWatchedItem("tag", message.tag, "group", message.tag);
+      } else if (message.type === "reorderItems" && Array.isArray(message.items)) {
+        this._reorderWatchedItems(message.items);
+      } else if (!this._session) {
+        return;
+      } else if (message.type === "force" && message.tag) {
         try {
           await this._session.customRequest("pyrungForce", {
             tag: message.tag,
@@ -50,13 +137,6 @@ class PyrungDataViewProvider {
         } catch (error) {
           this._postError(`Patch failed: ${error}`);
         }
-      } else if (message.type === "removeTag") {
-        this._watchedTags.delete(message.tag);
-      } else if (message.type === "removeGroup") {
-        this._watchedGroups.delete(message.group);
-      } else if (message.type === "promoteToGroup" && message.tag) {
-        this._watchedTags.delete(message.tag);
-        this._watchedGroups.add(message.tag);
       }
     });
 
@@ -65,11 +145,12 @@ class PyrungDataViewProvider {
     });
 
     // Restore watched items if webview was re-created
-    for (const tag of this._watchedTags) {
-      this._postMessage({ type: "addTag", tag });
-    }
-    for (const group of this._watchedGroups) {
-      this._postMessage({ type: "addGroup", group });
+    for (const item of this._watchedItems) {
+      if (item.type === "group") {
+        this._postMessage({ type: "addGroup", group: item.name });
+      } else {
+        this._postMessage({ type: "addTag", tag: item.name });
+      }
     }
   }
 
@@ -86,12 +167,21 @@ class PyrungDataViewProvider {
       this.addGroup(tagName);
       return;
     }
+    if (this._watchedTags.has(tagName)) return;
     this._watchedTags.add(tagName);
+    this._addWatchedItem("tag", tagName);
     this._postMessage({ type: "addTag", tag: tagName });
   }
 
   addGroup(groupName) {
     if (!groupName) return;
+    if (this._watchedGroups.has(groupName)) return;
+    if (this._watchedTags.has(groupName)) {
+      this._watchedTags.delete(groupName);
+      this._replaceWatchedItem("tag", groupName, "group", groupName);
+    } else {
+      this._addWatchedItem("group", groupName);
+    }
     this._watchedGroups.add(groupName);
     this._postMessage({ type: "addGroup", group: groupName });
   }
@@ -148,6 +238,9 @@ class PyrungDataViewProvider {
   }
 
   _html() {
+    const sortableScript = this._sortableScript
+      ? `<script>${this._sortableScript.replace(/<\/script/gi, "<\\/script")}</script>`
+      : "";
     return /* html */ `<!DOCTYPE html>
 <html>
 <head>
@@ -204,10 +297,31 @@ class PyrungDataViewProvider {
     font-weight: bold;
     font-size: 0.9em;
     border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.3));
+  }
+  .group-header td:hover { opacity: 0.8; }
+  .drag-handle {
+    cursor: grab;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .drag-handle::before {
+    content: "\\2261";
+    display: inline-block;
+    margin-right: 0.35em;
+    opacity: 0.6;
+  }
+  .sortable-chosen .drag-handle,
+  .sortable-drag .drag-handle {
+    cursor: grabbing;
+  }
+  .sortable-ghost td { opacity: 0.35; }
+  .group-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25em;
     cursor: pointer;
     user-select: none;
   }
-  .group-header td:hover { opacity: 0.8; }
   .group-chevron {
     display: inline-block;
     width: 1em;
@@ -327,6 +441,7 @@ class PyrungDataViewProvider {
     <div class="empty">Right-click a tag in the editor and select "Add to Data View"</div>
   </div>
   <div id="error"></div>
+${sortableScript}
 <script>
   const vscode = acquireVsCodeApi();
   const toolbar = document.getElementById("toolbar");
@@ -339,7 +454,8 @@ class PyrungDataViewProvider {
   const tagEntries = new Map();
   // Groups: groupName -> { headerRow, memberTags: Set, collapsed }
   const groupEntries = new Map();
-  let rowCounter = 0;
+  let sortable = null;
+  let hiddenDraggedRows = [];
 
   function normalizeHintKey(value) {
     if (value === undefined || value === null) return "";
@@ -373,8 +489,7 @@ class PyrungDataViewProvider {
   }
 
   function ensureTable() {
-    let table = document.getElementById("tag-table");
-    if (!table) {
+    if (!document.getElementById("tag-table")) {
       content.innerHTML =
         '<table class="tag-table" id="tag-table">' +
         "<thead><tr>" +
@@ -385,7 +500,106 @@ class PyrungDataViewProvider {
         '<tbody id="tag-body"></tbody></table>';
       toolbar.style.display = "flex";
     }
-    return document.getElementById("tag-body");
+    const tbody = document.getElementById("tag-body");
+    initializeSortable(tbody);
+    return tbody;
+  }
+
+  function destroySortable() {
+    if (!sortable) return;
+    sortable.destroy();
+    sortable = null;
+  }
+
+  function refreshRowNumbers() {
+    const tbody = document.getElementById("tag-body");
+    if (!tbody) return;
+
+    let index = 1;
+    for (const row of Array.from(tbody.children)) {
+      if (row.classList.contains("group-header")) continue;
+      const numCell = row.querySelector(".row-num");
+      if (!numCell) continue;
+      numCell.textContent = String(index).padStart(3, "0");
+      index += 1;
+    }
+  }
+
+  function syncGroupBlockPositions(groupName) {
+    const tbody = document.getElementById("tag-body");
+    if (!tbody) return;
+
+    const groups = groupName ? [groupName] : Array.from(groupEntries.keys());
+    for (const name of groups) {
+      const entry = groupEntries.get(name);
+      if (!entry) continue;
+
+      let anchor = entry.headerRow;
+      for (const memberTag of entry.memberTags) {
+        const memberEntry = tagEntries.get(memberTag);
+        if (!memberEntry) continue;
+        const targetSibling = anchor.nextElementSibling;
+        if (targetSibling !== memberEntry.row) {
+          tbody.insertBefore(memberEntry.row, targetSibling);
+        }
+        anchor = memberEntry.row;
+      }
+    }
+  }
+
+  function currentTopLevelOrder() {
+    const tbody = document.getElementById("tag-body");
+    if (!tbody) return [];
+
+    return Array.from(tbody.children)
+      .filter((row) => row.classList.contains("sortable-item"))
+      .map((row) => ({
+        type: row.dataset.itemType,
+        name: row.dataset.itemName,
+      }));
+  }
+
+  function postCurrentOrder() {
+    vscode.postMessage({ type: "reorderItems", items: currentTopLevelOrder() });
+  }
+
+  function initializeSortable(tbody) {
+    if (sortable || !tbody || typeof Sortable !== "function") return;
+
+    sortable = Sortable.create(tbody, {
+      animation: 150,
+      draggable: ".sortable-item",
+      handle: ".drag-handle",
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      onStart: (event) => {
+        hiddenDraggedRows = [];
+        if (event.item.dataset.itemType !== "group") return;
+
+        const entry = groupEntries.get(event.item.dataset.itemName);
+        if (!entry) return;
+
+        for (const memberTag of entry.memberTags) {
+          const memberEntry = tagEntries.get(memberTag);
+          if (!memberEntry) continue;
+          hiddenDraggedRows.push({
+            row: memberEntry.row,
+            display: memberEntry.row.style.display,
+          });
+          memberEntry.row.style.display = "none";
+        }
+      },
+      onEnd: () => {
+        syncGroupBlockPositions();
+        for (const item of hiddenDraggedRows) {
+          item.row.style.display = item.display;
+        }
+        hiddenDraggedRows = [];
+        refreshRowNumbers();
+        postCurrentOrder();
+      },
+    });
   }
 
   function setPendingValue(entry, value) {
@@ -525,15 +739,23 @@ class PyrungDataViewProvider {
 
   function createTagRow(tag, opts) {
     const isGroupMember = opts && opts.groupMember;
-    rowCounter++;
-
     const tbody = ensureTable();
     const row = document.createElement("tr");
-    row.className = "tag-row" + (isGroupMember ? " group-member" : "");
+    row.className = "tag-row" + (isGroupMember ? " group-member" : " sortable-item");
+    if (!isGroupMember) {
+      row.dataset.itemType = "tag";
+      row.dataset.itemName = tag;
+    } else if (opts && opts.groupName) {
+      row.dataset.groupName = opts.groupName;
+    }
 
     const numCell = document.createElement("td");
     numCell.className = "row-num";
-    numCell.textContent = String(rowCounter).padStart(3, "0");
+    numCell.textContent = "";
+    if (!isGroupMember) {
+      numCell.classList.add("drag-handle");
+      numCell.title = "Drag to reorder";
+    }
 
     const nameCell = document.createElement("td");
     nameCell.className = "tag-name";
@@ -588,6 +810,7 @@ class PyrungDataViewProvider {
       removeBtn.addEventListener("click", () => {
         tagEntries.delete(tag);
         row.remove();
+        refreshRowNumbers();
         checkEmpty();
         vscode.postMessage({ type: "removeTag", tag });
       });
@@ -625,6 +848,7 @@ class PyrungDataViewProvider {
     input.addEventListener("input", () => { entry.pendingValue = parseTypedValue(entry.tagType, input.value); });
     newValueCell.appendChild(input);
     entry._input = input;
+    refreshRowNumbers();
 
     return entry;
   }
@@ -634,23 +858,30 @@ class PyrungDataViewProvider {
     createTagRow(tag, {});
   }
 
-  function addGroup(groupName) {
+  function addGroup(groupName, opts) {
     if (groupEntries.has(groupName)) return;
 
     const tbody = ensureTable();
     const headerRow = document.createElement("tr");
-    headerRow.className = "group-header";
+    headerRow.className = "group-header sortable-item";
+    headerRow.dataset.itemType = "group";
+    headerRow.dataset.itemName = groupName;
 
     const chevronCell = document.createElement("td");
-    chevronCell.className = "row-num";
-    const chevron = document.createElement("span");
-    chevron.className = "group-chevron";
-    chevron.textContent = "\u25bc";
-    chevronCell.appendChild(chevron);
+    chevronCell.className = "row-num drag-handle";
+    chevronCell.title = "Drag to reorder";
 
     const nameCell = document.createElement("td");
     nameCell.colSpan = 5;
-    nameCell.textContent = groupName;
+    const groupToggle = document.createElement("span");
+    groupToggle.className = "group-toggle";
+    groupToggle.title = "Collapse/expand group";
+    const chevron = document.createElement("span");
+    chevron.className = "group-chevron";
+    chevron.textContent = "\u25bc";
+    groupToggle.appendChild(chevron);
+    groupToggle.appendChild(document.createTextNode(groupName));
+    nameCell.appendChild(groupToggle);
 
     const removeCell = document.createElement("td");
     const removeBtn = document.createElement("button");
@@ -668,6 +899,7 @@ class PyrungDataViewProvider {
         }
         headerRow.remove();
         groupEntries.delete(groupName);
+        refreshRowNumbers();
         checkEmpty();
       }
       vscode.postMessage({ type: "removeGroup", group: groupName });
@@ -677,12 +909,17 @@ class PyrungDataViewProvider {
     headerRow.appendChild(chevronCell);
     headerRow.appendChild(nameCell);
     headerRow.appendChild(removeCell);
-    tbody.appendChild(headerRow);
+    if (opts && opts.insertBefore) {
+      tbody.insertBefore(headerRow, opts.insertBefore);
+    } else {
+      tbody.appendChild(headerRow);
+    }
+    refreshRowNumbers();
 
     const ge = { headerRow, chevron, memberTags: new Set(), collapsed: false };
     groupEntries.set(groupName, ge);
 
-    headerRow.addEventListener("click", () => {
+    groupToggle.addEventListener("click", () => {
       ge.collapsed = !ge.collapsed;
       chevron.textContent = ge.collapsed ? "\u25b6" : "\u25bc";
       for (const memberTag of ge.memberTags) {
@@ -724,9 +961,17 @@ class PyrungDataViewProvider {
         if (e) insertAfter = e.row;
       }
 
-      const entry = createTagRow(memberTag, { groupMember: true, displayName, insertAfter });
+      const entry = createTagRow(memberTag, {
+        groupMember: true,
+        groupName,
+        displayName,
+        insertAfter,
+      });
       if (ge.collapsed) entry.row.style.display = "none";
     }
+
+    syncGroupBlockPositions(groupName);
+    refreshRowNumbers();
   }
 
   function updateForceState(entry, isForced) {
@@ -739,9 +984,9 @@ class PyrungDataViewProvider {
 
   function checkEmpty() {
     if (tagEntries.size === 0 && groupEntries.size === 0) {
+      destroySortable();
       content.innerHTML = '<div class="empty">Right-click a tag in the editor and select "Add to Data View"</div>';
       toolbar.style.display = "none";
-      rowCounter = 0;
     }
   }
 
@@ -774,9 +1019,10 @@ class PyrungDataViewProvider {
       for (const groupName of Object.keys(msg.tagGroups || {})) {
         if (tagEntries.has(groupName) && !groupEntries.has(groupName)) {
           const entry = tagEntries.get(groupName);
+          const nextSibling = entry.row.nextElementSibling;
           entry.row.remove();
           tagEntries.delete(groupName);
-          addGroup(groupName);
+          addGroup(groupName, { insertBefore: nextSibling });
           vscode.postMessage({ type: "promoteToGroup", tag: groupName });
         }
       }
