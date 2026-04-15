@@ -106,9 +106,7 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     seen: set[str] = set()
     for raw_tag in raw_tags:
         if not isinstance(raw_tag, str) or not raw_tag.strip():
-            raise adapter.DAPAdapterError(
-                "pyrungTagChanges.tags must contain non-empty strings"
-            )
+            raise adapter.DAPAdapterError("pyrungTagChanges.tags must contain non-empty strings")
         tag_name = raw_tag.strip()
         if tag_name in seen:
             continue

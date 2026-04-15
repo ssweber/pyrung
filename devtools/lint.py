@@ -57,6 +57,8 @@ def main() -> int:
     for js_file in sorted(VSCODE_JS_DIR.glob("*.js")):
         errcount += run(["node", "-c", str(js_file)])
 
+    errcount += run(["node", str(PROJECT_ROOT / "devtools" / "check_webview_scripts.js")])
+
     print()
 
     if errcount != 0:

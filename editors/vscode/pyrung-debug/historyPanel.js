@@ -554,7 +554,7 @@ class PyrungHistoryPanelProvider {
       : "";
 
     content.innerHTML =
-      '<div class="entries">' + entriesHtml + "</div>" + (loadOlderHtml ? "<div style=\"margin-top:8px;\">" + loadOlderHtml + "</div>" : "");
+      '<div class="entries">' + entriesHtml + "</div>" + (loadOlderHtml ? '<div style="margin-top:8px;">' + loadOlderHtml + "</div>" : "");
 
     const loadOlderBtn = document.getElementById("load-older-btn");
     if (loadOlderBtn) {
