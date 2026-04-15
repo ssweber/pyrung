@@ -15,9 +15,10 @@ from pyclickplc.blocks import compute_all_block_ranges, format_block_tag
 from pyclickplc.validation import validate_nickname
 
 from pyrung.core import Block, Tag
-from pyrung.core.tag import MappingEntry
+from pyrung.core.tag import MappingEntry, _normalize_choices
 
 from ._parsers import (
+    TagMeta,
     _build_block_spec,
     _compose_address_comment,
     _default_logical_block_start,
@@ -33,6 +34,15 @@ from ._types import StructuredImport, _BlockEntry, _BlockImportSpec
 
 if TYPE_CHECKING:
     from ._map import TagMap
+
+
+def _tag_meta_from_hints(*, choices: object, readonly: object) -> TagMeta | None:
+    if choices is None and not bool(readonly):
+        return None
+    return TagMeta(
+        readonly=bool(readonly),
+        choices=cast(dict[int | float | str, str] | None, choices),
+    )
 
 
 def tag_map_from_nickname_file(
@@ -122,6 +132,7 @@ def tag_map_from_nickname_file(
         seen_names[name] = (memory_type, address)
 
     def apply_block_rows(logical_block: Block, spec: _BlockImportSpec) -> None:
+        logical_block._pyrung_click_bg_color = spec.bg_color  # ty: ignore[unresolved-attribute]
         logical_addresses = tuple(
             logical_block.select(logical_block.start, logical_block.end).addresses
         )
@@ -148,11 +159,21 @@ def tag_map_from_nickname_file(
                     logical_block.slot(logical_addr, name=row.nickname)
 
             default = _parse_default(row.initial_value, logical_block.type)
-            comment = _extract_address_comment(row.comment)
+            comment, tag_meta, _ = _extract_address_comment(row.comment)
+            choices = tag_meta.choices if tag_meta is not None else None
+            readonly = tag_meta.readonly if tag_meta is not None else False
             retentive_changed = row.retentive != sv.retentive
             default_changed = default != sv.default
             comment_changed = comment != sv.comment
-            if retentive_changed or default_changed or comment_changed:
+            choices_changed = choices != sv.choices
+            readonly_changed = readonly != sv.readonly
+            if (
+                retentive_changed
+                or default_changed
+                or comment_changed
+                or choices_changed
+                or readonly_changed
+            ):
                 slot_kw: dict[str, Any] = {}
                 if retentive_changed:
                     slot_kw["retentive"] = row.retentive
@@ -160,6 +181,10 @@ def tag_map_from_nickname_file(
                     slot_kw["default"] = default
                 if comment_changed:
                     slot_kw["comment"] = comment
+                if choices_changed:
+                    slot_kw["choices"] = choices
+                if readonly_changed:
+                    slot_kw["readonly"] = readonly
                 logical_block.slot(logical_addr, **slot_kw)
 
     def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
@@ -409,6 +434,7 @@ def tag_map_from_nickname_file(
                 stride=stride,
                 always_number=inferred_always_number,
             )(runtime_type)
+            runtime._pyrung_click_bg_color = spec.bg_color  # ty: ignore[unresolved-attribute]
             runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
 
             for field, _ in ordered_fields_with_offsets:
@@ -422,11 +448,21 @@ def tag_map_from_nickname_file(
                         block.slot(instance, name=row.nickname)
 
                     default = _parse_default(row.initial_value, block.type)
-                    comment = _extract_address_comment(row.comment)
+                    comment, tag_meta, _ = _extract_address_comment(row.comment)
+                    choices = tag_meta.choices if tag_meta is not None else None
+                    readonly = tag_meta.readonly if tag_meta is not None else False
                     retentive_changed = row.retentive != sv.retentive
                     default_changed = default != sv.default
                     comment_changed = comment != sv.comment
-                    if retentive_changed or default_changed or comment_changed:
+                    choices_changed = choices != sv.choices
+                    readonly_changed = readonly != sv.readonly
+                    if (
+                        retentive_changed
+                        or default_changed
+                        or comment_changed
+                        or choices_changed
+                        or readonly_changed
+                    ):
                         slot_kw: dict[str, Any] = {}
                         if retentive_changed:
                             slot_kw["retentive"] = row.retentive
@@ -434,6 +470,10 @@ def tag_map_from_nickname_file(
                             slot_kw["default"] = default
                         if comment_changed:
                             slot_kw["comment"] = comment
+                        if choices_changed:
+                            slot_kw["choices"] = choices
+                        if readonly_changed:
+                            slot_kw["readonly"] = readonly
                         block.slot(instance, **slot_kw)
 
             mappings.extend(runtime.map_to(spec.hardware_range))
@@ -532,12 +572,19 @@ def tag_map_from_nickname_file(
 
         memory_type = row.memory_type
         logical_type = _tag_type_for_memory_type(memory_type)
+        comment, tag_meta, _ = _extract_address_comment(row.comment)
         logical = Tag(
             name=row.nickname,
             type=logical_type,
             retentive=row.retentive,
             default=_parse_default(row.initial_value, logical_type),
-            comment=_extract_address_comment(row.comment),
+            comment=comment,
+            choices=_normalize_choices(
+                tag_meta.choices if tag_meta is not None else None,
+                tag_type=logical_type,
+                owner=f"{row.nickname!r} choices",
+            ),
+            readonly=tag_meta.readonly if tag_meta is not None else False,
         )
         hardware = _hardware_block_for(memory_type)[row.address]
         mappings.append(logical.map_to(hardware))
@@ -583,11 +630,15 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
 
     for entry in self._tag_entries_tuple:
         memory_type, address = self._parse_hardware_tag(entry.hardware)
+        tag_meta = _tag_meta_from_hints(
+            choices=getattr(entry.logical, "choices", None),
+            readonly=getattr(entry.logical, "readonly", False),
+        )
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,
             address=address,
             nickname=entry.logical.name,
-            comment=entry.logical.comment,
+            comment=_compose_address_comment(entry.logical.comment, tag_meta=tag_meta),
             initial_value=_format_default(entry.logical.default, entry.logical.type),
             retentive=entry.logical.retentive,
             data_type=BANKS[memory_type].data_type,
@@ -597,6 +648,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
         if not entry.hardware_addresses:
             continue
         block_tag_name = block_tag_name_for_entry(entry)
+        block_bg_color = getattr(entry.logical, "_pyrung_click_bg_color", None)
         memory_type, _ = self._parse_hardware_tag(entry.hardware.block[entry.hardware_addresses[0]])
         block_len = len(entry.hardware_addresses)
 
@@ -607,17 +659,23 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             block_tag = ""
             if block_tag_name is not None:
                 if block_len == 1:
-                    block_tag = format_block_tag(block_tag_name, "self-closing")
+                    block_tag = format_block_tag(
+                        block_tag_name,
+                        "self-closing",
+                        bg_color=block_bg_color,
+                    )
                 elif i == 0:
-                    block_tag = format_block_tag(block_tag_name, "open")
+                    block_tag = format_block_tag(block_tag_name, "open", bg_color=block_bg_color)
                 elif i == block_len - 1:
                     block_tag = format_block_tag(block_tag_name, "close")
+
+            tag_meta = _tag_meta_from_hints(choices=slot.choices, readonly=slot.readonly)
 
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                 memory_type=memory_type,
                 address=hardware_addr,
                 nickname=slot.name,
-                comment=_compose_address_comment(slot.comment, block_tag),
+                comment=_compose_address_comment(slot.comment, block_tag, tag_meta),
                 initial_value=_format_default(slot.default, slot.type),
                 retentive=slot.retentive,
                 data_type=BANKS[memory_type].data_type,
@@ -637,12 +695,10 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 data_type=BANKS[memory_type].data_type,
             )
             return
+        existing_comment, existing_meta, _ = _extract_address_comment(existing.comment)
         records[addr_key] = replace(
             existing,
-            comment=_compose_address_comment(
-                _extract_address_comment(existing.comment),
-                block_tag,
-            ),
+            comment=_compose_address_comment(existing_comment, block_tag, existing_meta),
         )
 
     for structure in self._structures:
@@ -659,6 +715,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             if getattr(structure.runtime, "always_number", False) and structure.count == 1
             else ""
         )
+        bg_color = getattr(structure.runtime, "_pyrung_click_bg_color", None)
         block_name = (
             f"{structure.name}:named_array({structure.count},{stride}{always_number_suffix})"
         )
@@ -666,11 +723,15 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             write_boundary_comment(
                 memory_type,
                 start_address,
-                format_block_tag(block_name, "self-closing"),
+                format_block_tag(block_name, "self-closing", bg_color=bg_color),
             )
             continue
 
-        write_boundary_comment(memory_type, start_address, format_block_tag(block_name, "open"))
+        write_boundary_comment(
+            memory_type,
+            start_address,
+            format_block_tag(block_name, "open", bg_color=bg_color),
+        )
         write_boundary_comment(memory_type, end_address, format_block_tag(block_name, "close"))
 
     return pyclickplc.write_csv(path, records)

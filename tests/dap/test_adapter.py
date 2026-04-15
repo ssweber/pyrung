@@ -215,6 +215,42 @@ def _counter_change_script() -> str:
     )
 
 
+def _tag_hints_script() -> str:
+    return (
+        "from enum import IntEnum\n"
+        "from pyrung.core import Int, PLC, Program, Rung, copy\n"
+        "\n"
+        "class Mode(IntEnum):\n"
+        "    IDLE = 0\n"
+        "    RUN = 1\n"
+        "\n"
+        "ModeTag = Int('ModeTag', choices=Mode, readonly=True)\n"
+        "Plain = Int('Plain')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(0, ModeTag)\n"
+        "        copy(0, Plain)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _char_runner_script() -> str:
+    return (
+        "from pyrung.core import Char, PLC, Program, Rung, copy\n"
+        "\n"
+        "Mode = Char('Mode')\n"
+        "Mirror = Char('Mirror')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(Mode, Mirror)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
 def _program_only_script() -> str:
     return (
         "from pyrung.core import Bool, Program, Rung, out\n"
@@ -2999,7 +3035,7 @@ def test_pyrung_force_requires_tag(tmp_path: Path):
     assert "tag is required" in response["message"]
 
 
-def test_pyrung_force_requires_bool_or_number_value(tmp_path: Path):
+def test_pyrung_force_requires_bool_number_or_string_value(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3012,11 +3048,31 @@ def test_pyrung_force_requires_bool_or_number_value(tmp_path: Path):
         out_stream,
         seq=2,
         command="pyrungForce",
-        arguments={"tag": "Button", "value": "true"},
+        arguments={"tag": "Button", "value": ["true"]},
     )
     response = _single_response(messages)
     assert response["success"] is False
-    assert "must be a bool or number" in response["message"]
+    assert "must be a bool, number, or string" in response["message"]
+
+
+def test_pyrung_force_accepts_string_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _char_runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungForce",
+        arguments={"tag": "Mode", "value": "Z"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner.forces["Mode"] == "Z"
 
 
 def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
@@ -3066,7 +3122,7 @@ def test_pyrung_patch_requires_tag(tmp_path: Path):
     assert "tag is required" in response["message"]
 
 
-def test_pyrung_patch_requires_bool_or_number_value(tmp_path: Path):
+def test_pyrung_patch_requires_bool_number_or_string_value(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3075,11 +3131,11 @@ def test_pyrung_patch_requires_bool_or_number_value(tmp_path: Path):
     _drain_messages(out_stream)
 
     messages = _send_request(
-        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"tag": "Button", "value": "1"}
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"tag": "Button", "value": {}}
     )
     response = _single_response(messages)
     assert response["success"] is False
-    assert "must be a bool or number" in response["message"]
+    assert "must be a bool, number, or string" in response["message"]
 
 
 def test_pyrung_patch_batch_applies_multiple_tags(tmp_path: Path):
@@ -3138,11 +3194,11 @@ def test_pyrung_patch_batch_invalid_value_type_raises_error(tmp_path: Path):
         out_stream,
         seq=2,
         command="pyrungPatch",
-        arguments={"patches": {"Button": "yes"}},
+        arguments={"patches": {"Button": ["yes"]}},
     )
     response = _single_response(messages)
     assert response["success"] is False
-    assert "must be a bool or number" in response["message"]
+    assert "must be a bool, number, or string" in response["message"]
 
 
 def test_pyrung_patch_batch_not_a_dict_raises_error(tmp_path: Path):
@@ -3260,6 +3316,42 @@ def test_trace_tag_values_reflect_forced_state(tmp_path: Path):
     assert tag_values["Button"] == "True"
 
 
+def test_trace_tag_hints_present_for_choice_and_readonly_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert body["tagHints"] == {"ModeTag": {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}}
+
+
+def test_live_trace_body_includes_tag_hints(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=4, command="next")
+    _drain_messages(out_stream)
+
+    with adapter._state_lock:
+        body = adapter._live_trace_body_locked()
+
+    assert body is not None
+    assert body["tagHints"] == {"ModeTag": {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}}
+
+
 def test_trace_tag_groups_for_structured_tags(tmp_path: Path):
     """tagGroups maps structure name to its member tag names."""
     out_stream = io.BytesIO()
@@ -3306,6 +3398,7 @@ def test_trace_tag_groups_empty_for_plain_tags(tmp_path: Path):
     assert traces
     body = traces[0]["body"]
     assert body["tagGroups"] == {}
+    assert body["tagHints"] == {}
 
 
 def test_existing_debug_console_force_commands_still_work(tmp_path: Path):

@@ -37,10 +37,10 @@ def _require_tag(parsed: Any, *, prefix: str, error: type[Exception]) -> str:
     return tag.strip()
 
 
-def _require_value(parsed: Any, *, prefix: str, error: type[Exception]) -> bool | int | float:
+def _require_value(parsed: Any, *, prefix: str, error: type[Exception]) -> bool | int | float | str:
     value = parsed.value
-    if not isinstance(value, (bool, int, float)):
-        raise error(f"{prefix}.value must be a bool or number")
+    if not isinstance(value, (bool, int, float, str)):
+        raise error(f"{prefix}.value must be a bool, number, or string")
     return value
 
 
@@ -133,9 +133,9 @@ def _on_pyrung_patch_batch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     for tag_name, value in patches.items():
         if not isinstance(tag_name, str) or not tag_name.strip():
             raise adapter.DAPAdapterError("pyrungPatch.patches keys must be non-empty strings")
-        if not isinstance(value, (bool, int, float)):
+        if not isinstance(value, (bool, int, float, str)):
             raise adapter.DAPAdapterError(
-                f"pyrungPatch.patches[{tag_name!r}] must be a bool or number"
+                f"pyrungPatch.patches[{tag_name!r}] must be a bool, number, or string"
             )
     cleaned = {k.strip(): v for k, v in patches.items()}
 

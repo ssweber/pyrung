@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, cast
 
 import pyclickplc
@@ -10,6 +11,13 @@ from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
 from pyrung.click import TagMap, c, ds, x
+from pyrung.click.tag_map._parsers import (
+    TagMeta,
+    _compose_address_comment,
+    _extract_address_comment,
+    format_tag_meta,
+    parse_tag_meta,
+)
 from pyrung.core import Block, Bool, Tag, TagType
 
 
@@ -312,6 +320,64 @@ def test_from_nickname_file_round_trip(tmp_path):
     assert restored_block[1].default is True
     assert restored_block[1].comment == "First alarm"
     assert restored_block[2].comment == "Last alarm"
+
+
+def test_tag_meta_parser_round_trips_valid_metadata():
+    meta, remaining = parse_tag_meta("[choices=IDLE:0|RUN:1, readonly] Motor speed")
+
+    assert meta == TagMeta(readonly=True, choices={0: "IDLE", 1: "RUN"})
+    assert remaining == "Motor speed"
+    assert format_tag_meta(meta) == "[readonly, choices=IDLE:0|RUN:1]"
+
+
+def test_tag_meta_parser_leaves_literal_bracket_text_untouched():
+    meta, remaining = parse_tag_meta("[WIP] Motor speed")
+    comment, extracted_meta, bg_color = _extract_address_comment("[WIP] Motor speed")
+
+    assert meta is None
+    assert remaining == "[WIP] Motor speed"
+    assert comment == "[WIP] Motor speed"
+    assert extracted_meta is None
+    assert bg_color is None
+    assert _compose_address_comment(comment, tag_meta=extracted_meta) == "[WIP] Motor speed"
+
+
+def test_format_tag_meta_rejects_invalid_choice_label_characters():
+    with pytest.raises(ValueError, match="choice label"):
+        format_tag_meta(TagMeta(choices={0: "Run|Fast"}))
+
+
+def test_nickname_file_round_trip_preserves_block_tag_meta_bg_color_and_comment(tmp_path):
+    class Mode(IntEnum):
+        IDLE = 0
+        RUN = 1
+
+    mode_block = Block("Mode", TagType.INT, 1, 1)
+    mode_block.slot(1, comment="Motor speed", choices=Mode, readonly=True)
+    mode_block._pyrung_click_bg_color = "#FFCDD2"
+    mapping = TagMap({mode_block: ds.select(501, 501)})
+
+    path = tmp_path / "tag_meta_round_trip.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    record = rows[get_addr_key("DS", 501)]
+
+    assert (
+        record.comment == '<Mode:block bg="#FFCDD2" /> [readonly, choices=IDLE:0|RUN:1] Motor speed'
+    )
+
+    comment, tag_meta, bg_color = _extract_address_comment(record.comment)
+    assert comment == "Motor speed"
+    assert tag_meta == TagMeta(readonly=True, choices={0: "IDLE", 1: "RUN"})
+    assert bg_color == "#FFCDD2"
+
+    restored = TagMap.from_nickname_file(path)
+    restored_block = restored.blocks()[0].logical
+
+    assert getattr(restored_block, "_pyrung_click_bg_color", None) == "#FFCDD2"
+    assert restored_block[1].comment == "Motor speed"
+    assert restored_block[1].choices == {0: "IDLE", 1: "RUN"}
+    assert restored_block[1].readonly is True
 
 
 def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):

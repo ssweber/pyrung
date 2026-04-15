@@ -65,3 +65,4 @@ class _BlockImportSpec:
     end_idx: int
     hardware_range: BlockRange
     hardware_addresses: tuple[int, ...]
+    bg_color: str | None = None

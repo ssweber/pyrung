@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 from pyclickplc.addresses import AddressRecord, format_address_display, parse_address
@@ -11,6 +12,7 @@ from pyclickplc.blocks import BlockRange as ClickBlockRange
 from pyclickplc.blocks import parse_block_tag
 
 from pyrung.core import Block, InputBlock, OutputBlock, TagType
+from pyrung.core.tag import ChoiceMap
 
 from ._types import _BlockImportSpec
 
@@ -40,6 +42,16 @@ _EXPLICIT_BLOCK_RE = re.compile(rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block$")
 _EXPLICIT_BLOCK_START_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block\((?P<start>start=(?:0|[1-9][0-9]*)|0|[1-9][0-9]*)\)$"
 )
+
+_TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
+_CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
+_CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
+
+
+@dataclass(frozen=True)
+class TagMeta:
+    readonly: bool = False
+    choices: ChoiceMap | None = None
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -350,6 +362,7 @@ def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -
         end_idx=block_range.end_idx,
         hardware_range=hardware_range,
         hardware_addresses=hardware_addresses,
+        bg_color=block_range.bg_color,
     )
 
 
@@ -359,20 +372,130 @@ def _default_logical_block_start(hardware_addresses: tuple[int, ...]) -> int:
     return 1
 
 
-def _extract_address_comment(comment: str) -> str:
+def _parse_tag_meta_value(token: str) -> int | float | str:
+    text = token.strip()
+    if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
+        raise ValueError(f"Invalid TagMeta choice value {token!r}.")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
+    text = raw.strip()
+    if text == "":
+        raise ValueError("TagMeta choices must not be empty.")
+
+    choices: ChoiceMap = {}
+    for pair in text.split("|"):
+        label_text, sep, value_text = pair.partition(":")
+        label = label_text.strip()
+        if sep != ":" or label == "":
+            raise ValueError(f"Invalid TagMeta choice pair {pair!r}.")
+        if _CHOICE_LABEL_RE.fullmatch(label) is None:
+            raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+        choices[_parse_tag_meta_value(value_text)] = label
+
+    return choices
+
+
+def _parse_tag_meta_group(content: str) -> TagMeta | None:
+    tokens = [token.strip() for token in content.split(",") if token.strip()]
+    if not tokens:
+        return None
+
+    first = tokens[0]
+    if first != "readonly" and not first.startswith("choices="):
+        return None
+
+    readonly = False
+    choices: ChoiceMap | None = None
+    for token in tokens:
+        if token == "readonly":
+            readonly = True
+            continue
+        if token.startswith("choices="):
+            if choices is not None:
+                raise ValueError("TagMeta choices may only be specified once.")
+            choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
+            continue
+        raise ValueError(f"Unsupported TagMeta token {token!r}.")
+
+    return TagMeta(readonly=readonly, choices=choices)
+
+
+def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
+    if comment == "":
+        return None, ""
+
+    remaining_parts: list[str] = []
+    readonly = False
+    choices: ChoiceMap | None = None
+    cursor = 0
+
+    for match in _TAG_META_GROUP_RE.finditer(comment):
+        remaining_parts.append(comment[cursor : match.start()])
+        parsed = _parse_tag_meta_group(match.group()[1:-1].strip())
+        if parsed is None:
+            remaining_parts.append(match.group())
+        else:
+            readonly = readonly or parsed.readonly
+            if parsed.choices is not None:
+                if choices is not None:
+                    raise ValueError("TagMeta choices may only be specified once.")
+                choices = parsed.choices
+        cursor = match.end()
+
+    remaining_parts.append(comment[cursor:])
+    remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
+    if not readonly and choices is None:
+        return None, remaining_text
+    return TagMeta(readonly=readonly, choices=choices), remaining_text
+
+
+def format_tag_meta(meta: TagMeta | None) -> str:
+    if meta is None or (not meta.readonly and meta.choices is None):
+        return ""
+
+    tokens: list[str] = []
+    if meta.readonly:
+        tokens.append("readonly")
+    if meta.choices is not None:
+        pairs: list[str] = []
+        for value, label in meta.choices.items():
+            if _CHOICE_LABEL_RE.fullmatch(label) is None:
+                raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+            value_text = str(value)
+            if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
+                raise ValueError(f"Invalid TagMeta choice value {value!r}.")
+            pairs.append(f"{label}:{value_text}")
+        tokens.append(f"choices={'|'.join(pairs)}")
+    return f"[{', '.join(tokens)}]"
+
+
+def _extract_address_comment(comment: str) -> tuple[str, TagMeta | None, str | None]:
     parsed = parse_block_tag(comment)
     if parsed.name is None:
-        return comment.strip()
-    return parsed.remaining_text.strip()
+        meta, remaining_text = parse_tag_meta(comment)
+        return remaining_text.strip(), meta, None
+    meta, remaining_text = parse_tag_meta(parsed.remaining_text)
+    return remaining_text.strip(), meta, parsed.bg_color
 
 
-def _compose_address_comment(comment: str, block_tag: str = "") -> str:
+def _compose_address_comment(
+    comment: str,
+    block_tag: str = "",
+    tag_meta: TagMeta | None = None,
+) -> str:
     text = comment.strip()
-    if not block_tag:
-        return text
-    if not text:
-        return block_tag
-    return f"{block_tag} {text}"
+    meta_text = format_tag_meta(tag_meta)
+    parts = [part for part in (block_tag, meta_text, text) if part]
+    return " ".join(parts)
 
 
 def _is_marker_only_boundary_row(row: AddressRecord, *, block_name: str) -> bool:

@@ -8,6 +8,7 @@ Tracking issue: https://github.com/astral-sh/ty/issues/143
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -90,6 +91,24 @@ def test_udt_retentive_explicit_overrides_type_default():
     sensor = cast(Any, Sensor)
     assert sensor.active.retentive is True  # overridden from Bool default False
     assert sensor.reading.retentive is False  # overridden from Int default True
+
+
+def test_udt_field_choices_and_readonly_thread_through_blocks_and_fields():
+    class Mode(IntEnum):
+        IDLE = 0
+        RUN = 1
+
+    @udt(count=2)
+    class Device:
+        mode: Int = Field(choices=Mode, readonly=True)  # ty: ignore[invalid-assignment]
+
+    device = cast(Any, Device)
+    assert device.fields["mode"].choices == {0: "IDLE", 1: "RUN"}
+    assert device.fields["mode"].readonly is True
+    assert device.mode.slot(1).choices == {0: "IDLE", 1: "RUN"}
+    assert device.mode.slot(1).readonly is True
+    assert device[2].mode.choices == {0: "IDLE", 1: "RUN"}
+    assert device[2].mode.readonly is True
 
 
 def test_udt_rejects_invalid_declarations():

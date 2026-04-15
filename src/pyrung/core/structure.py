@@ -6,12 +6,22 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any, ClassVar, Protocol, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import LiveTag, MappingEntry, Tag, TagType, _TagTypeBase
+from pyrung.core.tag import (
+    ChoiceMap,
+    LiveTag,
+    MappingEntry,
+    Tag,
+    TagType,
+    _normalize_choices,
+    _TagTypeBase,
+)
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -72,14 +82,18 @@ class Field:
     type: TagType | None = None
     default: Any = UNSET
     retentive: bool | None = None
+    choices: ChoiceMap | None = None
+    readonly: bool = False
 
     def __new__(
         cls,
         type: TagType | None = None,
         default: Any = UNSET,
         retentive: bool | None = None,
+        choices: builtins.type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool = False,
     ) -> Any:
-        _ = (type, default, retentive)
+        _ = (type, default, retentive, choices, readonly)
         return super().__new__(cls)
 
 
@@ -97,6 +111,8 @@ class _FieldSpec:
     type: TagType
     default: object
     retentive: bool
+    choices: ChoiceMap | None = None
+    readonly: bool = False
 
 
 def auto(*, start: int = 1, step: int = 1) -> Any:
@@ -253,6 +269,8 @@ class _StructRuntime:
             block._pyrung_structure_kind = self._structure_kind  # ty: ignore[unresolved-attribute]
             block._pyrung_structure_name = name  # ty: ignore[unresolved-attribute]
             block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_choices = field_spec.choices  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_readonly = field_spec.readonly  # ty: ignore[unresolved-attribute]
             self._blocks[field_spec.name] = block
 
     def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
@@ -268,7 +286,13 @@ class _StructRuntime:
     @property
     def fields(self) -> dict[str, Field]:
         return {
-            name: Field(type=spec.type, default=spec.default, retentive=spec.retentive)
+            name: Field(
+                type=spec.type,
+                default=spec.default,
+                retentive=spec.retentive,
+                choices=spec.choices,
+                readonly=spec.readonly,
+            )
             for name, spec in self._field_specs.items()
         }
 
@@ -534,6 +558,8 @@ def _build_field_spec(
 ) -> _FieldSpec:
     retentive: bool | None = None
     default_spec = raw_default
+    choices: ChoiceMap | None = None
+    readonly = False
 
     if isinstance(raw_default, Field):
         if raw_default.type is not None and raw_default.type != type:
@@ -548,12 +574,25 @@ def _build_field_spec(
             )
         retentive = raw_default.retentive
         default_spec = raw_default.default
+        choices = _normalize_choices(
+            raw_default.choices,
+            tag_type=type,
+            owner=f"Field({field_name!r}) choices",
+        )
+        readonly = bool(raw_default.readonly)
 
     if retentive is None:
         retentive = _TYPE_DEFAULT_RETENTIVE[type]
 
     _validate_auto_default_allowed(field_name, default_spec, type)
-    return _FieldSpec(name=field_name, type=type, default=default_spec, retentive=retentive)
+    return _FieldSpec(
+        name=field_name,
+        type=type,
+        default=default_spec,
+        retentive=retentive,
+        choices=choices,
+        readonly=readonly,
+    )
 
 
 def _resolve_annotation(annotation: object, field_name: str) -> TagType:

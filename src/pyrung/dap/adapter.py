@@ -532,6 +532,7 @@ class DAPAdapter:
                 name: self._format_value(value) for name, value in runner.current_state.tags.items()
             }
             body["tagTypes"] = self._tag_types_locked(runner)
+            body["tagHints"] = self._tag_hints_locked(runner)
             body["tagGroups"] = self._tag_groups_locked(runner)
         return body
 
@@ -575,6 +576,7 @@ class DAPAdapter:
                 name: self._format_value(value) for name, value in runner.current_state.tags.items()
             },
             "tagTypes": self._tag_types_locked(runner),
+            "tagHints": self._tag_hints_locked(runner),
             "tagGroups": self._tag_groups_locked(runner),
         }
 
@@ -602,10 +604,21 @@ class DAPAdapter:
 
     @staticmethod
     def _tag_types_locked(runner: Any) -> dict[str, str]:
-        return {
-            name: tag.type.value
-            for name, tag in runner._known_tags_by_name.items()
-        }
+        return {name: tag.type.value for name, tag in runner._known_tags_by_name.items()}
+
+    @staticmethod
+    def _tag_hints_locked(runner: Any) -> dict[str, dict[str, Any]]:
+        hints: dict[str, dict[str, Any]] = {}
+        for name, tag in runner._known_tags_by_name.items():
+            entry: dict[str, Any] = {}
+            choices = getattr(tag, "choices", None)
+            if choices is not None:
+                entry["choices"] = {str(key): label for key, label in choices.items()}
+            if getattr(tag, "readonly", False):
+                entry["readonly"] = True
+            if entry:
+                hints[name] = entry
+        return hints
 
     @staticmethod
     def _tag_groups_locked(runner: Any) -> dict[str, list[str]]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, cast
 
 import pytest
@@ -52,6 +53,32 @@ def test_tag_type_class_allows_retentive_override(factory):
 def test_tag_type_class_allows_default_override(factory, custom_default):
     tag = factory("X", default=custom_default)
     assert tag.default == custom_default
+
+
+def test_tag_type_class_normalizes_intenum_choices_and_readonly():
+    class Mode(IntEnum):
+        IDLE = 0
+        RUN = 1
+
+    tag = Int("Mode", choices=Mode, readonly=True)
+
+    assert tag.choices == {0: "IDLE", 1: "RUN"}
+    assert tag.readonly is True
+
+
+def test_tag_type_class_allows_mapping_choices():
+    tag = Int("Mode", choices={0: "IDLE", 1: "RUN"})
+    assert tag.choices == {0: "IDLE", 1: "RUN"}
+
+
+def test_bool_tag_rejects_choices():
+    with pytest.raises(TypeError, match="BOOL"):
+        Bool("Flag", choices={0: "Off", 1: "On"})
+
+
+def test_tag_type_class_rejects_bool_choice_keys():
+    with pytest.raises(TypeError, match="keys must be int, float, or str"):
+        Int("Mode", choices={True: "On"})
 
 
 @pytest.mark.parametrize("factory", [Bool, Int, Dint, Real, Word, Char])

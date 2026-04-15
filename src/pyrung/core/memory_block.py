@@ -12,11 +12,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Never, cast, overload
 
 from pyrung.core.tag import (
+    ChoiceMap,
     LiveInputTag,
     LiveOutputTag,
     LiveTag,
     Tag,
     TagType,
+    _normalize_choices,
 )
 
 if TYPE_CHECKING:
@@ -67,6 +69,14 @@ class SlotView:
         return self._block._effective_slot_comment(self._addr)
 
     @property
+    def choices(self) -> ChoiceMap | None:
+        return self._block._effective_slot_hints(self._addr)[0]
+
+    @property
+    def readonly(self) -> bool:
+        return self._block._effective_slot_hints(self._addr)[1]
+
+    @property
     def name_overridden(self) -> bool:
         return self._addr in self._block._slot_name_overrides
 
@@ -82,6 +92,14 @@ class SlotView:
     def comment_overridden(self) -> bool:
         return self._addr in self._block._slot_comment_overrides
 
+    @property
+    def choices_overridden(self) -> bool:
+        return self._addr in self._block._slot_choices_overrides
+
+    @property
+    def readonly_overridden(self) -> bool:
+        return self._addr in self._block._slot_readonly_overrides
+
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
@@ -89,6 +107,8 @@ class SlotView:
         self._block._slot_retentive_overrides.pop(self._addr, None)
         self._block._slot_default_overrides.pop(self._addr, None)
         self._block._slot_comment_overrides.pop(self._addr, None)
+        self._block._slot_choices_overrides.pop(self._addr, None)
+        self._block._slot_readonly_overrides.pop(self._addr, None)
 
     def __repr__(self) -> str:
         return (
@@ -121,6 +141,8 @@ class RangeSlotView:
             self._block._slot_retentive_overrides.pop(addr, None)
             self._block._slot_default_overrides.pop(addr, None)
             self._block._slot_comment_overrides.pop(addr, None)
+            self._block._slot_choices_overrides.pop(addr, None)
+            self._block._slot_readonly_overrides.pop(addr, None)
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -187,6 +209,8 @@ class Block:
     _slot_retentive_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_default_overrides: dict[int, Any] = field(default_factory=dict, repr=False)
     _slot_comment_overrides: dict[int, str] = field(default_factory=dict, repr=False)
+    _slot_choices_overrides: dict[int, ChoiceMap | None] = field(default_factory=dict, repr=False)
+    _slot_readonly_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -255,16 +279,26 @@ class Block:
         if addr not in self._tag_cache:
             retentive, default = self._effective_slot_policy(addr)
             comment = self._effective_slot_comment(addr)
+            choices, readonly = self._effective_slot_hints(addr)
             self._tag_cache[addr] = self._new_tag_for_slot(
                 addr,
                 retentive=retentive,
                 default=default,
                 comment=comment,
+                choices=choices,
+                readonly=readonly,
             )
         return cast(LiveTag, self._tag_cache[addr])
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
     ) -> LiveTag:
         tag = LiveTag(
             name=self._effective_slot_name(addr),
@@ -272,6 +306,8 @@ class Block:
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
         )
         return self._annotate_tag(tag, addr)
 
@@ -311,6 +347,19 @@ class Block:
     def _effective_slot_comment(self, addr: int) -> str:
         return self._slot_comment_overrides.get(addr, "")
 
+    def _effective_slot_hints(self, addr: int) -> tuple[ChoiceMap | None, bool]:
+        if addr in self._slot_choices_overrides:
+            choices = self._slot_choices_overrides[addr]
+        else:
+            choices = cast(ChoiceMap | None, getattr(self, "_pyrung_field_choices", None))
+
+        if addr in self._slot_readonly_overrides:
+            readonly = self._slot_readonly_overrides[addr]
+        else:
+            readonly = bool(getattr(self, "_pyrung_field_readonly", False))
+
+        return choices, readonly
+
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
         if addr in self._tag_cache:
             raise ValueError(
@@ -330,6 +379,8 @@ class Block:
         retentive: bool = ...,
         default: Any = ...,
         comment: str = ...,
+        choices: ChoiceMap | None = ...,
+        readonly: bool = ...,
     ) -> SlotView: ...
 
     @overload
@@ -354,6 +405,8 @@ class Block:
         retentive: bool | None = None,
         default: object = UNSET,
         comment: object = UNSET,
+        choices: object = UNSET,
+        readonly: object = UNSET,
     ) -> SlotView | RangeSlotView:
         """Inspect, configure, or reset one or more block slots.
 
@@ -389,6 +442,8 @@ class Block:
             or retentive is not None
             or default is not UNSET
             or comment is not UNSET
+            or choices is not UNSET
+            or readonly is not UNSET
         )
         if has_config:
             self._assert_not_materialized(addr, action="configure slot")
@@ -407,6 +462,14 @@ class Block:
                     self._slot_comment_overrides.pop(addr, None)
                 else:
                     self._slot_comment_overrides[addr] = comment
+            if choices is not UNSET:
+                self._slot_choices_overrides[addr] = _normalize_choices(
+                    choices,
+                    tag_type=self.type,
+                    owner=f"{self.name}.slot({addr}) choices",
+                )
+            if readonly is not UNSET:
+                self._slot_readonly_overrides[addr] = bool(readonly)
 
         return SlotView(self, addr)
 
@@ -624,7 +687,14 @@ class InputBlock(Block):
         return cast(LiveInputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
     ) -> LiveInputTag:
         tag = LiveInputTag(
             name=self._effective_slot_name(addr),
@@ -632,6 +702,8 @@ class InputBlock(Block):
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
         )
         return cast(LiveInputTag, self._annotate_tag(tag, addr))
 
@@ -703,7 +775,14 @@ class OutputBlock(Block):
         return cast(LiveOutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
     ) -> LiveOutputTag:
         tag = LiveOutputTag(
             name=self._effective_slot_name(addr),
@@ -711,6 +790,8 @@ class OutputBlock(Block):
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
         )
         return cast(LiveOutputTag, self._annotate_tag(tag, addr))
 

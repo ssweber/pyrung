@@ -488,7 +488,13 @@ exports.activate = function (context) {
             if (message.event === "pyrungTrace") {
               const body = message.body || {};
               if (body.tagValues) {
-                dataView.updateTrace(body.tagValues, body.forces || {}, body.tagTypes || {}, body.tagGroups || {});
+                dataView.updateTrace(
+                  body.tagValues,
+                  body.forces || {},
+                  body.tagTypes || {},
+                  body.tagGroups || {},
+                  body.tagHints || {}
+                );
               }
             } else if (message.event === "pyrungMonitor") {
               const body = message.body || {};

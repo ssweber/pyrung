@@ -6,8 +6,9 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
@@ -27,6 +28,42 @@ class TagType(Enum):
     REAL = "real"  # 32-bit float
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
+
+
+ChoiceKey = int | float | str
+ChoiceMap = dict[ChoiceKey, str]
+
+
+def _normalize_choices(
+    raw: object,
+    *,
+    tag_type: TagType,
+    owner: str = "choices",
+) -> ChoiceMap | None:
+    if raw is None:
+        return None
+    if tag_type == TagType.BOOL:
+        raise TypeError(f"{owner} are not supported for BOOL tags.")
+
+    if isinstance(raw, type) and issubclass(raw, IntEnum):
+        items = ((member.value, member.name) for member in raw)
+    else:
+        try:
+            items = dict(cast(Mapping[object, object] | Any, raw)).items()
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"{owner} must be a mapping or IntEnum type, got {type(raw).__name__}."
+            ) from exc
+
+    normalized: ChoiceMap = {}
+    for key, label in items:
+        if isinstance(key, bool) or not isinstance(key, (int, float, str)):
+            raise TypeError(f"{owner} keys must be int, float, or str, got {key!r}.")
+        if not isinstance(label, str):
+            raise TypeError(f"{owner} labels must be strings, got {label!r}.")
+        normalized[key] = label
+
+    return normalized or None
 
 
 @dataclass(frozen=True)
@@ -57,6 +94,8 @@ class Tag:
     default: Any = field(default=None)
     retentive: bool = False
     comment: str = ""
+    choices: ChoiceMap | None = None
+    readonly: bool = False
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -547,6 +586,8 @@ class _TagTypeBase(LiveTag):
         default: Any = None,
         retentive: bool | None = None,
         comment: str = "",
+        choices: type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool = False,
     ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
@@ -558,6 +599,8 @@ class _TagTypeBase(LiveTag):
         default: Any = None,
         retentive: bool | None = None,
         comment: str = "",
+        choices: type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool = False,
     ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
@@ -565,7 +608,20 @@ class _TagTypeBase(LiveTag):
             raise TypeError(f"{cls.__name__}() name must be a string.")
         if not isinstance(comment, str):
             raise TypeError(f"{cls.__name__}() comment must be a string.")
-        return LiveTag(name, cls._tag_type, default, retentive, comment)
+        normalized_choices = _normalize_choices(
+            choices,
+            tag_type=cls._tag_type,
+            owner=f"{cls.__name__}() choices",
+        )
+        return LiveTag(
+            name,
+            cls._tag_type,
+            default,
+            retentive,
+            comment,
+            normalized_choices,
+            bool(readonly),
+        )
 
 
 class Bool(_TagTypeBase):
