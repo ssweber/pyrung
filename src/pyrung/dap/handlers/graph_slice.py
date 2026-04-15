@@ -208,26 +208,32 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     if not isinstance(parsed.tag, str) or not parsed.tag:
         raise adapter.DAPAdapterError("pyrungSlice.tag must be a non-empty string")
-    if parsed.direction not in ("upstream", "downstream"):
-        raise adapter.DAPAdapterError("pyrungSlice.direction must be 'upstream' or 'downstream'")
+    if parsed.direction not in ("upstream", "downstream", "both"):
+        raise adapter.DAPAdapterError(
+            "pyrungSlice.direction must be 'upstream', 'downstream', or 'both'"
+        )
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
 
     graph = runner.program.dataview()._graph
     tag_name = parsed.tag
+    direction = parsed.direction
 
-    if parsed.direction == "upstream":
-        slice_tags = graph.upstream_slice(tag_name)
-    else:
-        slice_tags = graph.downstream_slice(tag_name)
+    upstream_tags: frozenset[str] = frozenset()
+    downstream_tags: frozenset[str] = frozenset()
+    if direction in ("upstream", "both"):
+        upstream_tags = graph.upstream_slice(tag_name)
+    if direction in ("downstream", "both"):
+        downstream_tags = graph.downstream_slice(tag_name)
 
     # Include the queried tag itself in the result set
-    all_tags = slice_tags | {tag_name}
+    all_tags = upstream_tags | downstream_tags | {tag_name}
 
-    # Filter graph edges to those within the slice
+    # Filter graph edges to those within the slice and collect rung IDs
     all_edges = graph.graph_edges()
     slice_edges = []
+    slice_rungs: set[str] = set()
     for edge in all_edges:
         src = edge["source"]
         tgt = edge["target"]
@@ -244,6 +250,7 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             rung_node = graph.rung_nodes[rung_idx]
             if rung_node.writes & all_tags:
                 slice_edges.append(edge)
+                slice_rungs.add(tgt)
             continue
         if tgt_tag and tgt_tag in all_tags and src_tag is None:
             # rung→tag: include if rung reads from a tag in the slice
@@ -251,8 +258,17 @@ def on_pyrung_slice(adapter: Any, args: dict[str, Any]) -> HandlerResult:
             rung_node = graph.rung_nodes[rung_idx]
             if (rung_node.condition_reads | rung_node.data_reads) & all_tags:
                 slice_edges.append(edge)
+                slice_rungs.add(src)
 
-    return {"tags": sorted(all_tags), "edges": slice_edges}, []
+    result: dict[str, Any] = {
+        "tags": sorted(all_tags),
+        "edges": slice_edges,
+        "rungs": sorted(slice_rungs),
+    }
+    if direction == "both":
+        result["upstream"] = sorted(upstream_tags)
+        result["downstream"] = sorted(downstream_tags)
+    return result, []
 
 
 def on_pyrung_query(adapter: Any, args: dict[str, Any]) -> HandlerResult:

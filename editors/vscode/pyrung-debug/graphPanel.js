@@ -108,6 +108,9 @@ class PyrungGraphPanelProvider {
             direction: message.direction,
             tags: result.tags || [],
             edges: result.edges || [],
+            rungs: result.rungs || [],
+            upstream: result.upstream || [],
+            downstream: result.downstream || [],
           });
         } catch (e) {
           console.error("Slice request failed:", e);
@@ -232,7 +235,7 @@ class PyrungGraphPanelProvider {
 
   /* ---- Info sidebar ---- */
   .info-panel {
-    width: 220px;
+    width: 170px;
     border-left: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
     padding: 10px;
     overflow-y: auto;
@@ -311,6 +314,60 @@ class PyrungGraphPanelProvider {
     word-break: break-word;
   }
   .graph-tooltip.visible { display: block; }
+
+  /* ---- Slice buttons in info panel ---- */
+  .slice-btns {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+  .slice-btn {
+    flex: 1;
+    padding: 4px 6px;
+    border: 1px solid var(--vscode-button-secondaryBackground);
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    cursor: pointer;
+    font-size: 0.8em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .slice-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+  /* ---- Slice banner ---- */
+  .slice-banner {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    background: var(--vscode-editorWidget-background, rgba(60,60,60,0.9));
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
+    font-size: 0.85em;
+    flex-shrink: 0;
+  }
+  .slice-banner.visible { display: flex; }
+  .slice-banner-text { flex: 1; }
+  .slice-banner-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    font-size: 1.1em;
+    padding: 0 4px;
+  }
+  .slice-banner-close:hover { color: var(--vscode-errorForeground, #f44); }
+
+  /* ---- Grid layout banner ---- */
+  .grid-banner {
+    display: none;
+    padding: 4px 10px;
+    background: var(--vscode-editorWidget-background, rgba(60,60,60,0.9));
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
+    font-size: 0.85em;
+    flex-shrink: 0;
+    color: var(--vscode-descriptionForeground);
+  }
+  .grid-banner.visible { display: block; }
 </style>
 </head>
 <body>
@@ -324,6 +381,11 @@ class PyrungGraphPanelProvider {
     <button id="rung-order-btn" class="role-btn active" title="Sort layout by rung order (ladder top-down)">Rung Order</button>
     <button id="reset-btn" class="reset-btn" title="Reset layout, pins, and hidden nodes">Reset</button>
   </div>
+  <div id="slice-banner" class="slice-banner">
+    <span id="slice-banner-text" class="slice-banner-text"></span>
+    <button id="slice-banner-close" class="slice-banner-close" title="Clear slice">\u2715</button>
+  </div>
+  <div id="grid-banner" class="grid-banner"></div>
   <div class="main">
     <div id="cy"></div>
     <div id="info-panel" class="info-panel"></div>
@@ -345,6 +407,10 @@ class PyrungGraphPanelProvider {
   const resetBtn = document.getElementById("reset-btn");
   const rungOrderBtn = document.getElementById("rung-order-btn");
   const roleButtons = document.querySelectorAll(".role-btn[data-role]");
+  const sliceBanner = document.getElementById("slice-banner");
+  const sliceBannerText = document.getElementById("slice-banner-text");
+  const sliceBannerClose = document.getElementById("slice-banner-close");
+  const gridBanner = document.getElementById("grid-banner");
 
   // ---- State ----
   let cy = null;
@@ -452,6 +518,11 @@ class PyrungGraphPanelProvider {
     return tokens.some(tok => needleVariants.some(v => tok.startsWith(v)));
   }
 
+  // ---- Rung ID parsing ----
+  function parseRungId(id) {
+    return parseInt(id.split(":")[1], 10);
+  }
+
   // ---- Node colors ----
   const ROLE_COLORS = {
     input:    { bg: "#4A90D9", border: "#3570B0", text: "#fff" },
@@ -486,7 +557,7 @@ class PyrungGraphPanelProvider {
       } else if (tgt.startsWith("rung:") && !src.startsWith("rung:")) {
         rungId = tgt; tagName = src;
       } else continue;
-      const idx = parseInt(rungId.split(":")[1], 10);
+      const idx = parseRungId(rungId);
       if (!(tagName in tagRungAffinity) || idx < tagRungAffinity[tagName]) {
         tagRungAffinity[tagName] = idx;
       }
@@ -512,7 +583,7 @@ class PyrungGraphPanelProvider {
           bgColor: colors.bg,
           borderColor: colors.border,
           textColor: colors.text,
-          shape: role === "pivot" ? "diamond" :
+          shape: role === "pivot" ? "hexagon" :
                  role === "isolated" ? "ellipse" : "round-rectangle",
         },
         position: pinnedPositions[name] || undefined,
@@ -527,7 +598,7 @@ class PyrungGraphPanelProvider {
     }
 
     for (const rungId of rungSet) {
-      const idx = parseInt(rungId.split(":")[1], 10);
+      const idx = parseRungId(rungId);
       const rungNode = rungNodes[idx];
       if (!rungNode) continue;
       const label = "R" + (rungNode.rungIndex + 1);
@@ -581,10 +652,25 @@ class PyrungGraphPanelProvider {
   // ---- Initialize / update Cytoscape ----
   function initCytoscape(data) {
     if (cy) cy.destroy();
+
+    // Prune hiddenTags to only tags that exist in current data
+    const currentTags = new Set(Object.keys(data.tagRoles || {}));
+    for (const tag of [...hiddenTags]) {
+      if (!currentTags.has(tag)) hiddenTags.delete(tag);
+    }
+    saveWorkspaceState();
+
     const elements = buildElements(data);
 
     const nodeCount = elements.filter(e => e.group === "nodes").length;
-    const layoutConfig = nodeCount > 500
+    const useGrid = nodeCount > 500;
+    if (useGrid) {
+      gridBanner.textContent = "Graph is large (" + nodeCount + " nodes); layout simplified. Try filtering by role or search.";
+      gridBanner.classList.add("visible");
+    } else {
+      gridBanner.classList.remove("visible");
+    }
+    const layoutConfig = useGrid
       ? { name: "grid", animate: false, condense: true, avoidOverlapPadding: 10, fit: true, padding: 30 }
       : Object.assign(
           { name: "dagre", rankDir: "LR", nodeSep: 30, edgeSep: 15, rankSep: 80,
@@ -622,15 +708,6 @@ class PyrungGraphPanelProvider {
             shape: "data(shape)",
             "padding-top": "4px",
             "padding-bottom": "4px",
-          },
-        },
-        // Pivot (diamond) nodes — wider so text fits inside
-        {
-          selector: 'node[nodeType="tag"][shape="diamond"]',
-          style: {
-            width: 160,
-            height: 56,
-            "text-max-width": "100px",
           },
         },
         // Rung nodes
@@ -790,13 +867,10 @@ class PyrungGraphPanelProvider {
       }
     });
 
-    // Double-click tag node -> slice
+    // Double-click tag node -> slice both directions
     cy.on("dbltap", 'node[nodeType="tag"]', (evt) => {
       const node = evt.target;
-      const tagName = node.id();
-      vscodeApi.postMessage({ type: "slice", tag: tagName, direction: "upstream" });
-      vscodeApi.postMessage({ type: "slice", tag: tagName, direction: "downstream" });
-      sliceHighlight = { tag: tagName, upstream: [], downstream: [] };
+      performSlice(node.id(), "both");
     });
 
     // Right-click tag node -> context menu
@@ -805,6 +879,9 @@ class PyrungGraphPanelProvider {
       const node = evt.target;
       const tagName = node.id();
       showContextMenu(evt.originalEvent, [
+        { label: "Show Upstream", action: () => performSlice(tagName, "upstream") },
+        { label: "Show Downstream", action: () => performSlice(tagName, "downstream") },
+        { label: "Show Both", action: () => performSlice(tagName, "both") },
         { label: "Add to Data View", action: () => vscodeApi.postMessage({ type: "addToDataView", tag: tagName }) },
         { label: "Add to History", action: () => vscodeApi.postMessage({ type: "addToHistory", tag: tagName }) },
         { label: "Copy Name", action: () => navigator.clipboard.writeText(tagName) },
@@ -860,6 +937,12 @@ class PyrungGraphPanelProvider {
     });
   }
 
+  function performSlice(tagName, direction) {
+    clearSlice();
+    sliceHighlight = { tag: tagName, direction, upstream: [], downstream: [] };
+    vscodeApi.postMessage({ type: "slice", tag: tagName, direction });
+  }
+
   function selectTagNode(node) {
     selectedNode = node.id();
     cy.elements().removeClass("highlighted");
@@ -882,16 +965,44 @@ class PyrungGraphPanelProvider {
     if (!cy) return;
     sliceHighlight = null;
     cy.elements().removeClass("slice-upstream slice-downstream slice-origin dimmed");
+    sliceBanner.classList.remove("visible");
   }
 
-  function applySlice(tag, direction, tags) {
-    if (!cy || !sliceHighlight || sliceHighlight.tag !== tag) return;
-
-    if (direction === "upstream") {
-      sliceHighlight.upstream = tags;
-    } else {
-      sliceHighlight.downstream = tags;
+  function updateSliceBanner() {
+    if (!sliceHighlight) {
+      sliceBanner.classList.remove("visible");
+      return;
     }
+    const dir = sliceHighlight.direction;
+    const tag = sliceHighlight.tag;
+    let text;
+    if (dir === "upstream") text = "Showing upstream slice from: " + tag;
+    else if (dir === "downstream") text = "Showing downstream slice from: " + tag;
+    else text = "Showing upstream + downstream slice from: " + tag;
+    sliceBannerText.textContent = text;
+    sliceBanner.classList.add("visible");
+  }
+
+  function applySlice(msg) {
+    if (!cy || !sliceHighlight || sliceHighlight.tag !== msg.tag) return;
+
+    const tag = msg.tag;
+    const direction = msg.direction;
+
+    // Populate upstream/downstream arrays from response
+    if (direction === "both") {
+      sliceHighlight.upstream = msg.upstream || [];
+      sliceHighlight.downstream = msg.downstream || [];
+    } else if (direction === "upstream") {
+      sliceHighlight.upstream = msg.tags.filter(t => t !== tag);
+    } else {
+      sliceHighlight.downstream = msg.tags.filter(t => t !== tag);
+    }
+
+    const rungSet = new Set(msg.rungs || []);
+    const upstreamSet = new Set(sliceHighlight.upstream);
+    const allSliceTags = new Set([tag, ...sliceHighlight.upstream, ...sliceHighlight.downstream]);
+    const allSliceIds = new Set([...allSliceTags, ...rungSet]);
 
     // Apply styling
     cy.elements().addClass("dimmed");
@@ -909,50 +1020,38 @@ class PyrungGraphPanelProvider {
       if (n.length) n.removeClass("dimmed").addClass("slice-downstream");
     }
 
-    // Also highlight rung nodes and edges on the path
-    const allSliceTags = new Set([tag, ...sliceHighlight.upstream, ...sliceHighlight.downstream]);
-    const upstreamSet = new Set(sliceHighlight.upstream);
+    // Undim rung nodes explicitly returned by the server
+    for (const rId of rungSet) {
+      const rungNode = cy.getElementById(rId);
+      if (rungNode.length) rungNode.removeClass("dimmed");
+    }
 
+    // Color edges that connect slice members
     cy.edges().forEach(edge => {
       const src = edge.source().id();
       const tgt = edge.target().id();
 
-      const srcInSlice = allSliceTags.has(src) || (src.startsWith("rung:") && isRungInSlice(src, allSliceTags));
-      const tgtInSlice = allSliceTags.has(tgt) || (tgt.startsWith("rung:") && isRungInSlice(tgt, allSliceTags));
-
-      if (srcInSlice && tgtInSlice) {
+      if (allSliceIds.has(src) && allSliceIds.has(tgt)) {
         edge.removeClass("dimmed");
-        // Determine direction for this edge
-        const srcIsUpstream = upstreamSet.has(src) || (src.startsWith("rung:") && isRungInSlice(src, upstreamSet));
-        const tgtIsUpstream = upstreamSet.has(tgt) || (tgt.startsWith("rung:") && isRungInSlice(tgt, upstreamSet));
+        const srcIsUpstream = upstreamSet.has(src) || (src.startsWith("rung:") && rungSet.has(src) && hasUpstreamNeighbor(src, upstreamSet));
+        const tgtIsUpstream = upstreamSet.has(tgt) || (tgt.startsWith("rung:") && rungSet.has(tgt) && hasUpstreamNeighbor(tgt, upstreamSet));
         if (srcIsUpstream || tgtIsUpstream) {
           edge.addClass("slice-upstream");
         } else {
           edge.addClass("slice-downstream");
         }
       }
-
-      // Also undim rung nodes that connect slice tags
-      if (src.startsWith("rung:") && srcInSlice) {
-        const rungNode = cy.getElementById(src);
-        if (rungNode.length) rungNode.removeClass("dimmed");
-      }
-      if (tgt.startsWith("rung:") && tgtInSlice) {
-        const rungNode = cy.getElementById(tgt);
-        if (rungNode.length) rungNode.removeClass("dimmed");
-      }
     });
+
+    updateSliceBanner();
   }
 
-  function isRungInSlice(rungId, sliceTags) {
-    // A rung is in the slice if it connects to at least two tags in the slice set
+  function hasUpstreamNeighbor(rungId, upstreamSet) {
     const node = cy.getElementById(rungId);
     if (!node.length) return false;
     const neighbors = node.neighborhood("node");
-    let count = 0;
     for (let i = 0; i < neighbors.length; i++) {
-      if (sliceTags.has(neighbors[i].id())) count++;
-      if (count >= 2) return true;
+      if (upstreamSet.has(neighbors[i].id())) return true;
     }
     return false;
   }
@@ -967,7 +1066,8 @@ class PyrungGraphPanelProvider {
           const name = node.id();
           const roleVisible = activeRoles.has(role);
           const searchVisible = matchesSearch(name, searchNeedle);
-          if (!roleVisible || !searchVisible) {
+          const inSlice = node.hasClass("slice-upstream") || node.hasClass("slice-downstream") || node.hasClass("slice-origin");
+          if (!inSlice && (!roleVisible || !searchVisible)) {
             node.addClass("dimmed");
           } else {
             node.removeClass("dimmed");
@@ -1008,6 +1108,10 @@ class PyrungGraphPanelProvider {
       ? graphData.readersOf[tagName].length : 0;
 
     let html = '<div class="info-title">' + esc(tagName) + '</div>';
+    html += '<div class="slice-btns">';
+    html += '<button class="slice-btn" data-slice-dir="upstream" data-slice-tag="' + esc(tagName) + '">\u2190 Upstream</button>';
+    html += '<button class="slice-btn" data-slice-dir="downstream" data-slice-tag="' + esc(tagName) + '">Downstream \u2192</button>';
+    html += '</div>';
     html += '<div class="info-row"><b>Role:</b> ' + esc(role) + '</div>';
     if (value !== undefined) {
       html += '<div class="info-row"><b>Value:</b> ' + esc(String(value)) + '</div>';
@@ -1031,6 +1135,13 @@ class PyrungGraphPanelProvider {
 
     infoPanel.innerHTML = html;
     infoPanel.classList.add("visible");
+
+    // Wire up slice buttons
+    infoPanel.querySelectorAll(".slice-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        performSlice(btn.getAttribute("data-slice-tag"), btn.getAttribute("data-slice-dir"));
+      });
+    });
   }
 
   // ---- Context menu ----
@@ -1107,8 +1218,8 @@ class PyrungGraphPanelProvider {
         // Update label with value badge
         if (val !== undefined) {
           let badge;
-          if (val === true || val === "True") badge = "\\u25cf"; // green dot indicator
-          else if (val === false || val === "False") badge = "\\u25cb"; // hollow dot
+          if (val === true || val === "True") badge = "\u25cf"; // filled dot indicator
+          else if (val === false || val === "False") badge = "\u25cb"; // hollow dot
           else badge = String(val);
           node.data("label", tagName + "\\n" + badge);
           node.addClass("has-value");
@@ -1166,7 +1277,30 @@ class PyrungGraphPanelProvider {
   rungOrderBtn.addEventListener("click", () => {
     rungOrderEnabled = !rungOrderEnabled;
     rungOrderBtn.classList.toggle("active", rungOrderEnabled);
-    rebuildGraph();
+    if (cy) {
+      const nodeCount = cy.nodes().length;
+      if (nodeCount <= 500) {
+        const layoutOpts = Object.assign(
+          { name: "dagre", rankDir: "LR", nodeSep: 30, edgeSep: 15, rankSep: 80,
+            animate: false, fit: true, padding: 30 },
+          rungOrderEnabled ? {
+            sort: function(a, b) {
+              const aOrder = a.data("rungIdx") ?? a.data("rungAffinity") ?? 9999;
+              const bOrder = b.data("rungIdx") ?? b.data("rungAffinity") ?? 9999;
+              return aOrder - bOrder;
+            },
+          } : {},
+        );
+        cy.layout(layoutOpts).run();
+      }
+    } else {
+      rebuildGraph();
+    }
+  });
+
+  sliceBannerClose.addEventListener("click", () => {
+    clearSlice();
+    applyFilters();
   });
 
   resetBtn.addEventListener("click", () => {
@@ -1213,7 +1347,7 @@ class PyrungGraphPanelProvider {
     }
 
     if (msg.type === "sliceResult") {
-      applySlice(msg.tag, msg.direction, msg.tags);
+      applySlice(msg);
       return;
     }
   });
