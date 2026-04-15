@@ -11,6 +11,7 @@ from pyrung.core.rung import Rung as RungLogic
 from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.dataview import DataView
     from pyrung.core.context import ScanContext
 
@@ -44,7 +45,7 @@ class Program:
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
-        self._cached_graph: Any = None
+        self._cached_graph: ProgramGraph | None = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -60,6 +61,9 @@ class Program:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         Program._active = None
+
+    def _invalidate_graph_cache(self) -> None:
+        self._cached_graph = None
 
     def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
@@ -79,12 +83,14 @@ class Program:
                 "It can only reuse the prior rung snapshot in the same execution scope."
             )
         target.append(rung)
+        self._invalidate_graph_cache()
 
     def _start_subroutine(self, name: str) -> None:
         """Start defining a subroutine."""
         _validate_subroutine_name(name)
         self._current_subroutine = name
         self.subroutines[name] = []
+        self._invalidate_graph_cache()
 
     def _end_subroutine(self) -> None:
         """End subroutine definition."""

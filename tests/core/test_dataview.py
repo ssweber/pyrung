@@ -202,6 +202,22 @@ class TestContains:
     def test_empty_needle_returns_all(self, dv) -> None:
         assert len(dv.contains("")) == len(dv)
 
+    def test_single_char_needle_filters(self) -> None:
+        x = InputBlock("X", TagType.BOOL, 1, 1)
+        y = OutputBlock("Y", TagType.BOOL, 1, 1)
+        relay = Bool("Relay")
+
+        with Program() as prog:
+            with Rung(x[1]):
+                latch(relay)
+            with Rung(relay):
+                out(y[1])
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        assert set(dv.contains("x")) == {"X1"}
+        assert set(dv.contains("r")) == {"Relay"}
+        assert set(dv.contains("x")) != set(dv)
+
 
 # ------------------------------------------------------------------
 # Slicing tests
@@ -319,6 +335,26 @@ class TestProgramDataview:
         dv1 = module.logic.dataview()
         dv2 = module.logic.dataview()
         assert dv1._graph is dv2._graph
+
+    def test_rebuilds_after_program_mutation(self) -> None:
+        a = Bool("A")
+        b = Bool("B")
+        c = Bool("C")
+
+        with Program(strict=False) as prog:
+            with Rung(a):
+                out(b)
+
+            before = prog.dataview()
+
+            with Rung(b):
+                out(c)
+
+            after = prog.dataview()
+
+        assert "C" not in before
+        assert "C" in after
+        assert before._graph is not after._graph
 
 
 # ------------------------------------------------------------------

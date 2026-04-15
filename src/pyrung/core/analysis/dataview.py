@@ -34,9 +34,10 @@ class TagNameMatcher:
         if not needle:
             return tag_names
 
-        words = self._split_words(needle)
+        words = self._split_words(needle, min_len=1)
         if not words:
-            return tag_names
+            needle_lower = needle.lower()
+            return frozenset(name for name in tag_names if needle_lower in name.lower())
 
         if len(words) == 1:
             return self._filter_single(tag_names, words[0])
@@ -84,8 +85,8 @@ class TagNameMatcher:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _split_words(cls, text: str) -> list[str]:
-        return [w for w in cls._WORD_SPLIT.split(text) if len(w) > 1]
+    def _split_words(cls, text: str, *, min_len: int = 2) -> list[str]:
+        return [w for w in cls._WORD_SPLIT.split(text) if len(w) >= min_len]
 
     # ------------------------------------------------------------------
     # Abbreviation generation
