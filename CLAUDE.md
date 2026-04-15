@@ -35,6 +35,13 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `make test` — pytest (ALWAYS use this, not `uv run pytest`)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
 
+### VS Code Extension (`editors/vscode/pyrung-debug/`)
+
+- Requires Node.js LTS (`winget install OpenJS.NodeJS.LTS`)
+- Package: `cd editors/vscode/pyrung-debug && npx @vscode/vsce package`
+- Install: `code --install-extension pyrung-debug-0.1.0.vsix`
+- No `npm install` needed — plain JS, no dependencies
+
 ## Architecture
 
 - **Immutable state**: `SystemState` (frozen `PRecord` via `pyrsistent`) with `scan_id`, `timestamp`, `tags` (`PMap`), `memory` (`PMap`). Logic is pure `f(state) -> new_state`.

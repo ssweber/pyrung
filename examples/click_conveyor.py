@@ -29,6 +29,7 @@ from pyrung import (
     copy,
     count_up,
     latch,
+    named_array,
     on_delay,
     out,
     program,
@@ -64,13 +65,15 @@ Running = Bool("Running")  # C001 — motor run latch
 IsLarge = Bool("IsLarge")  # C002 — size classification result
 CountReset = Bool("CountReset")  # C003 — counter reset button
 
-# State constants — initialized once, never written
-IDLE = Int("IDLE", default=0)
-DETECTING = Int("DETECTING", default=1)
-SORTING = Int("SORTING", default=2)
-RESETTING = Int("RESETTING", default=3)
+# State constants — read-only named array, never written
+@named_array(Int, stride=4, readonly=True)
+class SortState:
+    IDLE = 0
+    DETECTING = 1
+    SORTING = 2
+    RESETTING = 3
 
-State = Int("State")  # DS005 — sort sequence state
+State = Int("State", choices=SortState)  # DS005 — sort sequence state
 
 SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
 SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
@@ -107,10 +110,10 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # State constants
-        IDLE.map_to(ds[1]),
-        DETECTING.map_to(ds[2]),
-        SORTING.map_to(ds[3]),
-        RESETTING.map_to(ds[4]),
+        SortState.IDLE.map_to(ds[1]),
+        SortState.DETECTING.map_to(ds[2]),
+        SortState.SORTING.map_to(ds[3]),
+        SortState.RESETTING.map_to(ds[4]),
         # Data
         State.map_to(ds[5]),
         SizeReading.map_to(ds[6]),
@@ -152,33 +155,33 @@ def logic():
             out(StatusLight)
 
     comment("Sort state machine — IDLE to DETECTING: box arrives")
-    with Rung(State == IDLE, rise(EntrySensor)):
-        copy(DETECTING, State)
+    with Rung(State == SortState.IDLE, rise(EntrySensor)):
+        copy(SortState.DETECTING, State)
 
     comment("DETECTING: read size for 0.5 seconds")
-    with Rung(State == DETECTING):
+    with Rung(State == SortState.DETECTING):
         on_delay(DetTimer, 500)
-    with Rung(State == DETECTING, SizeReading > SizeThreshold):
+    with Rung(State == SortState.DETECTING, SizeReading > SizeThreshold):
         latch(IsLarge)
     with Rung(DetTimer.Done):
-        copy(SORTING, State)
+        copy(SortState.SORTING, State)
 
     comment("SORTING: hold diverter for 2 seconds")
-    with Rung(State == SORTING):
+    with Rung(State == SortState.SORTING):
         on_delay(HoldTimer, 2000)
     with Rung(HoldTimer.Done):
-        copy(RESETTING, State)
+        copy(SortState.RESETTING, State)
 
     comment("RESETTING: clean up and return to idle")
-    with Rung(State == RESETTING):
+    with Rung(State == SortState.RESETTING):
         reset(IsLarge)
-        copy(IDLE, State)
+        copy(SortState.IDLE, State)
 
     comment("Diverter output — auto sort OR manual button, gated by EstopOK")
     with Rung(
         EstopOK,
         Or(
-            And(State == SORTING, IsLarge, Auto),
+            And(State == SortState.SORTING, IsLarge, Auto),
             And(Manual, DiverterBtn),
         ),
     ):

@@ -15,9 +15,22 @@ BinACounter = Counter.clone("BinACounter")
 BinBCounter = Counter.clone("BinBCounter")
 CountReset = Bool("CountReset")
 
+# --- Read-only structures ---
+
+from pyrung import copy, named_array
+
+@named_array(Int, stride=4, readonly=True)
+class SortState:
+    IDLE = 0
+    DETECTING = 1
+    SORTING = 2
+    RESETTING = 3
+
+State = Int("State", choices=SortState)
+
 # --- Blocks ---
 
-from pyrung import Block, TagType, blockcopy, copy
+from pyrung import Block, TagType, blockcopy
 
 SortLog = Block("SortLog", TagType.INT, 1, 5)  # SortLog1..SortLog5
 BoxSize = Int("BoxSize")

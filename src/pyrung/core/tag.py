@@ -34,6 +34,28 @@ ChoiceKey = int | float | str
 ChoiceMap = dict[ChoiceKey, str]
 
 
+def _structured_choice_items(raw: object, *, owner: str):
+    structure_kind = getattr(raw, "_structure_kind", None)
+    if structure_kind not in {"udt", "named_array"}:
+        return None
+
+    count = getattr(raw, "count", None)
+    if count != 1:
+        raise TypeError(f"{owner} structure choices require count=1, got {count!r}.")
+
+    try:
+        field_names = tuple(cast(Any, raw).field_names)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise TypeError(f"{owner} structure choices must expose field_names.") from exc
+
+    def _items():
+        for field_name in field_names:
+            tag = getattr(raw, field_name)
+            yield tag.default, field_name
+
+    return _items()
+
+
 def _normalize_choices(
     raw: object,
     *,
@@ -45,14 +67,18 @@ def _normalize_choices(
     if tag_type == TagType.BOOL:
         raise TypeError(f"{owner} are not supported for BOOL tags.")
 
-    if isinstance(raw, type) and issubclass(raw, IntEnum):
+    struct_items = _structured_choice_items(raw, owner=owner)
+    if struct_items is not None:
+        items = struct_items
+    elif isinstance(raw, type) and issubclass(raw, IntEnum):
         items = ((member.value, member.name) for member in raw)
     else:
         try:
             items = dict(cast(Mapping[object, object] | Any, raw)).items()
         except (TypeError, ValueError) as exc:
             raise TypeError(
-                f"{owner} must be a mapping or IntEnum type, got {type(raw).__name__}."
+                f"{owner} must be a mapping, IntEnum type, or count-one structure, "
+                f"got {type(raw).__name__}."
             ) from exc
 
     normalized: ChoiceMap = {}

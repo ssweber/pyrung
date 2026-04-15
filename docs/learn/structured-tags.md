@@ -70,6 +70,25 @@ A singleton UDT (`count` omitted or `count=1`) generates compact names with no i
 
 When all fields share the same type (like a group of Int fields for one sensor), pyrung also offers `named_array`, which maps to contiguous memory and supports bulk operations. See the [Tag Structures guide](../guides/tag-structures.md) for details.
 
+## Read-only structures
+
+The state constants from [Lesson 7](state-machines.md) — four `Int` tags, initialized once, never written — are really a read-only named array:
+
+```python
+@named_array(Int, stride=4, readonly=True)
+class SortState:
+    IDLE = 0
+    DETECTING = 1
+    SORTING = 2
+    RESETTING = 3
+
+State = Int("State", choices=SortState)
+```
+
+`SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge in the debugger.
+
+`choices=SortState` tells the Data View to show a labeled dropdown instead of a raw number — `SORTING (2)` instead of `2`.
+
 ## Blocks
 
 When you need an array of same-typed tags rather than a structured record, a `Block` gives you a contiguous range you can index into and operate on in bulk. Here's a sort log that records the last 5 box sizes:

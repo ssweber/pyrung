@@ -83,7 +83,7 @@ class Field:
     default: Any = UNSET
     retentive: bool | None = None
     choices: ChoiceMap | None = None
-    readonly: bool = False
+    readonly: bool | None = None
 
     def __new__(
         cls,
@@ -91,7 +91,7 @@ class Field:
         default: Any = UNSET,
         retentive: bool | None = None,
         choices: builtins.type[IntEnum] | ChoiceMap | None = None,
-        readonly: bool = False,
+        readonly: bool | None = None,
     ) -> Any:
         _ = (type, default, retentive, choices, readonly)
         return super().__new__(cls)
@@ -235,6 +235,7 @@ class _StructRuntime:
         field_specs: tuple[_FieldSpec, ...],
         *,
         always_number: bool = False,
+        readonly: bool = False,
         kind: str = "udt",
     ):
         _validate_name(name)
@@ -244,6 +245,7 @@ class _StructRuntime:
         self.name = name
         self.count = count
         self.always_number = always_number
+        self.readonly = bool(readonly)
         self._structure_kind = kind
         self._original_field_specs = field_specs
         self._field_specs: dict[str, _FieldSpec] = {}
@@ -280,6 +282,7 @@ class _StructRuntime:
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
+            readonly=self.readonly,
             kind=self._structure_kind,
         )
 
@@ -334,6 +337,7 @@ class _NamedArrayRuntime(_StructRuntime):
         stride: int,
         field_specs: tuple[_FieldSpec, ...],
         always_number: bool = False,
+        readonly: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -349,6 +353,7 @@ class _NamedArrayRuntime(_StructRuntime):
             count=count,
             field_specs=field_specs,
             always_number=always_number,
+            readonly=readonly,
             kind="named_array",
         )
 
@@ -367,6 +372,7 @@ class _NamedArrayRuntime(_StructRuntime):
             stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
+            readonly=self.readonly,
         )
 
     def hardware_span(self, hw_start: int) -> tuple[int, int]:
@@ -439,23 +445,34 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1, always_number: bool = False) -> Callable[[type[Any]], _StructRuntime]:
+def udt(
+    *, count: int = 1, always_number: bool = False, readonly: bool = False
+) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
     def _decorator(cls: type[Any]) -> _StructRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_udt_fields(cls)
+        field_specs = _parse_udt_fields(cls, readonly=readonly)
         return _StructRuntime(
-            name=name, count=count, field_specs=field_specs, always_number=always_number
+            name=name,
+            count=count,
+            field_specs=field_specs,
+            always_number=always_number,
+            readonly=readonly,
         )
 
     return _decorator
 
 
 def named_array(
-    base_type: object, *, count: int = 1, stride: int = 1, always_number: bool = False
+    base_type: object,
+    *,
+    count: int = 1,
+    stride: int = 1,
+    always_number: bool = False,
+    readonly: bool = False,
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -465,7 +482,7 @@ def named_array(
     def _decorator(cls: type[Any]) -> _NamedArrayRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_named_array_fields(cls, resolved_type)
+        field_specs = _parse_named_array_fields(cls, resolved_type, readonly=readonly)
         return _NamedArrayRuntime(
             name=name,
             type=resolved_type,
@@ -473,12 +490,13 @@ def named_array(
             stride=stride,
             field_specs=field_specs,
             always_number=always_number,
+            readonly=readonly,
         )
 
     return _decorator
 
 
-def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
+def _parse_udt_fields(cls: type[Any], *, readonly: bool = False) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     if not isinstance(annotations, dict):
         raise TypeError("UDT annotations must be a dict.")
@@ -501,11 +519,15 @@ def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
     for field_name, annotation in field_annotations.items():
         field_type = _resolve_annotation(annotation, field_name)
         raw_default = cls.__dict__.get(field_name, UNSET)
-        parsed.append(_build_field_spec(field_name, field_type, raw_default, source="udt"))
+        parsed.append(
+            _build_field_spec(field_name, field_type, raw_default, source="udt", readonly=readonly)
+        )
     return tuple(parsed)
 
 
-def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_FieldSpec, ...]:
+def _parse_named_array_fields(
+    cls: type[Any], base_type: TagType, *, readonly: bool = False
+) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     classvar_names: set[str] = set()
     if isinstance(annotations, dict):
@@ -519,7 +541,9 @@ def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_Fiel
     for field_name, value in cls.__dict__.items():
         if _should_skip_named_array_attr(field_name, value, classvar_names=classvar_names):
             continue
-        parsed.append(_build_field_spec(field_name, base_type, value, source="named_array"))
+        parsed.append(
+            _build_field_spec(field_name, base_type, value, source="named_array", readonly=readonly)
+        )
 
     _validate_fields_present(parsed)
     _validate_field_names(spec.name for spec in parsed)
@@ -554,12 +578,17 @@ def _should_skip_named_array_attr(name: str, value: object, *, classvar_names: s
 
 
 def _build_field_spec(
-    field_name: str, type: TagType, raw_default: object, *, source: str
+    field_name: str,
+    type: TagType,
+    raw_default: object,
+    *,
+    source: str,
+    readonly: bool = False,
 ) -> _FieldSpec:
     retentive: bool | None = None
     default_spec = raw_default
     choices: ChoiceMap | None = None
-    readonly = False
+    field_readonly = bool(readonly)
 
     if isinstance(raw_default, Field):
         if raw_default.type is not None and raw_default.type != type:
@@ -579,7 +608,8 @@ def _build_field_spec(
             tag_type=type,
             owner=f"Field({field_name!r}) choices",
         )
-        readonly = bool(raw_default.readonly)
+        if raw_default.readonly is not None:
+            field_readonly = bool(raw_default.readonly)
 
     if retentive is None:
         retentive = _TYPE_DEFAULT_RETENTIVE[type]
@@ -591,7 +621,7 @@ def _build_field_spec(
         default=default_spec,
         retentive=retentive,
         choices=choices,
-        readonly=readonly,
+        readonly=field_readonly,
     )
 
 

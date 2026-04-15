@@ -71,6 +71,26 @@ def test_tag_type_class_allows_mapping_choices():
     assert tag.choices == {0: "IDLE", 1: "RUN"}
 
 
+def test_tag_type_class_allows_struct_runtime_choices():
+    @udt(readonly=True)
+    class SortState:
+        IDLE: Int = 0  # ty: ignore[invalid-assignment]
+        DETECTING: Int = 1  # ty: ignore[invalid-assignment]
+
+    tag = Int("Mode", choices=cast(Any, SortState))
+
+    assert tag.choices == {0: "IDLE", 1: "DETECTING"}
+
+
+def test_tag_type_class_rejects_multi_instance_struct_choices():
+    @udt(count=2)
+    class SortState:
+        IDLE: Int = 0  # ty: ignore[invalid-assignment]
+
+    with pytest.raises(TypeError, match="count=1"):
+        Int("Mode", choices=cast(Any, SortState))
+
+
 def test_bool_tag_rejects_choices():
     with pytest.raises(TypeError, match="BOOL"):
         Bool("Flag", choices={0: "Off", 1: "On"})

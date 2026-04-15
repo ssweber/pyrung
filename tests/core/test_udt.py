@@ -111,6 +111,21 @@ def test_udt_field_choices_and_readonly_thread_through_blocks_and_fields():
     assert device[2].mode.readonly is True
 
 
+def test_udt_decorator_readonly_defaults_and_field_override():
+    @udt(count=2, readonly=True)
+    class Device:
+        mode: Int
+        editable: Int = Field(readonly=False)  # ty: ignore[invalid-assignment]
+
+    device = cast(Any, Device)
+    assert device.fields["mode"].readonly is True
+    assert device.mode.slot(1).readonly is True
+    assert device[2].mode.readonly is True
+    assert device.fields["editable"].readonly is False
+    assert device.editable.slot(1).readonly is False
+    assert device[2].editable.readonly is False
+
+
 def test_udt_rejects_invalid_declarations():
     with pytest.raises(ValueError, match="count"):
 
