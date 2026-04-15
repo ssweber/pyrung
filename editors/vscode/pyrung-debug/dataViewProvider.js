@@ -369,7 +369,7 @@ class PyrungDataViewProvider {
   function updateValueDisplay(entry, rawValue) {
     entry.rawValue = rawValue;
     const label = choiceLabelForValue(entry, rawValue);
-    entry.valueEl.textContent = label ? `${label} (${rawValue})` : rawValue;
+    entry.valueEl.textContent = label ? label + " (" + rawValue + ")" : rawValue;
   }
 
   function ensureTable() {
@@ -411,14 +411,14 @@ class PyrungDataViewProvider {
     if (!hasSelectedChoice && entry.rawValue !== undefined && entry.rawValue !== "--") {
       const rawOption = document.createElement("option");
       rawOption.value = "";
-      rawOption.textContent = `Current: ${entry.rawValue}`;
+      rawOption.textContent = "Current: " + entry.rawValue;
       select.appendChild(rawOption);
     }
 
     for (const [key, label] of Object.entries(choices)) {
       const option = document.createElement("option");
       option.value = key;
-      option.textContent = `${label} (${key})`;
+      option.textContent = label + " (" + key + ")";
       select.appendChild(option);
     }
 
