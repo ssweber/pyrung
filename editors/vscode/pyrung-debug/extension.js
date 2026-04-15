@@ -455,6 +455,35 @@ exports.activate = function (context) {
     )
   );
 
+  // ---- Graph scoping: fetch graph filtered to active editor file ----
+  let _lastGraphFile = null;
+
+  function fetchGraphForActiveFile(debugSession) {
+    if (!debugSession) return;
+    const editor = vscode.window.activeTextEditor;
+    const sourceFile = editor ? editor.document.uri.fsPath : undefined;
+    // No active text editor (e.g. focus on webview) — keep current graph
+    if (!sourceFile) return;
+    if (sourceFile === _lastGraphFile) return;
+    _lastGraphFile = sourceFile;
+    debugSession
+      .customRequest("pyrungGraph", { sourceFile })
+      .then((data) => {
+        graphPanel.updateGraph(data);
+        dataView.updateGraph(data);
+      })
+      .catch(() => {});
+  }
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      const debugSession = vscode.debug.activeDebugSession;
+      if (debugSession && isPyrungSession(debugSession)) {
+        fetchGraphForActiveFile(debugSession);
+      }
+    })
+  );
+
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterTrackerFactory("pyrung", {
       createDebugAdapterTracker(session) {
@@ -500,13 +529,7 @@ exports.activate = function (context) {
               message.command === "configurationDone" &&
               message.success
             ) {
-              session
-                .customRequest("pyrungGraph", {})
-                .then((data) => {
-                  graphPanel.updateGraph(data);
-                  dataView.updateGraph(data);
-                })
-                .catch(() => {});
+              fetchGraphForActiveFile(session);
             }
 
             if (message?.type !== "event") {

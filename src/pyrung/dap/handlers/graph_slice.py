@@ -57,6 +57,11 @@ def _parse_query(query: str, view: DataView) -> DataView:
 
 
 @dataclass(frozen=True)
+class _GraphRequestArgs:
+    sourceFile: Any = None
+
+
+@dataclass(frozen=True)
 class _SliceRequestArgs:
     tag: Any = None
     direction: Any = None
@@ -67,11 +72,133 @@ class _QueryRequestArgs:
     query: Any = None
 
 
-def on_pyrung_graph(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
-    """Return the full program graph for visualization."""
+def _filter_graph_by_file(graph: Any, source_file: str) -> dict[str, Any]:
+    """Return a to_json_dict-style dict scoped to rungs from *source_file*."""
+    import os
+
+    source_norm = os.path.normpath(source_file).lower()
+
+    # Select rung nodes whose source_file matches, tracking old→new index map
+    filtered_nodes = []
+    old_to_new: dict[int, int] = {}
+    for old_idx, node in enumerate(graph.rung_nodes):
+        if node.source_file and os.path.normpath(node.source_file).lower() == source_norm:
+            old_to_new[old_idx] = len(filtered_nodes)
+            filtered_nodes.append(node)
+
+    # Collect tags touched by those rungs
+    touched_tags: set[str] = set()
+    for node in filtered_nodes:
+        touched_tags |= node.condition_reads | node.data_reads | node.writes
+
+    # Build collapse map from block_ranges (only ranges whose members overlap touched_tags)
+    collapse: dict[str, str] = {}
+    relevant_ranges: dict[str, list[str]] = {}
+    for label, members in graph.block_ranges.items():
+        overlap = [m for m in members if m in touched_tags]
+        if len(overlap) >= 3:
+            relevant_ranges[label] = members
+            for m in members:
+                if m in touched_tags:
+                    collapse[m] = label
+
+    collapsed_members = set(collapse.keys())
+
+    # Build edges with collapsing, deduplicating
+    edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+    for new_idx, node in enumerate(filtered_nodes):
+        rung_id = f"rung:{new_idx}"
+        for tag_name in sorted(node.condition_reads):
+            if tag_name not in touched_tags:
+                continue
+            src = collapse.get(tag_name, tag_name)
+            key = (src, rung_id, "condition")
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({"source": src, "target": rung_id, "type": "condition"})
+        for tag_name in sorted(node.data_reads):
+            if tag_name not in touched_tags:
+                continue
+            src = collapse.get(tag_name, tag_name)
+            key = (src, rung_id, "data")
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({"source": src, "target": rung_id, "type": "data"})
+        for tag_name in sorted(node.writes):
+            if tag_name not in touched_tags:
+                continue
+            tgt = collapse.get(tag_name, tag_name)
+            key = (rung_id, tgt, "write")
+            if key not in seen_edges:
+                seen_edges.add(key)
+                edges.append({"source": rung_id, "target": tgt, "type": "write"})
+
+    # Build filtered readers/writers with new indices, collapsed
+    readers_of: dict[str, list[int]] = {}
+    writers_of: dict[str, list[int]] = {}
+    for tag in sorted(touched_tags):
+        key = collapse.get(tag, tag)
+        r = [old_to_new[i] for i in graph.readers_of.get(tag, frozenset()) if i in old_to_new]
+        w = [old_to_new[i] for i in graph.writers_of.get(tag, frozenset()) if i in old_to_new]
+        if r:
+            merged = readers_of.get(key, [])
+            merged.extend(r)
+            readers_of[key] = merged
+        if w:
+            merged = writers_of.get(key, [])
+            merged.extend(w)
+            writers_of[key] = merged
+    readers_of = {k: sorted(set(v)) for k, v in readers_of.items()}
+    writers_of = {k: sorted(set(v)) for k, v in writers_of.items()}
+
+    # Build tag roles: non-collapsed + range labels
+    tag_roles: dict[str, str] = {}
+    for name, role in sorted(graph.tag_roles.items()):
+        if name in touched_tags and name not in collapsed_members:
+            tag_roles[name] = role.value
+    for label in sorted(relevant_ranges):
+        tag_roles[label] = "pivot"
+
+    visible_tags = sorted((touched_tags - collapsed_members) | set(relevant_ranges.keys()))
+
+    return {
+        "rungNodes": [
+            {
+                "rungIndex": node.rung_index,
+                "scope": node.scope,
+                "subroutine": node.subroutine,
+                "branchPath": list(node.branch_path),
+                "conditionReads": sorted(node.condition_reads),
+                "dataReads": sorted(node.data_reads),
+                "writes": sorted(node.writes),
+                "calls": list(node.calls),
+                "sourceFile": node.source_file,
+                "sourceLine": node.source_line,
+            }
+            for node in filtered_nodes
+        ],
+        "tagRoles": tag_roles,
+        "tags": visible_tags,
+        "readersOf": readers_of,
+        "writersOf": writers_of,
+        "graphEdges": edges,
+        "blockRanges": {label: members for label, members in sorted(relevant_ranges.items())},
+        "sourceFilter": source_file,
+    }
+
+
+def on_pyrung_graph(adapter: Any, args: dict[str, Any]) -> HandlerResult:
+    """Return the program graph for visualization, optionally scoped to a file."""
+    parsed = adapter._parse_request_args(_GraphRequestArgs, args)
+
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
     graph = runner.program.dataview()._graph
+
+    if isinstance(parsed.sourceFile, str) and parsed.sourceFile:
+        return _filter_graph_by_file(graph, parsed.sourceFile), []
+
     return graph.to_json_dict(), []
 
 

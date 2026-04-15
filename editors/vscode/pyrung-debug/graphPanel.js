@@ -468,13 +468,16 @@ class PyrungGraphPanelProvider {
 
     buildSearchIndex(tagNames);
 
+    const physicalInputSet = data._physicalInputs ? new Set(data._physicalInputs) : null;
+    const physicalOutputSet = data._physicalOutputs ? new Set(data._physicalOutputs) : null;
+
     // Tag nodes
     for (const name of tagNames) {
       if (hiddenTags.has(name)) continue;
       const role = tagRoles[name] || "isolated";
       const colors = ROLE_COLORS[role] || ROLE_COLORS.isolated;
-      const isPhysicalInput = data._physicalInputs && data._physicalInputs.includes(name);
-      const isPhysicalOutput = data._physicalOutputs && data._physicalOutputs.includes(name);
+      const isPhysicalInput = physicalInputSet && physicalInputSet.has(name);
+      const isPhysicalOutput = physicalOutputSet && physicalOutputSet.has(name);
 
       elements.push({
         group: "nodes",
@@ -514,14 +517,9 @@ class PyrungGraphPanelProvider {
           id: rungId,
           label,
           nodeType: "rung",
-          rungIndex: rungNode.rungIndex,
+          rungIdx: idx,
           sourceFile: rungNode.sourceFile,
           sourceLine: rungNode.sourceLine,
-          scope: rungNode.scope,
-          subroutine: rungNode.subroutine,
-          conditionReads: rungNode.conditionReads,
-          dataReads: rungNode.dataReads,
-          writes: rungNode.writes,
           bgColor: RUNG_COLOR.bg,
           borderColor: RUNG_COLOR.border,
           textColor: RUNG_COLOR.text,
@@ -532,6 +530,9 @@ class PyrungGraphPanelProvider {
       });
     }
 
+    // Build node ID set for O(1) edge-endpoint lookup
+    const nodeIds = new Set(elements.map(e => e.data.id));
+
     // Edges
     let edgeId = 0;
     for (const edge of graphEdges) {
@@ -541,9 +542,7 @@ class PyrungGraphPanelProvider {
       if (!src.startsWith("rung:") && hiddenTags.has(src)) continue;
       if (!tgt.startsWith("rung:") && hiddenTags.has(tgt)) continue;
       // Skip edges referencing nodes not in our element set
-      const srcExists = elements.some(e => e.group === "nodes" && e.data.id === src);
-      const tgtExists = elements.some(e => e.group === "nodes" && e.data.id === tgt);
-      if (!srcExists || !tgtExists) continue;
+      if (!nodeIds.has(src) || !nodeIds.has(tgt)) continue;
 
       elements.push({
         group: "edges",
@@ -563,6 +562,11 @@ class PyrungGraphPanelProvider {
   function initCytoscape(data) {
     if (cy) cy.destroy();
     const elements = buildElements(data);
+
+    const nodeCount = elements.filter(e => e.group === "nodes").length;
+    const layoutConfig = nodeCount > 500
+      ? { name: "grid", animate: false, condense: true, avoidOverlapPadding: 10 }
+      : { name: "dagre", rankDir: "LR", nodeSep: 30, edgeSep: 15, rankSep: 80, animate: false };
 
     cy = cytoscape({
       container: cyContainer,
@@ -711,14 +715,7 @@ class PyrungGraphPanelProvider {
           },
         },
       ],
-      layout: {
-        name: "dagre",
-        rankDir: "LR",
-        nodeSep: 30,
-        edgeSep: 15,
-        rankSep: 80,
-        animate: false,
-      },
+      layout: layoutConfig,
       wheelSensitivity: 0.3,
     });
 
@@ -873,10 +870,12 @@ class PyrungGraphPanelProvider {
     }
 
     // Also highlight rung nodes and edges on the path
+    const allSliceTags = new Set([tag, ...sliceHighlight.upstream, ...sliceHighlight.downstream]);
+    const upstreamSet = new Set(sliceHighlight.upstream);
+
     cy.edges().forEach(edge => {
       const src = edge.source().id();
       const tgt = edge.target().id();
-      const allSliceTags = new Set([tag, ...sliceHighlight.upstream, ...sliceHighlight.downstream]);
 
       const srcInSlice = allSliceTags.has(src) || (src.startsWith("rung:") && isRungInSlice(src, allSliceTags));
       const tgtInSlice = allSliceTags.has(tgt) || (tgt.startsWith("rung:") && isRungInSlice(tgt, allSliceTags));
@@ -884,8 +883,8 @@ class PyrungGraphPanelProvider {
       if (srcInSlice && tgtInSlice) {
         edge.removeClass("dimmed");
         // Determine direction for this edge
-        const srcIsUpstream = sliceHighlight.upstream.includes(src) || (src.startsWith("rung:") && isRungInSlice(src, new Set(sliceHighlight.upstream)));
-        const tgtIsUpstream = sliceHighlight.upstream.includes(tgt) || (tgt.startsWith("rung:") && isRungInSlice(tgt, new Set(sliceHighlight.upstream)));
+        const srcIsUpstream = upstreamSet.has(src) || (src.startsWith("rung:") && isRungInSlice(src, upstreamSet));
+        const tgtIsUpstream = upstreamSet.has(tgt) || (tgt.startsWith("rung:") && isRungInSlice(tgt, upstreamSet));
         if (srcIsUpstream || tgtIsUpstream) {
           edge.addClass("slice-upstream");
         } else {
@@ -945,19 +944,20 @@ class PyrungGraphPanelProvider {
     const value = tagValues[tagName];
     const isForced = forces && Object.prototype.hasOwnProperty.call(forces, tagName);
 
-    // Find connected rungs
+    // Find connected rungs using readersOf/writersOf indices
     const readers = [];
     const writers = [];
     if (graphData) {
-      for (const rn of (graphData.rungNodes || [])) {
-        const idx = graphData.rungNodes.indexOf(rn);
-        const rungLabel = rn.subroutine ? rn.subroutine + ":R" + rn.rungIndex : "R" + rn.rungIndex;
-        if ((rn.conditionReads || []).includes(tagName) || (rn.dataReads || []).includes(tagName)) {
-          readers.push(rungLabel);
-        }
-        if ((rn.writes || []).includes(tagName)) {
-          writers.push(rungLabel);
-        }
+      const rungNodes = graphData.rungNodes || [];
+      const readerIndices = (graphData.readersOf && graphData.readersOf[tagName]) || [];
+      const writerIndices = (graphData.writersOf && graphData.writersOf[tagName]) || [];
+      for (const idx of readerIndices) {
+        const rn = rungNodes[idx];
+        if (rn) readers.push(rn.subroutine ? rn.subroutine + ":R" + rn.rungIndex : "R" + rn.rungIndex);
+      }
+      for (const idx of writerIndices) {
+        const rn = rungNodes[idx];
+        if (rn) writers.push(rn.subroutine ? rn.subroutine + ":R" + rn.rungIndex : "R" + rn.rungIndex);
       }
     }
 
@@ -1034,8 +1034,10 @@ class PyrungGraphPanelProvider {
       if (val !== undefined) html += "<br>Value: " + esc(String(val));
     } else {
       const label = node.data("label");
-      const reads = (node.data("conditionReads") || []).concat(node.data("dataReads") || []);
-      const writes = node.data("writes") || [];
+      const idx = node.data("rungIdx");
+      const rn = graphData && graphData.rungNodes ? graphData.rungNodes[idx] : null;
+      const reads = rn ? (rn.conditionReads || []).concat(rn.dataReads || []) : [];
+      const writes = rn ? (rn.writes || []) : [];
       html = "<b>" + esc(label) + "</b>";
       if (reads.length) html += "<br>Reads: " + reads.map(esc).join(", ");
       if (writes.length) html += "<br>Writes: " + writes.map(esc).join(", ");

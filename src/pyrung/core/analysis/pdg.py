@@ -69,6 +69,7 @@ class ProgramGraph:
     readers_of: dict[str, frozenset[int]]
     writers_of: dict[str, frozenset[int]]
     tags: dict[str, Tag]
+    block_ranges: dict[str, list[str]]  # range label → member tag names
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
@@ -78,22 +79,56 @@ class ProgramGraph:
         """Return whether ``tag_name`` resolves to a physical output tag."""
         return isinstance(self.tags.get(tag_name), OutputTag)
 
-    def graph_edges(self) -> list[dict[str, Any]]:
+    def _collapse_map(self) -> dict[str, str]:
+        """Build tag_name → range_label mapping for collapsible ranges."""
+        collapse: dict[str, str] = {}
+        for label, members in self.block_ranges.items():
+            for name in members:
+                collapse[name] = label
+        return collapse
+
+    def graph_edges(
+        self,
+        *,
+        collapse: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Bipartite edges for visualization: tag→rung (reads) and rung→tag (writes).
 
         Returns list of ``{source, target, type}`` where *type* is
         ``"condition"`` | ``"data"`` | ``"write"``.  Sources and targets are
         tag names or ``"rung:<index>"`` identifiers.
+
+        When *collapse* is provided, member tag names are replaced by their
+        range label and duplicate edges are suppressed.
         """
         edges: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] | None = set() if collapse else None
         for idx, node in enumerate(self.rung_nodes):
             rung_id = f"rung:{idx}"
             for tag_name in sorted(node.condition_reads):
-                edges.append({"source": tag_name, "target": rung_id, "type": "condition"})
+                src = collapse.get(tag_name, tag_name) if collapse else tag_name
+                key = (src, rung_id, "condition")
+                if seen is not None:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                edges.append({"source": src, "target": rung_id, "type": "condition"})
             for tag_name in sorted(node.data_reads):
-                edges.append({"source": tag_name, "target": rung_id, "type": "data"})
+                src = collapse.get(tag_name, tag_name) if collapse else tag_name
+                key = (src, rung_id, "data")
+                if seen is not None:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                edges.append({"source": src, "target": rung_id, "type": "data"})
             for tag_name in sorted(node.writes):
-                edges.append({"source": rung_id, "target": tag_name, "type": "write"})
+                tgt = collapse.get(tag_name, tag_name) if collapse else tag_name
+                key = (rung_id, tgt, "write")
+                if seen is not None:
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                edges.append({"source": rung_id, "target": tgt, "type": "write"})
         return edges
 
     def upstream_slice(self, tag_name: str) -> frozenset[str]:
@@ -143,7 +178,41 @@ class ProgramGraph:
         return frozenset(visited_tags)
 
     def to_json_dict(self) -> dict[str, Any]:
-        """Serialize the graph for DAP/webview consumption."""
+        """Serialize the graph for DAP/webview consumption.
+
+        Block ranges with 3+ members are collapsed into single nodes.
+        """
+        collapse = self._collapse_map()
+        collapsed_members = set(collapse.keys())
+
+        # Collapsed tag roles: keep non-collapsed tags, add range labels
+        tag_roles: dict[str, str] = {}
+        for name, role in sorted(self.tag_roles.items()):
+            if name not in collapsed_members:
+                tag_roles[name] = role.value
+        for label in sorted(self.block_ranges):
+            tag_roles[label] = "pivot"  # ranges are typically intermediate data
+
+        # Collapsed tag list
+        tags = sorted(set(self.tags.keys()) - collapsed_members | set(self.block_ranges.keys()))
+
+        # Collapsed readers/writers: remap member indices to range label
+        readers_of: dict[str, list[int]] = {}
+        writers_of: dict[str, list[int]] = {}
+        for name, indices in sorted(self.readers_of.items()):
+            key = collapse.get(name, name)
+            merged = readers_of.get(key, [])
+            merged.extend(indices)
+            readers_of[key] = merged
+        for name, indices in sorted(self.writers_of.items()):
+            key = collapse.get(name, name)
+            merged = writers_of.get(key, [])
+            merged.extend(indices)
+            writers_of[key] = merged
+        # Deduplicate and sort
+        readers_of = {k: sorted(set(v)) for k, v in readers_of.items()}
+        writers_of = {k: sorted(set(v)) for k, v in writers_of.items()}
+
         return {
             "rungNodes": [
                 {
@@ -160,15 +229,12 @@ class ProgramGraph:
                 }
                 for node in self.rung_nodes
             ],
-            "tagRoles": {name: role.value for name, role in sorted(self.tag_roles.items())},
-            "tags": sorted(self.tags.keys()),
-            "readersOf": {
-                name: sorted(indices) for name, indices in sorted(self.readers_of.items())
-            },
-            "writersOf": {
-                name: sorted(indices) for name, indices in sorted(self.writers_of.items())
-            },
-            "graphEdges": self.graph_edges(),
+            "tagRoles": tag_roles,
+            "tags": tags,
+            "readersOf": readers_of,
+            "writersOf": writers_of,
+            "graphEdges": self.graph_edges(collapse=collapse),
+            "blockRanges": {label: members for label, members in sorted(self.block_ranges.items())},
         }
 
 
@@ -193,8 +259,37 @@ def _block_tags(block_range: BlockRange | IndirectBlockRange) -> list[Tag]:
     return [block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)]
 
 
-def _extract_tag_names(value: Any, tag_refs: dict[str, Tag]) -> set[str]:
-    """Extract statically-known tag names from values, expressions, and refs."""
+_RANGE_COLLAPSE_THRESHOLD = 3
+
+
+def _record_range(
+    ranges: dict[str, list[str]],
+    block_name: str,
+    tags: list[Tag],
+) -> None:
+    """Merge *tags* into a single per-block range entry in *ranges*."""
+    existing = ranges.get(block_name)
+    if existing is not None:
+        seen = set(existing)
+        for t in tags:
+            if t.name not in seen:
+                existing.append(t.name)
+                seen.add(t.name)
+    else:
+        ranges[block_name] = [t.name for t in tags]
+
+
+def _extract_tag_names(
+    value: Any,
+    tag_refs: dict[str, Tag],
+    ranges: dict[str, list[str]] | None = None,
+) -> set[str]:
+    """Extract statically-known tag names from values, expressions, and refs.
+
+    If *ranges* is provided, static ``BlockRange`` accesses with
+    ``_RANGE_COLLAPSE_THRESHOLD`` or more elements are recorded as
+    ``{group_label: [member_tag_name, ...]}`` entries.
+    """
     found: set[str] = set()
     seen: set[int] = set()
 
@@ -218,8 +313,15 @@ def _extract_tag_names(value: Any, tag_refs: dict[str, Tag]) -> set[str]:
             return
 
         if isinstance(current, BlockRange | IndirectBlockRange):
-            for tag in _block_tags(current):
+            tags = _block_tags(current)
+            for tag in tags:
                 _register_tag(tag, tag_refs, found)
+            if (
+                ranges is not None
+                and isinstance(current, BlockRange)
+                and len(tags) >= _RANGE_COLLAPSE_THRESHOLD
+            ):
+                _record_range(ranges, current.block.name, tags)
             if isinstance(current, IndirectBlockRange):
                 walk(current.start_expr)
                 walk(current.end_expr)
@@ -227,14 +329,24 @@ def _extract_tag_names(value: Any, tag_refs: dict[str, Tag]) -> set[str]:
 
         if isinstance(current, IndirectRef):
             walk(current.pointer)
-            for tag in _block_tags(current.block.select(current.block.start, current.block.end)):
+            block = current.block
+            full_range = block.select(block.start, block.end)
+            tags = _block_tags(full_range)
+            for tag in tags:
                 _register_tag(tag, tag_refs, found)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
             walk(current.expr)
-            for tag in _block_tags(current.block.select(current.block.start, current.block.end)):
+            block = current.block
+            full_range = block.select(block.start, block.end)
+            tags = _block_tags(full_range)
+            for tag in tags:
                 _register_tag(tag, tag_refs, found)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, block.name, tags)
             return
 
         if isinstance(current, Condition):
@@ -277,6 +389,7 @@ def _extract_tag_names(value: Any, tag_refs: dict[str, Tag]) -> set[str]:
 def _extract_write_targets(
     value: Any,
     tag_refs: dict[str, Tag],
+    ranges: dict[str, list[str]] | None = None,
 ) -> tuple[set[str], set[str]]:
     """Extract written tags plus any address-resolution reads for a target."""
     writes: set[str] = set()
@@ -303,23 +416,40 @@ def _extract_write_targets(
             return
 
         if isinstance(current, BlockRange | IndirectBlockRange):
-            for tag in _block_tags(current):
+            tags = _block_tags(current)
+            for tag in tags:
                 _register_tag(tag, tag_refs, writes)
+            if (
+                ranges is not None
+                and isinstance(current, BlockRange)
+                and len(tags) >= _RANGE_COLLAPSE_THRESHOLD
+            ):
+                _record_range(ranges, current.block.name, tags)
             if isinstance(current, IndirectBlockRange):
-                reads.update(_extract_tag_names(current.start_expr, tag_refs))
-                reads.update(_extract_tag_names(current.end_expr, tag_refs))
+                reads.update(_extract_tag_names(current.start_expr, tag_refs, ranges=ranges))
+                reads.update(_extract_tag_names(current.end_expr, tag_refs, ranges=ranges))
             return
 
         if isinstance(current, IndirectRef):
-            reads.update(_extract_tag_names(current.pointer, tag_refs))
-            for tag in _block_tags(current.block.select(current.block.start, current.block.end)):
+            reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
+            block = current.block
+            full_range = block.select(block.start, block.end)
+            tags = _block_tags(full_range)
+            for tag in tags:
                 _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
-            reads.update(_extract_tag_names(current.expr, tag_refs))
-            for tag in _block_tags(current.block.select(current.block.start, current.block.end)):
+            reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
+            block = current.block
+            full_range = block.select(block.start, block.end)
+            tags = _block_tags(full_range)
+            for tag in tags:
                 _register_tag(tag, tag_refs, writes)
+            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                _record_range(ranges, block.name, tags)
             return
 
         if isinstance(current, dict):
@@ -359,6 +489,7 @@ def _extract_rung_node(
     subroutine: str | None,
     branch_path: tuple[int, ...],
     tag_refs: dict[str, Tag],
+    range_acc: dict[str, list[str]] | None = None,
 ) -> RungNode:
     """Extract one rung/branch rung into a static node summary."""
     condition_reads: set[str] = set()
@@ -378,12 +509,15 @@ def _extract_rung_node(
 
         cls = type(instr)
         for field_name in getattr(cls, "_reads", ()):
-            data_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
+            data_reads.update(
+                _extract_tag_names(getattr(instr, field_name), tag_refs, ranges=range_acc)
+            )
 
         for field_name in getattr(cls, "_writes", ()):
             target_writes, target_reads = _extract_write_targets(
                 getattr(instr, field_name),
                 tag_refs,
+                ranges=range_acc,
             )
             writes.update(target_writes)
             data_reads.update(target_reads)
@@ -626,6 +760,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
     node_index_by_rung: dict[int, int] = {}
+    range_acc: dict[str, list[str]] = {}
 
     def walk_rung(
         rung: Rung,
@@ -642,6 +777,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
             subroutine=subroutine,
             branch_path=branch_path,
             tag_refs=tag_refs,
+            range_acc=range_acc,
         )
         node_index_by_rung[id(rung)] = len(rung_nodes)
         rung_nodes.append(node)
@@ -685,6 +821,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         readers_of={name: frozenset(indices) for name, indices in readers_of_mut.items()},
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
+        block_ranges=range_acc,
     )
     graph.tag_roles = classify_tags(graph)
     return graph
