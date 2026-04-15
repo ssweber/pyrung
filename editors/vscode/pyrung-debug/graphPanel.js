@@ -321,6 +321,7 @@ class PyrungGraphPanelProvider {
     <button class="role-btn active" data-role="terminal" title="Terminals">T</button>
     <button class="role-btn active" data-role="isolated" title="Isolated">X</button>
     <span class="toolbar-spacer"></span>
+    <button id="rung-order-btn" class="role-btn active" title="Sort layout by rung order (ladder top-down)">Rung Order</button>
     <button id="reset-btn" class="reset-btn" title="Reset layout, pins, and hidden nodes">Reset</button>
   </div>
   <div class="main">
@@ -342,7 +343,8 @@ class PyrungGraphPanelProvider {
   const tooltip = document.getElementById("tooltip");
   const searchInput = document.getElementById("search");
   const resetBtn = document.getElementById("reset-btn");
-  const roleButtons = document.querySelectorAll(".role-btn");
+  const rungOrderBtn = document.getElementById("rung-order-btn");
+  const roleButtons = document.querySelectorAll(".role-btn[data-role]");
 
   // ---- State ----
   let cy = null;
@@ -355,6 +357,7 @@ class PyrungGraphPanelProvider {
   let searchNeedle = "";
   let pinnedPositions = {};
   let hiddenTags = new Set();
+  let rungOrderEnabled = true;
 
   // Load workspace state
   const savedState = vscodeApi.getState() || {};
@@ -452,8 +455,8 @@ class PyrungGraphPanelProvider {
   // ---- Node colors ----
   const ROLE_COLORS = {
     input:    { bg: "#4A90D9", border: "#3570B0", text: "#fff" },
-    pivot:    { bg: "#D9A441", border: "#B0832E", text: "#fff" },
-    terminal: { bg: "#5CB85C", border: "#449944", text: "#fff" },
+    pivot:    { bg: "#D9A441", border: "#B0832E", text: "#1a1a1a" },
+    terminal: { bg: "#5CB85C", border: "#449944", text: "#1a1a1a" },
     isolated: { bg: "#888",    border: "#666",    text: "#fff" },
   };
   const RUNG_COLOR = { bg: "rgba(128,128,128,0.15)", border: "rgba(128,128,128,0.4)", text: "var(--vscode-foreground, #ccc)" };
@@ -471,6 +474,24 @@ class PyrungGraphPanelProvider {
     const physicalInputSet = data._physicalInputs ? new Set(data._physicalInputs) : null;
     const physicalOutputSet = data._physicalOutputs ? new Set(data._physicalOutputs) : null;
 
+    // Compute rung affinity for each tag — minimum rung index it connects to.
+    // This lets us sort tags vertically by rung order (ladder is top-down).
+    const tagRungAffinity = {};
+    for (const edge of graphEdges) {
+      const src = edge.source;
+      const tgt = edge.target;
+      let tagName, rungId;
+      if (src.startsWith("rung:") && !tgt.startsWith("rung:")) {
+        rungId = src; tagName = tgt;
+      } else if (tgt.startsWith("rung:") && !src.startsWith("rung:")) {
+        rungId = tgt; tagName = src;
+      } else continue;
+      const idx = parseInt(rungId.split(":")[1], 10);
+      if (!(tagName in tagRungAffinity) || idx < tagRungAffinity[tagName]) {
+        tagRungAffinity[tagName] = idx;
+      }
+    }
+
     // Tag nodes
     for (const name of tagNames) {
       if (hiddenTags.has(name)) continue;
@@ -486,6 +507,7 @@ class PyrungGraphPanelProvider {
           label: name,
           nodeType: "tag",
           role,
+          rungAffinity: tagRungAffinity[name] ?? 9999,
           borderWidth: (isPhysicalInput || isPhysicalOutput) ? 4 : 2,
           bgColor: colors.bg,
           borderColor: colors.border,
@@ -508,9 +530,7 @@ class PyrungGraphPanelProvider {
       const idx = parseInt(rungId.split(":")[1], 10);
       const rungNode = rungNodes[idx];
       if (!rungNode) continue;
-      const label = rungNode.subroutine
-        ? rungNode.subroutine + ":R" + rungNode.rungIndex
-        : "R" + rungNode.rungIndex;
+      const label = "R" + (rungNode.rungIndex + 1);
       elements.push({
         group: "nodes",
         data: {
@@ -565,8 +585,19 @@ class PyrungGraphPanelProvider {
 
     const nodeCount = elements.filter(e => e.group === "nodes").length;
     const layoutConfig = nodeCount > 500
-      ? { name: "grid", animate: false, condense: true, avoidOverlapPadding: 10 }
-      : { name: "dagre", rankDir: "LR", nodeSep: 30, edgeSep: 15, rankSep: 80, animate: false };
+      ? { name: "grid", animate: false, condense: true, avoidOverlapPadding: 10, fit: true, padding: 30 }
+      : Object.assign(
+          { name: "dagre", rankDir: "LR", nodeSep: 30, edgeSep: 15, rankSep: 80,
+            animate: false, fit: true, padding: 30 },
+          rungOrderEnabled ? {
+            // Sort nodes within the same rank by rung order (ladder is top-down)
+            sort: function(a, b) {
+              const aOrder = a.data("rungIdx") ?? a.data("rungAffinity") ?? 9999;
+              const bOrder = b.data("rungIdx") ?? b.data("rungAffinity") ?? 9999;
+              return aOrder - bOrder;
+            },
+          } : {},
+        );
 
     cy = cytoscape({
       container: cyContainer,
@@ -591,6 +622,15 @@ class PyrungGraphPanelProvider {
             shape: "data(shape)",
             "padding-top": "4px",
             "padding-bottom": "4px",
+          },
+        },
+        // Pivot (diamond) nodes — wider so text fits inside
+        {
+          selector: 'node[nodeType="tag"][shape="diamond"]',
+          style: {
+            width: 160,
+            height: 56,
+            "text-max-width": "100px",
           },
         },
         // Rung nodes
@@ -953,11 +993,11 @@ class PyrungGraphPanelProvider {
       const writerIndices = (graphData.writersOf && graphData.writersOf[tagName]) || [];
       for (const idx of readerIndices) {
         const rn = rungNodes[idx];
-        if (rn) readers.push(rn.subroutine ? rn.subroutine + ":R" + rn.rungIndex : "R" + rn.rungIndex);
+        if (rn) readers.push("R" + (rn.rungIndex + 1));
       }
       for (const idx of writerIndices) {
         const rn = rungNodes[idx];
-        if (rn) writers.push(rn.subroutine ? rn.subroutine + ":R" + rn.rungIndex : "R" + rn.rungIndex);
+        if (rn) writers.push("R" + (rn.rungIndex + 1));
       }
     }
 
@@ -1121,6 +1161,12 @@ class PyrungGraphPanelProvider {
       }
       applyFilters();
     });
+  });
+
+  rungOrderBtn.addEventListener("click", () => {
+    rungOrderEnabled = !rungOrderEnabled;
+    rungOrderBtn.classList.toggle("active", rungOrderEnabled);
+    rebuildGraph();
   });
 
   resetBtn.addEventListener("click", () => {
