@@ -11,6 +11,7 @@ from pyrung.core.rung import Rung as RungLogic
 from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.dataview import DataView
     from pyrung.core.context import ScanContext
 
     from ..validation import DialectValidator
@@ -43,6 +44,7 @@ class Program:
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
+        self._cached_graph: Any = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -137,6 +139,19 @@ class Program:
                 f"Import the dialect package first (example: import pyrung.{dialect})."
             )
         return validator(self, mode=mode, **kwargs)
+
+    def dataview(self) -> DataView:
+        """Return a chainable query over this program's tag dependency graph.
+
+        The graph is built lazily on first call and cached.
+        """
+        if self._cached_graph is None:
+            from pyrung.core.analysis import build_program_graph
+
+            self._cached_graph = build_program_graph(self)
+        from pyrung.core.analysis.dataview import DataView
+
+        return DataView.from_graph(self._cached_graph)
 
     def _evaluate(self, ctx: ScanContext) -> None:
         """Evaluate all main rungs in order (not subroutines) within a ScanContext."""

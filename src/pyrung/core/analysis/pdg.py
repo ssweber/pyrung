@@ -78,6 +78,80 @@ class ProgramGraph:
         """Return whether ``tag_name`` resolves to a physical output tag."""
         return isinstance(self.tags.get(tag_name), OutputTag)
 
+    def upstream_slice(self, tag_name: str) -> frozenset[str]:
+        """Return all tags transitively upstream of *tag_name*."""
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        queue: list[str] = [tag_name]
+
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in self.writers_of.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                node = self.rung_nodes[rung_idx]
+                for read_tag in node.condition_reads | node.data_reads:
+                    if read_tag not in visited_tags:
+                        queue.append(read_tag)
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
+
+    def downstream_slice(self, tag_name: str) -> frozenset[str]:
+        """Return all tags transitively downstream of *tag_name*."""
+        visited_tags: set[str] = set()
+        visited_rungs: set[int] = set()
+        queue: list[str] = [tag_name]
+
+        while queue:
+            current = queue.pop()
+            if current in visited_tags:
+                continue
+            visited_tags.add(current)
+            for rung_idx in self.readers_of.get(current, frozenset()):
+                if rung_idx in visited_rungs:
+                    continue
+                visited_rungs.add(rung_idx)
+                node = self.rung_nodes[rung_idx]
+                for written_tag in node.writes:
+                    if written_tag not in visited_tags:
+                        queue.append(written_tag)
+
+        visited_tags.discard(tag_name)
+        return frozenset(visited_tags)
+
+    def to_json_dict(self) -> dict[str, Any]:
+        """Serialize the graph for DAP/webview consumption."""
+        return {
+            "rungNodes": [
+                {
+                    "rungIndex": node.rung_index,
+                    "scope": node.scope,
+                    "subroutine": node.subroutine,
+                    "branchPath": list(node.branch_path),
+                    "conditionReads": sorted(node.condition_reads),
+                    "dataReads": sorted(node.data_reads),
+                    "writes": sorted(node.writes),
+                    "calls": list(node.calls),
+                    "sourceFile": node.source_file,
+                    "sourceLine": node.source_line,
+                }
+                for node in self.rung_nodes
+            ],
+            "tagRoles": {name: role.value for name, role in sorted(self.tag_roles.items())},
+            "tags": sorted(self.tags.keys()),
+            "readersOf": {
+                name: sorted(indices) for name, indices in sorted(self.readers_of.items())
+            },
+            "writersOf": {
+                name: sorted(indices) for name, indices in sorted(self.writers_of.items())
+            },
+        }
+
 
 @dataclass(frozen=True)
 class _AccessEvent:
