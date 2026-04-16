@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
+from pyrsistent import PMap, pmap
+
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
@@ -33,7 +35,6 @@ from pyrung.core.system_points import (
     SystemPointRuntime,
 )
 from pyrung.core.time_mode import TimeMode
-from pyrsistent import PMap, pmap
 from pyrung.core.trace_formatter import TraceFormatter
 
 if TYPE_CHECKING:
