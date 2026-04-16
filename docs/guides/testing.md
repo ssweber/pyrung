@@ -294,6 +294,7 @@ pytest tests/   # or directly
 
 ## Next steps
 
+- [Analysis](analysis.md) — dataview, cause/effect chains, coverage queries
 - [Forces & Debug](forces-debug.md) — force semantics, history, time travel
 - [Runner Guide](runner.md) — time modes, execution methods, numeric behavior
 - [Quickstart](../getting-started/quickstart.md) — the traffic light example

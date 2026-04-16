@@ -50,6 +50,7 @@ nav:
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md
+      - Analysis: guides/analysis.md
       - Forces: guides/forces-debug.md
       - Architecture: guides/architecture.md
       - DAP Debugger in VS Code: guides/dap-vscode.md
