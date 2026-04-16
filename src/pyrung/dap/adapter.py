@@ -565,7 +565,7 @@ class DAPAdapter:
         all_regions: list[dict[str, Any]] = []
         for rung_id, _rung in enumerate(runner.debug.iter_top_level_rungs()):
             try:
-                trace = runner.debug.rung_trace(rung_id, scan_id)
+                trace = runner.debug.rung_trace(rung_id)
             except KeyError:
                 continue
             if not trace.events:

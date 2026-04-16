@@ -11,9 +11,14 @@ from pyrung.core.input_overrides import InputOverrideManager
 class _CtxProbe:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self._tags: dict[str, object] = {}
 
     def set_tags(self, updates: dict[str, object]) -> None:
         self.calls.append(dict(updates))
+        self._tags.update(updates)
+
+    def get_tag(self, name: str, default: object = None) -> object:
+        return self._tags.get(name, default)
 
 
 def _manager(*, read_only: set[str] | None = None) -> InputOverrideManager:

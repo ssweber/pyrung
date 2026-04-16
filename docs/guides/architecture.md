@@ -101,11 +101,11 @@ Yields `ScanStep` objects at rung, branch, subroutine, and instruction boundarie
 
 ## Rung inspection
 
-`inspect()` and `inspect_event()` return retained debug trace data. Currently populated only through `scan_steps_debug()` (including DAP stepping paths) — scans produced by `step()`/`run()` do not retain rung trace.
+`runner.debug.rung_trace()` and `runner.debug.last_event()` return debug trace data for the most recently committed debug scan. Only one scan's worth of trace is retained — a non-debug commit (`step()`/`run()`) wipes the slot.
 
-### `inspect(rung_id, scan_id=None)`
+### `runner.debug.rung_trace(rung_id)`
 
-Returns a `RungTrace` for one rung in one scan:
+Returns a `RungTrace` for one rung in the current scan:
 
 - `RungTrace.scan_id` — committed scan id
 - `RungTrace.rung_id` — top-level rung index (0-based)
@@ -119,9 +119,9 @@ Each `RungTraceEvent` captures one debug boundary:
 - `enabled_state`, `instruction_kind`
 - `trace`: `TraceEvent | None`
 
-If `scan_id` is omitted, uses `runner.playhead`. Missing/evicted scans raise `KeyError(scan_id)`. Existing scans with no retained trace raise `KeyError(rung_id)`.
+Raises `KeyError(rung_id)` when no debug trace exists for the current scan.
 
-### `inspect_event()`
+### `runner.debug.last_event()`
 
 Returns the latest debug-trace event as `(scan_id, rung_id, RungTraceEvent)` or `None`:
 

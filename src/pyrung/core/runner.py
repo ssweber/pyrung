@@ -243,9 +243,13 @@ class _DebugNamespace:
         """Execute one scan cycle yielding fine-grained debug steps."""
         return self._plc._scan_steps_debug()
 
-    def rung_trace(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
-        """Return retained rung-level debug trace for one scan."""
-        return self._plc._inspect(rung_id, scan_id)
+    def rung_trace(self, rung_id: int) -> RungTrace:
+        """Return rung-level debug trace for the most recently committed scan.
+
+        Only the most recent debug scan's traces are retained — historical
+        scan inspection is not supported.
+        """
+        return self._plc._inspect(rung_id)
 
     def rung_firings(self, scan_id: int | None = None) -> PMap:
         """Return rung firings for the given scan (default: playhead)."""
@@ -331,7 +335,8 @@ class PLC:
             battery_present=self._battery_present,
         )
         self._history = History(self._state, limit=history_limit)
-        self._rung_traces_by_scan: dict[int, dict[int, RungTrace]] = {}
+        self._current_rung_traces: dict[int, RungTrace] = {}
+        self._current_rung_traces_scan_id: int | None = None
         self._rung_firings_by_scan: dict[int, PMap] = {}
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
@@ -658,22 +663,20 @@ class PLC:
 
         return QueryNamespace(self)
 
-    def _inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
-        """Return retained rung-level debug trace for one scan.
+    def _inspect(self, rung_id: int) -> RungTrace:
+        """Return rung-level debug trace for the most recently committed scan.
 
-        If ``scan_id`` is omitted, the current playhead scan is inspected.
+        Only the most recent debug scan's traces are retained.
+
         Raises:
-            KeyError: Missing scan id, or missing rung trace for retained scan.
+            KeyError: No debug trace for the current scan, or no trace for
+                the requested rung.
         """
-        target_scan_id = self._playhead if scan_id is None else scan_id
-        self.history.at(target_scan_id)
-
-        scan_traces = self._rung_traces_by_scan.get(target_scan_id)
-        if scan_traces is None:
+        if self._current_rung_traces_scan_id is None:
             raise KeyError(rung_id)
 
         try:
-            return scan_traces[rung_id]
+            return self._current_rung_traces[rung_id]
         except KeyError as exc:
             raise KeyError(rung_id) from exc
 
@@ -699,7 +702,10 @@ class PLC:
             return None
 
         scan_id, rung_id, _event = committed
-        trace = self._rung_traces_by_scan.get(scan_id, {}).get(rung_id)
+        if scan_id != self._current_rung_traces_scan_id:
+            self._latest_committed_trace_event = None
+            return None
+        trace = self._current_rung_traces.get(rung_id)
         if trace is None:
             self._latest_committed_trace_event = None
             return None
@@ -866,7 +872,8 @@ class PLC:
         return rebuilt
 
     def _clear_retained_debug_trace_caches(self) -> None:
-        self._rung_traces_by_scan.clear()
+        self._current_rung_traces = {}
+        self._current_rung_traces_scan_id = None
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
 
@@ -1237,12 +1244,24 @@ class PLC:
         return ctx, dt
 
     def _capture_previous_states(self, ctx: ScanContext) -> None:
-        """Batch _prev:* updates used by edge detection conditions."""
+        """Batch _prev:* updates used by edge detection conditions.
+
+        Skips writes when the stored ``_prev:{name}`` already equals the
+        current tag value — so idle scans (nothing changed) leave the
+        memory PMap untouched and structurally shared with the prior scan.
+        """
+        state_memory = self._state.memory
         for name in self._state.tags:
-            ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+            prev_key = f"_prev:{name}"
+            current = ctx.get_tag(name)
+            if state_memory.get(prev_key, _SENTINEL) != current:
+                ctx.set_memory(prev_key, current)
         for name in ctx._tags_pending:
             if name not in self._state.tags:
-                ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
+                prev_key = f"_prev:{name}"
+                current = ctx.get_tag(name)
+                if state_memory.get(prev_key, _SENTINEL) != current:
+                    ctx.set_memory(prev_key, current)
 
     def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
         """Finalize one scan and commit all batched writes.
@@ -1262,16 +1281,25 @@ class PLC:
         # Always record firings for scans that executed logic — even an
         # empty pmap distinguishes "rung didn't fire this scan" from "no
         # data for this scan" (important for ``query.hot_rungs`` etc.).
-        self._rung_firings_by_scan[self._state.scan_id] = ctx.rung_firings
+        # When consecutive scans produce structurally identical firings
+        # (steady-state / idle), share the previous scan's PMap reference
+        # instead of holding a fresh copy — in a pure idle loop this keeps
+        # per-scan retention at ~one dict entry.
+        new_firings = ctx.rung_firings
+        prev_firings = self._rung_firings_by_scan.get(previous_tip_scan_id)
+        if prev_firings is not None and new_firings == prev_firings:
+            new_firings = prev_firings
+        self._rung_firings_by_scan[self._state.scan_id] = new_firings
+        # Rung traces are per-commit, not per-history. The debug path
+        # repopulates _current_rung_traces after commit_scan returns; any
+        # other commit path leaves the slot empty for this scan.
+        if self._current_rung_traces_scan_id != self._state.scan_id:
+            self._current_rung_traces = {}
+            self._current_rung_traces_scan_id = None
+            self._latest_committed_trace_event = None
         evicted_scan_ids = self._history._append(self._state)
         for evicted_scan_id in evicted_scan_ids:
-            self._rung_traces_by_scan.pop(evicted_scan_id, None)
             self._rung_firings_by_scan.pop(evicted_scan_id, None)
-            if (
-                self._latest_committed_trace_event is not None
-                and self._latest_committed_trace_event[0] == evicted_scan_id
-            ):
-                self._latest_committed_trace_event = None
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
@@ -1385,10 +1413,11 @@ class PLC:
                 yield step
 
             scan_id = self._state.scan_id
-            self._rung_traces_by_scan[scan_id] = {
+            self._current_rung_traces = {
                 rung_id: RungTrace(scan_id=scan_id, rung_id=rung_id, events=tuple(events))
                 for rung_id, events in sorted(events_by_rung.items())
             }
+            self._current_rung_traces_scan_id = scan_id
             if self._latest_inflight_trace_event is not None:
                 _inflight_scan_id, latest_rung_id, latest_event = self._latest_inflight_trace_event
                 self._latest_committed_trace_event = (scan_id, latest_rung_id, latest_event)
