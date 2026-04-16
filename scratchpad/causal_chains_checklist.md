@@ -25,11 +25,11 @@
 - [ ] **D3.** Sidebar timeline panel — chain as a story, click-to-jump via fork machinery
 
 ## Section E: Retrospective `effect()`
-- [ ] **E1.** Counterfactual SP evaluation (flip leaf, re-evaluate tree, compare)
-- [ ] **E2.** Forward walk algorithm with steady-state stopping rule (K=3 consecutive scans, max=1000)
-- [ ] **E3.** `program.effect(tag, scan=N)` — public API
+- [x] **E1.** Counterfactual SP evaluation (flip leaf, re-evaluate tree, compare)
+- [x] **E2.** Forward walk algorithm with steady-state stopping rule (K=3 consecutive scans, max=1000)
+- [x] **E3.** `plc.effect(tag, scan=N)` — public API on `PLC`
 - [ ] **E4.** DAP query handler for `effect:tag@scan`
-- [ ] **E5.** Tests: worked example (Sensor_Pressure forward chain), latch stopping behavior
+- [x] **E5.** Tests: worked example (Sensor_Pressure forward chain), latch stopping behavior
 
 ## Section F: Prospective Mode
 - [ ] **F1.** Prospective backward walk for `cause(tag, to=value)` — walk static PDG, ground in observed input behavior

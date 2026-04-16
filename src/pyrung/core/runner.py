@@ -473,6 +473,44 @@ class PLC:
             scan_id=scan,
         )
 
+    def effect(
+        self,
+        tag: Tag | str,
+        scan: int | None = None,
+        *,
+        steady_state_k: int = 3,
+        max_scans: int = 1000,
+    ) -> CausalChain | None:
+        """Trace the downstream effects of a tag transition (retrospective).
+
+        Walks recorded history forward from the transition, using
+        counterfactual SP evaluation to identify which downstream tags were
+        causally affected.
+
+        Args:
+            tag: Tag object or tag name string.
+            scan: Specific scan of the transition.  If ``None``, finds the
+                most recent transition of the tag in retained history.
+            steady_state_k: Stop after this many consecutive scans with no
+                new effects (default 3).
+            max_scans: Hard cap on forward scans to examine (default 1000).
+
+        Returns:
+            A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
+            if no transition was found in retained history.
+        """
+        from pyrung.core.analysis.causal import retrospective_effect
+
+        return retrospective_effect(
+            logic=self._logic,
+            history=self._history,
+            rung_firings_fn=self.rung_firings,
+            tag=tag,
+            scan_id=scan,
+            steady_state_k=steady_state_k,
+            max_scans=max_scans,
+        )
+
     def _inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
         """Return retained rung-level debug trace for one scan.
 
