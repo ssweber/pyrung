@@ -39,20 +39,20 @@
 - [ ] **F5.** Tests: worked example (Sts_FaultTripped projected clear path), stranded tag returns `mode='unreachable'`
 
 ## Section G: `recovers()` and `program.query` Namespace
-- [ ] **G1.** `program.recovers(tag)` — convenience predicate: `cause(tag, to=resting).mode != 'unreachable'`
-- [ ] **G2.** `program.query.cold_rungs()` and `program.query.hot_rungs()`
-- [ ] **G3.** `program.query.stranded_bits()` — returns `list[CausalChain]` (unreachable chains, one per stranded bit)
+- [x] **G1.** `program.recovers(tag)` — convenience predicate: `cause(tag, to=resting).mode != 'unreachable'`
+- [x] **G2.** `program.query.cold_rungs()` and `program.query.hot_rungs()`
+- [x] **G3.** `program.query.stranded_bits()` — returns `list[CausalChain]` (unreachable chains, one per stranded bit)
 - [ ] **G4.** `program.query.coverage_gaps(tag)` / `program.query.unexercised_paths(tag)`
 - [ ] **G5.** `program.query.full()` — comprehensive structured report
 - [ ] **G6.** DAP query handler for `recovers:tag`
-- [ ] **G7.** Tests: survey methods against known programs with expected cold/hot/stranded results
+- [x] **G7.** Tests: survey methods against known programs with expected cold/hot/stranded results
 
 ## Section H: Coverage Merge & Pytest Plugin
-- [ ] **H1.** `CoverageReport` dataclass with `merge()` (intersection for negative, union for positive); stranded bits merge by chain identity (effect tag + blocker fingerprint)
-- [ ] **H2.** `program.query.report()` — emit per-test `CoverageReport`
+- [x] **H1.** `CoverageReport` dataclass with `merge()` (intersection for negative, union for positive); stranded bits merge by chain identity (effect tag + blocker fingerprint)
+- [x] **H2.** `program.query.report()` — emit per-test `CoverageReport`
 - [ ] **H3.** Pytest plugin: fixture collects reports, `pytest_sessionfinish` merges and emits `pyrung_coverage.json`
 - [ ] **H4.** Whitelist file format (TOML), CI-failure gating on whitelist diff
-- [ ] **H5.** Tests: multi-test merge produces correct residuals, monotonic shrinkage property
+- [x] **H5.** Tests: multi-test merge produces correct residuals, monotonic shrinkage property
 
 ## Section I: UI Polish
 - [ ] **I1.** Conjunctive vs ambiguous root rendering in UI (joint causation vs "N candidate causes, expand to compare")

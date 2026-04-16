@@ -568,6 +568,36 @@ class PLC:
             max_scans=max_scans,
         )
 
+    def recovers(self, tag: Tag | str) -> bool:
+        """True if *tag* has a reachable clear path from the current state.
+
+        Convenience predicate: ``cause(tag, to=resting).mode != 'unreachable'``.
+        For the underlying chain (witness or blockers), call ``cause()`` directly.
+        """
+        from pyrung.core.tag import Tag as TagClass
+
+        if isinstance(tag, TagClass):
+            resting = tag.default
+        else:
+            resting = self._resolve_resting_value(tag)
+        chain = self.cause(tag, to=resting)
+        assert chain is not None  # projected mode never returns None
+        return chain.mode != "unreachable"
+
+    def _resolve_resting_value(self, tag_name: str) -> Any:
+        """Resolve the resting (default) value for a tag name by searching logic."""
+        from pyrung.core.analysis.query import find_tag_object
+
+        tag_obj = find_tag_object(self._logic, tag_name)
+        return tag_obj.default if tag_obj is not None else False
+
+    @property
+    def query(self) -> Any:
+        """Survey namespace for whole-program dynamic analysis."""
+        from pyrung.core.analysis.query import QueryNamespace
+
+        return QueryNamespace(self)
+
     def _inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
         """Return retained rung-level debug trace for one scan.
 
