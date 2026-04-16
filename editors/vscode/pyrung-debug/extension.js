@@ -622,6 +622,7 @@ exports.activate = function (context) {
         historyPanel.setSession(null);
         dataView.setSession(null);
         graphPanel.dispose();
+        _lastGraphFile = null;
       }
     })
   );
