@@ -546,3 +546,347 @@ class TestProjectedEffectEdgeCases:
         assert chain.mode == "projected"
         effect_tags = [s.transition.tag_name for s in chain.steps]
         assert "X" not in effect_tags
+
+
+# ---------------------------------------------------------------------------
+# F5: Additional projected-mode test coverage
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedCauseBlockedUpstream:
+    """BLOCKED_UPSTREAM: internal tag has writers but they can't fire."""
+
+    def test_internal_gate_blocked_upstream(self) -> None:
+        """A reset rung guarded by an internal tag whose writer is blocked.
+
+        Layout:
+          Rung 0: Trigger → latch(X)
+          Rung 1: Impossible → latch(Gate)   # Gate has a writer
+          Rung 2: Gate → reset(X)
+
+        Impossible is also internal (written by a rung guarded by itself,
+        creating a circular dependency that can never fire from False).
+        Gate has writers in the PDG so it is NOT treated as an input.
+        Gate has never been observed transitioning → BLOCKED_UPSTREAM.
+        """
+        from pyrung.core.analysis.causal import BlockerReason
+
+        X = Bool("X")
+        Trigger = Bool("Trigger")
+        Gate = Bool("Gate")
+        Impossible = Bool("Impossible")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                latch(X)
+            with Rung(Impossible):
+                latch(Gate)
+            with Rung(Impossible):
+                latch(Impossible)  # self-referencing, never fires from False
+            with Rung(Gate):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Trigger": True})
+        runner.step()
+
+        assert runner.current_state.tags.get("X") is True
+        assert runner.current_state.tags.get("Gate") in (False, None)
+
+        chain = runner.cause("X", to=False)
+        assert chain.mode == "unreachable"
+        assert len(chain.blockers) >= 1
+
+        blocker = chain.blockers[0]
+        assert blocker.blocked_tag == "Gate"
+        assert blocker.reason == BlockerReason.BLOCKED_UPSTREAM
+
+    def test_blocked_upstream_serializes(self) -> None:
+        """BLOCKED_UPSTREAM blocker should round-trip via to_dict()."""
+        X = Bool("X")
+        Trigger = Bool("Trigger")
+        Gate = Bool("Gate")
+        Impossible = Bool("Impossible")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                latch(X)
+            with Rung(Impossible):
+                latch(Gate)
+            with Rung(Impossible):
+                latch(Impossible)
+            with Rung(Gate):
+                reset(X)
+
+        runner = PLC(logic)
+        runner.patch({"Trigger": True})
+        runner.step()
+
+        chain = runner.cause("X", to=False)
+        d = chain.to_dict()
+        assert d["mode"] == "unreachable"
+        assert any(b["reason"] == "BLOCKED_UPSTREAM" for b in d["blockers"])
+
+
+class TestProjectedEffectUnreachable:
+    """Projected effect: unreachable trigger and edge cases."""
+
+    def test_non_bool_from_value_unreachable(self) -> None:
+        """effect() with non-Bool from_value can't infer TO → unreachable."""
+        from pyrung.core import Int
+
+        Counter = Int("Counter")
+
+        with Program() as logic:
+            with Rung():
+                out(Counter)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("Counter", from_=5)
+        assert chain.mode == "unreachable"
+
+    def test_trigger_itself_unreachable(self) -> None:
+        """effect() returns unreachable when from_value != current and cause is blocked.
+
+        projected_effect checks trigger reachability only when current_value
+        differs from from_value. If the tag can't reach from_value,
+        the trigger is unreachable.
+
+        Here Orphan has no writers in the PDG, is currently False, and we
+        ask what-if from True — projected_cause("Orphan", to=True) fails
+        because no rung writes Orphan.
+        """
+        Orphan = Bool("Orphan")
+        A = Bool("A")
+
+        with Program() as logic:
+            with Rung(Orphan):
+                out(A)
+
+        runner = PLC(logic)
+        runner.step()
+
+        # Orphan is False, from_=True → current != from_
+        # projected_cause("Orphan", to=True) → no writers → unreachable
+        chain = runner.effect("Orphan", from_=True)
+        assert chain.mode == "unreachable"
+
+
+class TestProjectedEffectCascading:
+    """Multi-step forward propagation through a rung chain."""
+
+    def test_three_step_chain(self) -> None:
+        """A→B→C→D: pressing A should propagate through all three rungs.
+
+        Layout:
+          Rung 0: A → out(B)
+          Rung 1: B → out(C)
+          Rung 2: C → out(D)
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        D = Bool("D")
+
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+            with Rung(B):
+                out(C)
+            with Rung(C):
+                out(D)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("A", from_=False)
+        assert chain.mode == "projected"
+
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "B" in effect_tags
+        assert "C" in effect_tags
+        assert "D" in effect_tags
+
+    def test_cascading_with_enabling_condition(self) -> None:
+        """Forward chain where intermediate rung has an enabling condition.
+
+        Layout:
+          Rung 0: A → out(B)
+          Rung 1: And(B, Permit) → out(C)
+
+        With Permit=True, pressing A should reach C.
+        """
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        Permit = Bool("Permit")
+
+        with Program() as logic:
+            with Rung(A):
+                out(B)
+            with Rung(And(B, Permit)):
+                out(C)
+
+        runner = PLC(logic)
+        runner.patch({"Permit": True})
+        runner.step()
+
+        chain = runner.effect("A", from_=False)
+        assert chain.mode == "projected"
+
+        effect_tags = [s.transition.tag_name for s in chain.steps]
+        assert "B" in effect_tags
+        assert "C" in effect_tags
+
+
+class TestProjectedCauseConjunctiveRoots:
+    """conjunctive_roots field on projected cause chains."""
+
+    def test_conjunctive_roots_populated(self) -> None:
+        """Projected cause with multiple proximate causes fills conjunctive_roots."""
+        A = Bool("A")
+        B = Bool("B")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(And(A, B)):
+                latch(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        # Both A and B are False — both need to transition
+        chain = runner.cause("X", to=True)
+        assert chain.mode == "projected"
+
+        root_tags = [t.tag_name for t in chain.conjunctive_roots]
+        assert "A" in root_tags
+        assert "B" in root_tags
+
+    def test_single_proximate_in_conjunctive_roots(self) -> None:
+        """When only one condition needs to transition, it's the sole root."""
+        A = Bool("A")
+        B = Bool("B")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(And(A, B)):
+                latch(X)
+
+        runner = PLC(logic)
+        runner.patch({"A": True})
+        runner.step()
+
+        # A is True (enabling), B is False (proximate)
+        chain = runner.cause("X", to=True)
+        assert chain.mode == "projected"
+
+        root_tags = [t.tag_name for t in chain.conjunctive_roots]
+        assert root_tags == ["B"]
+
+
+class TestProjectedChainAccessors:
+    """tags(), rungs(), and to_config() on projected chains."""
+
+    def test_projected_cause_tags(self) -> None:
+        """tags() on a projected cause includes effect, proximate, and enabling."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped", to=False)
+        assert chain.mode == "projected"
+
+        tags = chain.tags()
+        assert "Sts_FaultTripped" in tags
+        assert "Cmd_Reset" in tags
+
+    def test_projected_cause_rungs(self) -> None:
+        """rungs() on a projected cause returns the candidate rung indices."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped", to=False)
+        assert chain.mode == "projected"
+        assert 1 in chain.rungs()
+
+    def test_projected_cause_to_config(self) -> None:
+        """to_config() on a projected cause returns compact serialization."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        chain = runner.cause("Sts_FaultTripped", to=False)
+        cfg = chain.to_config()
+
+        assert cfg["effect"] == "Sts_FaultTripped"
+        assert cfg["mode"] == "projected"
+        assert isinstance(cfg["steps"], list)
+        assert len(cfg["steps"]) >= 1
+        assert cfg["steps"][0]["rung"] == 1
+
+    def test_projected_effect_tags(self) -> None:
+        """tags() on a projected effect includes trigger and downstream."""
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("A", from_=False)
+        tags = chain.tags()
+        assert "A" in tags
+        assert "X" in tags
+
+    def test_projected_effect_rungs(self) -> None:
+        """rungs() on a projected effect returns affected rung indices."""
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("A", from_=False)
+        assert 0 in chain.rungs()
+
+    def test_projected_effect_to_config(self) -> None:
+        """to_config() on a projected effect returns compact serialization."""
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        chain = runner.effect("A", from_=False)
+        cfg = chain.to_config()
+
+        assert cfg["effect"] == "A"
+        assert cfg["mode"] == "projected"
+        assert isinstance(cfg["steps"], list)

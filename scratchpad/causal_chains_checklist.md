@@ -36,7 +36,7 @@
 - [x] **F2.** Projected forward walk for `effect(tag, from_=value)` — what-if analysis without mutating state, dead-end vs unreachable trigger distinction
 - [x] **F3.** `CausalChain.mode` field (`'recorded'` / `'projected'` / `'unreachable'`), `CausalChain.__str__`, hypothetical scan references
 - [ ] **F4.** DAP query handlers: `cause:tag:value`, `effect:tag:value`
-- [ ] **F5.** Tests: worked example (Sts_FaultTripped projected clear path), stranded tag returns `mode='unreachable'`
+- [x] **F5.** Tests: worked example (Sts_FaultTripped projected clear path), stranded tag returns `mode='unreachable'`
 
 ## Section G: `recovers()` and `program.query` Namespace
 - [x] **G1.** `program.recovers(tag)` — convenience predicate: `cause(tag, to=resting).mode != 'unreachable'`
