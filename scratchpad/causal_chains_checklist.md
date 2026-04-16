@@ -20,7 +20,7 @@
 - [x] **C7.** Tests: worked example from spec (Sensor_Pressure → Sts_FaultTripped chain), edge cases
 
 ## Section D: DAP Integration (cause)
-- [ ] **D1.** DAP query handler for `cause:tag` and `cause:tag@scan`
+- [x] **D1.** DAP query handler for `cause:tag` and `cause:tag@scan`
 - [ ] **D2.** Graph view highlighting — `causal-path` CSS class, sequenced numbering, proximate vs enabling visual weight
 - [ ] **D3.** Sidebar timeline panel — chain as a story, click-to-jump via fork machinery
 
@@ -28,14 +28,14 @@
 - [x] **E1.** Counterfactual SP evaluation (flip leaf, re-evaluate tree, compare)
 - [x] **E2.** Forward walk algorithm with steady-state stopping rule (K=3 consecutive scans, max=1000)
 - [x] **E3.** `plc.effect(tag, scan=N)` — public API on `PLC`
-- [ ] **E4.** DAP query handler for `effect:tag@scan`
+- [x] **E4.** DAP query handler for `effect:tag@scan`
 - [x] **E5.** Tests: worked example (Sensor_Pressure forward chain), latch stopping behavior
 
 ## Section F: Projected Mode
 - [x] **F1.** Projected backward walk for `cause(tag, to=value)` — walk static PDG, ground in observed input behavior, return `mode='projected'` or `mode='unreachable'` with `blockers`
 - [x] **F2.** Projected forward walk for `effect(tag, from_=value)` — what-if analysis without mutating state, dead-end vs unreachable trigger distinction
 - [x] **F3.** `CausalChain.mode` field (`'recorded'` / `'projected'` / `'unreachable'`), `CausalChain.__str__`, hypothetical scan references
-- [ ] **F4.** DAP query handlers: `cause:tag:value`, `effect:tag:value`
+- [x] **F4.** DAP query handlers: `cause:tag:value`, `effect:tag:value`
 - [x] **F5.** Tests: worked example (Sts_FaultTripped projected clear path), stranded tag returns `mode='unreachable'`
 
 ## Section G: `recovers()` and `program.query` Namespace
@@ -44,7 +44,7 @@
 - [x] **G3.** `program.query.stranded_bits()` — returns `list[CausalChain]` (unreachable chains, one per stranded bit)
 - [ ] **G4.** `program.query.coverage_gaps(tag)` / `program.query.unexercised_paths(tag)`
 - [ ] **G5.** `program.query.full()` — comprehensive structured report
-- [ ] **G6.** DAP query handler for `recovers:tag`
+- [x] **G6.** DAP query handler for `recovers:tag`
 - [x] **G7.** Tests: survey methods against known programs with expected cold/hot/stranded results
 
 ## Section H: Coverage Merge & Pytest Plugin

@@ -7,8 +7,11 @@ preserving read-after-write visibility.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
+
+from pyrsistent import PMap, pmap
 
 if TYPE_CHECKING:
     from pyrung.core.state import SystemState
@@ -107,6 +110,7 @@ class ScanContext:
         "_read_only_tags",
         "_condition_snapshot",
         "_condition_scope_token",
+        "_rung_firings",
     )
 
     def __init__(
@@ -130,6 +134,7 @@ class ScanContext:
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
         self._condition_scope_token = object()
+        self._rung_firings: dict[int, dict[str, Any]] = {}
 
     # =========================================================================
     # Read operations (with pending visibility)
@@ -275,6 +280,46 @@ class ScanContext:
         such as computing _prev:* for edge detection.
         """
         return self._state
+
+    # =========================================================================
+    # Rung-scoped firing capture
+    # =========================================================================
+
+    @contextmanager
+    def capturing_rung(self, rung_index: int) -> Iterator[None]:
+        """Attribute all tag writes made inside this block to ``rung_index``.
+
+        Produces the input data for :attr:`rung_firings` by diffing
+        ``_tags_pending`` at the scope boundary.  Wrap each top-level
+        rung evaluation in this context manager; both the non-debug and
+        debug scan paths rely on it to populate the firing log used by
+        causal-chain analysis.
+
+        Nesting is not supported — each scope must close before the next
+        opens.  Writes made outside any scope (e.g. pre-force, system
+        runtime) are intentionally unattributed.
+        """
+        before = dict(self._tags_pending)
+        try:
+            yield
+        finally:
+            pending = self._tags_pending
+            writes = {
+                name: pending[name]
+                for name in pending
+                if name not in before or before[name] != pending[name]
+            }
+            if writes:
+                self._rung_firings[rung_index] = writes
+
+    @property
+    def rung_firings(self) -> PMap:
+        """Per-rung tag writes captured via :meth:`capturing_rung`.
+
+        ``PMap[int, PMap[str, Any]]`` — rung index to ``{tag: value_written}``.
+        Empty if no rung scopes were opened during the scan.
+        """
+        return pmap({i: pmap(w) for i, w in self._rung_firings.items()})
 
     # =========================================================================
     # Commit

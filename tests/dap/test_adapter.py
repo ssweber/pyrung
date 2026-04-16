@@ -3982,3 +3982,224 @@ def test_pyrung_query_missing_query_fails(tmp_path: Path):
     messages = _send_request(adapter, out_stream, seq=2, command="pyrungQuery", arguments={})
     response = _single_response(messages)
     assert response["success"] is False
+
+
+# ------------------------------------------------------------------
+# pyrungCausal
+# ------------------------------------------------------------------
+
+
+def _causal_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "relay = Bool('Relay')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        latch(relay)\n"
+        "    with Rung(relay):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _causal_adapter(tmp_path: Path):
+    """Launch the causal script, step a few scans so history accumulates.
+
+    Uses the DAP-native step/patch path end-to-end so the test covers the
+    full stack — including that ``pyrungStepScan`` populates ``rung_firings``.
+    """
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _causal_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="pyrungPatch",
+        arguments={"tag": "Button", "value": True},
+    )
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=4, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=5, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+def test_pyrung_causal_recorded_cause(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Relay"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "cause"
+    assert body["ok"] is True
+    chain = body["chain"]
+    assert chain["mode"] == "recorded"
+    assert chain["effect"]["tag"] == "Relay"
+    assert chain["effect"]["to"] is True
+    # Button is the proximate cause of Relay latching.
+    root_tags = {t["tag"] for t in chain["conjunctive_roots"] + chain["ambiguous_roots"]}
+    assert "Button" in root_tags
+
+
+def test_pyrung_causal_recorded_effect(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "effect:Button"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "effect"
+    assert body["ok"] is True
+    chain = body["chain"]
+    assert chain["mode"] == "recorded"
+    chain_tags = {chain["effect"]["tag"]} | {s["transition"]["tag"] for s in chain["steps"]}
+    assert {"Relay", "Light"} <= chain_tags
+
+
+def test_pyrung_causal_cause_at_scan(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    # First resolve which scan Relay transitioned on via cause:Relay, then
+    # look it up by explicit scan.
+    bootstrap = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Relay"}
+    )
+    scan = _single_response(bootstrap)["body"]["chain"]["effect"]["scan"]
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=11,
+        command="pyrungCausal",
+        arguments={"query": f"cause:Relay@{scan}"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["chain"]["effect"]["scan"] == scan
+
+
+def test_pyrung_causal_projected_cause_unreachable(tmp_path: Path):
+    """Relay has no unlatch rung, so clearing it is unreachable."""
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Relay:false"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["ok"] is False
+    chain = body["chain"]
+    assert chain["mode"] == "unreachable"
+
+
+def test_pyrung_causal_recovers_false(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "recovers:Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "recovers"
+    assert body["ok"] is False
+    # Witness chain is attached so the UI can explain why.
+    assert body["chain"] is not None
+    assert body["chain"]["mode"] == "unreachable"
+
+
+def test_pyrung_causal_recorded_cause_miss_returns_null_chain(tmp_path: Path):
+    """Button's most recent transition is TRUE; there is no FALSE→TRUE for Light
+    to search for either, but this test targets a tag that has simply never
+    transitioned in history (Light stays TRUE after scan 2 latch)."""
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Nonexistent"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["ok"] is False
+    assert body["chain"] is None
+
+
+def test_pyrung_causal_empty_query_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": ""}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_unknown_command_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "bogus:Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_missing_colon_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_bad_scan_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Relay@notanumber"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False

@@ -99,34 +99,35 @@ class PLCDebugger:
         ctx, dt = runner.prepare_scan()
 
         for i, rung in enumerate(runner.iter_top_level_rungs()):
-            condition_view = rung._resolve_condition_view(ctx)
-            enabled, rung_condition_traces = self._evaluate_conditions_with_trace(
-                runner, rung._conditions, condition_view
-            )
-            execution = DebugExecutionState(
-                runner=runner,
-                rung_index=i,
-                ctx=ctx,
-                kind="rung",
-                depth=0,
-                subroutine_name=None,
-                call_stack=(),
-                enabled=enabled,
-                parent_enabled=True,
-                enabled_state=self._enabled_state_for(
+            with ctx.capturing_rung(i):
+                condition_view = rung._resolve_condition_view(ctx)
+                enabled, rung_condition_traces = self._evaluate_conditions_with_trace(
+                    runner, rung._conditions, condition_view
+                )
+                execution = DebugExecutionState(
+                    runner=runner,
+                    rung_index=i,
+                    ctx=ctx,
                     kind="rung",
+                    depth=0,
+                    subroutine_name=None,
+                    call_stack=(),
                     enabled=enabled,
                     parent_enabled=True,
-                ),
-                condition_view=condition_view,
-            )
-            yield from self._iter_rung_steps(
-                self._make_rung_state(
-                    execution=execution,
-                    rung=rung,
-                    rung_condition_traces=rung_condition_traces,
+                    enabled_state=self._enabled_state_for(
+                        kind="rung",
+                        enabled=enabled,
+                        parent_enabled=True,
+                    ),
+                    condition_view=condition_view,
                 )
-            )
+                yield from self._iter_rung_steps(
+                    self._make_rung_state(
+                        execution=execution,
+                        rung=rung,
+                        rung_condition_traces=rung_condition_traces,
+                    )
+                )
 
         runner.commit_scan(ctx, dt)
 

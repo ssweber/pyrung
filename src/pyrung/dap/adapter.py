@@ -19,6 +19,7 @@ from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
 from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
+    causal,
     force_patch,
     graph_slice,
     history_seek,
@@ -396,6 +397,9 @@ class DAPAdapter:
 
     def _on_pyrungQuery(self, args: dict[str, Any]) -> HandlerResult:
         return graph_slice.on_pyrung_query(self, args)
+
+    def _on_pyrungCausal(self, args: dict[str, Any]) -> HandlerResult:
+        return causal.on_pyrung_causal(self, args)
 
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)

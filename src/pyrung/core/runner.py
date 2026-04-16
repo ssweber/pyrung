@@ -423,12 +423,9 @@ class PLC:
 
         Returns ``PMap[int, PMap[str, Any]]`` mapping each rung index that
         wrote at least one tag during the scan to a map of
-        ``{tag_name: value_written}``.
-
-        .. note::
-
-            Only populated for scans executed via the non-debug path
-            (``step()``, ``run()``, ``run_for()``, ``run_until()``).
+        ``{tag_name: value_written}``.  Populated uniformly by both the
+        non-debug (``step()`` / ``run()``) and debug (DAP ``pyrungStepScan`` /
+        continue) scan paths via ``ScanContext.capturing_rung``.
 
         .. todo::
 
@@ -1247,10 +1244,14 @@ class PLC:
             if name not in self._state.tags:
                 ctx.set_memory(f"_prev:{name}", ctx.get_tag(name))
 
-    def _commit_scan(
-        self, ctx: ScanContext, dt: float, *, rung_firings: PMap | None = None
-    ) -> None:
-        """Finalize one scan and commit all batched writes."""
+    def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
+        """Finalize one scan and commit all batched writes.
+
+        Rung firings are read from ``ctx.rung_firings`` — both the non-debug
+        and debug scan paths populate it via ``ctx.capturing_rung(i)`` around
+        each top-level rung evaluation.  Scans with no firings (e.g. manual
+        commits from tests) simply record nothing.
+        """
         previous_state = self._state
         previous_tip_scan_id = previous_state.scan_id
         self._input_overrides.apply_post_logic(ctx)
@@ -1258,8 +1259,10 @@ class PLC:
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
-        if rung_firings is not None:
-            self._rung_firings_by_scan[self._state.scan_id] = rung_firings
+        # Always record firings for scans that executed logic — even an
+        # empty pmap distinguishes "rung didn't fire this scan" from "no
+        # data for this scan" (important for ``query.hot_rungs`` etc.).
+        self._rung_firings_by_scan[self._state.scan_id] = ctx.rung_firings
         evicted_scan_ids = self._history._append(self._state)
         for evicted_scan_id in evicted_scan_ids:
             self._rung_traces_by_scan.pop(evicted_scan_id, None)
@@ -1341,23 +1344,12 @@ class PLC:
         self._ensure_running()
         ctx, dt = self._prepare_scan()
 
-        # Evaluate logic rung-by-rung, yielding at rung boundaries.
-        # Capture per-rung tag writes by diffing _tags_pending before/after.
-        firings: dict[int, dict[str, Any]] = {}
         for i, rung in enumerate(self._logic):
-            tags_before = dict(ctx._tags_pending)
-            rung.evaluate(ctx)
-            writes = {
-                name: ctx._tags_pending[name]
-                for name in ctx._tags_pending
-                if name not in tags_before or tags_before[name] != ctx._tags_pending[name]
-            }
-            if writes:
-                firings[i] = writes
+            with ctx.capturing_rung(i):
+                rung.evaluate(ctx)
             yield i, rung, ctx
 
-        rung_firings = pmap({i: pmap(w) for i, w in firings.items()})
-        self._commit_scan(ctx, dt, rung_firings=rung_firings)
+        self._commit_scan(ctx, dt)
 
     def _scan_steps_debug(self) -> Generator[ScanStep, None, None]:
         """Execute one scan cycle and yield ``ScanStep`` objects at all boundaries.
