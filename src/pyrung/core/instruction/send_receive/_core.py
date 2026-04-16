@@ -34,7 +34,6 @@ from .helpers import (
     _normalize_operand_tags,
     _pack_values_to_registers,
     _preview_operand_tag_types,
-    _status_clear_tags,
     _unpack_registers_to_values,
     _validate_status_tags,
 )
@@ -54,7 +53,6 @@ ClickClient = _backends.ClickClient
 _PendingRequest = _backends._PendingRequest
 _RequestResult = _backends._RequestResult
 _create_raw_client = _backends._create_raw_client
-_discard_pending_request = _backends._discard_pending_request
 _extract_exception_code = _backends._extract_exception_code
 _run_raw_receive_request = _backends._run_raw_receive_request
 _run_raw_send_request = _backends._run_raw_send_request
@@ -244,60 +242,57 @@ class ModbusSendInstruction(Instruction):
         )
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not enabled:
-            if self._is_live():
-                _discard_pending_request(self._pending)
-                self._pending = None
-            ctx.set_tags(
-                _status_clear_tags(self.sending, self.success, self.error, self.exception_response)
-            )
-            return
-
         if not self._is_live():
             return
 
-        if self._pending is None:
-            source_tags = _normalize_operand_tags(self.source, ctx)
-            values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
-            self._pending = _PendingRequest(future=self._submit(source_tags, values))
-            ctx.set_tags(
-                {
-                    self.sending.name: True,
-                    self.success.name: False,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
-                }
-            )
+        if self._pending is not None:
+            # Drain an in-flight request regardless of enable state — Click
+            # semantics: once submitted, the transaction runs to completion.
+            if not self._pending.future.done():
+                ctx.set_tag(self.sending.name, True)
+                return
+
+            try:
+                result = self._pending.future.result()
+            except Exception:
+                result = _RequestResult(ok=False, exception_code=0)
+
+            self._pending = None
+            if result.ok:
+                ctx.set_tags(
+                    {
+                        self.sending.name: False,
+                        self.success.name: True,
+                        self.error.name: False,
+                        self.exception_response.name: 0,
+                    }
+                )
+            else:
+                ctx.set_tags(
+                    {
+                        self.sending.name: False,
+                        self.success.name: False,
+                        self.error.name: True,
+                        self.exception_response.name: int(result.exception_code),
+                    }
+                )
             return
 
-        ctx.set_tag(self.sending.name, True)
-        if not self._pending.future.done():
+        if not enabled:
+            # Idle + disabled: leave success/error/exception_response latched.
             return
 
-        try:
-            result = self._pending.future.result()
-        except Exception:
-            result = _RequestResult(ok=False, exception_code=0)
-
-        self._pending = None
-        if result.ok:
-            ctx.set_tags(
-                {
-                    self.sending.name: False,
-                    self.success.name: True,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
-                }
-            )
-        else:
-            ctx.set_tags(
-                {
-                    self.sending.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
-                }
-            )
+        source_tags = _normalize_operand_tags(self.source, ctx)
+        values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
+        self._pending = _PendingRequest(future=self._submit(source_tags, values))
+        ctx.set_tags(
+            {
+                self.sending.name: True,
+                self.success.name: False,
+                self.error.name: False,
+                self.exception_response.name: 0,
+            }
+        )
 
 
 @dataclass
@@ -372,79 +367,74 @@ class ModbusReceiveInstruction(Instruction):
         )
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not enabled:
-            if self._is_live():
-                _discard_pending_request(self._pending)
-                self._pending = None
-            ctx.set_tags(
-                _status_clear_tags(
-                    self.receiving, self.success, self.error, self.exception_response
-                )
-            )
-            return
-
         if not self._is_live():
             return
 
-        if self._pending is None:
-            dest_tags = _normalize_operand_tags(self.dest, ctx)
-            self._pending = _PendingRequest(
-                future=self._submit(dest_tags),
-                target_tags=dest_tags,
-            )
-            ctx.set_tags(
-                {
-                    self.receiving.name: True,
-                    self.success.name: False,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
-                }
-            )
+        if self._pending is not None:
+            # Drain an in-flight request regardless of enable state — Click
+            # semantics: once submitted, the transaction runs to completion.
+            if not self._pending.future.done():
+                ctx.set_tag(self.receiving.name, True)
+                return
+
+            target_tags = self._pending.target_tags or []
+            try:
+                result = self._pending.future.result()
+            except Exception:
+                result = _RequestResult(ok=False, exception_code=0)
+
+            self._pending = None
+            if not result.ok:
+                ctx.set_tags(
+                    {
+                        self.receiving.name: False,
+                        self.success.name: False,
+                        self.error.name: True,
+                        self.exception_response.name: int(result.exception_code),
+                    }
+                )
+                return
+
+            unpacked = self._unpack_result(result, target_tags)
+            if len(unpacked) != len(target_tags):
+                ctx.set_tags(
+                    {
+                        self.receiving.name: False,
+                        self.success.name: False,
+                        self.error.name: True,
+                        self.exception_response.name: 0,
+                    }
+                )
+                return
+
+            updates = {
+                tag.name: _store_copy_value_to_tag_type(value, tag)
+                for tag, value in zip(target_tags, unpacked, strict=True)
+            }
+            updates[self.receiving.name] = False
+            updates[self.success.name] = True
+            updates[self.error.name] = False
+            updates[self.exception_response.name] = 0
+            ctx.set_tags(updates)
             return
 
-        ctx.set_tag(self.receiving.name, True)
-        if not self._pending.future.done():
+        if not enabled:
+            # Idle + disabled: leave success/error/exception_response latched.
             return
 
-        target_tags = self._pending.target_tags or []
-        try:
-            result = self._pending.future.result()
-        except Exception:
-            result = _RequestResult(ok=False, exception_code=0)
-
-        self._pending = None
-        if not result.ok:
-            ctx.set_tags(
-                {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
-                }
-            )
-            return
-
-        unpacked = self._unpack_result(result, target_tags)
-        if len(unpacked) != len(target_tags):
-            ctx.set_tags(
-                {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: 0,
-                }
-            )
-            return
-
-        updates = {
-            tag.name: _store_copy_value_to_tag_type(value, tag)
-            for tag, value in zip(target_tags, unpacked, strict=True)
-        }
-        updates[self.receiving.name] = False
-        updates[self.success.name] = True
-        updates[self.error.name] = False
-        updates[self.exception_response.name] = 0
-        ctx.set_tags(updates)
+        dest_tags = _normalize_operand_tags(self.dest, ctx)
+        self._pending = _PendingRequest(
+            future=self._submit(dest_tags),
+            target_tags=dest_tags,
+        )
+        ctx.set_tags(
+            {
+                self.receiving.name: True,
+                self.success.name: False,
+                self.error.name: False,
+                self.exception_response.name: 0,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -137,6 +137,10 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
     from pyrung.core.instruction.coils import OutInstruction
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.send_receive import (
+        ModbusReceiveInstruction,
+        ModbusSendInstruction,
+    )
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     itype = type(instr).__name__
@@ -160,6 +164,20 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
         targets = [t.name for t in instr.outputs]
         targets.append(instr.current_step.name)
         targets.append(instr.completion_flag.name)
+    elif isinstance(instr, ModbusSendInstruction):
+        targets = [
+            instr.sending.name,
+            instr.success.name,
+            instr.error.name,
+            instr.exception_response.name,
+        ]
+    elif isinstance(instr, ModbusReceiveInstruction):
+        targets = [
+            instr.receiving.name,
+            instr.success.name,
+            instr.error.name,
+            instr.exception_response.name,
+        ]
 
     return [(name, itype) for name in targets]
 

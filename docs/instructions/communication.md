@@ -52,9 +52,20 @@ with Rung(Enable):
 Both instructions require four status tags:
 
 - **sending** / **receiving** (`BOOL`) — True while the transaction is in progress
-- **success** (`BOOL`) — True for one scan after a successful transaction
-- **error** (`BOOL`) — True for one scan after a failed transaction
-- **exception_response** (`INT`) — Modbus exception code on error
+- **success** (`BOOL`) — Latches True on successful completion; cleared when the next request starts
+- **error** (`BOOL`) — Latches True on failure; cleared when the next request starts
+- **exception_response** (`INT`) — Modbus exception code on error; cleared when the next request starts
+
+Once a request is submitted, it runs to completion even if `Enable` drops — `sending` / `receiving` stays True until the response (or timeout) is processed. `success` and `error` then latch and persist across disabled scans. They are only cleared when the next request is submitted (the rising-edge of Enable, or any scan where Enable is still high after a previous request finished).
+
+Because the flags latch, checking `success` or `error` directly in downstream logic will fire every scan while the value is stuck True. Use `rise(success)` / `rise(error)` to get a one-scan pulse on the completion edge:
+
+```python
+with Rung(rise(SendOK)):
+    out(SendComplete)  # fires for exactly one scan on each success
+```
+
+This also handles a subtle hardware timing case: on real Click CPUs, if the TCP connection is busy with another Send/Receive, `sending` / `receiving` may not rise immediately — and during that brief delay, the previous cycle's `success` is still latched. `rise()` avoids triggering on the stale value.
 
 ### Remote addressing
 

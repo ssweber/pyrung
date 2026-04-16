@@ -731,3 +731,127 @@ class TestCallerExclusivityPatterns:
 
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# Modbus send/receive status tag conflicts
+# ---------------------------------------------------------------------------
+
+
+class TestSendReceiveStatusTagConflicts:
+    """Status tags (sending/receiving, success, error, exception_response) are
+    per-instruction state — sharing them between instructions corrupts the
+    latched result and causes competing busy-bit writes."""
+
+    def test_two_sends_sharing_all_status_tags_flags_all_four(self):
+        from pyrung.core.instruction.send_receive import ModbusTcpTarget, send
+
+        target = ModbusTcpTarget("peer", "127.0.0.1", port=502, device_id=1)
+        Enable = Bool("Enable")
+        Source = Int("Source")
+        Sending = Bool("Sending")
+        Success = Bool("Success")
+        Error = Bool("Error")
+        ExCode = Int("ExCode")
+
+        with Program() as prog:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS2",
+                    source=Source,
+                    sending=Sending,
+                    success=Success,
+                    error=Error,
+                    exception_response=ExCode,
+                )
+
+        report = validate_conflicting_outputs(prog)
+        flagged = {f.target_name for f in report.findings}
+        assert flagged == {"Sending", "Success", "Error", "ExCode"}
+        for f in report.findings:
+            assert f.code == CORE_CONFLICTING_OUTPUT
+
+    def test_send_and_receive_sharing_success_flags_it(self):
+        from pyrung.core.instruction.send_receive import ModbusTcpTarget, receive, send
+
+        target = ModbusTcpTarget("peer", "127.0.0.1", port=502, device_id=1)
+        EnableSend = Bool("EnableSend")
+        EnableRecv = Bool("EnableRecv")
+        Source = Int("Source")
+        Dest = Int("Dest")
+        Sending = Bool("Sending")
+        Receiving = Bool("Receiving")
+        SharedSuccess = Bool("SharedSuccess")
+        SendErr = Bool("SendErr")
+        RecvErr = Bool("RecvErr")
+        SendEx = Int("SendEx")
+        RecvEx = Int("RecvEx")
+
+        with Program() as prog:
+            with Rung(EnableSend):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Sending,
+                    success=SharedSuccess,
+                    error=SendErr,
+                    exception_response=SendEx,
+                )
+            with Rung(EnableRecv):
+                receive(
+                    target=target,
+                    remote_start="DS2",
+                    dest=Dest,
+                    receiving=Receiving,
+                    success=SharedSuccess,
+                    error=RecvErr,
+                    exception_response=RecvEx,
+                )
+
+        report = validate_conflicting_outputs(prog)
+        flagged = {f.target_name for f in report.findings}
+        assert flagged == {"SharedSuccess"}
+
+    def test_distinct_status_tags_no_conflict(self):
+        from pyrung.core.instruction.send_receive import ModbusTcpTarget, send
+
+        target = ModbusTcpTarget("peer", "127.0.0.1", port=502, device_id=1)
+        Enable = Bool("Enable")
+        Source = Int("Source")
+
+        with Program() as prog:
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS1",
+                    source=Source,
+                    sending=Bool("Sending1"),
+                    success=Bool("Success1"),
+                    error=Bool("Error1"),
+                    exception_response=Int("Ex1"),
+                )
+            with Rung(Enable):
+                send(
+                    target=target,
+                    remote_start="DS2",
+                    source=Source,
+                    sending=Bool("Sending2"),
+                    success=Bool("Success2"),
+                    error=Bool("Error2"),
+                    exception_response=Int("Ex2"),
+                )
+
+        report = validate_conflicting_outputs(prog)
+        assert len(report.findings) == 0

@@ -7,7 +7,8 @@ last-writer-wins stomping at runtime.
 Covered instruction types:
   OutInstruction, OnDelayInstruction, OffDelayInstruction,
   CountUpInstruction, CountDownInstruction, ShiftInstruction,
-  EventDrumInstruction, TimeDrumInstruction.
+  EventDrumInstruction, TimeDrumInstruction,
+  ModbusSendInstruction, ModbusReceiveInstruction.
 """
 
 from __future__ import annotations

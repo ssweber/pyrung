@@ -294,10 +294,3 @@ def _extract_exception_code(exc: BaseException) -> int:
         if nested_match is not None:
             return int(nested_match.group(1))
     return 0
-
-
-def _discard_pending_request(pending: _PendingRequest | None) -> None:
-    if pending is None:
-        return
-    # Best effort only: a running threadpool task may not cancel.
-    pending.future.cancel()
