@@ -50,8 +50,8 @@
 ## Section H: Coverage Merge & Pytest Plugin
 - [x] **H1.** `CoverageReport` dataclass with `merge()` (intersection for negative, union for positive); stranded bits merge by chain identity (effect tag + blocker fingerprint)
 - [x] **H2.** `program.query.report()` — emit per-test `CoverageReport`
-- [ ] **H3.** Pytest plugin: fixture collects reports, `pytest_sessionfinish` merges and emits `pyrung_coverage.json`
-- [ ] **H4.** Whitelist file format (TOML), CI-failure gating on whitelist diff
+- [x] **H3.** Pytest plugin: fixture collects reports, `pytest_sessionfinish` merges and emits `pyrung_coverage.json`
+- [x] **H4.** Whitelist file format (TOML), CI-failure gating on whitelist diff
 - [x] **H5.** Tests: multi-test merge produces correct residuals, monotonic shrinkage property
 
 ## Section I: UI Polish

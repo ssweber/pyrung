@@ -250,6 +250,73 @@ Negative findings (cold rungs, stranded bits) merge by **intersection** — a ru
 
 Stranded bits merge by chain identity (tag + blocker fingerprint), so "stranded for a different reason" after a refactor is a distinct signal from "still stranded."
 
+### Pytest plugin
+
+The manual merge above works, but the `pyrung.pytest_plugin` handles it automatically. Enable it in your `conftest.py`:
+
+```python
+pytest_plugins = ["pyrung.pytest_plugin"]
+```
+
+Then wire the `pyrung_coverage` fixture into your PLC fixture:
+
+```python
+@pytest.fixture
+def plc(pyrung_coverage):
+    with PLC(logic, dt=0.1) as p:
+        yield p
+        pyrung_coverage.collect(p)
+```
+
+Every test that uses `plc` contributes a report. At session end, the plugin merges all reports and writes `pyrung_coverage.json`:
+
+```json
+{
+  "cold_rungs": [22, 91],
+  "hot_rungs": [0, 2, 3],
+  "stranded_chains": []
+}
+```
+
+Control the output path with `--pyrung-coverage-json`:
+
+```bash
+pytest --pyrung-coverage-json=build/coverage.json   # custom path
+pytest --pyrung-coverage-json=                       # disable output
+```
+
+### Whitelist and CI gating
+
+A TOML whitelist declares known-acceptable findings — cold rungs you've decided are dormant by design, stranded bits that are operator-only and not testable from software:
+
+```toml
+# pyrung_whitelist.toml
+
+[cold_rungs]
+allow = [22, 91, 104]
+
+[stranded_chains]
+allow = ["Sts_SpecialFault", "Sts_ManualReset"]
+```
+
+Pass it with `--pyrung-whitelist`:
+
+```bash
+pytest --pyrung-whitelist=pyrung_whitelist.toml
+```
+
+New findings not in the whitelist fail the session (exitstatus 1) and print a summary:
+
+```
+=============================== pyrung coverage ===============================
+New cold rungs not in whitelist: [200, 201]
+New stranded bits not in whitelist: ['Sts_NewFault']
+```
+
+The whitelist keys stranded bits by tag name only — not by blocker fingerprint. If a refactor changes *why* a bit is stranded, the whitelist still covers it, but the JSON report's chain identity will differ, surfacing the change for review.
+
+With one test, cold rungs and stranded bits are mostly noise. After hundreds of tests, anything still in the residual has had hundreds of chances to be exercised and wasn't. That's where the whitelist becomes a short list of deliberate decisions rather than a pile of false positives.
+
 ## Static validators
 
 Separate from the runtime analysis, two static validators check program structure at build time — no scans needed.

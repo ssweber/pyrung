@@ -1,5 +1,7 @@
 """Pytest configuration and test helpers."""
 
+pytest_plugins = ["pytester"]
+
 from pyrung.core import SystemState
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext
