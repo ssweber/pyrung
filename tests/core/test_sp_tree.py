@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pyrung.core import And, Bool, Or
-from pyrung.core.rung import Rung
 from pyrung.core.analysis.sp_tree import (
     SPLeaf,
     SPParallel,
@@ -18,6 +17,7 @@ from pyrung.core.condition import (
     BitCondition,
     NormallyClosedCondition,
 )
+from pyrung.core.rung import Rung
 
 # ---------------------------------------------------------------------------
 # Conversion: conditions_to_sp

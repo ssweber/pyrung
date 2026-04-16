@@ -40,6 +40,7 @@ from pyrung.core.trace_formatter import TraceFormatter
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
 
+    from pyrung.core.analysis.causal import CausalChain
     from pyrung.core.condition import Condition
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
@@ -441,6 +442,36 @@ class PLC:
             if old_value != new_value:
                 changed[key] = (old_value, new_value)
         return changed
+
+    def cause(
+        self,
+        tag: Tag | str,
+        scan: int | None = None,
+    ) -> CausalChain | None:
+        """Explain what caused a tag to transition (retrospective).
+
+        Walks recorded history backward from the transition, using per-rung
+        SP-tree attribution to identify proximate causes (what flipped) and
+        enabling conditions (what held the path open).
+
+        Args:
+            tag: Tag object or tag name string.
+            scan: Specific scan to examine.  If ``None``, finds the most
+                recent transition of the tag in retained history.
+
+        Returns:
+            A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
+            if no transition was found in retained history.
+        """
+        from pyrung.core.analysis.causal import retrospective_cause
+
+        return retrospective_cause(
+            logic=self._logic,
+            history=self._history,
+            rung_firings_fn=self.rung_firings,
+            tag=tag,
+            scan_id=scan,
+        )
 
     def _inspect(self, rung_id: int, scan_id: int | None = None) -> RungTrace:
         """Return retained rung-level debug trace for one scan.

@@ -11,13 +11,13 @@
 - [x] **B3.** Four-rule attribution walk: implement the post-order SERIES/PARALLEL TRUE/FALSE walk on SP trees
 
 ## Section C: Retrospective `cause()`
-- [ ] **C1.** `CausalChain`, `Transition`, `ChainStep`, `EnablingCondition` data model
-- [ ] **C2.** Retrospective backward walk algorithm (find transition → firing log → SP attribution → proximate/enabling split → recurse)
-- [ ] **C3.** `program.cause(tag)` and `program.cause(tag, scan=N)` — public API on `Program`
-- [ ] **C4.** `CausalChain.to_dict()` and `CausalChain.to_config()` serialization
-- [ ] **C5.** `CausalChain.tags()` and `CausalChain.rungs()` accessors
-- [ ] **C6.** Confidence scoring (conjunctive vs ambiguous roots, scalar formula)
-- [ ] **C7.** Tests: worked example from spec (Sensor_Pressure → Sts_FaultTripped chain), edge cases
+- [x] **C1.** `CausalChain`, `Transition`, `ChainStep`, `EnablingCondition` data model
+- [x] **C2.** Retrospective backward walk algorithm (find transition → firing log → SP attribution → proximate/enabling split → recurse)
+- [x] **C3.** `plc.cause(tag)` and `plc.cause(tag, scan=N)` — public API on `PLC`
+- [x] **C4.** `CausalChain.to_dict()` and `CausalChain.to_config()` serialization
+- [x] **C5.** `CausalChain.tags()` and `CausalChain.rungs()` accessors
+- [x] **C6.** Confidence scoring (conjunctive vs ambiguous roots, scalar formula)
+- [x] **C7.** Tests: worked example from spec (Sensor_Pressure → Sts_FaultTripped chain), edge cases
 
 ## Section D: DAP Integration (cause)
 - [ ] **D1.** DAP query handler for `cause:tag` and `cause:tag@scan`
