@@ -45,6 +45,8 @@ if TYPE_CHECKING:
     from pyrung.core.rung import Rung
     from pyrung.core.tag import Tag
 
+_SENTINEL = object()  # distinguishes "not passed" from None/False
+
 
 @dataclass(frozen=True)
 class ScanStep:
@@ -443,29 +445,64 @@ class PLC:
                 changed[key] = (old_value, new_value)
         return changed
 
+    def _ensure_pdg(self) -> Any:
+        """Lazily build and cache the static program dependency graph."""
+        if not hasattr(self, "_pdg_cache") or self._pdg_cache is None:
+            from pyrung.core.analysis.pdg import build_program_graph
+            from pyrung.core.program import Program
+
+            program = self._program
+            if program is None:
+                program = Program.__new__(Program)
+                program.rungs = list(self._logic)
+                program.subroutines = {}
+            self._pdg_cache = build_program_graph(program)
+        return self._pdg_cache
+
     def cause(
         self,
         tag: Tag | str,
         scan: int | None = None,
+        *,
+        to: Any = _SENTINEL,
     ) -> CausalChain | None:
-        """Explain what caused a tag to transition (retrospective).
+        """Explain what caused a tag to transition.
 
-        Walks recorded history backward from the transition, using per-rung
-        SP-tree attribution to identify proximate causes (what flipped) and
-        enabling conditions (what held the path open).
+        **Recorded** (default, ``to`` omitted): walks recorded history
+        backward from the transition.  Returns ``None`` if no transition
+        was found.
+
+        **Projected** (``to=value``): projects forward from the current
+        state, finding reachable paths that would drive the tag to *value*.
+        Returns a ``CausalChain`` with ``mode='projected'`` (reachable) or
+        ``mode='unreachable'`` (stranded, with ``blockers``).  Never
+        returns ``None`` in projected mode.
 
         Args:
             tag: Tag object or tag name string.
-            scan: Specific scan to examine.  If ``None``, finds the most
-                recent transition of the tag in retained history.
+            scan: Specific scan to examine (recorded mode only).
+            to: Target value for projected mode.  When provided, the
+                method returns the path that would drive *tag* to this
+                value from the current state.
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
-            if no transition was found in retained history.
+            (recorded mode only, when no transition was found).
         """
-        from pyrung.core.analysis.causal import retrospective_cause
+        if to is not _SENTINEL:
+            from pyrung.core.analysis.causal import projected_cause
 
-        return retrospective_cause(
+            return projected_cause(
+                logic=self._logic,
+                history=self._history,
+                tag=tag,
+                to_value=to,
+                pdg=self._ensure_pdg(),
+            )
+
+        from pyrung.core.analysis.causal import recorded_cause
+
+        return recorded_cause(
             logic=self._logic,
             history=self._history,
             rung_firings_fn=self.rung_firings,
@@ -478,30 +515,50 @@ class PLC:
         tag: Tag | str,
         scan: int | None = None,
         *,
+        from_: Any = _SENTINEL,
         steady_state_k: int = 3,
         max_scans: int = 1000,
     ) -> CausalChain | None:
-        """Trace the downstream effects of a tag transition (retrospective).
+        """Trace the downstream effects of a tag transition.
 
-        Walks recorded history forward from the transition, using
-        counterfactual SP evaluation to identify which downstream tags were
-        causally affected.
+        **Recorded** (default, ``from_`` omitted): walks recorded
+        history forward from an actual transition.  Returns ``None`` if
+        no transition was found.
+
+        **Projected** (``from_=value``): what-if analysis — if the tag
+        transitioned from *value* right now, what downstream effects would
+        follow?  Returns ``mode='projected'`` (possibly empty steps for
+        dead-end) or ``mode='unreachable'`` if the trigger can't fire.
+        Never returns ``None`` in projected mode.
 
         Args:
             tag: Tag object or tag name string.
-            scan: Specific scan of the transition.  If ``None``, finds the
-                most recent transition of the tag in retained history.
+            scan: Specific scan of the transition (recorded mode only).
+            from_: Current value for projected what-if analysis.  For
+                Bool tags the TO value is inferred as ``not from_``.
             steady_state_k: Stop after this many consecutive scans with no
-                new effects (default 3).
-            max_scans: Hard cap on forward scans to examine (default 1000).
+                new effects (recorded mode only, default 3).
+            max_scans: Hard cap on forward scans (recorded mode only,
+                default 1000).
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
-            if no transition was found in retained history.
+            (recorded mode only, when no transition was found).
         """
-        from pyrung.core.analysis.causal import retrospective_effect
+        if from_ is not _SENTINEL:
+            from pyrung.core.analysis.causal import projected_effect
 
-        return retrospective_effect(
+            return projected_effect(
+                logic=self._logic,
+                history=self._history,
+                tag=tag,
+                from_value=from_,
+                pdg=self._ensure_pdg(),
+            )
+
+        from pyrung.core.analysis.causal import recorded_effect
+
+        return recorded_effect(
             logic=self._logic,
             history=self._history,
             rung_firings_fn=self.rung_firings,

@@ -58,7 +58,7 @@ class TestWorkedExampleEffect:
         chain = runner.effect("Sensor_Pressure", scan=2)
 
         assert chain is not None
-        assert chain.mode == "retrospective"
+        assert chain.mode == "recorded"
         assert chain.effect.tag_name == "Sensor_Pressure"
         assert chain.effect.scan_id == 2
 
@@ -375,7 +375,7 @@ class TestEffectEdgeCases:
         assert chain is not None
 
         d = chain.to_dict()
-        assert d["mode"] == "retrospective"
+        assert d["mode"] == "recorded"
         assert "steps" in d
 
         c = chain.to_config()

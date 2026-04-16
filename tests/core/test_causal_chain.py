@@ -84,7 +84,7 @@ class TestWorkedExample:
         chain = runner.cause("Sts_FaultTripped")
 
         assert chain is not None
-        assert chain.mode == "retrospective"
+        assert chain.mode == "recorded"
         assert chain.effect.tag_name == "Sts_FaultTripped"
         assert chain.effect.from_value is False
         assert chain.effect.to_value is True
@@ -357,7 +357,7 @@ class TestSerialization:
         assert "ambiguous_roots" in d
         assert "confidence" in d
         assert "duration_scans" in d
-        assert d["mode"] == "retrospective"
+        assert d["mode"] == "recorded"
 
     def test_to_config_compact(self) -> None:
         """to_config() should be compact with tag names and scan ids."""
