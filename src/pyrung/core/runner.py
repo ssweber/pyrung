@@ -48,6 +48,16 @@ if TYPE_CHECKING:
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 
+def _validate_assume(logic: list[Any], assume: dict[str, Any]) -> None:
+    """Raise ``ValueError`` if *assume* targets a readonly tag."""
+    from pyrung.core.analysis.query import find_tag_object
+
+    for name in assume:
+        tag_obj = find_tag_object(logic, name)
+        if tag_obj is not None and tag_obj.readonly:
+            raise ValueError(f"cannot assume value for readonly tag {name!r}")
+
+
 @dataclass(frozen=True)
 class ScanStep:
     """Debug scan step emitted at rung boundaries."""
@@ -465,6 +475,7 @@ class PLC:
         scan: int | None = None,
         *,
         to: Any = _SENTINEL,
+        assume: dict[str, Any] | None = None,
     ) -> CausalChain | None:
         """Explain what caused a tag to transition.
 
@@ -484,12 +495,21 @@ class PLC:
             to: Target value for projected mode.  When provided, the
                 method returns the path that would drive *tag* to this
                 value from the current state.
+            assume: Tag-to-value overrides for projected mode.  Pins
+                the given tags to specified values during analysis.
+                Raises ``ValueError`` if used without ``to=`` or if
+                any key is a ``readonly`` tag.
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
             (recorded mode only, when no transition was found).
         """
+        if assume and to is _SENTINEL:
+            raise ValueError("assume= requires projected mode (provide to=)")
+
         if to is not _SENTINEL:
+            if assume:
+                _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_cause
 
             return projected_cause(
@@ -498,6 +518,7 @@ class PLC:
                 tag=tag,
                 to_value=to,
                 pdg=self._ensure_pdg(),
+                assume=assume,
             )
 
         from pyrung.core.analysis.causal import recorded_cause
@@ -516,6 +537,7 @@ class PLC:
         scan: int | None = None,
         *,
         from_: Any = _SENTINEL,
+        assume: dict[str, Any] | None = None,
         steady_state_k: int = 3,
         max_scans: int = 1000,
     ) -> CausalChain | None:
@@ -536,6 +558,10 @@ class PLC:
             scan: Specific scan of the transition (recorded mode only).
             from_: Current value for projected what-if analysis.  For
                 Bool tags the TO value is inferred as ``not from_``.
+            assume: Tag-to-value overrides for projected mode.  Pins
+                the given tags to specified values during analysis.
+                Raises ``ValueError`` if used without ``from_=`` or if
+                any key is a ``readonly`` tag.
             steady_state_k: Stop after this many consecutive scans with no
                 new effects (recorded mode only, default 3).
             max_scans: Hard cap on forward scans (recorded mode only,
@@ -545,7 +571,12 @@ class PLC:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
             (recorded mode only, when no transition was found).
         """
+        if assume and from_ is _SENTINEL:
+            raise ValueError("assume= requires projected mode (provide from_=)")
+
         if from_ is not _SENTINEL:
+            if assume:
+                _validate_assume(self._logic, assume)
             from pyrung.core.analysis.causal import projected_effect
 
             return projected_effect(
@@ -554,6 +585,7 @@ class PLC:
                 tag=tag,
                 from_value=from_,
                 pdg=self._ensure_pdg(),
+                assume=assume,
             )
 
         from pyrung.core.analysis.causal import recorded_effect
@@ -568,14 +600,21 @@ class PLC:
             max_scans=max_scans,
         )
 
-    def recovers(self, tag: Tag | str) -> bool:
+    def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.
 
         Convenience predicate: ``cause(tag, to=resting).mode != 'unreachable'``.
         For the underlying chain (witness or blockers), call ``cause()`` directly.
 
         Tags marked ``external=True`` always return True — the recovery path
-        exists outside the ladder by declaration.
+        exists outside the ladder by declaration.  When *assume* is provided
+        the external shortcut is skipped so the analysis runs with the given
+        overrides.
+
+        Args:
+            tag: Tag object or tag name string.
+            assume: Tag-to-value overrides.  Pins the given tags to
+                specified values during projected analysis.
         """
         from pyrung.core.analysis.query import find_tag_object
         from pyrung.core.tag import Tag as TagClass
@@ -587,11 +626,13 @@ class PLC:
             tag_obj = find_tag_object(self._logic, tag)
             resting = self._resolve_resting_value(tag)
 
-        # External tags recover by declaration — the external writer handles it
-        if tag_obj is not None and tag_obj.external:
+        # External tags recover by declaration — the external writer
+        # handles it.  Skip when assume is provided so the caller can
+        # exercise the actual recovery path.
+        if not assume and tag_obj is not None and tag_obj.external:
             return True
 
-        chain = self.cause(tag, to=resting)
+        chain = self.cause(tag, to=resting, assume=assume)
         assert chain is not None  # projected mode never returns None
         return chain.mode != "unreachable"
 

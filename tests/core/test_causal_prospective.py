@@ -5,9 +5,12 @@ Covers:
 - Projected effect (forward): what-if analysis, dead-end, unreachable trigger
 - Mode field values ('projected' / 'unreachable')
 - BlockingCondition / BlockerReason data model
+- assume={} scenario pinning on cause, effect, recovers
 """
 
 from __future__ import annotations
+
+import pytest
 
 from pyrung.core import PLC, And, Bool, Or, Program, Rung, latch, out, reset
 
@@ -890,3 +893,220 @@ class TestProjectedChainAccessors:
         assert cfg["effect"] == "A"
         assert cfg["mode"] == "projected"
         assert isinstance(cfg["steps"], list)
+
+
+# ---------------------------------------------------------------------------
+# assume={} on projected cause
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedCauseWithAssume:
+    """assume= pins tag values and bypasses reachability checks."""
+
+    def test_assume_makes_unreachable_reachable(self) -> None:
+        """A ladder-written condition tag with no observed transition blocks
+        the clear path.  assume= stipulates the value, making it reachable.
+
+        ResetReady is written by the ladder (rung 2), so it's NOT a pure
+        input -- projected_cause won't grant automatic reachability.
+        """
+        Sensor = Bool("Sensor")
+        Fault = Bool("Fault")
+        ResetReady = Bool("ResetReady")
+        Trigger = Bool("Trigger")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                latch(Fault)
+            with Rung(And(Fault, ResetReady)):
+                reset(Fault)
+            # ResetReady written by ladder → has a PDG writer
+            with Rung(Trigger):
+                out(ResetReady)
+
+        runner = PLC(logic)
+        runner.patch({"Sensor": True})
+        runner.step()
+        assert runner.current_state.tags.get("Fault") is True
+
+        # Without assume: ResetReady has no observed transition → blocked
+        chain_no = runner.cause("Fault", to=False)
+        assert chain_no.mode == "unreachable"
+
+        # With assume: ResetReady stipulated → reachable
+        chain_yes = runner.cause("Fault", to=False, assume={"ResetReady": True})
+        assert chain_yes.mode == "projected"
+        assert len(chain_yes.steps) >= 1
+
+    def test_assume_pins_state_for_evaluation(self) -> None:
+        """An assumed tag that satisfies a condition shows as enabling."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+
+        # Trip the fault
+        runner.patch({"Permissive_OK": True})
+        runner.step()
+        runner.patch({"Sensor_Pressure": True})
+        runner.step()
+
+        # Cmd_Reset=True satisfies the Cmd_Reset contact on rung 1.
+        # Sts_FaultTripped is already True (enabling).
+        # With the assumed Cmd_Reset pinned True, the condition evaluates
+        # True → it should appear as enabling, not proximate.
+        chain = runner.cause("Sts_FaultTripped", to=False, assume={"Cmd_Reset": True})
+        assert chain.mode == "projected"
+        step = chain.steps[0]
+        enabling_tags = [e.tag_name for e in step.enabling_conditions]
+        proximate_tags = [p.tag_name for p in step.proximate_causes]
+        assert "Cmd_Reset" in enabling_tags
+        assert "Cmd_Reset" not in proximate_tags
+
+    def test_assume_already_at_target(self) -> None:
+        """assume= can push the target tag itself to the desired value."""
+        X = Bool("X")
+        Trigger = Bool("Trigger")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                latch(X)
+
+        runner = PLC(logic)
+        runner.patch({"Trigger": True})
+        runner.step()
+        assert runner.current_state.tags.get("X") is True
+
+        # X has no reset rung → normally unreachable.
+        # But assume={"X": False} overrides state to already-at-target.
+        chain = runner.cause("X", to=False, assume={"X": False})
+        assert chain.mode == "projected"
+        assert len(chain.steps) == 0  # already at desired value
+
+    def test_assume_without_to_raises(self) -> None:
+        """assume= without to= (recorded mode) raises ValueError."""
+        logic = _build_worked_example()
+        runner = PLC(logic)
+        runner.step()
+
+        with pytest.raises(ValueError, match="projected mode"):
+            runner.cause("Sts_FaultTripped", assume={"Cmd_Reset": True})
+
+
+# ---------------------------------------------------------------------------
+# assume={} on projected effect
+# ---------------------------------------------------------------------------
+
+
+class TestProjectedEffectWithAssume:
+    """assume= on effect() pins state for forward what-if analysis."""
+
+    def test_assume_affects_forward_walk(self) -> None:
+        """Assumed values change which downstream rungs fire."""
+        A = Bool("A")
+        Guard = Bool("Guard")
+        X = Bool("X")
+
+        with Program() as logic:
+            # X fires only when both A and Guard are True
+            with Rung(And(A, Guard)):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        # Without assume: Guard is False, so A flipping has no effect on X
+        chain_no = runner.effect("A", from_=False)
+        effect_tags = [s.transition.tag_name for s in chain_no.steps]
+        assert "X" not in effect_tags
+
+        # With assume: Guard=True, so A flipping does affect X
+        chain_yes = runner.effect("A", from_=False, assume={"Guard": True})
+        effect_tags = [s.transition.tag_name for s in chain_yes.steps]
+        assert "X" in effect_tags
+
+    def test_assume_without_from_raises(self) -> None:
+        """assume= without from_= (recorded mode) raises ValueError."""
+        A = Bool("A")
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(A):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        with pytest.raises(ValueError, match="projected mode"):
+            runner.effect("A", assume={"Guard": True})
+
+
+# ---------------------------------------------------------------------------
+# assume={} on recovers
+# ---------------------------------------------------------------------------
+
+
+class TestRecoversWithAssume:
+    """assume= on recovers() exercises recovery paths with stipulated values."""
+
+    def test_recovers_external_with_assume(self) -> None:
+        """External tag with assume skips the declaration shortcut and runs analysis."""
+        HmiAck = Bool("HmiAck", external=True)
+        Trigger = Bool("Trigger")
+
+        with Program() as logic:
+            with Rung(Trigger):
+                latch(HmiAck)
+
+        runner = PLC(logic)
+        runner.patch({"Trigger": True})
+        runner.step()
+        assert runner.current_state.tags.get("HmiAck") is True
+
+        # Without assume: external → True by declaration
+        assert runner.recovers(HmiAck) is True
+
+        # With assume: analysis runs. HmiAck pinned to False (resting) →
+        # already at target → projected, recovers.
+        assert runner.recovers(HmiAck, assume={"HmiAck": False}) is True
+
+    def test_recovers_with_assume_on_condition_tag(self) -> None:
+        """assume= on a ladder-written condition tag makes a blocked fault
+        recoverable.  ResetReady has a PDG writer, so it's not a pure input.
+        """
+        Sensor = Bool("Sensor")
+        Fault = Bool("Fault")
+        ResetReady = Bool("ResetReady")
+        Trigger = Bool("Trigger")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                latch(Fault)
+            with Rung(And(Fault, ResetReady)):
+                reset(Fault)
+            with Rung(Trigger):
+                out(ResetReady)
+
+        runner = PLC(logic)
+        runner.patch({"Sensor": True})
+        runner.step()
+        assert runner.current_state.tags.get("Fault") is True
+
+        # Without assume: ResetReady has no observed transition → unreachable
+        assert runner.recovers(Fault) is False
+
+        # With assume: ResetReady stipulated → reachable
+        assert runner.recovers(Fault, assume={"ResetReady": True}) is True
+
+    def test_assume_readonly_raises(self) -> None:
+        """assume= targeting a readonly tag raises ValueError."""
+        Sensor = Bool("Sensor", readonly=True)
+        X = Bool("X")
+
+        with Program() as logic:
+            with Rung(Sensor):
+                out(X)
+
+        runner = PLC(logic)
+        runner.step()
+
+        with pytest.raises(ValueError, match="readonly"):
+            runner.cause("X", to=True, assume={"Sensor": True})

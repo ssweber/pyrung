@@ -869,6 +869,7 @@ def projected_cause(
     tag: Tag | str,
     to_value: Any,
     pdg: ProgramGraph,
+    assume: dict[str, Any] | None = None,
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -901,6 +902,10 @@ def projected_cause(
         )
     latest_scan = list(history._order)[-1]
     state = history.at(latest_scan)
+
+    # Apply assumption overrides to the state snapshot
+    if assume:
+        state = state.with_tags(assume)
 
     current_value = state.tags.get(tag_name)
 
@@ -1021,9 +1026,12 @@ def projected_cause(
                 needed_value = not cond_value if cond_value is not None else True
 
                 # Check reachability: has this tag ever transitioned to
-                # the needed value in recorded history?
+                # the needed value in recorded history?  Tags in the
+                # assume dict are reachable by stipulation.
                 is_input = not pdg.writers_of.get(cond_tag, frozenset())
-                reachable = _has_observed_transition(history, cond_tag, needed_value)
+                reachable = (assume and cond_tag in assume) or _has_observed_transition(
+                    history, cond_tag, needed_value
+                )
 
                 if reachable or is_input:
                     proximate.append(
@@ -1092,6 +1100,7 @@ def projected_effect(
     tag: Tag | str,
     from_value: Any,
     pdg: ProgramGraph,
+    assume: dict[str, Any] | None = None,
 ) -> CausalChain:
     """Build a projected forward chain: what would happen if *tag*
     transitioned from *from_value*?
@@ -1135,6 +1144,10 @@ def projected_effect(
     latest_scan = list(history._order)[-1]
     state = history.at(latest_scan)
 
+    # Apply assumption overrides to the state snapshot
+    if assume:
+        state = state.with_tags(assume)
+
     # Build the hypothetical transition
     cause_transition = Transition(
         tag_name=tag_name,
@@ -1150,7 +1163,7 @@ def projected_effect(
     if current_value != from_value:
         # Trigger doesn't match current state — check if the trigger
         # is reachable via a projected cause walk
-        trigger_chain = projected_cause(logic, history, tag, from_value, pdg)
+        trigger_chain = projected_cause(logic, history, tag, from_value, pdg, assume=assume)
         if trigger_chain.mode == "unreachable":
             return CausalChain(
                 effect=cause_transition,

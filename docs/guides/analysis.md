@@ -182,6 +182,45 @@ chain = plc.effect(StartBtn, from_=False)
 
 What-if analysis without mutating state.
 
+### `assume={}` — scenario pinning
+
+All three projected methods accept `assume=` to pin tags to specific values during analysis:
+
+```python
+plc.cause(Running, to=False, assume={"ResetReady": True})
+plc.effect(StartBtn, from_=False, assume={"Guard": True})
+plc.recovers(Fault, assume={"ResetBtn": True})
+```
+
+The assumed values override the state snapshot before the walker runs, and assumed tags are treated as reachable regardless of history. Three uses:
+
+**Exploration.** REPL sweeps to discover which tests are worth writing:
+
+```python
+for tag in fault_tags:
+    if not plc.recovers(tag, assume={"ResetBtn": True}):
+        print(f"Reset doesn't clear {tag}")
+```
+
+**Causal assertions in tests.** Assert the ladder actually connects inputs to outputs:
+
+```python
+assert plc.cause("Motor_Running",
+                 assume={"StartBtn": True, "EStop": False})
+assert not plc.cause("Motor_Running",
+                     assume={"EStop": True})
+```
+
+**External tag reasoning.** Tags marked `external=True` normally return `True` from `recovers()` by declaration. With `assume=`, the shortcut is skipped and the analysis runs, so you can verify the recovery path works with specific inputs:
+
+```python
+assert plc.recovers("Alarm_Ack", assume={"Alarm_Ack": False})
+```
+
+`assume=` on a `readonly` tag raises `ValueError` — the tag is declared constant, so pinning it to a different value contradicts the declaration. `external` and `final` tags are fine to assume.
+
+`assume=` requires projected mode. Using it without `to=` on `cause()` or without `from_=` on `effect()` raises `ValueError`.
+
 ### `recovers()` — can this bit clear?
 
 ```python
