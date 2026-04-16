@@ -124,10 +124,6 @@ class InputOverrideManager:
         Skipping already-matching writes keeps the ``tags`` PMap structurally
         shared when a force's value is stable.
         """
-        diff = {
-            name: value
-            for name, value in self._forces.items()
-            if ctx.get_tag(name) != value
-        }
+        diff = {name: value for name, value in self._forces.items() if ctx.get_tag(name) != value}
         if diff:
             ctx.set_tags(diff)
