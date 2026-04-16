@@ -16,6 +16,7 @@ from pyrung.core.condition import (
 )
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.sp_tree import SPNode
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.instruction import Instruction
 
@@ -90,6 +91,15 @@ class Rung:
             )
         self._branches.append(branch)
         self._execution_items.append(branch)
+
+    def sp_tree(self) -> SPNode | None:
+        """Return this rung's condition structure as an SP tree.
+
+        Returns ``None`` for unconditional rungs (no conditions).
+        """
+        from pyrung.core.analysis.sp_tree import conditions_to_sp
+
+        return conditions_to_sp(self._conditions)
 
     def _get_combined_condition(self) -> Condition | None:
         """Get a single condition representing all rung conditions ANDed together.

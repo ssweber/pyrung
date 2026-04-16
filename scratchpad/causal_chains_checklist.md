@@ -6,9 +6,9 @@
 - [x] **A3.** Tests: verify `rung_firings` is correct for simple programs, empty for non-firing rungs, sparse across scans
 
 ## Section B: SP Tree Exposure
-- [ ] **B1.** Hand-written path: wrap `And`/`Or`/`~` expression AST behind a uniform SP-tree interface on rung objects
-- [ ] **B2.** Equivalence corpus: paired Click→pyrung examples asserting identical SP tree shape, leaf sets, and attribution results
-- [ ] **B3.** Four-rule attribution walk: implement the post-order SERIES/PARALLEL TRUE/FALSE walk on SP trees
+- [x] **B1.** Hand-written path: wrap `And`/`Or`/`~` expression AST behind a uniform SP-tree interface on rung objects
+- [x] **B2.** Equivalence corpus: paired Click→pyrung examples asserting identical SP tree shape, leaf sets, and attribution results
+- [x] **B3.** Four-rule attribution walk: implement the post-order SERIES/PARALLEL TRUE/FALSE walk on SP trees
 
 ## Section C: Retrospective `cause()`
 - [ ] **C1.** `CausalChain`, `Transition`, `ChainStep`, `EnablingCondition` data model
