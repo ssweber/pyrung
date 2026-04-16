@@ -17,7 +17,11 @@
       "WebFetch(domain:facts-engineering.github.io)",
       "WebFetch(domain:circuitpython.org)",
       "WebFetch(domain:github.com)",
-      "Bash(grep -E \"^[^.]*$|^[^/]*/\\(src|tests|examples|docs\\)\")"
+      "Bash(grep -E \"^[^.]*$|^[^/]*/\\(src|tests|examples|docs\\)\")",
+      "Read(//c/Users/Sam/documents/github/pyclickplc/**)",
+      "Bash(uv pip *)",
+      "Bash(pip show *)",
+      "Bash(node --check editors/vscode/pyrung-debug/historyPanel.js)"
     ]
   }
 }

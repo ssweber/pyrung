@@ -13,6 +13,9 @@ class PyrungHistoryPanelProvider {
     this._pageSize = 50;
     this._liveTimer = null;
     this._liveIntervalMs = 500;
+    this._mode = "tags";
+    this._chainResult = null;
+    this._chainError = null;
   }
 
   resolveWebviewView(webviewView) {
@@ -49,6 +52,25 @@ class PyrungHistoryPanelProvider {
         return;
       }
 
+      if (
+        message.type === "setMode" &&
+        (message.mode === "tags" || message.mode === "chain")
+      ) {
+        this._mode = message.mode;
+        this._postState();
+        return;
+      }
+
+      if (message.type === "runCausal" && typeof message.query === "string") {
+        await this._runCausal(message.query);
+        return;
+      }
+
+      if (message.type === "suggestTags" && typeof message.query === "string") {
+        await this._suggestTags(message.context, message.query);
+        return;
+      }
+
       if (!this._session) {
         return;
       }
@@ -72,6 +94,8 @@ class PyrungHistoryPanelProvider {
             scanId: message.scanId,
           });
           this._activeScanId = result.scanId;
+          this._chainResult = null;
+          this._chainError = null;
           await this.refresh();
         } catch (error) {
           this._postError(String(error));
@@ -99,6 +123,8 @@ class PyrungHistoryPanelProvider {
       this._entries = [];
       this._hasMore = false;
       this._activeScanId = null;
+      this._chainResult = null;
+      this._chainError = null;
     }
     this._postState();
   }
@@ -201,6 +227,64 @@ class PyrungHistoryPanelProvider {
     }
   }
 
+  async _suggestTags(context, query) {
+    const ctx = context === "chain" ? "chain" : "tags";
+    const trimmed = typeof query === "string" ? query.trim() : "";
+    if (!trimmed || !this._session) {
+      this._postSuggestions(ctx, trimmed, [], {});
+      return;
+    }
+    try {
+      const result = await this._session.customRequest("pyrungQuery", {
+        query: trimmed,
+      });
+      const tags = Array.isArray(result?.tags) ? result.tags.slice(0, 10) : [];
+      const roles = result?.roles || {};
+      this._postSuggestions(ctx, trimmed, tags, roles);
+    } catch (_error) {
+      this._postSuggestions(ctx, trimmed, [], {});
+    }
+  }
+
+  _postSuggestions(context, query, tags, roles) {
+    if (!this._view || !this._isReady) return;
+    this._view.webview.postMessage({
+      type: "tagSuggestions",
+      context,
+      query,
+      tags,
+      roles,
+    });
+  }
+
+  async _runCausal(query) {
+    const trimmed = typeof query === "string" ? query.trim() : "";
+    if (!trimmed) {
+      this._chainResult = null;
+      this._chainError = null;
+      this._postState();
+      return;
+    }
+    if (!this._session) {
+      this._chainResult = null;
+      this._chainError = "No active pyrung debug session.";
+      this._postState();
+      return;
+    }
+
+    try {
+      const result = await this._session.customRequest("pyrungCausal", {
+        query: trimmed,
+      });
+      this._chainResult = result || null;
+      this._chainError = null;
+    } catch (error) {
+      this._chainResult = null;
+      this._chainError = String(error?.message || error);
+    }
+    this._postState();
+  }
+
   async _fetchEntries({ append, beforeScan } = {}) {
     if (!this._session) {
       return;
@@ -234,6 +318,9 @@ class PyrungHistoryPanelProvider {
       activeScanId: this._activeScanId,
       hasSession: Boolean(this._session),
       hasMore: this._hasMore,
+      mode: this._mode,
+      chainResult: this._chainResult,
+      chainError: this._chainError,
     });
   }
 
@@ -279,6 +366,91 @@ class PyrungHistoryPanelProvider {
   .tag-input:focus {
     outline: 1px solid var(--vscode-focusBorder);
     outline-offset: 0;
+  }
+  .mode-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+  }
+  .mode-tab {
+    flex: 1;
+    padding: 6px 8px;
+    background: transparent;
+    color: var(--vscode-descriptionForeground);
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .mode-tab:hover {
+    color: var(--vscode-foreground);
+  }
+  .mode-tab.active {
+    color: var(--vscode-foreground);
+    border-bottom-color: var(--vscode-focusBorder);
+  }
+  .composer {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .composer-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+  }
+  .composer select,
+  .composer input {
+    padding: 5px 7px;
+    border: 1px solid var(--vscode-input-border, var(--vscode-widget-border, #444));
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    font-family: inherit;
+    font-size: inherit;
+  }
+  .composer select:focus,
+  .composer input:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 0;
+  }
+  .composer-tag {
+    flex: 1;
+    min-width: 0;
+  }
+  .composer-scan {
+    width: 6.5em;
+  }
+  .composer-value {
+    flex: 1;
+    min-width: 0;
+  }
+  .composer-row.hidden {
+    display: none;
+  }
+  .composer-preview {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 0.9em;
+    color: var(--vscode-descriptionForeground);
+    padding: 4px 2px;
+    min-height: 1.2em;
+    word-break: break-all;
+  }
+  .run-btn {
+    border: 1px solid transparent;
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    cursor: pointer;
+    padding: 5px 12px;
+  }
+  .run-btn:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
+  }
+  .run-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .add-btn,
   .load-btn,
@@ -384,8 +556,33 @@ class PyrungHistoryPanelProvider {
   .entry-body:hover {
     background: rgba(128, 128, 128, 0.07);
   }
+  .change-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
   .change-row + .change-row {
     margin-top: 6px;
+  }
+  .change-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .explain-btn {
+    flex-shrink: 0;
+    padding: 0 4px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+    font-size: 0.95em;
+    border-radius: 4px;
+    opacity: 0.6;
+  }
+  .explain-btn:hover {
+    opacity: 1;
+    background: rgba(128, 128, 128, 0.15);
+    color: var(--vscode-foreground);
   }
   .change-tag {
     font-family: var(--vscode-editor-font-family);
@@ -401,17 +598,260 @@ class PyrungHistoryPanelProvider {
     color: var(--vscode-errorForeground);
     font-size: 0.9em;
   }
+  .suggestions {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+    border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+    background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
+    max-height: 220px;
+    overflow-y: auto;
+    border-radius: 4px;
+  }
+  .suggestions[hidden] {
+    display: none;
+  }
+  .suggestion {
+    padding: 4px 8px;
+    cursor: pointer;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-family: var(--vscode-editor-font-family);
+  }
+  .suggestion:hover,
+  .suggestion.focused {
+    background: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
+  }
+  .suggestion-role {
+    font-size: 0.75em;
+    width: 1.3em;
+    text-align: center;
+    color: var(--vscode-descriptionForeground);
+    font-weight: 600;
+  }
+  .suggestion-role.input { color: #4A90D9; }
+  .suggestion-role.pivot { color: #D9A441; }
+  .suggestion-role.terminal { color: #5CB85C; }
+  .suggestion-role.isolated { color: #888; }
+  .suggestion-none {
+    padding: 4px 8px;
+    color: var(--vscode-descriptionForeground);
+    font-style: italic;
+    font-size: 0.9em;
+  }
+  .chain {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .chain-effect {
+    border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06));
+  }
+  .chain-effect-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .mode-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.8em;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+  .mode-badge.recorded {
+    background: var(--vscode-testing-iconPassed, #3fb950);
+    color: var(--vscode-editor-background);
+  }
+  .mode-badge.projected {
+    background: var(--vscode-charts-blue, #3794ff);
+    color: var(--vscode-editor-background);
+  }
+  .mode-badge.unreachable {
+    background: var(--vscode-errorForeground, #f85149);
+    color: var(--vscode-editor-background);
+  }
+  .recovers-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+  }
+  .recovers-banner.ok {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--vscode-testing-iconPassed, #3fb950);
+  }
+  .recovers-banner.fail {
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--vscode-errorForeground, #f85149);
+  }
+  .chain-meta {
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.9em;
+  }
+  .chain-step {
+    border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.35));
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06));
+  }
+  .chain-step-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+  }
+  .chain-step-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+  .rung-tag {
+    font-family: var(--vscode-editor-font-family);
+    font-weight: 600;
+    color: var(--vscode-symbolIcon-functionForeground, var(--vscode-foreground));
+  }
+  .chain-step-body {
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .cause-list,
+  .enabling-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .cause-label,
+  .enabling-label {
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .proximate-item,
+  .root-item {
+    padding: 2px 0;
+    cursor: pointer;
+  }
+  .proximate-item:hover,
+  .root-item:hover {
+    color: var(--vscode-textLink-activeForeground);
+  }
+  .enabling-item {
+    padding: 2px 0;
+    color: var(--vscode-descriptionForeground);
+    cursor: pointer;
+  }
+  .enabling-item:hover {
+    color: var(--vscode-foreground);
+  }
+  details.enabling-details > summary {
+    cursor: pointer;
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.85em;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    list-style: revert;
+  }
+  .chain-roots {
+    border: 1px dashed var(--vscode-widget-border, rgba(128, 128, 128, 0.3));
+    border-radius: 8px;
+    padding: 8px 12px;
+  }
+  .chain-roots-title {
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .root-group + .root-group {
+    margin-top: 8px;
+  }
+  .blocker {
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: rgba(248, 81, 73, 0.06);
+  }
+  .blocker + .blocker {
+    margin-top: 6px;
+  }
+  .blocker-reason {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-family: var(--vscode-editor-font-family);
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--vscode-errorForeground, #f85149);
+    margin-left: 6px;
+  }
+  .sub-blockers {
+    margin-top: 6px;
+    margin-left: 12px;
+    padding-left: 8px;
+    border-left: 2px solid rgba(248, 81, 73, 0.3);
+  }
 </style>
 </head>
 <body>
-  <div class="toolbar">
-    <div class="input-row">
-      <input id="tag-input" class="tag-input" type="text" placeholder="Tag name" />
-      <button id="add-btn" class="add-btn">Add</button>
-    </div>
-    <div id="tag-chips" class="tag-chips"></div>
+  <div class="mode-tabs" role="tablist">
+    <button class="mode-tab" data-mode="tags" role="tab">Tags</button>
+    <button class="mode-tab" data-mode="chain" role="tab">Chain</button>
   </div>
-  <div id="content"></div>
+
+  <div id="tags-pane">
+    <div class="toolbar">
+      <div class="input-row">
+        <input id="tag-input" class="tag-input" type="text" placeholder="Tag name" autocomplete="off" />
+        <button id="add-btn" class="add-btn">Add</button>
+      </div>
+      <div id="tag-suggestions" class="suggestions" hidden></div>
+      <div id="tag-chips" class="tag-chips"></div>
+    </div>
+    <div id="content"></div>
+  </div>
+
+  <div id="chain-pane" hidden>
+    <div class="composer">
+      <div class="composer-row">
+        <select id="chain-cmd" title="Causal query command">
+          <option value="cause">cause</option>
+          <option value="effect">effect</option>
+          <option value="recovers">recovers</option>
+        </select>
+        <input id="chain-tag" class="composer-tag" type="text" placeholder="Tag name" autocomplete="off" />
+      </div>
+      <div id="chain-suggestions" class="suggestions" hidden></div>
+      <div class="composer-row" id="chain-args-row">
+        <input id="chain-scan" class="composer-scan" type="number" placeholder="@scan" />
+        <input id="chain-value" class="composer-value" type="text" placeholder=":value" />
+      </div>
+      <div class="composer-preview" id="chain-preview"></div>
+      <div class="composer-row">
+        <button id="chain-run" class="run-btn" disabled>Run</button>
+      </div>
+    </div>
+    <div id="chain-content"></div>
+  </div>
+
   <div id="error" class="error"></div>
 <script>
   const vscode = acquireVsCodeApi();
@@ -420,6 +860,19 @@ class PyrungHistoryPanelProvider {
   const tagChips = document.getElementById("tag-chips");
   const content = document.getElementById("content");
   const errorEl = document.getElementById("error");
+  const tagsPane = document.getElementById("tags-pane");
+  const chainPane = document.getElementById("chain-pane");
+  const modeTabs = document.querySelectorAll(".mode-tab");
+  const chainCmd = document.getElementById("chain-cmd");
+  const chainTag = document.getElementById("chain-tag");
+  const chainScan = document.getElementById("chain-scan");
+  const chainValue = document.getElementById("chain-value");
+  const chainArgsRow = document.getElementById("chain-args-row");
+  const chainPreview = document.getElementById("chain-preview");
+  const chainRun = document.getElementById("chain-run");
+  const chainContent = document.getElementById("chain-content");
+  const tagSuggestionsEl = document.getElementById("tag-suggestions");
+  const chainSuggestionsEl = document.getElementById("chain-suggestions");
 
   const state = {
     watchedTags: [],
@@ -428,6 +881,9 @@ class PyrungHistoryPanelProvider {
     activeScanId: null,
     hasSession: false,
     hasMore: false,
+    mode: "tags",
+    chainResult: null,
+    chainError: null,
   };
 
   function esc(value) {
@@ -444,13 +900,50 @@ class PyrungHistoryPanelProvider {
     tagInput.focus();
   }
 
-  addBtn.addEventListener("click", addCurrentTag);
+  addBtn.addEventListener("click", () => {
+    addCurrentTag();
+    hideSuggestions("tags");
+  });
   tagInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       addCurrentTag();
+      hideSuggestions("tags");
+    } else if (event.key === "Escape") {
+      hideSuggestions("tags");
     }
   });
+
+  function makeDebouncer(delay) {
+    let timer = null;
+    return (fn) => {
+      clearTimeout(timer);
+      timer = setTimeout(fn, delay);
+    };
+  }
+  const debounceTagsSuggest = makeDebouncer(150);
+  const debounceChainSuggest = makeDebouncer(150);
+
+  function hideSuggestions(context) {
+    const el = context === "chain" ? chainSuggestionsEl : tagSuggestionsEl;
+    el.hidden = true;
+    el.innerHTML = "";
+  }
+
+  function requestSuggestions(context, value) {
+    const q = (value || "").trim();
+    if (!q) {
+      hideSuggestions(context);
+      return;
+    }
+    const runner = context === "chain" ? debounceChainSuggest : debounceTagsSuggest;
+    runner(() => {
+      vscode.postMessage({ type: "suggestTags", context, query: q });
+    });
+  }
+
+  tagInput.addEventListener("input", () => requestSuggestions("tags", tagInput.value));
+  chainTag.addEventListener("input", () => requestSuggestions("chain", chainTag.value));
 
   tagChips.addEventListener("click", (event) => {
     const button = event.target.closest("[data-remove-tag]");
@@ -458,7 +951,46 @@ class PyrungHistoryPanelProvider {
     vscode.postMessage({ type: "removeTag", tag: button.getAttribute("data-remove-tag") });
   });
 
-  content.addEventListener("click", (event) => {
+  document.body.addEventListener("click", (event) => {
+    const suggestion = event.target.closest("[data-suggest-tag]");
+    if (suggestion) {
+      const tag = suggestion.getAttribute("data-suggest-tag") || "";
+      const ctx = suggestion.getAttribute("data-suggest-context") || "tags";
+      if (!tag) return;
+      if (ctx === "chain") {
+        chainTag.value = tag;
+        hideSuggestions("chain");
+        renderComposer();
+        chainTag.focus();
+      } else {
+        vscode.postMessage({ type: "addTag", tag });
+        tagInput.value = "";
+        hideSuggestions("tags");
+        tagInput.focus();
+      }
+      return;
+    }
+
+    const explainButton = event.target.closest("[data-explain-tag]");
+    if (explainButton) {
+      event.stopPropagation();
+      const tag = explainButton.getAttribute("data-explain-tag") || "";
+      const scanId = Number(explainButton.getAttribute("data-explain-scan"));
+      if (tag) {
+        chainCmd.value = "cause";
+        chainTag.value = tag;
+        chainScan.value = Number.isInteger(scanId) ? String(scanId) : "";
+        chainValue.value = "";
+        renderComposer();
+        vscode.postMessage({ type: "setMode", mode: "chain" });
+        const query = buildCausalQuery();
+        if (query) {
+          vscode.postMessage({ type: "runCausal", query });
+        }
+      }
+      return;
+    }
+
     const forkButton = event.target.closest("[data-fork-scan]");
     if (forkButton) {
       const scanId = Number(forkButton.getAttribute("data-fork-scan"));
@@ -561,11 +1093,18 @@ class PyrungHistoryPanelProvider {
         const changeRows = Object.entries(entry.changes || {})
           .map(
             ([tagName, values]) =>
-              '<div class="change-row"><span class="change-tag">' +
+              '<div class="change-row">' +
+              '<div class="change-text"><span class="change-tag">' +
               esc(tagName) +
               ':</span><span class="change-values">' +
               formatChange(tagName, values) +
-              "</span></div>"
+              "</span></div>" +
+              '<button class="explain-btn" data-explain-tag="' +
+              esc(tagName) +
+              '" data-explain-scan="' +
+              esc(entry.scanId) +
+              '" title="Explain cause of this change">\u{1F4A1}</button>' +
+              "</div>"
           )
           .join("");
 
@@ -616,9 +1155,332 @@ class PyrungHistoryPanelProvider {
     }
   }
 
+  function buildCausalQuery() {
+    const cmd = chainCmd.value;
+    const tag = chainTag.value.trim();
+    if (!tag) return "";
+    if (cmd === "recovers") {
+      return "recovers:" + tag;
+    }
+    const scan = chainScan.value.trim();
+    const value = chainValue.value.trim();
+    // DAP grammar accepts @scan OR :value, not both. Scan wins when both set.
+    if (scan) return cmd + ":" + tag + "@" + scan;
+    if (value) return cmd + ":" + tag + ":" + value;
+    return cmd + ":" + tag;
+  }
+
+  function renderComposer() {
+    const cmd = chainCmd.value;
+    chainArgsRow.classList.toggle("hidden", cmd === "recovers");
+    const query = buildCausalQuery();
+    chainPreview.textContent = query || "\u2014";
+    chainRun.disabled = !query;
+  }
+
+  function formatValue(tagName, value) {
+    const label = choiceLabel(tagName, value);
+    if (label) return esc(value) + " (" + esc(label) + ")";
+    return esc(value);
+  }
+
+  function formatTransition(t) {
+    return (
+      '<span class="change-tag">' +
+      esc(t.tag) +
+      ":</span> " +
+      formatValue(t.tag, t.from) +
+      " \u2192 " +
+      formatValue(t.tag, t.to) +
+      ' <span class="scan-id">@#' +
+      esc(t.scan) +
+      "</span>"
+    );
+  }
+
+  function forkButtons(scanId) {
+    const prev = Math.max(0, Number(scanId) - 1);
+    return (
+      '<div class="entry-actions">' +
+      '<button class="fork-btn" data-fork-scan="' +
+      esc(prev) +
+      '" title="Fork before this transition">\u21a9</button>' +
+      '<button class="fork-btn" data-fork-scan="' +
+      esc(scanId) +
+      '" title="Fork at this transition">\u21aa</button>' +
+      "</div>"
+    );
+  }
+
+  function renderEffectCard(chain, command) {
+    const e = chain.effect;
+    const modeClass = chain.mode;
+    const modeLabel = esc(chain.mode);
+    let title;
+    if (chain.mode === "unreachable" || chain.mode === "projected") {
+      title =
+        '<span class="change-tag">' +
+        esc(e.tag) +
+        ":</span> \u2192 " +
+        formatValue(e.tag, e.to);
+    } else {
+      title = formatTransition(e);
+    }
+    const meta = [];
+    if (Number.isFinite(chain.duration_scans) && chain.duration_scans > 0) {
+      meta.push("span " + chain.duration_scans + " scans");
+    }
+    if (Number.isFinite(chain.confidence) && chain.confidence < 1) {
+      meta.push("confidence " + chain.confidence.toFixed(2));
+    }
+    const metaHtml = meta.length
+      ? '<div class="chain-meta">' + esc(meta.join(" \u00b7 ")) + "</div>"
+      : "";
+    const cmdLabel = '<span class="chain-meta">' + esc(command) + "</span>";
+    return (
+      '<div class="chain-effect">' +
+      '<div class="chain-effect-row">' +
+      '<span class="mode-badge ' +
+      modeClass +
+      '">' +
+      modeLabel +
+      "</span>" +
+      cmdLabel +
+      "<span>" +
+      title +
+      "</span>" +
+      "</div>" +
+      metaHtml +
+      "</div>"
+    );
+  }
+
+  function renderProximateCause(t) {
+    return (
+      '<li class="proximate-item" data-seek-scan="' +
+      esc(t.scan) +
+      '" title="Seek to this scan">' +
+      formatTransition(t) +
+      "</li>"
+    );
+  }
+
+  function renderEnabling(ec) {
+    const held =
+      ec.held_since_scan === null || ec.held_since_scan === undefined
+        ? ""
+        : ' <span class="scan-id">held since #' + esc(ec.held_since_scan) + "</span>";
+    const seekAttr =
+      Number.isInteger(ec.held_since_scan)
+        ? ' data-seek-scan="' + esc(ec.held_since_scan) + '"'
+        : "";
+    return (
+      '<li class="enabling-item"' +
+      seekAttr +
+      ">" +
+      '<span class="change-tag">' +
+      esc(ec.tag) +
+      ":</span> = " +
+      formatValue(ec.tag, ec.value) +
+      held +
+      "</li>"
+    );
+  }
+
+  function renderStep(step) {
+    const t = step.transition;
+    const proximate = (step.proximate_causes || [])
+      .map(renderProximateCause)
+      .join("");
+    const proximateHtml = proximate
+      ? '<div><span class="cause-label">Proximate</span><ul class="cause-list">' +
+        proximate +
+        "</ul></div>"
+      : "";
+    const enabling = (step.enabling_conditions || [])
+      .map(renderEnabling)
+      .join("");
+    const enablingHtml = enabling
+      ? '<details class="enabling-details"><summary>Enabling (' +
+        (step.enabling_conditions || []).length +
+        ')</summary><ul class="enabling-list">' +
+        enabling +
+        "</ul></details>"
+      : "";
+    return (
+      '<div class="chain-step">' +
+      '<div class="chain-step-header">' +
+      '<div class="chain-step-meta">' +
+      '<span class="rung-tag">Rung #' +
+      esc(step.rung_index) +
+      "</span>" +
+      "<span>" +
+      formatTransition(t) +
+      "</span>" +
+      "</div>" +
+      forkButtons(t.scan) +
+      "</div>" +
+      '<div class="chain-step-body">' +
+      proximateHtml +
+      enablingHtml +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderRootGroup(label, transitions) {
+    if (!transitions || !transitions.length) return "";
+    const items = transitions
+      .map(
+        (t) =>
+          '<li class="root-item" data-seek-scan="' +
+          esc(t.scan) +
+          '" title="Seek to this scan">' +
+          formatTransition(t) +
+          "</li>"
+      )
+      .join("");
+    return (
+      '<div class="root-group">' +
+      '<div class="chain-roots-title">' +
+      esc(label) +
+      "</div>" +
+      '<ul class="cause-list">' +
+      items +
+      "</ul>" +
+      "</div>"
+    );
+  }
+
+  function renderBlocker(blocker) {
+    const subs = (blocker.sub_blockers || []).map(renderBlocker).join("");
+    const subsHtml = subs ? '<div class="sub-blockers">' + subs + "</div>" : "";
+    return (
+      '<div class="blocker">' +
+      '<div><span class="rung-tag">Rung #' +
+      esc(blocker.rung_index) +
+      "</span> needs " +
+      '<span class="change-tag">' +
+      esc(blocker.blocked_tag) +
+      "</span> = " +
+      formatValue(blocker.blocked_tag, blocker.needed_value) +
+      '<span class="blocker-reason">' +
+      esc(blocker.reason) +
+      "</span></div>" +
+      subsHtml +
+      "</div>"
+    );
+  }
+
+  function renderChainBody(chain) {
+    if (chain.mode === "unreachable") {
+      const blockers = (chain.blockers || []).map(renderBlocker).join("");
+      return blockers
+        ? '<div class="chain-roots"><div class="chain-roots-title">Blockers</div>' +
+            blockers +
+            "</div>"
+        : '<div class="panel-message">No blockers reported.</div>';
+    }
+    const steps = (chain.steps || []).map(renderStep).join("");
+    const conjunctive = renderRootGroup(
+      "Caused jointly by " + (chain.conjunctive_roots || []).length + " event(s)",
+      chain.conjunctive_roots
+    );
+    const ambiguous = renderRootGroup(
+      (chain.ambiguous_roots || []).length + " candidate cause(s) \u2014 ambiguous",
+      chain.ambiguous_roots
+    );
+    const footer =
+      conjunctive || ambiguous
+        ? '<div class="chain-roots">' + conjunctive + ambiguous + "</div>"
+        : "";
+    return steps + footer;
+  }
+
+  function renderChainResult() {
+    if (state.chainError) {
+      chainContent.innerHTML =
+        '<div class="panel-message" style="color:var(--vscode-errorForeground);">' +
+        esc(state.chainError) +
+        "</div>";
+      return;
+    }
+    if (!state.chainResult) {
+      chainContent.innerHTML =
+        '<div class="panel-message">Compose a query and click Run.</div>';
+      return;
+    }
+
+    const result = state.chainResult;
+    const command = result.command || "cause";
+    const chain = result.chain;
+
+    if (!chain) {
+      const msg =
+        command === "recovers"
+          ? "No clear path reachable from current state."
+          : "No chain found for this query.";
+      chainContent.innerHTML =
+        '<div class="panel-message">' + esc(msg) + "</div>";
+      return;
+    }
+
+    let banner = "";
+    if (command === "recovers") {
+      banner = result.ok
+        ? '<div class="recovers-banner ok">\u2713 Recovers</div>'
+        : '<div class="recovers-banner fail">\u2717 Does not recover</div>';
+    }
+
+    chainContent.innerHTML =
+      '<div class="chain">' +
+      banner +
+      renderEffectCard(chain, command) +
+      renderChainBody(chain) +
+      "</div>";
+  }
+
+  function renderMode() {
+    modeTabs.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.mode === state.mode);
+    });
+    const chainActive = state.mode === "chain";
+    tagsPane.hidden = chainActive;
+    chainPane.hidden = !chainActive;
+  }
+
+  modeTabs.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.mode;
+      if (mode !== state.mode) {
+        vscode.postMessage({ type: "setMode", mode });
+      }
+    });
+  });
+
+  chainCmd.addEventListener("change", renderComposer);
+  [chainTag, chainScan, chainValue].forEach((input) => {
+    input.addEventListener("input", renderComposer);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !chainRun.disabled) {
+        event.preventDefault();
+        chainRun.click();
+      }
+    });
+  });
+  chainRun.addEventListener("click", () => {
+    const query = buildCausalQuery();
+    if (!query) return;
+    hideSuggestions("chain");
+    vscode.postMessage({ type: "runCausal", query });
+  });
+
   function render() {
+    renderMode();
     renderChips();
     renderEntries();
+    renderComposer();
+    renderChainResult();
   }
 
   window.addEventListener("message", (event) => {
@@ -630,7 +1492,20 @@ class PyrungHistoryPanelProvider {
       state.activeScanId = Number.isInteger(msg.activeScanId) ? msg.activeScanId : null;
       state.hasSession = Boolean(msg.hasSession);
       state.hasMore = Boolean(msg.hasMore);
+      state.mode = msg.mode === "chain" ? "chain" : "tags";
+      state.chainResult = msg.chainResult || null;
+      state.chainError = typeof msg.chainError === "string" ? msg.chainError : null;
       render();
+      return;
+    }
+
+    if (msg.type === "tagSuggestions") {
+      renderSuggestions(
+        msg.context === "chain" ? "chain" : "tags",
+        msg.query || "",
+        Array.isArray(msg.tags) ? msg.tags : [],
+        msg.roles || {}
+      );
       return;
     }
 
@@ -643,6 +1518,48 @@ class PyrungHistoryPanelProvider {
       }, 5000);
     }
   });
+
+  function renderSuggestions(context, query, tags, roles) {
+    const containerEl = context === "chain" ? chainSuggestionsEl : tagSuggestionsEl;
+    const inputEl = context === "chain" ? chainTag : tagInput;
+    if (inputEl.value.trim() !== query) {
+      // Stale response — user has moved on.
+      return;
+    }
+    if (!query) {
+      hideSuggestions(context);
+      return;
+    }
+    if (!tags.length) {
+      containerEl.innerHTML = '<div class="suggestion-none">No matches</div>';
+      containerEl.hidden = false;
+      return;
+    }
+    containerEl.innerHTML = tags
+      .map((tag) => {
+        const role = roles[tag] || "";
+        const badge = role
+          ? '<span class="suggestion-role ' +
+            esc(role) +
+            '">' +
+            esc(role.charAt(0).toUpperCase()) +
+            "</span>"
+          : '<span class="suggestion-role"></span>';
+        return (
+          '<div class="suggestion" data-suggest-tag="' +
+          esc(tag) +
+          '" data-suggest-context="' +
+          esc(context) +
+          '">' +
+          badge +
+          "<span>" +
+          esc(tag) +
+          "</span></div>"
+        );
+      })
+      .join("");
+    containerEl.hidden = false;
+  }
 
   render();
   vscode.postMessage({ type: "ready" });
