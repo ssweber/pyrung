@@ -84,6 +84,9 @@ class Field:
     retentive: bool | None = None
     choices: ChoiceMap | None = None
     readonly: bool | None = None
+    external: bool | None = None
+    final: bool | None = None
+    public: bool | None = None
 
     def __new__(
         cls,
@@ -92,8 +95,11 @@ class Field:
         retentive: bool | None = None,
         choices: builtins.type[IntEnum] | ChoiceMap | None = None,
         readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
     ) -> Any:
-        _ = (type, default, retentive, choices, readonly)
+        _ = (type, default, retentive, choices, readonly, external, final, public)
         return super().__new__(cls)
 
 
@@ -113,6 +119,9 @@ class _FieldSpec:
     retentive: bool
     choices: ChoiceMap | None = None
     readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
 
 
 def auto(*, start: int = 1, step: int = 1) -> Any:
@@ -236,6 +245,9 @@ class _StructRuntime:
         *,
         always_number: bool = False,
         readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
         kind: str = "udt",
     ):
         _validate_name(name)
@@ -246,6 +258,9 @@ class _StructRuntime:
         self.count = count
         self.always_number = always_number
         self.readonly = bool(readonly)
+        self.external = bool(external)
+        self.final = bool(final)
+        self.public = bool(public)
         self._structure_kind = kind
         self._original_field_specs = field_specs
         self._field_specs: dict[str, _FieldSpec] = {}
@@ -273,16 +288,31 @@ class _StructRuntime:
             block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
             block._pyrung_field_choices = field_spec.choices  # ty: ignore[unresolved-attribute]
             block._pyrung_field_readonly = field_spec.readonly  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_external = field_spec.external  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_final = field_spec.final  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_public = field_spec.public  # ty: ignore[unresolved-attribute]
             self._blocks[field_spec.name] = block
 
-    def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
+    def clone(
+        self,
+        name: str,
+        *,
+        count: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
+    ) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
         return _StructRuntime(
             name=name,
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
-            readonly=self.readonly,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
             kind=self._structure_kind,
         )
 
@@ -295,6 +325,9 @@ class _StructRuntime:
                 retentive=spec.retentive,
                 choices=spec.choices,
                 readonly=spec.readonly,
+                external=spec.external,
+                final=spec.final,
+                public=spec.public,
             )
             for name, spec in self._field_specs.items()
         }
@@ -338,6 +371,9 @@ class _NamedArrayRuntime(_StructRuntime):
         field_specs: tuple[_FieldSpec, ...],
         always_number: bool = False,
         readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -354,6 +390,9 @@ class _NamedArrayRuntime(_StructRuntime):
             field_specs=field_specs,
             always_number=always_number,
             readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
             kind="named_array",
         )
 
@@ -363,6 +402,10 @@ class _NamedArrayRuntime(_StructRuntime):
         *,
         count: int | None = None,
         stride: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
     ) -> _NamedArrayRuntime:
         """Create a copy of this named array with a different base name."""
         return _NamedArrayRuntime(
@@ -372,7 +415,10 @@ class _NamedArrayRuntime(_StructRuntime):
             stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
-            readonly=self.readonly,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
         )
 
     def hardware_span(self, hw_start: int) -> tuple[int, int]:
@@ -446,7 +492,13 @@ class _NamedArrayRuntime(_StructRuntime):
 
 
 def udt(
-    *, count: int = 1, always_number: bool = False, readonly: bool = False
+    *,
+    count: int = 1,
+    always_number: bool = False,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
@@ -454,13 +506,18 @@ def udt(
     def _decorator(cls: type[Any]) -> _StructRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_udt_fields(cls, readonly=readonly)
+        field_specs = _parse_udt_fields(
+            cls, readonly=readonly, external=external, final=final, public=public
+        )
         return _StructRuntime(
             name=name,
             count=count,
             field_specs=field_specs,
             always_number=always_number,
             readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
         )
 
     return _decorator
@@ -473,6 +530,9 @@ def named_array(
     stride: int = 1,
     always_number: bool = False,
     readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -482,7 +542,9 @@ def named_array(
     def _decorator(cls: type[Any]) -> _NamedArrayRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_named_array_fields(cls, resolved_type, readonly=readonly)
+        field_specs = _parse_named_array_fields(
+            cls, resolved_type, readonly=readonly, external=external, final=final, public=public
+        )
         return _NamedArrayRuntime(
             name=name,
             type=resolved_type,
@@ -491,12 +553,22 @@ def named_array(
             field_specs=field_specs,
             always_number=always_number,
             readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
         )
 
     return _decorator
 
 
-def _parse_udt_fields(cls: type[Any], *, readonly: bool = False) -> tuple[_FieldSpec, ...]:
+def _parse_udt_fields(
+    cls: type[Any],
+    *,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
+) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     if not isinstance(annotations, dict):
         raise TypeError("UDT annotations must be a dict.")
@@ -520,13 +592,28 @@ def _parse_udt_fields(cls: type[Any], *, readonly: bool = False) -> tuple[_Field
         field_type = _resolve_annotation(annotation, field_name)
         raw_default = cls.__dict__.get(field_name, UNSET)
         parsed.append(
-            _build_field_spec(field_name, field_type, raw_default, source="udt", readonly=readonly)
+            _build_field_spec(
+                field_name,
+                field_type,
+                raw_default,
+                source="udt",
+                readonly=readonly,
+                external=external,
+                final=final,
+                public=public,
+            )
         )
     return tuple(parsed)
 
 
 def _parse_named_array_fields(
-    cls: type[Any], base_type: TagType, *, readonly: bool = False
+    cls: type[Any],
+    base_type: TagType,
+    *,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     classvar_names: set[str] = set()
@@ -542,7 +629,16 @@ def _parse_named_array_fields(
         if _should_skip_named_array_attr(field_name, value, classvar_names=classvar_names):
             continue
         parsed.append(
-            _build_field_spec(field_name, base_type, value, source="named_array", readonly=readonly)
+            _build_field_spec(
+                field_name,
+                base_type,
+                value,
+                source="named_array",
+                readonly=readonly,
+                external=external,
+                final=final,
+                public=public,
+            )
         )
 
     _validate_fields_present(parsed)
@@ -584,11 +680,17 @@ def _build_field_spec(
     *,
     source: str,
     readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> _FieldSpec:
     retentive: bool | None = None
     default_spec = raw_default
     choices: ChoiceMap | None = None
     field_readonly = bool(readonly)
+    field_external = bool(external)
+    field_final = bool(final)
+    field_public = bool(public)
 
     if isinstance(raw_default, Field):
         if raw_default.type is not None and raw_default.type != type:
@@ -610,6 +712,12 @@ def _build_field_spec(
         )
         if raw_default.readonly is not None:
             field_readonly = bool(raw_default.readonly)
+        if raw_default.external is not None:
+            field_external = bool(raw_default.external)
+        if raw_default.final is not None:
+            field_final = bool(raw_default.final)
+        if raw_default.public is not None:
+            field_public = bool(raw_default.public)
 
     if retentive is None:
         retentive = _TYPE_DEFAULT_RETENTIVE[type]
@@ -622,6 +730,9 @@ def _build_field_spec(
         retentive=retentive,
         choices=choices,
         readonly=field_readonly,
+        external=field_external,
+        final=field_final,
+        public=field_public,
     )
 
 

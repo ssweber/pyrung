@@ -122,6 +122,9 @@ class Tag:
     comment: str = ""
     choices: ChoiceMap | None = None
     readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -136,6 +139,18 @@ class Tag:
             }
             # Use object.__setattr__ because frozen=True
             object.__setattr__(self, "default", defaults.get(self.type, 0))
+
+        # Mutual exclusivity checks
+        if self.readonly and self.final:
+            raise ValueError(
+                f"Tag {self.name!r}: readonly and final are mutually exclusive "
+                "(readonly = zero writers, final = exactly one)."
+            )
+        if self.readonly and self.external:
+            raise ValueError(
+                f"Tag {self.name!r}: readonly and external are mutually exclusive "
+                "(readonly = nothing writes it, external = something outside the ladder writes it)."
+            )
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -614,6 +629,9 @@ class _TagTypeBase(LiveTag):
         comment: str = "",
         choices: type[IntEnum] | ChoiceMap | None = None,
         readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
     ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
@@ -627,6 +645,9 @@ class _TagTypeBase(LiveTag):
         comment: str = "",
         choices: type[IntEnum] | ChoiceMap | None = None,
         readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
     ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
@@ -647,6 +668,9 @@ class _TagTypeBase(LiveTag):
             comment,
             normalized_choices,
             bool(readonly),
+            bool(external),
+            bool(final),
+            bool(public),
         )
 
 

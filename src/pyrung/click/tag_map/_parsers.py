@@ -52,6 +52,9 @@ _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
 class TagMeta:
     readonly: bool = False
     choices: ChoiceMap | None = None
+    external: bool = False
+    final: bool = False
+    public: bool = False
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -404,20 +407,23 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     return choices
 
 
+_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
+
+
 def _parse_tag_meta_group(content: str) -> TagMeta | None:
     tokens = [token.strip() for token in content.split(",") if token.strip()]
     if not tokens:
         return None
 
     first = tokens[0]
-    if first != "readonly" and not first.startswith("choices="):
+    if first not in _BOOL_FLAG_TOKENS and not first.startswith("choices="):
         return None
 
-    readonly = False
+    flags: dict[str, bool] = {}
     choices: ChoiceMap | None = None
     for token in tokens:
-        if token == "readonly":
-            readonly = True
+        if token in _BOOL_FLAG_TOKENS:
+            flags[token] = True
             continue
         if token.startswith("choices="):
             if choices is not None:
@@ -426,7 +432,13 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
             continue
         raise ValueError(f"Unsupported TagMeta token {token!r}.")
 
-    return TagMeta(readonly=readonly, choices=choices)
+    return TagMeta(
+        readonly=flags.get("readonly", False),
+        choices=choices,
+        external=flags.get("external", False),
+        final=flags.get("final", False),
+        public=flags.get("public", False),
+    )
 
 
 def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
@@ -436,6 +448,9 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     remaining_parts: list[str] = []
     readonly = False
     choices: ChoiceMap | None = None
+    external = False
+    final = False
+    public = False
     cursor = 0
 
     for match in _TAG_META_GROUP_RE.finditer(comment):
@@ -445,6 +460,9 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
             remaining_parts.append(match.group())
         else:
             readonly = readonly or parsed.readonly
+            external = external or parsed.external
+            final = final or parsed.final
+            public = public or parsed.public
             if parsed.choices is not None:
                 if choices is not None:
                     raise ValueError("TagMeta choices may only be specified once.")
@@ -453,18 +471,32 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
 
     remaining_parts.append(comment[cursor:])
     remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
-    if not readonly and choices is None:
+    if not readonly and choices is None and not external and not final and not public:
         return None, remaining_text
-    return TagMeta(readonly=readonly, choices=choices), remaining_text
+    return TagMeta(
+        readonly=readonly, choices=choices, external=external, final=final, public=public
+    ), remaining_text
 
 
 def format_tag_meta(meta: TagMeta | None) -> str:
-    if meta is None or (not meta.readonly and meta.choices is None):
+    if meta is None or (
+        not meta.readonly
+        and meta.choices is None
+        and not meta.external
+        and not meta.final
+        and not meta.public
+    ):
         return ""
 
     tokens: list[str] = []
     if meta.readonly:
         tokens.append("readonly")
+    if meta.external:
+        tokens.append("external")
+    if meta.final:
+        tokens.append("final")
+    if meta.public:
+        tokens.append("public")
     if meta.choices is not None:
         pairs: list[str] = []
         for value, label in meta.choices.items():

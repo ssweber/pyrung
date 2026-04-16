@@ -632,6 +632,12 @@ class DAPAdapter:
                 entry["choices"] = {str(key): label for key, label in choices.items()}
             if getattr(tag, "readonly", False):
                 entry["readonly"] = True
+            if getattr(tag, "external", False):
+                entry["external"] = True
+            if getattr(tag, "final", False):
+                entry["final"] = True
+            if getattr(tag, "public", False):
+                entry["public"] = True
             if entry:
                 hints[name] = entry
         return hints

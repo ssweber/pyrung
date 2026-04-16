@@ -76,6 +76,57 @@ def _resolve_tag_names(target: Any) -> list[str]:
     return []
 
 
+def _resolve_tag_objects(target: Any) -> list[Tag]:
+    """Extract Tag objects from an output target."""
+    from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+    if isinstance(target, ImmediateRef):
+        return _resolve_tag_objects(target.value)
+    if isinstance(target, Tag):
+        return [target]
+    if isinstance(target, BlockRange):
+        return list(target.tags())
+    if isinstance(target, IndirectBlockRange):
+        return []
+    return []
+
+
+def _build_tag_map(program: Program) -> dict[str, Tag]:
+    """Build a name→Tag map from all tag references in a program."""
+    tag_map: dict[str, Tag] = {}
+
+    def _collect_from_rung(rung: Any) -> None:
+        for cond in rung._conditions:
+            tag_obj = getattr(cond, "tag", None)
+            if tag_obj is not None:
+                raw = tag_obj
+                if isinstance(raw, ImmediateRef):
+                    raw = object.__getattribute__(raw, "value")
+                if isinstance(raw, Tag) and raw.name not in tag_map:
+                    tag_map[raw.name] = raw
+        for instr in rung._instructions:
+            target = getattr(instr, "target", None)
+            if target is not None:
+                for tag_obj in _resolve_tag_objects(target):
+                    if tag_obj.name not in tag_map:
+                        tag_map[tag_obj.name] = tag_obj
+            source = getattr(instr, "source", None)
+            if source is not None:
+                for tag_obj in _resolve_tag_objects(source):
+                    if tag_obj.name not in tag_map:
+                        tag_map[tag_obj.name] = tag_obj
+        for branch in rung._branches:
+            _collect_from_rung(branch)
+
+    for rung in program.rungs:
+        _collect_from_rung(rung)
+    for sub_name in program.subroutines:
+        for rung in program.subroutines[sub_name]:
+            _collect_from_rung(rung)
+
+    return tag_map
+
+
 def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
     """Return (tag_name, instruction_type) pairs for write targets of an instruction.
 

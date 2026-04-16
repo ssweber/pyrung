@@ -41,29 +41,29 @@ from pyrung.click import TagMap, c, ct, ctd, ds, t, td, x, y
 # ---------------------------------------------------------------------------
 # Tags — inputs
 # ---------------------------------------------------------------------------
-StartBtn = Bool("StartBtn")  # X001 — NO momentary start button
-StopBtn = Bool("StopBtn")  # X002 — NC stop button (healthy at rest)
-EstopOK = Bool("EstopOK")  # X003 — NC safety relay permission contact
-Auto = Bool("Auto")  # X004 — auto mode selector
-Manual = Bool("Manual")  # X005 — manual mode selector
+StartBtn = Bool("StartBtn", public=True)  # X001 — NO momentary start button
+StopBtn = Bool("StopBtn", public=True)  # X002 — NC stop button (healthy at rest)
+EstopOK = Bool("EstopOK", public=True)  # X003 — NC safety relay permission contact
+Auto = Bool("Auto", public=True)  # X004 — auto mode selector
+Manual = Bool("Manual", public=True)  # X005 — manual mode selector
 EntrySensor = Bool("EntrySensor")  # X006 — photo-eye at conveyor entry
-DiverterBtn = Bool("DiverterBtn")  # X007 — manual diverter button
+DiverterBtn = Bool("DiverterBtn", public=True)  # X007 — manual diverter button
 BinASensor = Bool("BinASensor")  # X008 — small-box bin exit sensor
 BinBSensor = Bool("BinBSensor")  # X009 — large-box bin exit sensor
 
 # ---------------------------------------------------------------------------
 # Tags — outputs
 # ---------------------------------------------------------------------------
-ConveyorMotor = Bool("ConveyorMotor")  # Y001 — motor contactor
-DiverterCmd = Bool("DiverterCmd")  # Y002 — diverter solenoid
-StatusLight = Bool("StatusLight")  # Y003 — running indicator
+ConveyorMotor = Bool("ConveyorMotor", public=True)  # Y001 — motor contactor
+DiverterCmd = Bool("DiverterCmd", public=True)  # Y002 — diverter solenoid
+StatusLight = Bool("StatusLight", public=True)  # Y003 — running indicator
 
 # ---------------------------------------------------------------------------
 # Tags — internal
 # ---------------------------------------------------------------------------
-Running = Bool("Running")  # C001 — motor run latch
+Running = Bool("Running", public=True)  # C001 — motor run latch
 IsLarge = Bool("IsLarge")  # C002 — size classification result
-CountReset = Bool("CountReset")  # C003 — counter reset button
+CountReset = Bool("CountReset", public=True)  # C003 — counter reset button
 
 # State constants — read-only named array, never written
 @named_array(Int, stride=4, readonly=True)
@@ -73,18 +73,18 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
-State = Int("State", choices=SortState)  # DS005 — sort sequence state
+State = Int("State", choices=SortState, public=True)  # DS005 — sort sequence state
 
 SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
-SizeThreshold = Int("SizeThreshold")  # DS007 — small/large cutoff
+SizeThreshold = Int("SizeThreshold", public=True)  # DS007 — small/large cutoff
 
 # Timers — detection and diverter hold
 DetTimer = Timer.clone("DetTimer")  # T001 / TD001
 HoldTimer = Timer.clone("HoldTimer")  # T002 / TD002
 
 # Counters — per bin
-BinACounter = Counter.clone("BinACounter")  # CT001 / CTD001
-BinBCounter = Counter.clone("BinBCounter")  # CT002 / CTD002
+BinACounter = Counter.clone("BinACounter", public=True)  # CT001 / CTD001
+BinBCounter = Counter.clone("BinBCounter", public=True)  # CT002 / CTD002
 
 # ---------------------------------------------------------------------------
 # Click hardware mapping

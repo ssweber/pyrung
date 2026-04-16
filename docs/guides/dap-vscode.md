@@ -158,6 +158,32 @@ Use `Watch` for predicate evaluation.
 
 See [Architecture — Debug stepping APIs](architecture.md#debug-stepping-apis) for details on `scan_steps_debug()` and rung inspection.
 
+## Data View
+
+The Data View panel (in the debug sidebar) shows watched tags with live values, types, and editing controls.
+
+### Adding tags
+
+Right-click a tag name in the editor and select **Add to Data View**. Structured tags (UDTs, named arrays) auto-promote to expandable groups with collapsible member rows.
+
+### Editing values
+
+- **Bool tags**: click True/False buttons to stage, double-click to write immediately.
+- **Choice tags**: selecting from the dropdown writes immediately — no "Write Values" click needed.
+- **Other types**: type a value, then click **Write Values** to patch all pending values in one scan.
+- **Force**: click the Force button to lock a tag to its staged value across scans. Click again to unforce.
+
+### Tag flag badges
+
+Badges appear next to the tag name when flags are set:
+
+- **RO** — read-only tag. Editing controls are locked by default. Click the lock icon to unlock for debugging; click again to re-lock.
+- **P** — public tag. Part of the intended API surface (setpoints, mode commands, status bits).
+
+### Public filter
+
+A **Public** checkbox sits above the tag table. It starts disabled and greyed out ("Start debugger to enable"). Once the debugger sends tag metadata, it enables. When checked, only tags declared `public=True` are shown — plumbing tags are hidden. Group headers hide when none of their members are public. Unchecking restores all rows. The filter resets when the debug session ends.
+
 ## Trace event
 
 The adapter emits `pyrungTrace` after each stop with the current step and region evaluation details used by decorations.

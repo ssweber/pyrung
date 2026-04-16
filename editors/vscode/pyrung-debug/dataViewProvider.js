@@ -371,14 +371,33 @@ class PyrungDataViewProvider {
   }
   .tag-name { white-space: nowrap; }
   .tag-name-label { display: inline-block; }
-  .readonly-badge {
+  .readonly-badge, .public-badge {
     display: none;
     margin-left: 0.5em;
     color: var(--vscode-descriptionForeground);
     font-size: 0.8em;
     letter-spacing: 0.04em;
   }
-  .readonly-badge.visible { display: inline-block; }
+  .readonly-badge.visible, .public-badge.visible { display: inline-block; }
+  .filter-bar {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    gap: 4px;
+  }
+  .filter-bar label {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    user-select: none;
+  }
+  .filter-bar label.disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .tag-type {
     color: var(--vscode-descriptionForeground);
     font-size: 0.85em;
@@ -440,8 +459,23 @@ class PyrungDataViewProvider {
     border-color: var(--vscode-inputValidation-warningBorder, #cca700);
     font-weight: bold;
   }
-  .force-btn.readonly-hint {
-    opacity: 0.7;
+  .force-btn.readonly-locked {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .lock-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85em;
+    padding: 1px 3px;
+    opacity: 0.6;
+    line-height: 1;
+  }
+  .lock-btn:hover { opacity: 1; }
+  .tag-row.readonly-locked .new-value-cell > * {
+    opacity: 0.35;
+    pointer-events: none;
   }
   .row-actions {
     display: flex;
@@ -556,6 +590,9 @@ class PyrungDataViewProvider {
     <button class="toolbar-btn" id="write-btn" title="Patch all pending new values (one-scan)">Write Values</button>
     <button class="toolbar-btn" id="clear-btn" title="Clear all pending new values">Clear</button>
   </div>
+  <div class="filter-bar" id="filter-bar">
+    <label id="public-filter-label" class="disabled" title="Start debugger to enable"><input type="checkbox" id="public-filter" disabled /> Public</label>
+  </div>
   <div id="content">
     <div class="empty">Right-click a tag in the editor and select "Add to Data View"</div>
   </div>
@@ -570,6 +607,9 @@ ${sortableScript}
   const errorEl = document.getElementById("error");
   const searchInput = document.getElementById("search-input");
   const queryResultsEl = document.getElementById("query-results");
+  const publicFilter = document.getElementById("public-filter");
+  const publicFilterLabel = document.getElementById("public-filter-label");
+  let publicFilterActive = false;
 
   // Individual tags: tag -> entry
   const tagEntries = new Map();
@@ -823,6 +863,7 @@ ${sortableScript}
     let index = 1;
     for (const row of Array.from(tbody.children)) {
       if (row.classList.contains("group-header")) continue;
+      if (row.style.display === "none") continue;
       const numCell = row.querySelector(".row-num");
       if (!numCell) continue;
       numCell.textContent = String(index).padStart(3, "0");
@@ -957,10 +998,67 @@ ${sortableScript}
   function applyReadonlyHint(entry) {
     const isReadonly = !!(entry.tagHints && entry.tagHints.readonly);
     entry._readonlyBadge.classList.toggle("visible", isReadonly);
-    entry.forceBtn.classList.toggle("readonly-hint", isReadonly);
-    entry.forceBtn.title = isReadonly
-      ? "Read-only hint only: force/patch is still allowed"
-      : "Toggle force override";
+    entry._lockBtn.style.display = isReadonly ? "" : "none";
+    if (isReadonly && !entry._readonlyUnlocked) {
+      setReadonlyLocked(entry, true);
+    } else {
+      setReadonlyLocked(entry, false);
+    }
+  }
+
+  function setReadonlyLocked(entry, locked) {
+    entry.row.classList.toggle("readonly-locked", locked);
+    entry.forceBtn.classList.toggle("readonly-locked", locked);
+    entry._lockBtn.textContent = locked ? "\ud83d\udd12" : "\ud83d\udd13";
+    entry._lockBtn.title = locked
+      ? "Unlock editing for this read-only tag"
+      : "Re-lock this read-only tag";
+  }
+
+  function applyPublicHint(entry) {
+    const isPublic = !!(entry.tagHints && entry.tagHints.public);
+    entry._publicBadge.classList.toggle("visible", isPublic);
+  }
+
+  let hintsReceived = false;
+
+  function applyPublicFilter() {
+    const filtering = publicFilterActive && hintsReceived;
+    for (const entry of tagEntries.values()) {
+      const isPublic = !!(entry.tagHints && entry.tagHints.public);
+      const groupCollapsed = isGroupMemberCollapsed(entry);
+      if (filtering && !isPublic) {
+        entry.row.style.display = "none";
+      } else if (groupCollapsed) {
+        entry.row.style.display = "none";
+      } else {
+        entry.row.style.display = "";
+      }
+    }
+    // Hide group headers whose visible members are all hidden
+    for (const [groupName, ge] of groupEntries.entries()) {
+      if (!filtering) {
+        ge.headerRow.style.display = "";
+        continue;
+      }
+      let anyVisible = false;
+      for (const memberTag of ge.memberTags) {
+        const entry = tagEntries.get(memberTag);
+        if (entry && entry.tagHints && entry.tagHints.public) {
+          anyVisible = true;
+          break;
+        }
+      }
+      ge.headerRow.style.display = anyVisible ? "" : "none";
+    }
+    refreshRowNumbers();
+  }
+
+  function isGroupMemberCollapsed(entry) {
+    for (const [, ge] of groupEntries.entries()) {
+      if (ge.collapsed && ge.memberTags.has(entry.tagName)) return true;
+    }
+    return false;
   }
 
   function buildNewValueCell(entry) {
@@ -1013,6 +1111,7 @@ ${sortableScript}
         const value = parseTypedValue(entry.tagType, select.value);
         if (value === undefined) return;
         setPendingValue(entry, value);
+        vscode.postMessage({ type: "patchSingle", tag: entry.tagName, value });
       });
       cell.appendChild(select);
       entry._select = select;
@@ -1073,8 +1172,13 @@ ${sortableScript}
     readonlyBadge.className = "readonly-badge";
     readonlyBadge.textContent = "RO";
     readonlyBadge.title = "Read-only hint";
+    const publicBadge = document.createElement("span");
+    publicBadge.className = "public-badge";
+    publicBadge.textContent = "P";
+    publicBadge.title = "Public — part of the intended API surface";
     nameCell.appendChild(nameLabel);
     nameCell.appendChild(readonlyBadge);
+    nameCell.appendChild(publicBadge);
     nameCell.title = tag;
     nameCell.style.cursor = "pointer";
     nameCell.addEventListener("click", () => {
@@ -1117,8 +1221,18 @@ ${sortableScript}
     historyBtn.addEventListener("click", () => {
       vscode.postMessage({ type: "watchHistory", tag });
     });
+    const lockBtn = document.createElement("button");
+    lockBtn.className = "lock-btn";
+    lockBtn.style.display = "none";
+    lockBtn.addEventListener("click", () => {
+      const entry = tagEntries.get(tag);
+      if (!entry) return;
+      entry._readonlyUnlocked = !entry._readonlyUnlocked;
+      setReadonlyLocked(entry, !entry._readonlyUnlocked);
+    });
     actionButtons.appendChild(forceBtn);
     actionButtons.appendChild(historyBtn);
+    actionButtons.appendChild(lockBtn);
     forceCell.appendChild(actionButtons);
 
     const removeCell = document.createElement("td");
@@ -1157,6 +1271,9 @@ ${sortableScript}
       tagType: null, pendingValue: undefined, forced: false, rawValue: "--",
       _trueBtn: null, _falseBtn: null, _input: null, _select: null,
       _readonlyBadge: readonlyBadge,
+      _publicBadge: publicBadge,
+      _lockBtn: lockBtn,
+      _readonlyUnlocked: false,
     };
     tagEntries.set(tag, entry);
 
@@ -1332,9 +1449,20 @@ ${sortableScript}
 
   clearBtn.addEventListener("click", clearPendingValues);
 
+  publicFilter.addEventListener("change", () => {
+    publicFilterActive = publicFilter.checked;
+    applyPublicFilter();
+  });
+
   window.addEventListener("message", (event) => {
     const msg = event.data;
     if (msg.type === "update") {
+      if (!hintsReceived && msg.tagHints && Object.keys(msg.tagHints).length > 0) {
+        hintsReceived = true;
+        publicFilter.disabled = false;
+        publicFilterLabel.classList.remove("disabled");
+        publicFilterLabel.title = "Show only tags declared public";
+      }
       // Auto-promote individual tags that are actually group names
       for (const groupName of Object.keys(msg.tagGroups || {})) {
         if (tagEntries.has(groupName) && !groupEntries.has(groupName)) {
@@ -1357,6 +1485,7 @@ ${sortableScript}
         if (hintsChanged) {
           entry.tagHints = nextHints;
           applyReadonlyHint(entry);
+          applyPublicHint(entry);
         }
         if (tag in msg.tagTypes && entry.tagType !== msg.tagTypes[tag]) {
           entry.tagType = msg.tagTypes[tag];
@@ -1371,6 +1500,7 @@ ${sortableScript}
         }
         updateForceState(entry, tag in msg.forces);
       }
+      if (publicFilterActive) applyPublicFilter();
       errorEl.textContent = "";
     } else if (msg.type === "queryResults") {
       renderQueryResults(msg.tags, msg.roles);
@@ -1382,6 +1512,12 @@ ${sortableScript}
     } else if (msg.type === "addGroup") {
       addGroup(msg.group);
     } else if (msg.type === "reset") {
+      hintsReceived = false;
+      publicFilter.disabled = true;
+      publicFilter.checked = false;
+      publicFilterActive = false;
+      publicFilterLabel.classList.add("disabled");
+      publicFilterLabel.title = "Start debugger to enable";
       graphData = null;
       neighborIndex = {};
       focusRing.length = 0;
@@ -1389,7 +1525,11 @@ ${sortableScript}
       for (const entry of tagEntries.values()) {
         entry.valueEl.textContent = "--";
         entry.rawValue = "--";
+        entry.row.style.display = "";
         updateForceState(entry, false);
+      }
+      for (const ge of groupEntries.values()) {
+        ge.headerRow.style.display = "";
       }
     } else if (msg.type === "error") {
       errorEl.textContent = msg.text;

@@ -573,13 +573,24 @@ class PLC:
 
         Convenience predicate: ``cause(tag, to=resting).mode != 'unreachable'``.
         For the underlying chain (witness or blockers), call ``cause()`` directly.
+
+        Tags marked ``external=True`` always return True — the recovery path
+        exists outside the ladder by declaration.
         """
+        from pyrung.core.analysis.query import find_tag_object
         from pyrung.core.tag import Tag as TagClass
 
         if isinstance(tag, TagClass):
+            tag_obj = tag
             resting = tag.default
         else:
+            tag_obj = find_tag_object(self._logic, tag)
             resting = self._resolve_resting_value(tag)
+
+        # External tags recover by declaration — the external writer handles it
+        if tag_obj is not None and tag_obj.external:
+            return True
+
         chain = self.cause(tag, to=resting)
         assert chain is not None  # projected mode never returns None
         return chain.mode != "unreachable"

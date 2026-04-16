@@ -281,6 +281,36 @@ Detects latch/reset imbalance: `CORE_STUCK_HIGH` when a tag is latched but never
 
 This is the static complement to `plc.query.stranded_bits()` — stuck-bits checks structure ("is there a reset rung at all?"), while stranded-bits checks reachability ("is there a reset rung *and can it actually fire*?").
 
+### Read-only writes
+
+```python
+from pyrung.core.validation.readonly_write import validate_readonly_write
+
+report = validate_readonly_write(logic)
+```
+
+Flags any write instruction targeting a `readonly=True` tag as `CORE_READONLY_WRITE`. Read-only tags are initialized from their declared default at power-on and should never be written by ladder logic.
+
+### Choices violations
+
+```python
+from pyrung.core.validation.choices_violation import validate_choices_violation
+
+report = validate_choices_violation(logic)
+```
+
+Checks every literal-value write against the tag's `choices` key set. If a `copy(5, State)` writes a value not in `State`'s choices map, it's flagged as `CORE_CHOICES_VIOLATION`.
+
+### Final multiple writers
+
+```python
+from pyrung.core.validation.final_writers import validate_final_writers
+
+report = validate_final_writers(logic)
+```
+
+Counts write sites for `final=True` tags. If more than one instruction writes the same `final` tag, it's flagged as `CORE_FINAL_MULTIPLE_WRITERS` — regardless of whether the writers are mutually exclusive. This is stricter than the conflicting-outputs validator, which allows multi-writers behind exclusive conditions.
+
 ## Next steps
 
 - [Testing Guide](testing.md) — forces as fixtures, forking, monitors, breakpoints

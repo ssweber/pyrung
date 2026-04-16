@@ -85,9 +85,11 @@ class SortState:
 State = Int("State", choices=SortState)
 ```
 
-`SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge in the debugger.
+`SortState.IDLE` is a tag — use it anywhere: `State == SortState.IDLE`, `copy(SortState.DETECTING, State)`. The decorator's `readonly=True` applies to every field; constants show a read-only badge (**RO**) in the debugger and are locked from editing by default.
 
-`choices=SortState` tells the Data View to show a labeled dropdown instead of a raw number — `SORTING (2)` instead of `2`.
+`choices=SortState` tells the Data View to show a labeled dropdown instead of a raw number — `SORTING (2)` instead of `2`. Selecting a choice writes the value immediately.
+
+Tags can also be marked `public=True` to indicate they're part of the operator-facing API. The Data View shows a **P** badge next to public tags and provides a filter checkbox to hide everything else. See [Tag Structures — Tag flags](../guides/tag-structures.md#tag-flags) for all available flags.
 
 ## Blocks
 

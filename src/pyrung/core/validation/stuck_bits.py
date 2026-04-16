@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.validation._common import (
     WriteSite,
     _build_caller_map,
+    _build_tag_map,
     _caller_conditions,
     _CallerMap,
     _collect_write_sites,
@@ -157,12 +158,16 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     Detects tags that can be latched but never reset (STUCK_HIGH) or reset
     but never latched (STUCK_LOW).
 
+    Skips ``readonly`` tags (frozen constants) and ``external`` tags (the
+    missing latch or reset side is handled outside the ladder).
+
     Returns a StuckBitReport with one finding per stuck tag.
     """
     from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 
     sites = _collect_write_sites(program, target_extractor=_latch_reset_write_targets)
     caller_map = _build_caller_map(program)
+    tag_map = _build_tag_map(program)
 
     # Partition sites by target and instruction type
     latch_sites: dict[str, list[WriteSite]] = defaultdict(list)
@@ -180,6 +185,14 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
     findings: list[StuckBitFinding] = []
 
     for tag_name in all_tags:
+        # Skip readonly tags — they're frozen constants, not stuck-bit candidates
+        tag = tag_map.get(tag_name)
+        if tag is not None and tag.readonly:
+            continue
+        # Skip external tags — missing side is handled outside the ladder
+        if tag is not None and tag.external:
+            continue
+
         latches = latch_sites.get(tag_name, [])
         resets = reset_sites.get(tag_name, [])
 

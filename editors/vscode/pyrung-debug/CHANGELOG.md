@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Tag flag badges** — `RO` and `P` badges next to tag names in the Data View
+- **Read-only lock/unlock** — readonly tags start locked (inputs and Force disabled); click the lock icon to unlock for debugging
+- **Public filter** — checkbox above the tag table filters to only `public=True` tags; disabled until the debugger starts, resets when the session ends
+- **Choice instant write** — selecting a value from a choices dropdown writes immediately (no "Write Values" click needed)
+
 ## 0.1.0
 
 Initial release.

@@ -161,6 +161,16 @@ class Slot:
 WideSlot = Slot.clone("WideSlot", stride=5)
 ```
 
+### Flag overrides
+
+`clone()` accepts optional flag overrides. `None` (the default) inherits from the parent:
+
+```python
+BinACounter = Counter.clone("BinACounter", public=True)
+```
+
+Available flags: `readonly`, `external`, `final`, `public`. See [Tag flags](#tag-flags) for details.
+
 Use case: define a template structure once, clone it for each subsystem.
 
 ## Mapping to hardware
@@ -249,4 +259,69 @@ The `*_overridden` flags tell you whether a value comes from an explicit overrid
 ```python
 ds.slot(10).reset()        # Clear all overrides for slot 10
 ds.slot(20, 30).reset()    # Clear all overrides for range 20–30
+```
+
+## Tag flags
+
+Tags carry metadata flags that control validation and presentation. Three semantic flags are enforced by static validators; one presentation flag controls Data View visibility.
+
+### Semantic flags
+
+```python
+SizeThreshold = Int("SizeThreshold", readonly=True)   # zero writers after startup
+HmiSetpoint   = Int("HmiSetpoint", external=True)     # written outside the ladder
+FilteredVal   = Int("FilteredVal", final=True)         # exactly one writer
+```
+
+**`readonly`** — the tag is initialized from its declared default and never written again. The `CORE_READONLY_WRITE` validator flags any write site. The stuck-bits validator skips readonly tags.
+
+**`external`** — something outside the ladder (HMI, SCADA, comms) is the writer. The stuck-bits validator treats the external source as satisfying the missing latch or reset side. `plc.recovers()` returns `'external'` instead of `False`.
+
+**`final`** — exactly one instruction in the ladder may write this tag. The `CORE_FINAL_MULTIPLE_WRITERS` validator flags any tag with more than one write site, regardless of mutual exclusivity.
+
+Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
+
+### Presentation flag
+
+```python
+Running = Bool("Running", public=True)         # operator-facing status
+State   = Int("State", choices=SortState, public=True)
+```
+
+**`public`** — part of the intended API surface. Setpoints, mode commands, alarms, key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. No validator consequence.
+
+The absence of `public` means plumbing — not hidden, not forbidden, just not the featured interface. Same convention as Python's `foo` vs `_foo`.
+
+### Flags on structures
+
+Flags set on a `@udt()` or `@named_array()` decorator apply to all fields. Individual fields can override with `Field()`:
+
+```python
+@udt(external=True, public=True)
+class Cmd:
+    Speed: Int                              # inherits external=True, public=True
+    Mode: Int = Field(external=False)       # overrides: ladder writes this one
+
+@named_array(Int, stride=4, readonly=True)
+class SortState:
+    IDLE = 0
+    DETECTING = 1
+```
+
+`clone()` inherits flags from the parent but accepts overrides:
+
+```python
+BinACounter = Counter.clone("BinACounter", public=True)
+```
+
+### Click comment convention
+
+All flags round-trip through the Click nickname CSV comment parser using bracket syntax:
+
+```
+[readonly]
+[external]
+[final]
+[public]
+[readonly, choices=Off:0|On:1]
 ```

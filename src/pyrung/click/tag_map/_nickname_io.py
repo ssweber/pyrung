@@ -36,12 +36,26 @@ if TYPE_CHECKING:
     from ._map import TagMap
 
 
-def _tag_meta_from_hints(*, choices: object, readonly: object) -> TagMeta | None:
-    if choices is None and not bool(readonly):
+def _tag_meta_from_hints(
+    *,
+    choices: object,
+    readonly: object,
+    external: object = False,
+    final: object = False,
+    public: object = False,
+) -> TagMeta | None:
+    r = bool(readonly)
+    e = bool(external)
+    f = bool(final)
+    p = bool(public)
+    if choices is None and not r and not e and not f and not p:
         return None
     return TagMeta(
-        readonly=bool(readonly),
+        readonly=r,
         choices=cast(dict[int | float | str, str] | None, choices),
+        external=e,
+        final=f,
+        public=p,
     )
 
 
@@ -162,17 +176,26 @@ def tag_map_from_nickname_file(
             comment, tag_meta, _ = _extract_address_comment(row.comment)
             choices = tag_meta.choices if tag_meta is not None else None
             readonly = tag_meta.readonly if tag_meta is not None else False
+            external = tag_meta.external if tag_meta is not None else False
+            final = tag_meta.final if tag_meta is not None else False
+            public = tag_meta.public if tag_meta is not None else False
             retentive_changed = row.retentive != sv.retentive
             default_changed = default != sv.default
             comment_changed = comment != sv.comment
             choices_changed = choices != sv.choices
             readonly_changed = readonly != sv.readonly
+            external_changed = external != sv.external
+            final_changed = final != sv.final
+            public_changed = public != sv.public
             if (
                 retentive_changed
                 or default_changed
                 or comment_changed
                 or choices_changed
                 or readonly_changed
+                or external_changed
+                or final_changed
+                or public_changed
             ):
                 slot_kw: dict[str, Any] = {}
                 if retentive_changed:
@@ -185,6 +208,12 @@ def tag_map_from_nickname_file(
                     slot_kw["choices"] = choices
                 if readonly_changed:
                     slot_kw["readonly"] = readonly
+                if external_changed:
+                    slot_kw["external"] = external
+                if final_changed:
+                    slot_kw["final"] = final
+                if public_changed:
+                    slot_kw["public"] = public
                 logical_block.slot(logical_addr, **slot_kw)
 
     def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
@@ -451,17 +480,26 @@ def tag_map_from_nickname_file(
                     comment, tag_meta, _ = _extract_address_comment(row.comment)
                     choices = tag_meta.choices if tag_meta is not None else None
                     readonly = tag_meta.readonly if tag_meta is not None else False
+                    external = tag_meta.external if tag_meta is not None else False
+                    final = tag_meta.final if tag_meta is not None else False
+                    public = tag_meta.public if tag_meta is not None else False
                     retentive_changed = row.retentive != sv.retentive
                     default_changed = default != sv.default
                     comment_changed = comment != sv.comment
                     choices_changed = choices != sv.choices
                     readonly_changed = readonly != sv.readonly
+                    external_changed = external != sv.external
+                    final_changed = final != sv.final
+                    public_changed = public != sv.public
                     if (
                         retentive_changed
                         or default_changed
                         or comment_changed
                         or choices_changed
                         or readonly_changed
+                        or external_changed
+                        or final_changed
+                        or public_changed
                     ):
                         slot_kw: dict[str, Any] = {}
                         if retentive_changed:
@@ -474,6 +512,12 @@ def tag_map_from_nickname_file(
                             slot_kw["choices"] = choices
                         if readonly_changed:
                             slot_kw["readonly"] = readonly
+                        if external_changed:
+                            slot_kw["external"] = external
+                        if final_changed:
+                            slot_kw["final"] = final
+                        if public_changed:
+                            slot_kw["public"] = public
                         block.slot(instance, **slot_kw)
 
             mappings.extend(runtime.map_to(spec.hardware_range))
@@ -585,6 +629,9 @@ def tag_map_from_nickname_file(
                 owner=f"{row.nickname!r} choices",
             ),
             readonly=tag_meta.readonly if tag_meta is not None else False,
+            external=tag_meta.external if tag_meta is not None else False,
+            final=tag_meta.final if tag_meta is not None else False,
+            public=tag_meta.public if tag_meta is not None else False,
         )
         hardware = _hardware_block_for(memory_type)[row.address]
         mappings.append(logical.map_to(hardware))
@@ -633,6 +680,9 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
         tag_meta = _tag_meta_from_hints(
             choices=getattr(entry.logical, "choices", None),
             readonly=getattr(entry.logical, "readonly", False),
+            external=getattr(entry.logical, "external", False),
+            final=getattr(entry.logical, "final", False),
+            public=getattr(entry.logical, "public", False),
         )
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,
@@ -669,7 +719,13 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 elif i == block_len - 1:
                     block_tag = format_block_tag(block_tag_name, "close")
 
-            tag_meta = _tag_meta_from_hints(choices=slot.choices, readonly=slot.readonly)
+            tag_meta = _tag_meta_from_hints(
+                choices=slot.choices,
+                readonly=slot.readonly,
+                external=slot.external,
+                final=slot.final,
+                public=slot.public,
+            )
 
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(
                 memory_type=memory_type,
