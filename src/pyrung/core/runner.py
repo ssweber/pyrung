@@ -592,6 +592,17 @@ class PLC:
         return tag_obj.default if tag_obj is not None else False
 
     @property
+    def dataview(self) -> Any:
+        """Chainable query over this program's tag dependency graph.
+
+        Convenience shorthand for ``plc.program.dataview()`` — builds
+        (and caches) the static program graph lazily on first access.
+        """
+        from pyrung.core.analysis.dataview import DataView
+
+        return DataView.from_graph(self._ensure_pdg())
+
+    @property
     def query(self) -> Any:
         """Survey namespace for whole-program dynamic analysis."""
         from pyrung.core.analysis.query import QueryNamespace
