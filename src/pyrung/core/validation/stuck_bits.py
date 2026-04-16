@@ -32,7 +32,6 @@ from pyrung.core.validation._common import (
     _caller_conditions,
     _CallerMap,
     _collect_write_sites,
-    _flatten_and_conditions,
     _format_site_location,
     _resolve_tag_names,
 )
@@ -68,18 +67,14 @@ def _latch_reset_write_targets(instr: Any) -> list[tuple[str, str]]:
 
 
 def _conditions_provably_unreachable(conditions: tuple[Any, ...]) -> bool:
-    """Check if an AND-chain of conditions contains a contradicting pair.
+    """Check if an AND-chain of conditions is provably unsatisfiable.
 
-    If so, the rung can never be true — the site is provably unreachable.
+    Uses per-tag domain feasibility to catch both pairwise contradictions
+    and transitive unsatisfiability (e.g. ``CompareEq(T, 4) + CompareGt(T, 5)``).
     """
-    from pyrung.core.validation._common import _conditions_contradict
+    from pyrung.core.validation._common import _conjunction_satisfiable
 
-    flat = _flatten_and_conditions(conditions)
-    for i in range(len(flat)):
-        for j in range(i + 1, len(flat)):
-            if _conditions_contradict(flat[i], flat[j]):
-                return True
-    return False
+    return not _conjunction_satisfiable(conditions)
 
 
 def _site_provably_unreachable(site: WriteSite, caller_map: _CallerMap) -> bool:

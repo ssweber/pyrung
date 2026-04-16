@@ -8,6 +8,7 @@ validation passes (conflicting outputs, stuck bits, etc.).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -329,6 +330,134 @@ def _tag_name(tag_or_ref: Any) -> str | None:
     return None
 
 
+_EPS = 1e-9
+
+
+def _tag_domain_feasible(conds: list[Condition]) -> bool:
+    """Check if conditions constraining a single tag have a feasible domain.
+
+    Bool conditions (BitCondition/NormallyClosedCondition) constrain a set
+    {True, False}.  Numeric conditions (Compare*) constrain an interval
+    [lo, hi] plus equality/inequality point constraints.
+    """
+    # -- Bool domain: narrowed by bit conditions ----------------------------
+    bool_domain: set[bool] | None = None
+
+    # -- Numeric domain -----------------------------------------------------
+    lo = float("-inf")
+    hi = float("inf")
+    eq_point: int | float | None = None
+    ne_points: set[int | float] = set()
+    has_numeric = False
+
+    # Determine discrete vs continuous from literal value types (first pass).
+    is_continuous = any(
+        isinstance(c.value, float)
+        for c in conds
+        if isinstance(c, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe))
+        and not isinstance(c.value, Tag)
+    )
+
+    for cond in conds:
+        # -- Bool constraints -----------------------------------------------
+        if isinstance(cond, BitCondition):
+            if bool_domain is None:
+                bool_domain = {True, False}
+            bool_domain &= {True}
+            continue
+
+        if isinstance(cond, NormallyClosedCondition):
+            if bool_domain is None:
+                bool_domain = {True, False}
+            bool_domain &= {False}
+            continue
+
+        # -- Numeric constraints (Compare*) ---------------------------------
+        assert isinstance(cond, (CompareEq, CompareNe, CompareGt, CompareGe, CompareLt, CompareLe))
+
+        if isinstance(cond.value, Tag):
+            continue  # tag-vs-tag: can't constrain statically
+        val = cond.value
+        if not isinstance(val, (int, float)):
+            continue  # non-numeric literal: skip
+
+        has_numeric = True
+
+        if isinstance(cond, CompareEq):
+            if eq_point is not None and eq_point != val:
+                return False  # two different equality pins
+            eq_point = val
+        elif isinstance(cond, CompareNe):
+            ne_points.add(val)
+        elif isinstance(cond, CompareGt):
+            new_lo = val + (_EPS if is_continuous else 1)
+            lo = max(lo, new_lo)
+        elif isinstance(cond, CompareGe):
+            lo = max(lo, val)
+        elif isinstance(cond, CompareLt):
+            new_hi = val - (_EPS if is_continuous else 1)
+            hi = min(hi, new_hi)
+        elif isinstance(cond, CompareLe):
+            hi = min(hi, val)
+
+    # -- Feasibility checks -------------------------------------------------
+    if bool_domain is not None and not bool_domain:
+        return False
+
+    if has_numeric:
+        if eq_point is not None:
+            if eq_point < lo or eq_point > hi:
+                return False
+            if eq_point in ne_points:
+                return False
+        else:
+            if lo > hi:
+                return False
+            if lo == hi and lo in ne_points:
+                return False
+
+    return True
+
+
+def _conjunction_satisfiable(conditions: Iterable[Condition]) -> bool:
+    """Check whether a conjunction (AND) of conditions is satisfiable.
+
+    Groups leaf conditions by tag and checks per-tag domain feasibility.
+    Strictly stronger than pairwise ``_conditions_contradict`` — catches
+    transitive cases like ``CompareEq(T, 4) + CompareGt(T, 5)``.
+
+    AnyCondition, edge conditions, and indirect comparisons are treated as
+    opaque (always satisfiable) — conservative by design.
+    """
+    flat = _flatten_and_conditions(tuple(conditions))
+
+    # Group constrainable leaf conditions by tag name.
+    groups: dict[str, list[Condition]] = defaultdict(list)
+    for cond in flat:
+        if isinstance(
+            cond,
+            (
+                BitCondition,
+                NormallyClosedCondition,
+                CompareEq,
+                CompareNe,
+                CompareGt,
+                CompareGe,
+                CompareLt,
+                CompareLe,
+            ),
+        ):
+            name = _tag_name(cond.tag)
+            if name is not None:
+                groups[name].append(cond)
+
+    for conds in groups.values():
+        if not _tag_domain_feasible(conds):
+            return False
+
+    return True
+
+
 def _conditions_contradict(a: Condition, b: Condition) -> bool:
     """Check if two leaf conditions are provably contradictory."""
     # Pattern 1: CompareEq(same_tag, different_literal)
@@ -410,17 +539,13 @@ def _chain_pair_mutually_exclusive(
 ) -> bool:
     """Check if two AND-condition chains are provably mutually exclusive.
 
-    Two chains are mutually exclusive if ANY pair of leaf conditions from them
-    contradicts (since each chain is an AND of its conditions).
+    Two chains are mutually exclusive when their combined conjunction is
+    unsatisfiable (i.e. no assignment can make both chains true at once).
     """
     flat_a = _flatten_and_conditions(chain_a)
     flat_b = _flatten_and_conditions(chain_b)
 
-    for cond_a in flat_a:
-        for cond_b in flat_b:
-            if _conditions_contradict(cond_a, cond_b):
-                return True
-    return False
+    return not _conjunction_satisfiable(flat_a + flat_b)
 
 
 # ---------------------------------------------------------------------------
