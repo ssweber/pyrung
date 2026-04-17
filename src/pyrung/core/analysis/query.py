@@ -101,37 +101,29 @@ class QueryNamespace:
     def cold_rungs(self) -> list[int]:
         """Rung indices that never fired across retained history.
 
-        A rung is "cold" if it never appears in any scan's ``rung_firings``.
+        Backed by :class:`RungFiringTimelines` — a rung with no
+        timeline (or an empty timeline) is cold.
         """
         plc = self._plc
         total_rungs = set(range(len(plc._logic)))
-        ever_fired: set[int] = set()
-        for scan_id in plc._history.scan_ids():
-            firings = plc._rung_firings_by_scan.get(scan_id, None)
-            if firings is not None:
-                ever_fired.update(firings.keys())
+        ever_fired = plc._rung_firing_timelines.ever_fired()
         return sorted(total_rungs - ever_fired)
 
     def hot_rungs(self) -> list[int]:
         """Rung indices that fired every scan across retained history.
 
-        A rung is "hot" if it appears in every scan's ``rung_firings``.
-        Only scans with firings data are considered (scan 0 is the initial
-        state and has no firings).
+        A rung is "hot" if :meth:`RungFiringTimelines.fired_on` returns
+        True for every retained scan_id (excluding the initial scan,
+        which predates any rung evaluation).
         """
         plc = self._plc
-        total_rungs = set(range(len(plc._logic)))
-
-        scans_with_firings = [
-            scan_id for scan_id in plc._history.scan_ids() if scan_id in plc._rung_firings_by_scan
-        ]
-        if not scans_with_firings:
+        initial_scan_id = plc._initial_scan_id
+        scan_ids = [sid for sid in plc._history.scan_ids() if sid != initial_scan_id]
+        if not scan_ids:
             return []
-
-        hot = set(total_rungs)
-        for scan_id in scans_with_firings:
-            firings = plc._rung_firings_by_scan[scan_id]
-            hot &= set(firings.keys())
+        hot = set(range(len(plc._logic)))
+        for scan_id in scan_ids:
+            hot &= plc._rung_firing_timelines.fired_on(scan_id)
             if not hot:
                 break
         return sorted(hot)

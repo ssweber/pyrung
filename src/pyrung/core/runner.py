@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
-from pyrsistent import PMap, pmap
+from pyrsistent import PMap
 
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -28,6 +28,7 @@ from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
+from pyrung.core.rung_firings import RungFiringTimelines
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
@@ -395,7 +396,12 @@ class PLC:
         self._history = History(self)
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
-        self._rung_firings_by_scan: dict[int, PMap] = {}
+        # Per-rung range-encoded firing timelines.  Replaces the
+        # ``scan_id -> PMap`` shape that paid one dict entry per scan
+        # for every firing rung; now a stable rung costs one range
+        # regardless of how long it fires, and a period-2 alternator
+        # collapses into a single ``AlternatingRun``.
+        self._rung_firing_timelines = RungFiringTimelines()
         self._inflight_scan_id: int | None = None
         self._inflight_rung_events: dict[int, list[RungTraceEvent]] = {}
         self._latest_inflight_trace_event: tuple[int, int, RungTraceEvent] | None = None
@@ -513,11 +519,16 @@ class PLC:
     def rung_firings(self, scan_id: int | None = None) -> PMap:
         """Return rung firings for the given scan (default: playhead).
 
-        Returns ``PMap[int, PMap[str, Any]]`` mapping each rung index that
-        wrote at least one tag during the scan to a map of
-        ``{tag_name: value_written}``.  Populated uniformly by both the
-        non-debug (``step()`` / ``run()``) and debug (DAP ``pyrungStepScan`` /
-        continue) scan paths via ``ScanContext.capturing_rung``.
+        Returns ``PMap[int, PMap[str, Any]]`` mapping each rung index
+        that fired (had any write, even if all were filtered by PDG)
+        during the scan to the filtered ``{tag_name: value_written}``
+        map.  Synthesized on demand from per-rung range-encoded
+        timelines (:class:`RungFiringTimelines`); rungs with no
+        timeline covering ``scan_id`` contribute nothing.
+
+        Populated uniformly by both the non-debug (``step()`` /
+        ``run()``) and debug (DAP ``pyrungStepScan`` / continue) scan
+        paths via ``ScanContext.capturing_rung``.
 
         .. todo::
 
@@ -528,7 +539,7 @@ class PLC:
             on ``Rung`` may be needed later.
         """
         target = self._playhead if scan_id is None else scan_id
-        return self._rung_firings_by_scan.get(target, pmap())
+        return self._rung_firing_timelines.at(target)
 
     def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
         """Return changed tag values between two retained historical scans."""
@@ -1307,6 +1318,10 @@ class PLC:
         self._forces.clear()
         self._pause_requested_this_scan = False
         self._clear_retained_debug_trace_caches()
+        # Reboot drops the firing timelines together with the scan log
+        # and checkpoints — Option B treats reboot like a fresh session
+        # (see stage-4 notes in the design doc).
+        self._rung_firing_timelines.reset()
 
         if self._time_mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
@@ -1697,18 +1712,14 @@ class PLC:
             self._checkpoints[new_scan_id] = self._state
         if self._scan_log.records_dt:
             self._scan_log.record_dt(new_scan_id, dt)
-        # Always record firings for scans that executed logic — even an
-        # empty pmap distinguishes "rung didn't fire this scan" from "no
-        # data for this scan" (important for ``query.hot_rungs`` etc.).
-        # When consecutive scans produce structurally identical firings
-        # (steady-state / idle), share the previous scan's PMap reference
-        # instead of holding a fresh copy — in a pure idle loop this keeps
-        # per-scan retention at ~one dict entry.
+        # Per-rung timeline append.  Only rungs that fired this scan
+        # get a timeline update — stable rungs extend the tail range
+        # (no allocation), period-2 oscillators collapse into a single
+        # ``AlternatingRun`` entry.  Rungs that didn't fire contribute
+        # nothing to the timeline for this scan.
         new_firings = ctx.rung_firings
-        prev_firings = self._rung_firings_by_scan.get(previous_tip_scan_id)
-        if prev_firings is not None and new_firings == prev_firings:
-            new_firings = prev_firings
-        self._rung_firings_by_scan[self._state.scan_id] = new_firings
+        for rung_index, writes in new_firings.items():
+            self._rung_firing_timelines.append(rung_index, new_scan_id, writes)
         # Rung traces are per-commit, not per-history. The debug path
         # repopulates _current_rung_traces after commit_scan returns; any
         # other commit path leaves the slot empty for this scan.
@@ -1716,9 +1727,6 @@ class PLC:
             self._current_rung_traces = {}
             self._current_rung_traces_scan_id = None
             self._latest_committed_trace_event = None
-        # Window push.  ``_rung_firings_by_scan`` is intentionally not
-        # evicted here: it remains unbounded until Stage 7 replaces the
-        # storage with per-rung range-encoded timelines.
         self._recent_state_window.append(self._state)
 
         # Keep playhead following newest state unless manually moved.

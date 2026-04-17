@@ -47,13 +47,24 @@ def test_idle_scan_reuses_tags_pmap() -> None:
         assert runner.current_state.tags is primed_tags
 
 
-def test_idle_scan_avoids_fresh_rung_firings_pmap() -> None:
+def test_idle_scan_reuses_rung_firing_timeline_range() -> None:
+    """A rung firing the same pattern every scan stays in a single range.
+
+    Under the per-rung timeline storage, idle-scan memory reuse is no
+    longer a PMap-identity property — it's a structural one.  A rung
+    that produces the same canonical writes every scan extends its
+    tail range's ``end_scan_id`` instead of allocating a new entry.
+    """
     runner = _idle_runner()
 
     for _ in range(3):
         runner.step()
-    primed_firings = runner._rung_firings_by_scan[runner.current_state.scan_id]
+    timeline = runner._rung_firing_timelines._timelines.get(0, [])
+    assert len(timeline) == 1
 
     for _ in range(20):
         runner.step()
-        assert runner._rung_firings_by_scan[runner.current_state.scan_id] is primed_firings
+        timeline = runner._rung_firing_timelines._timelines[0]
+        # Still a single range, extended to cover every idle scan.
+        assert len(timeline) == 1
+        assert timeline[0].end_scan_id == runner.current_state.scan_id
