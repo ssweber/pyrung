@@ -94,13 +94,19 @@ Invariants to protect across all stages:
 - [x] Stage 1 test adjusted: `test_idle_scans_cost_zero_bytes` now builds an idle PLC with `checkpoint_interval=10_001` so the 10K-idle-scan log-level zero-bytes claim still holds. Checkpoint cost is a separate budget line.
 - [x] `make test`: 2689 passed (+3 new). `make lint`: clean aside from the pre-existing ty error on `_calculate_dt` method-assign in Stage 2's `_replay_from_log_for_test` helper (resolved in Stage 4 when `_dt_override_for_next_scan` replaces monkey-patching).
 
-## Stage 4 — `replay_to(scan_id)` and `_replay_mode` guards
+## Stage 4 — `replay_to(scan_id)` and `_replay_mode` guards ✅
 
-- [ ] Add `self._dt_override_for_next_scan: float | None` in `__init__`; consume in `_calculate_dt` (`runner.py:1226-1235`).
-- [ ] Add `self._replay_mode = False`; fork inherits off by default.
-- [ ] Three `if not self._replay_mode:` guards: before `_evaluate_monitors` (:1331), before `_evaluate_breakpoints` (:1344), inside `_rtc_setter` path in `system_points.py:515-547`.
-- [ ] Implement `replay_to(target_scan_id)` per the pseudocode in `record-and-replay.md:135-159`, reusing `fork()` at `runner.py:727`.
-- [ ] Re-run Stage 2 tests through `replay_to` (real checkpoints, real replay). Repeat the mutation check.
+- [x] `self._dt_override_for_next_scan: float | None` added in `__init__`; consumed at the top of `_calculate_dt` before the FIXED_STEP/REALTIME branches.
+- [x] `self._replay_mode = False` added; `fork()` inherits False (fresh PLC default); `replay_to` manually sets it on the forked instance.
+- [x] Guards: combined `if not self._replay_mode:` around `_evaluate_monitors` + `_evaluate_breakpoints` in `_commit_scan`; early-return guard at the top of `_set_rtc_and_record` (covers both `set_rtc()` and the `_apply_rtc_date/time` setter-call sites in system_points.py without propagating a new getter).
+- [x] `replay_to(target_scan_id)` implemented next to `_nearest_checkpoint_at_or_before`. Anchors on nearest checkpoint <= target, falls back to `fork(scan_id=0)` when none exists. Walks log applying lifecycle → force map → RTC base → patch → `_dt_override_for_next_scan` → `step()`. Trailing lifecycle at `target_scan_id + 1` applied before return. Module-level `_apply_lifecycle_to_replay` helper; reboot is an AssertionError (can never appear in a live log under Option B).
+- [x] **Reboot lifecycle: Option B.** `PLC.reboot()` resets `_scan_log`, `_checkpoints`, `_forces_last_recorded`, `_this_scan_drained_patches` to fresh state. No reboot lifecycle event recorded. Rationale: post-reboot scan_ids would alias pre-reboot entries in every sparse channel, so Option A (sim_time ordering of lifecycle alone) doesn't fix the collision; reboot is treated like a fresh recording session. Pre-reboot history not replay-addressable — user forks before rebooting if they need it.
+- [x] Stage 2 tests rewritten through `replay_to` (public API). `_replay_from_log_for_test` + `_make_source_and_replay` retired. `assert_plc_state_equal` switched from raw `_rtc_base`/`_rtc_base_sim_time` comparison to effective-RTC-at-shared-timestamp comparison (fork()'s RTC rebase is mathematically equivalent to applying the trajectory, but not bit-identical). RTC tests additionally capture intermediate historical bases and compare against `replay_to(intermediate_scan)._rtc_base` so mutation 3 stays detectable despite the effective-RTC forgiveness.
+- [x] Stage 1 test `test_reboot_records_lifecycle_event` rewritten as `test_reboot_resets_scan_log_and_checkpoints` (Option B semantics).
+- [x] New tests: `test_replay_lifecycle_reboot`, `test_replay_across_multiple_checkpoints` (exercises fork-from-anchor and mid-range replay), `test_replay_to_rejects_invalid_target`, `test_replay_fork_is_in_replay_mode`.
+- [x] **Mutation verification sweep** — all five mutations confirmed to surface the expected failing tests (see test file's module docstring for the mapping). The Stage 2 rtc-via-apply-tags gap closed (`_replay_mode` blocks the in-scan setter).
+- [x] Pre-existing ty error on `_calculate_dt` method-assign in the Stage 2 helper is gone (helper retired).
+- [x] `make test`: 2693 passed (+4 net from Stage 3: added `_reboot`, `_across_multiple_checkpoints`, `_rejects_invalid_target`, `_fork_is_in_replay_mode`; renamed one Stage 1 reboot test). `make lint`: clean.
 
 ## Stage 5 — Swap history consumers
 

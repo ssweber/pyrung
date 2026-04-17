@@ -131,13 +131,25 @@ def test_stop_when_already_stopped_is_noop():
     assert [e.kind for e in snap.lifecycle_events] == ["stop"]
 
 
-def test_reboot_records_lifecycle_event():
-    plc = _idle_plc()
-    plc.step()
+def test_reboot_resets_scan_log_and_checkpoints():
+    """Reboot is destructive: post-reboot scan_ids would alias pre-reboot
+    entries in every sparse channel, so the log and checkpoints reset to
+    a fresh recording session rooted at the post-reboot scan 0.  No
+    ghost ``reboot`` lifecycle event is retained — the log starts clean.
+    """
+    plc = _idle_plc(checkpoint_interval=2)
+    for _ in range(3):
+        plc.step()
+    assert plc._scan_log.bytes_estimate() > 0
+    assert plc._checkpoints  # checkpoint at scan 2
+
     plc.reboot()
     snap = plc._scan_log.snapshot()
-    kinds = [e.kind for e in snap.lifecycle_events]
-    assert kinds == ["reboot"]
+    assert snap.lifecycle_events == ()
+    assert snap.patches_by_scan == {}
+    assert snap.force_changes_by_scan == {}
+    assert snap.rtc_base_changes == {}
+    assert plc._checkpoints == {}
 
 
 def test_battery_present_toggle_records_with_value():

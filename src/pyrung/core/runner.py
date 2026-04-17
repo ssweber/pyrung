@@ -199,6 +199,28 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
     return tuple(found_by_name.values())
 
 
+def _apply_lifecycle_to_replay(replay: PLC, event: LifecycleEvent) -> None:
+    """Apply a captured lifecycle event to a replay PLC.
+
+    ``reboot`` never appears in a live log snapshot because
+    ``PLC.reboot()`` resets the scan log — surfacing it here flags a
+    regression in that invariant.
+    """
+    if event.kind == "stop":
+        replay.stop()
+    elif event.kind == "battery_present":
+        replay.battery_present = bool(event.value)
+    elif event.kind == "clear_forces":
+        replay.clear_forces()
+    elif event.kind == "reboot":
+        raise AssertionError(
+            "unexpected reboot lifecycle event in replay log "
+            "(reboot() should reset the log — see PLC.reboot())"
+        )
+    else:  # pragma: no cover - exhaustive
+        raise AssertionError(f"unknown lifecycle kind: {event.kind!r}")
+
+
 class _DebugNamespace:
     """Namespace exposing debugger-facing methods on ``plc.debug``."""
 
@@ -365,6 +387,12 @@ class PLC:
         self._checkpoints: dict[int, SystemState] = {}
         self._forces_last_recorded: dict[str, bool | int | float | str] = {}
         self._this_scan_drained_patches: dict[str, bool | int | float | str] = {}
+        # Stage 4 replay plumbing. ``_dt_override_for_next_scan`` lets
+        # ``replay_to`` inject the recorded dt for each replayed scan in
+        # REALTIME mode; ``_replay_mode`` suppresses user monitors,
+        # breakpoint labels, and the RTC setter during a replay walk.
+        self._dt_override_for_next_scan: float | None = None
+        self._replay_mode: bool = False
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -760,6 +788,68 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
+    def replay_to(self, target_scan_id: int) -> PLC:
+        """Reconstruct historical state by forking and replaying the scan log.
+
+        Anchors at the nearest retained checkpoint ``<= target_scan_id``
+        (falling back to scan 0 when no earlier checkpoint exists) and
+        walks the scan log forward to ``target_scan_id``, applying
+        captured lifecycle events, force-map replacements, RTC base
+        changes, patches, and per-scan ``dt`` in REALTIME mode.
+
+        Returns a fork positioned at ``target_scan_id`` with
+        ``_replay_mode=True``.  The returned fork is primarily for
+        inspection; callers who want to continue it as a live
+        investigation session can clear ``fork._replay_mode = False``.
+        """
+        if target_scan_id < 0:
+            raise ValueError(f"target_scan_id must be >= 0, got {target_scan_id}")
+        if target_scan_id > self._state.scan_id:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+            )
+
+        log = self._scan_log.snapshot()
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        anchor_scan_id = anchor if anchor is not None else 0
+
+        replay = self.fork(scan_id=anchor_scan_id)
+        replay._replay_mode = True
+
+        # Seed the force map at the anchor.  When anchor is a real
+        # checkpoint the Stage 3 bypass guarantees a full snapshot is
+        # recorded at that scan_id; from scan 0 the force map starts
+        # empty (matches the default PLC construction).
+        if anchor is not None:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
+
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+
+        for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
+            for event in lifecycle_by_scan.get(scan_id, []):
+                _apply_lifecycle_to_replay(replay, event)
+            if scan_id in log.force_changes_by_scan:
+                replay._input_overrides._forces.clear()
+                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+            if scan_id in log.rtc_base_changes:
+                base, base_sim_time = log.rtc_base_changes[scan_id]
+                replay._set_rtc_internal(base, base_sim_time)
+            if scan_id in log.patches_by_scan:
+                replay.patch(log.patches_by_scan[scan_id])
+            if log.dts is not None:
+                replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+            replay.step()
+
+        # Trailing lifecycle events that fired after the last committed
+        # scan (e.g. a trailing stop() with no subsequent step).
+        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+            _apply_lifecycle_to_replay(replay, event)
+
+        return replay
+
     @property
     def simulation_time(self) -> float:
         """Current simulation clock in seconds."""
@@ -806,7 +896,18 @@ class PLC:
         self._record_lifecycle("battery_present", value=new_value)
 
     def reboot(self) -> SystemState:
-        """Power-cycle the runner and return the reset state."""
+        """Power-cycle the runner and return the reset state.
+
+        Reboot is destructive: tags reset to defaults (except
+        battery-preserved retentive values), ``state.scan_id`` and
+        ``state.timestamp`` return to 0.  Because post-reboot scan_ids
+        would alias pre-reboot entries in every sparse channel
+        (patches, forces, rtc_base_changes, dts), the scan log and
+        checkpoints are reset to a fresh recording session rooted at
+        the post-reboot scan 0.  Pre-reboot history is not
+        replay-addressable — users who need that should ``fork()``
+        before rebooting.
+        """
         tag_values = self._rebuild_tags_for_reset(
             preserve_all=self._battery_present,
             preserve_retentive=False,
@@ -817,7 +918,10 @@ class PLC:
             preserve_rtc_continuity=self._battery_present,
         )
         self._running = True
-        self._record_lifecycle("reboot")
+        self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
+        self._checkpoints = {}
+        self._forces_last_recorded = {}
+        self._this_scan_drained_patches = {}
         return self._state
 
     def set_rtc(self, value: datetime) -> None:
@@ -926,7 +1030,14 @@ class PLC:
         callback) paths.  Internal lifecycle paths (reboot,
         stop-to-run) use ``_set_rtc_internal`` directly; the lifecycle
         event itself implies the RTC transition at replay time.
+
+        No-op in replay mode — the log's ``rtc_base_changes`` entry is
+        load-bearing, and ``replay_to`` applies it via
+        ``_set_rtc_internal`` directly.  Re-firing here would
+        duplicate-record and (worse) shift the recorded scan_id.
         """
+        if self._replay_mode:
+            return
         self._set_rtc_internal(value, sim_time)
         self._scan_log.record_rtc_base_change(self._state.scan_id + 1, value, float(sim_time))
 
@@ -1276,6 +1387,10 @@ class PLC:
 
     def _calculate_dt(self) -> float:
         """Calculate scan delta time based on current time mode."""
+        if self._dt_override_for_next_scan is not None:
+            dt_override = self._dt_override_for_next_scan
+            self._dt_override_for_next_scan = None
+            return dt_override
         if self._time_mode == TimeMode.REALTIME:
             now = time.perf_counter()
             if self._last_step_time is None:
@@ -1384,8 +1499,9 @@ class PLC:
         if not self._history.contains(self._playhead):
             self._playhead = self._history.oldest_scan_id
 
-        self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
-        self._evaluate_breakpoints(state=self._state)
+        if not self._replay_mode:
+            self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
+            self._evaluate_breakpoints(state=self._state)
         self._sync_runtime_flags_from_state()
 
     def _evaluate_monitors(

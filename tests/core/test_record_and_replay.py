@@ -1,38 +1,58 @@
-"""Stage 2 per-channel determinism tests.
+"""Per-channel determinism tests routed through ``PLC.replay_to``.
 
-Validates that the ``ScanLog`` captured in Stage 1 carries enough
-information to deterministically reconstruct any historical state.
+Originally introduced in Stage 2 against a test-only walker
+(``_replay_from_log_for_test``); Stage 4 retires that helper in favor
+of the public ``PLC.replay_to`` entry point backed by real checkpoints
+and a ``_replay_mode`` guard that silences user monitors, breakpoint
+labels, and the in-scan RTC setter during replay.
+
 Every nondeterminism channel is exercised in isolation so a regression
-in one surfaces as a specific failing test.
+in one surfaces as a specific failing test.  The ``reboot()``
+lifecycle — deferred in Stage 2 because the log couldn't sequence
+pre/post-reboot scans — is now covered: Stage 4 treats reboot as a
+destructive log reset (Option B from the design doc), so post-reboot
+replay anchors on the fresh log and the pre-reboot era is simply not
+replay-addressable.
 
-The ``_replay_from_log_for_test`` helper is test-only scaffolding
-(forks from scan 0, no checkpoints) — Stages 3/4 replace it with
-``PLC.replay_to(scan_id)`` backed by real checkpoints and a
-``_replay_mode`` guard.
+Mutation verification — each mutation confirmed to surface as the
+listed failing test(s) against a deliberately broken ``replay_to``
+(reverted after verifying):
 
-Mutation verification: each test was run once against a deliberately
-broken replay to confirm it fails loudly — see the module docstring
-block below for the exact mutations exercised.
-
-Mutations verified (reverted after):
-- Skip applying forces → ``test_replay_forces_*`` must fail.
-- Drop the last recorded patch → ``test_replay_patches`` must fail.
-- Ignore ``rtc_base_changes`` → ``test_replay_rtc_changes`` must fail.
-- Skip a lifecycle event → ``test_replay_lifecycle`` must fail.
-- Ignore ``dts`` in REALTIME → ``test_replay_realtime_dt`` must fail.
+- Skip applying forces → ``forces_add_remove`` +
+  ``lifecycle_clear_forces`` + ``across_multiple_checkpoints`` +
+  ``forces_across_checkpoint`` (Stage 3) fail.
+  (``forces_interact_with_patches`` passes because the force map is
+  cleared by the test's end — redundant coverage from the others.)
+- Drop the final patch (skip when ``scan_id == target_scan_id``) →
+  ``patches`` + ``forces_interact_with_patches`` +
+  ``rtc_changes_via_apply_tags`` + ``across_multiple_checkpoints``
+  fail.
+- Ignore ``rtc_base_changes`` → both ``rtc_changes_via_set_rtc`` and
+  ``rtc_changes_via_apply_tags`` fail via the historical-RTC checks
+  below.  The final effective-RTC equality alone is insensitive —
+  ``fork()``'s RTC rebase at the anchor is mathematically equivalent
+  to applying source's whole trajectory — so each RTC test also
+  captures a mid-run RTC base and compares against
+  ``replay_to(intermediate_scan)``.  The Stage 2 gap on the
+  apply-tags path closes now that ``_replay_mode`` blocks the
+  in-scan setter from reconstructing the base independently.
+- Skip a lifecycle event → ``lifecycle_stop`` +
+  ``lifecycle_battery_present_toggle`` fail.
+  (``lifecycle_clear_forces`` passes on this mutation because the
+  empty force map is also captured in ``force_changes_by_scan`` —
+  redundant capture.)
+- Ignore ``dts`` in REALTIME → ``realtime_dt`` fails.
 """
 
 from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Any
 
 import pytest
 
 from pyrung import Rung, program
 from pyrung.core import PLC, Bool, Dint, calc, out
-from pyrung.core.scan_log import LifecycleEvent
 
 # --------------------------------------------------------------------------- #
 # Equality helper — explicit field coverage per Stage 2 design.
@@ -43,8 +63,16 @@ def assert_plc_state_equal(live: PLC, replayed: PLC, *, context: str = "") -> No
     """Assert two PLCs have equivalent observable state.
 
     Covers every field replay is responsible for reproducing.  A bare
-    ``==`` would silently pass if replay forgets ``_rtc_base`` or
-    ``_battery_present``; this helper forces every channel to show up.
+    ``==`` would silently pass if replay forgets ``_battery_present``
+    or the live force map; this helper forces every channel to show
+    up.
+
+    RTC is compared via the effective "now" at the shared
+    ``state.timestamp`` rather than raw ``_rtc_base`` /
+    ``_rtc_base_sim_time``.  ``PLC.fork()`` rebases the internal
+    representation when anchoring at a non-zero snapshot, which is
+    semantically equivalent but not bit-identical.  What matters for
+    correctness is what ``rtc_now`` returns.
     """
     prefix = f"[{context}] " if context else ""
     live_state = live.current_state
@@ -64,11 +92,10 @@ def assert_plc_state_equal(live: PLC, replayed: PLC, *, context: str = "") -> No
         f"{prefix}memory mismatch\n  live:   {dict(live_state.memory)}\n"
         f"  replay: {dict(replay_state.memory)}"
     )
-    assert live._rtc_base == replayed._rtc_base, (
-        f"{prefix}_rtc_base mismatch: live={live._rtc_base} replay={replayed._rtc_base}"
-    )
-    assert live._rtc_base_sim_time == replayed._rtc_base_sim_time, (
-        f"{prefix}_rtc_base_sim_time mismatch"
+    live_rtc_now = live._rtc_at_sim_time(live_state.timestamp)
+    replay_rtc_now = replayed._rtc_at_sim_time(replay_state.timestamp)
+    assert live_rtc_now == replay_rtc_now, (
+        f"{prefix}effective RTC mismatch: live={live_rtc_now} replay={replay_rtc_now}"
     )
     assert live._time_mode == replayed._time_mode, f"{prefix}_time_mode mismatch"
     assert live._dt == replayed._dt, f"{prefix}_dt mismatch"
@@ -86,125 +113,24 @@ def assert_plc_state_equal(live: PLC, replayed: PLC, *, context: str = "") -> No
 
 
 # --------------------------------------------------------------------------- #
-# Replay helper — Stage 2 scaffolding.
-#
-# Constructs a replay PLC paired with the source (matched initial RTC)
-# and walks the source's ScanLog forward, applying each nondeterminism
-# channel in the same order the runtime does:
-#
-#   1. Lifecycle events at the incoming scan boundary
-#   2. Force-map replacement (full snapshot from the log entry)
-#   3. RTC base update
-#   4. Patch application (becomes pending_patches, drained by step)
-#   5. step() — which internally calls apply_pre_scan in the right order
-#
-# In REALTIME mode we override ``_calculate_dt`` to return recorded dts.
-# --------------------------------------------------------------------------- #
-
-
-def _make_source_and_replay(
-    logic: Any = None,
-    *,
-    dt: float | None = 0.01,
-    realtime: bool = False,
-) -> tuple[PLC, PLC]:
-    """Create source + replay PLCs with matched initial RTC base."""
-    if realtime:
-        source = PLC(logic=logic, realtime=True)
-        replay = PLC(logic=logic, realtime=True)
-    else:
-        source = PLC(logic=logic, dt=dt)
-        replay = PLC(logic=logic, dt=dt)
-    # Two PLCs constructed moments apart have different datetime.now()
-    # reads — pin the replay to the source's initial RTC so any
-    # post-construction divergence is attributable to replay itself.
-    replay._set_rtc_internal(source._rtc_base, source._rtc_base_sim_time)
-    return source, replay
-
-
-def _apply_lifecycle(replay: PLC, event: LifecycleEvent) -> None:
-    if event.kind == "stop":
-        replay.stop()
-    elif event.kind == "reboot":
-        replay.reboot()
-    elif event.kind == "battery_present":
-        replay.battery_present = bool(event.value)
-    elif event.kind == "clear_forces":
-        replay.clear_forces()
-    else:  # pragma: no cover - exhaustive
-        raise AssertionError(f"unknown lifecycle kind: {event.kind!r}")
-
-
-def _replay_from_log_for_test(
-    source: PLC,
-    replay: PLC,
-    target_scan_id: int,
-) -> None:
-    """Replay ``source``'s ScanLog into ``replay`` up to ``target_scan_id``.
-
-    ``replay`` must have been constructed alongside ``source`` via
-    ``_make_source_and_replay`` so initial RTC matches.  Target scan_id
-    should be ``source.current_state.scan_id`` for round-trip tests.
-    """
-    log = source._scan_log.snapshot()
-
-    lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
-    for event in log.lifecycle_events:
-        lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
-
-    if log.dts is not None:
-
-        def _calc_dt_override() -> float:
-            scan_to_come = replay.current_state.scan_id + 1
-            index = scan_to_come - log.base_scan
-            return float(log.dts[index])
-
-        replay._calculate_dt = _calc_dt_override  # type: ignore[method-assign]
-
-    while replay.current_state.scan_id < target_scan_id:
-        next_scan = replay.current_state.scan_id + 1
-
-        for event in lifecycle_by_scan.get(next_scan, []):
-            _apply_lifecycle(replay, event)
-
-        if next_scan in log.force_changes_by_scan:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(log.force_changes_by_scan[next_scan])
-
-        if next_scan in log.rtc_base_changes:
-            base, base_sim_time = log.rtc_base_changes[next_scan]
-            replay._set_rtc_internal(base, base_sim_time)
-
-        if next_scan in log.patches_by_scan:
-            replay.patch(log.patches_by_scan[next_scan])
-
-        replay.step()
-
-    # Apply lifecycle events that fired after the final committed scan
-    # (e.g. a trailing stop() with no subsequent step).
-    for event in lifecycle_by_scan.get(target_scan_id + 1, []):
-        _apply_lifecycle(replay, event)
-
-
-# --------------------------------------------------------------------------- #
-# Tests — one per nondeterminism channel.
+# Tests — one per nondeterminism channel, routed through replay_to.
 # --------------------------------------------------------------------------- #
 
 
 def test_replay_idle_scans() -> None:
     """N idle scans with no patches, forces, or events — zero-bytes log."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
     for _ in range(100):
         source.step()
 
     assert source._scan_log.bytes_estimate() == 0  # Stage 1 invariant
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
 def test_replay_patches() -> None:
     """Patches applied at varied scans — including a final-scan patch."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     source.step()  # scan 1, no patch
     source.patch({"A": True, "B": 42})
@@ -215,13 +141,13 @@ def test_replay_patches() -> None:
     source.patch({"A": False})
     source.step()  # scan 5 — final-scan patch
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
 def test_replay_forces_add_remove() -> None:
     """Forces added, removed, and cleared across multiple scans."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     source.force(Bool("X"), True)
     source.step()  # scan 1: force map {X:True}
@@ -232,13 +158,13 @@ def test_replay_forces_add_remove() -> None:
     source.step()  # scan 4: {Y:False}
     source.step()  # scan 5: unchanged
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
 def test_replay_forces_interact_with_patches() -> None:
     """Patch and force applied on the same scan — force wins at pre-logic."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     source.step()  # scan 1
     source.force(Bool("Z"), True)
@@ -251,30 +177,52 @@ def test_replay_forces_interact_with_patches() -> None:
     source.patch({"Z": False})  # now the patch sticks
     source.step()  # scan 5
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
     # Sanity: final Z value is False (last patch, no force)
     assert source.current_state.tags["Z"] is False
 
 
 def test_replay_rtc_changes_via_set_rtc() -> None:
-    """User-initiated ``set_rtc()`` between scans is captured and replayed."""
-    source, replay = _make_source_and_replay()
+    """User-initiated ``set_rtc()`` between scans is captured and replayed.
+
+    A final-state effective-RTC check alone is insensitive to mutation
+    3 (ignore ``rtc_base_changes``) because fork()'s RTC rebase at the
+    anchor is mathematically equivalent to applying source's whole
+    RTC trajectory.  To catch mutation 3 we also verify the
+    *intermediate* historical RTC at scan 2: source's current
+    ``_rtc_base`` has since been overwritten, so the historical value
+    can only be reconstructed by applying the recorded base change.
+    """
+    source = PLC(dt=0.01)
 
     source.step()  # scan 1
     source.set_rtc(datetime(2030, 6, 15, 10, 30, 0))
-    source.step()  # scan 2 — rtc effective here
+    source.step()  # scan 2 — rtc effective here (base set at sim_time 0.01)
     source.step()  # scan 3
     source.set_rtc(datetime(2035, 1, 1, 0, 0, 0))
     source.step()  # scan 4
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
+
+    # Historical RTC at scan 2: base was 2030-06-15 10:30:00 set at
+    # sim_time 0.01; scan 2's state.timestamp is 0.02, so the
+    # effective RTC is 10ms after the base.
+    replay_2 = source.replay_to(2)
+    expected_at_2 = datetime(2030, 6, 15, 10, 30, 0, 10_000)
+    assert replay_2._rtc_at_sim_time(replay_2.current_state.timestamp) == expected_at_2
 
 
 def test_replay_rtc_changes_via_apply_tags() -> None:
-    """In-scan ``rtc.new_*`` + ``rtc.apply_*`` path — downstream of patch."""
-    source, replay = _make_source_and_replay(logic=[])
+    """In-scan ``rtc.new_*`` + ``rtc.apply_*`` path — downstream of patch.
+
+    Closes the Stage 2 mutation gap: with ``_replay_mode`` guarding
+    ``_set_rtc_and_record``, the in-scan ``_apply_rtc_date/time``
+    path no longer reconstructs the base independently — the log's
+    ``rtc_base_changes`` entry is load-bearing.
+    """
+    source = PLC(logic=[], dt=0.01)
 
     source.step()  # scan 1
     # Patch the "new date" tags and the apply flag; the in-scan logic
@@ -287,8 +235,14 @@ def test_replay_rtc_changes_via_apply_tags() -> None:
             "rtc.apply_date": True,
         }
     )
-    source.step()  # scan 2 — rtc_setter fires inside this scan
-    source.step()  # scan 3
+    # The patch drains at scan 2's commit, so ``apply_date=True`` is
+    # visible to scan 3's ``on_scan_start`` — that's where
+    # ``_rtc_setter`` actually fires (not scan 2).
+    source.step()  # scan 2 — patch commits; apply_date now visible for scan 3
+    source.step()  # scan 3 — rtc_setter fires in on_scan_start of this scan
+    # Capture post-apply-date RTC base for the historical check below
+    # (before the scan-5 apply_time overwrites hour/minute/second).
+    rtc_base_after_scan_3 = source._rtc_base
     source.patch(
         {
             "rtc.new_hour": 14,
@@ -297,28 +251,42 @@ def test_replay_rtc_changes_via_apply_tags() -> None:
             "rtc.apply_time": True,
         }
     )
-    source.step()  # scan 4
+    source.step()  # scan 4 — apply_time patch commits
+    source.step()  # scan 5 — apply_time fires in on_scan_start
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
+
+    # Historical check: at scan 3, source's ``_rtc_base`` had 2040-03-15
+    # as the date but construction-time H/M/S.  After scan 5 the H/M/S
+    # were overwritten to 14/45/30 — so asking source.rtc_now at scan 3
+    # today yields the wrong answer.  Replay must reconstruct the
+    # historical base; mutation 3 (ignore rtc_base_changes) would leave
+    # replay with only fork()'s rebase of source's *current* base, whose
+    # hour/minute/second differ from the scan-3 snapshot.
+    replay_3 = source.replay_to(3)
+    # replay_3._rtc_base at scan 3 should equal what source had then.
+    # _rtc_base_sim_time == 0.02 (ctx.timestamp at scan 3's on_scan_start).
+    assert replay_3._rtc_base == rtc_base_after_scan_3
+    assert replay_3._rtc_base_sim_time == 0.02
 
 
 def test_replay_lifecycle_stop() -> None:
     """Trailing ``stop()`` — _running flag and state.memory flag match."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     for _ in range(3):
         source.step()
     source.stop()
 
     assert source._running is False
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
 def test_replay_lifecycle_battery_present_toggle() -> None:
     """Battery present toggled across scans."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     source.step()
     source.battery_present = False
@@ -327,13 +295,13 @@ def test_replay_lifecycle_battery_present_toggle() -> None:
     source.step()
     source.battery_present = False
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
 def test_replay_lifecycle_clear_forces() -> None:
     """``clear_forces()`` between scans clears the force map."""
-    source, replay = _make_source_and_replay()
+    source = PLC(dt=0.01)
 
     source.force(Bool("X"), True)
     source.force(Bool("Y"), False)
@@ -342,24 +310,42 @@ def test_replay_lifecycle_clear_forces() -> None:
     source.clear_forces()
     source.step()
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
-# ``reboot()`` lifecycle is intentionally out-of-scope for Stage 2.
-# After reboot(), ``_reset_runtime_scope`` resets ``state.scan_id`` to
-# 0 and ``state.timestamp`` to 0.0 — and the subsequent
-# ``_record_lifecycle("reboot")`` uses the *post-reset* scan_id, so the
-# recorded ``at_scan_id`` is always 1 regardless of how many scans ran
-# before.  The current Stage 1 log format can't distinguish "reboot
-# now" from "run N scans then reboot."  Stage 4 gets proper sequencing
-# (either sim_time-based ordering or reset-invalidates-log).  Tracked
-# in ``record-and-replay-checklist.md``.
+def test_replay_lifecycle_reboot() -> None:
+    """Reboot resets the log; replay anchors on the fresh post-reboot era.
+
+    Pre-reboot scans are not replay-addressable (the log is cleared).
+    Post-reboot replay works because ``reboot()`` sets up a fresh
+    recording session rooted at the new scan 0, and ``replay_to`` on
+    any post-reboot scan_id falls back to ``fork(scan_id=0)`` against
+    the fresh history when no checkpoint yet exists.
+    """
+    source = PLC(dt=0.01)
+
+    for _ in range(5):
+        source.step()
+    assert source.current_state.scan_id == 5
+
+    source.reboot()
+    # Option B semantics: log and checkpoints reset with the reboot.
+    assert source._scan_log.bytes_estimate() == 0
+    assert source._checkpoints == {}
+    assert source.current_state.scan_id == 0
+
+    for _ in range(3):
+        source.step()
+    assert source.current_state.scan_id == 3
+
+    replay = source.replay_to(source.current_state.scan_id)
+    assert_plc_state_equal(source, replay)
 
 
 def test_replay_realtime_dt() -> None:
     """REALTIME mode — varying dts captured and replayed."""
-    source, replay = _make_source_and_replay(realtime=True)
+    source = PLC(realtime=True)
 
     for _ in range(4):
         source.step()
@@ -371,7 +357,7 @@ def test_replay_realtime_dt() -> None:
     dts_captured = list(snap.dts)
     assert any(dt > 0 for dt in dts_captured[1:])  # sanity: real values
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
 
@@ -389,7 +375,7 @@ def test_replay_with_logic_present() -> None:
         with Rung(b):
             calc(c + 1, c)
 
-    source, replay = _make_source_and_replay(logic=ladder)
+    source = PLC(logic=ladder, dt=0.01)
 
     source.patch({"input_a": True})
     source.step()  # scan 1: b becomes True, c increments
@@ -398,41 +384,106 @@ def test_replay_with_logic_present() -> None:
     source.step()  # scan 3: b False, c stops
     source.step()  # scan 4: steady
 
-    _replay_from_log_for_test(source, replay, source.current_state.scan_id)
+    replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
     assert source.current_state.tags["counter"] >= 1
 
 
 # --------------------------------------------------------------------------- #
-# Smoke tests for the helpers themselves (cheap to keep, easy to spot if
-# the helper regresses independently of the scenarios).
+# Smoke tests for the helper itself.
 # --------------------------------------------------------------------------- #
 
 
 def test_assert_plc_state_equal_catches_scan_id_mismatch() -> None:
-    source, replay = _make_source_and_replay()
-    source.step()
+    source = PLC(dt=0.01)
+    source.step()  # scan 1
+    replay = source.replay_to(0)  # anchor at scan 0 — different scan_id
     with pytest.raises(AssertionError, match="scan_id"):
         assert_plc_state_equal(source, replay)
 
 
 def test_assert_plc_state_equal_catches_forces_mismatch() -> None:
-    """A force difference surfaces (either via the tag it writes or the
-    force map itself).  The helper must flag *something* — a bare ==
-    would silently pass on a subset of these fields."""
-    source, replay = _make_source_and_replay()
+    """Build a replay that disagrees on forces — helper must flag it."""
+    source = PLC(dt=0.01)
     source.force(Bool("X"), True)
     source.step()
-    replay.step()
-    # The force leaks through to tags first (force-write to X=True); the
-    # helper still fails loudly, just on tags rather than on the map
-    # itself.  Either way the divergence is caught.
+    replay = source.replay_to(source.current_state.scan_id)
+    # Mutate the replay's force map to synthesize a mismatch — the
+    # helper must notice either via the force map itself or via tags.
+    replay._input_overrides._forces.clear()
     with pytest.raises(AssertionError):
         assert_plc_state_equal(source, replay)
 
 
 # --------------------------------------------------------------------------- #
-# Stage 3 — checkpoints + force-map bypass invariant.
+# Stage 4 — replay_to with multi-checkpoint anchoring.
+# --------------------------------------------------------------------------- #
+
+
+def test_replay_across_multiple_checkpoints() -> None:
+    """Exercise replay_to anchoring on real checkpoints (not just scan 0).
+
+    Runs past three checkpoint boundaries with a steady force and a
+    patch applied at scan 13, then verifies both a full replay_to(tip)
+    and a mid-range replay_to(13) reconstruct correctly.
+    """
+    source = PLC(dt=0.01, checkpoint_interval=5)
+    source.force(Bool("X"), True)
+    for _ in range(12):
+        source.step()  # scan 1..12
+    source.patch({"A": 1})
+    source.step()  # scan 13 with a patch, post-second checkpoint
+    for _ in range(5):
+        source.step()  # scan 14..18
+
+    assert source.current_state.scan_id == 18
+    assert set(source._checkpoints.keys()) == {5, 10, 15}
+
+    # Full-tip replay anchors on checkpoint 15 (nearest <= 18).
+    replay = source.replay_to(18)
+    assert replay.current_state.scan_id == 18
+    assert_plc_state_equal(source, replay, context="replay_to(18)")
+
+    # Mid-range replay to scan 13 anchors on checkpoint 10 and walks
+    # 11, 12, 13 — including the patch at scan 13.  Compared against
+    # a fresh source run to exactly scan 13; fresh's RTC is seeded
+    # from source so the two trajectories are observationally
+    # identical (avoiding the construction-time datetime.now() drift).
+    replay_13 = source.replay_to(13)
+    assert replay_13.current_state.scan_id == 13
+    fresh = PLC(dt=0.01, checkpoint_interval=5)
+    fresh._set_rtc_internal(source._rtc_base, source._rtc_base_sim_time)
+    fresh.force(Bool("X"), True)
+    for _ in range(12):
+        fresh.step()
+    fresh.patch({"A": 1})
+    fresh.step()
+    assert_plc_state_equal(fresh, replay_13, context="replay_to(13)")
+
+
+def test_replay_to_rejects_invalid_target() -> None:
+    source = PLC(dt=0.01)
+    for _ in range(3):
+        source.step()
+
+    with pytest.raises(ValueError, match="must be >= 0"):
+        source.replay_to(-1)
+    with pytest.raises(ValueError, match="beyond current tip"):
+        source.replay_to(source.current_state.scan_id + 1)
+
+
+def test_replay_fork_is_in_replay_mode() -> None:
+    """The returned fork has ``_replay_mode=True`` so further steps
+    would still suppress monitors/breakpoints unless cleared."""
+    source = PLC(dt=0.01)
+    source.step()
+    replay = source.replay_to(1)
+    assert replay._replay_mode is True
+    assert source._replay_mode is False  # parent unaffected
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3 — checkpoints + force-map bypass invariant (retained).
 # --------------------------------------------------------------------------- #
 
 
@@ -476,29 +527,12 @@ def test_replay_forces_across_checkpoint() -> None:
     assert dict(snap.force_changes_by_scan[5]) == {"X": True}
     assert dict(snap.force_changes_by_scan[10]) == {"X": True}
 
-    # Invariant guard: simulate a Stage-4-style replay starting at the
-    # nearest checkpoint rather than from scan 0.  Seeds the force map
-    # from ``force_changes_by_scan[anchor]`` — without the checkpoint
-    # bypass this lookup would KeyError and the test fails loudly.
+    # Route the invariant check through the public replay_to API.  Without
+    # the Stage 3 bypass, anchor=10 would not find {"X": True} in
+    # ``force_changes_by_scan[10]`` and the force map would be lost.
     anchor = source._nearest_checkpoint_at_or_before(12)
     assert anchor == 10
-    replay = PLC(
-        dt=0.01,
-        initial_state=source._checkpoints[anchor],
-        checkpoint_interval=5,
-    )
-    replay._set_rtc_internal(source._rtc_base, source._rtc_base_sim_time)
-    replay._input_overrides._forces.clear()
-    replay._input_overrides._forces.update(snap.force_changes_by_scan[anchor])
-    while replay.current_state.scan_id < source.current_state.scan_id:
-        next_scan = replay.current_state.scan_id + 1
-        if next_scan in snap.force_changes_by_scan:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(snap.force_changes_by_scan[next_scan])
-        if next_scan in snap.patches_by_scan:
-            replay.patch(snap.patches_by_scan[next_scan])
-        replay.step()
-
+    replay = source.replay_to(12)
     assert dict(replay._input_overrides.forces_mutable) == {"X": True}
     assert dict(replay.current_state.tags) == dict(source.current_state.tags)
     assert replay.current_state.scan_id == source.current_state.scan_id
