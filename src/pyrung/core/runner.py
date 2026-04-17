@@ -11,6 +11,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from contextvars import Token
@@ -49,6 +50,13 @@ if TYPE_CHECKING:
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
+
+# Number of most recent committed scans retained as live ``SystemState``
+# objects.  These back ``History.at()`` for hot-path callers (monitor
+# ``previous_value``, ``_prev:*`` edge detection, recent diff/seek/
+# fork) without paying a replay walk.  Older scans are reconstructed
+# on demand via ``PLC.replay_to`` / ``PLC._replay_range``.
+_RECENT_STATE_WINDOW_SIZE = 20
 
 
 def _validate_assume(logic: list[Any], assume: dict[str, Any]) -> None:
@@ -366,7 +374,18 @@ class PLC:
             mode_run=self._running,
             battery_present=self._battery_present,
         )
-        self._history = History(self._state, limit=history_limit)
+        # Recent committed-state ring buffer feeding ``History.at()`` on
+        # the hot path.  ``History`` itself is a stateless facade.
+        self._recent_state_window: deque[SystemState] = deque(
+            [self._state], maxlen=_RECENT_STATE_WINDOW_SIZE
+        )
+        # The "implicit anchor" for replay walks below the earliest
+        # checkpoint.  Pinned at construction and refreshed only on
+        # ``_reset_runtime_scope`` (reboot), so it remains valid even
+        # after the recent-state window rotates past the initial scan.
+        self._initial_scan_id: int = self._state.scan_id
+        self._initial_state: SystemState = self._state
+        self._history = History(self)
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
         self._rung_firings_by_scan: dict[int, PMap] = {}
@@ -423,7 +442,9 @@ class PLC:
         }
         if seed:
             self._state = self._state.with_tags(seed)
-            self._history = History(self._state, limit=history_limit)
+            self._recent_state_window.clear()
+            self._recent_state_window.append(self._state)
+            self._initial_state = self._state
 
     @property
     def program(self) -> Any:
@@ -768,7 +789,7 @@ class PLC:
             scan_id: Snapshot to fork from. Defaults to current committed tip state.
         """
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
-        historical_state = self.history.at(target_scan_id)
+        historical_state = self._state_at(target_scan_id)
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=historical_state,
@@ -783,6 +804,30 @@ class PLC:
     def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
+
+    def _state_at(self, scan_id: int) -> SystemState:
+        """Return the ``SystemState`` for ``scan_id`` without recursing
+        through ``History.at()``.
+
+        Used by ``fork()`` and ``History.at()`` to avoid the
+        ``replay_to → fork → history.at → replay_to`` loop.  Direct
+        lookups (current tip, recent-state window, checkpoint dict,
+        the pinned initial state) terminate immediately; the
+        replay-reconstruction fallback only fires for scans that fall
+        between addressable anchors.
+        """
+        if scan_id == self._state.scan_id:
+            return self._state
+        for state in self._recent_state_window:
+            if state.scan_id == scan_id:
+                return state
+        if scan_id in self._checkpoints:
+            return self._checkpoints[scan_id]
+        if scan_id == self._initial_scan_id:
+            return self._initial_state
+        if self._initial_scan_id <= scan_id <= self._state.scan_id:
+            return self.replay_to(scan_id).current_state
+        raise KeyError(scan_id)
 
     def _nearest_checkpoint_at_or_before(self, scan_id: int) -> int | None:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
@@ -802,8 +847,10 @@ class PLC:
         inspection; callers who want to continue it as a live
         investigation session can clear ``fork._replay_mode = False``.
         """
-        if target_scan_id < 0:
-            raise ValueError(f"target_scan_id must be >= 0, got {target_scan_id}")
+        if target_scan_id < self._initial_scan_id:
+            raise ValueError(
+                f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
+            )
         if target_scan_id > self._state.scan_id:
             raise ValueError(
                 f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
@@ -811,7 +858,7 @@ class PLC:
 
         log = self._scan_log.snapshot()
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-        anchor_scan_id = anchor if anchor is not None else 0
+        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
 
         replay = self.fork(scan_id=anchor_scan_id)
         replay._replay_mode = True
@@ -849,6 +896,64 @@ class PLC:
             _apply_lifecycle_to_replay(replay, event)
 
         return replay
+
+    def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+        """Reconstruct ``SystemState`` for every scan in ``[start, end]``.
+
+        Anchors once at the nearest checkpoint ``<= start`` (falling
+        back to scan 0) and walks the scan log forward to
+        ``end_scan_id``, accumulating the committed state after each
+        scan in the requested range.  Cheaper than N independent
+        ``replay_to`` calls because it pays the fork-from-checkpoint
+        cost once.
+
+        Used by ``History.range`` / ``History.latest`` when the
+        requested range falls outside the live recent-state window.
+        """
+        if start_scan_id < self._initial_scan_id or end_scan_id < start_scan_id:
+            return []
+        tip = self._state.scan_id
+        if start_scan_id > tip:
+            return []
+        end_scan_id = min(end_scan_id, tip)
+
+        log = self._scan_log.snapshot()
+        anchor = self._nearest_checkpoint_at_or_before(start_scan_id)
+        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
+
+        replay = self.fork(scan_id=anchor_scan_id)
+        replay._replay_mode = True
+
+        if anchor is not None:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
+
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+
+        results: list[SystemState] = []
+        if anchor_scan_id >= start_scan_id:
+            results.append(replay.current_state)
+
+        for scan_id in range(anchor_scan_id + 1, end_scan_id + 1):
+            for event in lifecycle_by_scan.get(scan_id, []):
+                _apply_lifecycle_to_replay(replay, event)
+            if scan_id in log.force_changes_by_scan:
+                replay._input_overrides._forces.clear()
+                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+            if scan_id in log.rtc_base_changes:
+                base, base_sim_time = log.rtc_base_changes[scan_id]
+                replay._set_rtc_internal(base, base_sim_time)
+            if scan_id in log.patches_by_scan:
+                replay.patch(log.patches_by_scan[scan_id])
+            if log.dts is not None:
+                replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+            replay.step()
+            if scan_id >= start_scan_id:
+                results.append(replay.current_state)
+
+        return results
 
     @property
     def simulation_time(self) -> float:
@@ -1073,7 +1178,11 @@ class PLC:
             battery_present=self._battery_present,
         )
         self._set_rtc_internal(rtc_after_reset, self._state.timestamp)
-        self._history = History(self._state, limit=self._history_limit)
+        self._recent_state_window.clear()
+        self._recent_state_window.append(self._state)
+        self._initial_scan_id = self._state.scan_id
+        self._initial_state = self._state
+        self._history._reset_labels()
         self._playhead = self._state.scan_id
 
         self._pending_patches.clear()
@@ -1488,16 +1597,14 @@ class PLC:
             self._current_rung_traces = {}
             self._current_rung_traces_scan_id = None
             self._latest_committed_trace_event = None
-        evicted_scan_ids = self._history._append(self._state)
-        for evicted_scan_id in evicted_scan_ids:
-            self._rung_firings_by_scan.pop(evicted_scan_id, None)
+        # Window push.  ``_rung_firings_by_scan`` is intentionally not
+        # evicted here: it remains unbounded until Stage 7 replaces the
+        # storage with per-rung range-encoded timelines.
+        self._recent_state_window.append(self._state)
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:
             self._playhead = self._state.scan_id
-
-        if not self._history.contains(self._playhead):
-            self._playhead = self._history.oldest_scan_id
 
         if not self._replay_mode:
             self._evaluate_monitors(previous_state=previous_state, current_state=self._state)

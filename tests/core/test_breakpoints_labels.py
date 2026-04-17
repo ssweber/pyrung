@@ -79,13 +79,16 @@ def test_snapshot_labels_deduplicate_same_label_on_same_scan() -> None:
     assert _scan_ids(runner.history.find_all("dup")) == [2]
 
 
-def test_snapshot_labels_are_evicted_with_history() -> None:
+def test_snapshot_labels_survive_history_window_rotation() -> None:
+    """Labels are decoupled from state storage post-Stage-5 — early
+    snapshots stay findable even after the recent-state window has
+    rotated past their scans."""
     runner = PLC(logic=[], history_limit=3)
     runner.when(lambda state: state.scan_id in {1, 3}).snapshot("milestone")
 
-    runner.run(cycles=4)  # retained scans [2, 3, 4]
+    runner.run(cycles=40)
 
-    assert _scan_ids(runner.history.find_all("milestone")) == [3]
+    assert _scan_ids(runner.history.find_all("milestone")) == [1, 3]
     latest_milestone = runner.history.find("milestone")
     assert latest_milestone is not None
     assert latest_milestone.scan_id == 3

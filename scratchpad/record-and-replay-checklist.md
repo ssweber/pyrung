@@ -108,13 +108,18 @@ Invariants to protect across all stages:
 - [x] Pre-existing ty error on `_calculate_dt` method-assign in the Stage 2 helper is gone (helper retired).
 - [x] `make test`: 2693 passed (+4 net from Stage 3: added `_reboot`, `_across_multiple_checkpoints`, `_rejects_invalid_target`, `_fork_is_in_replay_mode`; renamed one Stage 1 reboot test). `make lint`: clean.
 
-## Stage 5 — Swap history consumers
+## Stage 5 — Swap history consumers ✅
 
-- [ ] `plc.history.at(scan_id)` → `replay_to`.
-- [ ] `_recent_state_window` (10 scans) retained for monitor `previous_value` and `_prev:*` edge detection.
-- [ ] Retire `history.py` storage (deque + dict). Labels/metadata stay as a thin overlay on `ScanLog`.
-- [ ] Rewire `seek`, `rewind`, `diff` at `runner.py:411-464` to use `replay_to`; `diff` caches the more recent side.
-- [ ] `history_limit` semantics: log-byte or wall-time bound; scan-count as secondary.
+- [x] `History` rewritten as a stateless facade over the owning PLC. `at(scan_id)` routes through a new `PLC._state_at` helper that checks the recent-state window, the checkpoint dict, and the pinned `_initial_state` before falling back to `replay_to` — no recursion through `fork()`.
+- [x] `_recent_state_window: deque[SystemState]` (`maxlen=20`, module constant `_RECENT_STATE_WINDOW_SIZE`) on `PLC`. Populated in `_commit_scan`, refreshed on tag-default seed and `_reset_runtime_scope`. Backs hot-path monitor `previous_value` / `_prev:*` reads and cheap recent `at()`/`range()`/`latest()`.
+- [x] `_initial_scan_id` + `_initial_state` pinned at construction (and on reboot) so replay anchors and `oldest_scan_id` survive window rotation. Forks pin their own `_initial_scan_id` to the fork point.
+- [x] `History` storage retired: `_order`, `_by_scan_id`, `_append`, `_evict_if_needed`, the `limit` ctor param all gone. Labels overlay (`_label_to_scan_ids`, `_scan_id_to_labels`, `_label_scan_metadata`) stays. `_label_scan` no longer requires a retained scan — any addressable scan_id is valid. New `History.scan_ids()` and `History._reset_labels()`.
+- [x] `PLC._replay_range(start, end)` added — single-anchor batched walk used by `History.range`/`latest` for older slices.
+- [x] `seek`, `rewind`, `diff`, `fork`, `fork_from` now route through the facade. `_commit_scan` no longer evicts `_rung_firings_by_scan` (Stage 7 replaces that storage); the obsolete `playhead.contains` fallback is gone.
+- [x] Consumers rewired: `analysis/causal.py` (`_order` → `scan_ids()`, with `# TODO(stage-7)` perf-floor markers at each transition-walk site), `analysis/query.py` (cold/hot-rungs iteration), `dap/handlers/history_seek.py` (count + retained scan-id list).
+- [x] `history_limit` ctor param preserved as a no-op for backward compat (still validates `>= 1` or `None`). Stage 8 picks the real bound.
+- [x] Tests updated: `tests/core/test_history.py` rewritten for facade semantics (eviction tests inverted to assert no eviction; label tests use a runner-owned `History`; new `test_history_labels_survive_window_rotation`). `tests/core/test_breakpoints_labels.py::test_snapshot_labels_are_evicted_with_history` → `..._survive_history_window_rotation`.
+- [x] Stage 4 mutation sweep + Stage 1/3 invariants intact: `make test` 2692 passed (+3 net rewrites). `make lint` clean.
 
 ## Stage 6 — DAP trace regeneration
 

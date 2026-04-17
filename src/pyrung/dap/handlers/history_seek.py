@@ -68,7 +68,7 @@ def on_pyrung_history_info(adapter: Any, _args: dict[str, Any]) -> HandlerResult
             "minScanId": history.oldest_scan_id,
             "maxScanId": history.newest_scan_id,
             "playhead": runner.playhead,
-            "count": len(history._order),
+            "count": history.newest_scan_id - history.oldest_scan_id + 1,
         }, []
 
 
@@ -133,7 +133,7 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
 
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
-        retained_scan_ids = list(runner.history._order)
+        retained_scan_ids = list(runner.history.scan_ids())
         entries: list[dict[str, Any]] = []
 
         for index in range(len(retained_scan_ids) - 1, 0, -1):

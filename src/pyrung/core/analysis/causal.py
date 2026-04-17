@@ -322,8 +322,8 @@ def _condition_tag_name(condition: Condition) -> str | None:
 
 
 def _scan_ids_descending(history: History) -> list[int]:
-    """Return retained scan ids newest-first."""
-    return list(reversed(history._order))
+    """Return addressable scan ids newest-first."""
+    return list(reversed(list(history.scan_ids())))
 
 
 def _find_transition(
@@ -331,12 +331,15 @@ def _find_transition(
     tag_name: str,
     scan_id: int | None = None,
 ) -> Transition | None:
-    """Find a transition of *tag_name* in retained history.
+    """Find a transition of *tag_name* in addressable history.
 
     If *scan_id* is given, check whether the tag changed at that exact scan.
     Otherwise find the most recent transition.
     """
-    ids = list(history._order)
+    # TODO(stage-7): each ``history.at()`` past the recent-state window
+    # triggers a replay walk; replace this scan-by-scan loop with the
+    # rung-firings index once Stage 7 lands.
+    ids = list(history.scan_ids())
 
     if scan_id is not None:
         idx = None
@@ -385,9 +388,10 @@ def _find_last_transition_scan(
 ) -> int | None:
     """Find the most recent scan where *tag_name* changed, before *before_scan_id*.
 
-    Returns the scan_id, or None if no transition found in retained history.
+    Returns the scan_id, or None if no transition found in addressable history.
     """
-    ids = list(history._order)
+    # TODO(stage-7): replace scan-by-scan walk with rung-firings index lookup.
+    ids = list(history.scan_ids())
     for i in range(len(ids) - 1, 0, -1):
         if ids[i] >= before_scan_id:
             continue
@@ -416,7 +420,7 @@ def _find_recent_transition(
         return t
 
     # Check immediately preceding scan
-    ids = list(history._order)
+    ids = list(history.scan_ids())
     idx = None
     for i, sid in enumerate(ids):
         if sid == scan_id:
@@ -695,7 +699,9 @@ def recorded_effect(
     steps: list[ChainStep] = []
     seen_effects: set[str] = {tag_name}  # don't re-add the cause itself
 
-    ids = list(history._order)
+    # TODO(stage-7): forward walk replays state per scan past the recent
+    # window — replace with rung-firings index once Stage 7 lands.
+    ids = list(history.scan_ids())
     try:
         start_idx = ids.index(transition.scan_id)
     except ValueError:
@@ -854,7 +860,9 @@ def _rung_writes_value_when_enabled(
 
 def _has_observed_transition(history: History, tag_name: str, to_value: Any) -> bool:
     """Check whether *tag_name* has ever transitioned to *to_value* in history."""
-    ids = list(history._order)
+    # TODO(stage-7): scan-by-scan walk past the recent window replays
+    # state per scan; switch to a rung-firings index lookup in Stage 7.
+    ids = list(history.scan_ids())
     for i in range(1, len(ids)):
         cur_val = history.at(ids[i]).tags.get(tag_name)
         prev_val = history.at(ids[i - 1]).tags.get(tag_name)
@@ -894,13 +902,7 @@ def projected_cause(
     """
     tag_name = _get_tag_name(tag)
 
-    # Get current state — require at least one scan in history
-    if not history._order:
-        return CausalChain(
-            effect=Transition(tag_name, 0, None, to_value),
-            mode="unreachable",
-        )
-    latest_scan = list(history._order)[-1]
+    latest_scan = history.newest_scan_id
     state = history.at(latest_scan)
 
     # Apply assumption overrides to the state snapshot
@@ -1135,13 +1137,7 @@ def projected_effect(
             mode="unreachable",
         )
 
-    # Get current state — require at least one scan in history
-    if not history._order:
-        return CausalChain(
-            effect=Transition(tag_name, 0, from_value, to_value),
-            mode="unreachable",
-        )
-    latest_scan = list(history._order)[-1]
+    latest_scan = history.newest_scan_id
     state = history.at(latest_scan)
 
     # Apply assumption overrides to the state snapshot

@@ -106,7 +106,7 @@ class QueryNamespace:
         plc = self._plc
         total_rungs = set(range(len(plc._logic)))
         ever_fired: set[int] = set()
-        for scan_id in plc._history._order:
+        for scan_id in plc._history.scan_ids():
             firings = plc._rung_firings_by_scan.get(scan_id, None)
             if firings is not None:
                 ever_fired.update(firings.keys())
@@ -123,7 +123,7 @@ class QueryNamespace:
         total_rungs = set(range(len(plc._logic)))
 
         scans_with_firings = [
-            scan_id for scan_id in plc._history._order if scan_id in plc._rung_firings_by_scan
+            scan_id for scan_id in plc._history.scan_ids() if scan_id in plc._rung_firings_by_scan
         ]
         if not scans_with_firings:
             return []
