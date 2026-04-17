@@ -155,16 +155,16 @@ def pyrung_coverage(request: pytest.FixtureRequest) -> CoverageCollector:
     to register a pre-built report.
     """
     collector = CoverageCollector()
-    request.config._pyrung_collector = collector  # type: ignore[attr-defined]
+    request.config._pyrung_collector = collector  # ty: ignore[unresolved-attribute]
     return collector
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    config._pyrung_collector = None  # type: ignore[attr-defined]
+    config._pyrung_collector = None  # ty: ignore[unresolved-attribute]
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    collector: CoverageCollector | None = session.config._pyrung_collector  # type: ignore[attr-defined]
+    collector: CoverageCollector | None = session.config._pyrung_collector  # ty: ignore[unresolved-attribute]
     if collector is None:
         return
 
@@ -190,7 +190,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             if new_stranded:
                 parts.append(f"New stranded bits not in whitelist: {sorted(new_stranded)}")
             session.exitstatus = 1
-            session.config._pyrung_failures = parts  # type: ignore[attr-defined]
+            session.config._pyrung_failures = parts  # ty: ignore[unresolved-attribute]
 
 
 @pytest.hookimpl(trylast=True)
