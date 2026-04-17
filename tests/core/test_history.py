@@ -205,12 +205,12 @@ def test_diff_returns_empty_for_same_scan() -> None:
     assert runner.diff(2, 2) == {}
 
 
-def test_diff_reflects_system_tag_changes_between_scans() -> None:
+def test_diff_is_empty_for_idle_scans() -> None:
     runner = PLC(logic=[])
     runner.step()
     runner.step()
 
-    assert runner.diff(1, 2) == {"sys.scan_counter": (1, 2)}
+    assert runner.diff(1, 2) == {}
 
 
 def test_diff_raises_for_unknown_scan() -> None:

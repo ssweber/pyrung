@@ -35,6 +35,18 @@ def test_idle_scan_reuses_memory_pmap() -> None:
         assert runner.current_state.memory is primed_memory
 
 
+def test_idle_scan_reuses_tags_pmap() -> None:
+    runner = _idle_runner()
+
+    for _ in range(3):
+        runner.step()
+    primed_tags = runner.current_state.tags
+
+    for _ in range(20):
+        runner.step()
+        assert runner.current_state.tags is primed_tags
+
+
 def test_idle_scan_avoids_fresh_rung_firings_pmap() -> None:
     runner = _idle_runner()
 

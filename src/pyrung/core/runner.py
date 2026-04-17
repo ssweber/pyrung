@@ -33,7 +33,6 @@ from pyrung.core.system_points import (
     _MODE_RUN_KEY,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
-    system,
 )
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.trace_formatter import TraceFormatter
@@ -47,11 +46,6 @@ if TYPE_CHECKING:
     from pyrung.core.tag import Tag
 
 _SENTINEL = object()  # distinguishes "not passed" from None/False
-
-# Tags intentionally excluded from `_prev:*` edge-detection tracking.
-# ``sys.scan_counter`` increments every scan so its _prev would churn
-# memory forever, and edge-detecting it has no meaningful semantics.
-_NO_PREV_TRACKING = frozenset({system.sys.scan_counter.name})
 
 
 def _validate_assume(logic: list[Any], assume: dict[str, Any]) -> None:
@@ -1256,23 +1250,15 @@ class PLC:
         Skips writes when the stored ``_prev:{name}`` already equals the
         current tag value — so idle scans (nothing changed) leave the
         memory PMap untouched and structurally shared with the prior scan.
-
-        ``sys.scan_counter`` is excluded because it increments every scan;
-        tracking its _prev would churn memory forever with no useful edge
-        semantics (its "rising edge" would fire on every scan).  Other
-        system tags stay eligible so ``rise()``/``fall()`` on commands
-        (cmd_mode_stop, apply_date, …) still works.
         """
         state_memory = self._state.memory
         for name in self._state.tags:
-            if name in _NO_PREV_TRACKING:
-                continue
             prev_key = f"_prev:{name}"
             current = ctx.get_tag(name)
             if state_memory.get(prev_key, _SENTINEL) != current:
                 ctx.set_memory(prev_key, current)
         for name in ctx._tags_pending:
-            if name in self._state.tags or name in _NO_PREV_TRACKING:
+            if name in self._state.tags:
                 continue
             prev_key = f"_prev:{name}"
             current = ctx.get_tag(name)

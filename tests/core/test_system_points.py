@@ -108,16 +108,25 @@ def test_scan_counter_and_scan_min_max_stats_update():
     runner = PLC(logic=[], dt=0.1)
 
     runner.step()
-    assert runner.current_state.tags["sys.scan_counter"] == 1
+    assert _resolved(runner, system.sys.scan_counter.name) == 1
     assert runner.current_state.tags["sys.scan_time_min_ms"] == 100
     assert runner.current_state.tags["sys.scan_time_max_ms"] == 100
 
     runner._set_time_mode(TimeMode.FIXED_STEP, dt=0.25)
     runner.step()
-    assert runner.current_state.tags["sys.scan_counter"] == 2
+    assert _resolved(runner, system.sys.scan_counter.name) == 2
     assert runner.current_state.tags["sys.scan_time_min_ms"] == 100
     assert runner.current_state.tags["sys.scan_time_max_ms"] == 250
     assert _resolved(runner, system.sys.scan_time_current_ms.name) == 250
+
+
+def test_scan_counter_is_derived_from_scan_id():
+    runner = PLC(logic=[], dt=0.1)
+
+    for _ in range(50):
+        runner.step()
+        assert _resolved(runner, system.sys.scan_counter.name) == runner.current_state.scan_id
+    assert "sys.scan_counter" not in runner.current_state.tags
 
 
 def test_rtc_fields_derive_from_set_rtc_anchor():

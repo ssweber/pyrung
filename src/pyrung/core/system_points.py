@@ -211,6 +211,7 @@ _DERIVED_TAG_NAMES = frozenset(
     {
         system.sys.always_on.name,
         system.sys.first_scan.name,
+        system.sys.scan_counter.name,
         system.sys.scan_clock_toggle.name,
         system.sys.clock_10ms.name,
         system.sys.clock_100ms.name,
@@ -367,9 +368,10 @@ class SystemPointRuntime:
             return True, True
         if name == system.sys.first_scan.name:
             return True, ctx_or_state.scan_id == 0
+        if name == system.sys.scan_counter.name:
+            return True, ctx_or_state.scan_id
         if name == system.sys.scan_clock_toggle.name:
-            counter = int(_raw_get_tag(ctx_or_state, system.sys.scan_counter.name, 0))
-            return True, (counter % 2) == 1
+            return True, (ctx_or_state.scan_id % 2) == 1
 
         half_period = _CLOCK_HALF_PERIODS.get(name)
         if half_period is not None:
@@ -433,8 +435,6 @@ class SystemPointRuntime:
 
     def on_scan_end(self, ctx: ScanContext) -> None:
         current_ms = self._scan_time_current_ms(ctx)
-        next_counter = int(_raw_get_tag(ctx, system.sys.scan_counter.name, 0)) + 1
-        ctx._set_tag_internal(system.sys.scan_counter.name, next_counter)
 
         min_name = system.sys.scan_time_min_ms.name
         max_name = system.sys.scan_time_max_ms.name
