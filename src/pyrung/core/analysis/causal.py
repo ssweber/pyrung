@@ -17,18 +17,23 @@ PDG fallback for filtered firing logs
 
 The recorded walks consume the rung-firings log via ``rung_firings_fn``.
 Under PDG-filtered capture (see ``context.py::capturing_rung``), writes
-to tags no rung reads are dropped from the log at capture time — the
-filter saves memory on internal churn like timer accumulators.
+to non-Bool tags that no rung reads are dropped from the log at
+capture time — the filter saves memory on internal churn like timer
+accumulators.  Bool tags are always kept regardless of read status
+(low cardinality, user-facing state transitions, common target of
+``cause()``) so the direct-log path handles the typical case.
 
 The filter's *downstream* claim (a write that no rung reads can't
 matter to analysis) holds for the **recursive** walk step: once we
 identify the writing rung, its causes are reads by upstream rungs,
 all of which are consumed-and-therefore-logged by definition.  The
 filter's claim **fails at the root step** whenever the analysis
-target is a terminal output — e.g. ``cause("Alarm_Horn")`` where
-nothing downstream reads ``Alarm_Horn``.  Without a fallback, the
-firing log lacks the rung that wrote the alarm, and the chain's
-first step never materializes.
+target is a terminal **non-Bool** output — e.g. ``cause("Timer_Acc")``
+where nothing reads the accumulator.  (Terminal Bool outputs like
+``Alarm_Horn`` are preserved by the Bool-keep rule and hit the
+direct-log path.)  Without a fallback, the firing log would lack
+the rung that wrote the non-Bool terminal, and the chain's first
+step would never materialize.
 
 The fix is a PDG fallback keyed off the static ``writers_of`` /
 ``readers_of`` sets.  When the firing log doesn't identify a writer

@@ -558,16 +558,21 @@ class PLC:
     def _ensure_pdg(self) -> Any:
         """Lazily build and cache the static program dependency graph.
 
-        Also populates ``_pdg_consumed_tags`` — every tag any rung reads,
-        combining condition-reads and data-reads via ``readers_of``.  The
-        rung-firing capture path filters against this set so writes to
-        tags nobody reads stay out of the firing log.  Any future site
-        that invalidates ``_pdg_cache`` must clear ``_pdg_consumed_tags``
-        together — the two caches share a lifetime.
+        Also populates ``_pdg_consumed_tags`` — every tag any rung
+        reads, combining condition-reads and data-reads via
+        ``readers_of`` — unioned with every Bool-typed tag the PDG
+        knows about.  The capture-layer filter keeps all Bools regardless
+        of read/write role: they're low-cardinality and usually the
+        tags users ask ``cause()`` about, so the direct-log path stays
+        cheap for them.  Non-Bool churn (Timer.acc et al.) still gets
+        filtered.  Any future site that invalidates ``_pdg_cache`` must
+        clear ``_pdg_consumed_tags`` together — the two caches share a
+        lifetime.
         """
         if not hasattr(self, "_pdg_cache") or self._pdg_cache is None:
             from pyrung.core.analysis.pdg import build_program_graph
             from pyrung.core.program import Program
+            from pyrung.core.tag import TagType
 
             program = self._program
             if program is None:
@@ -575,14 +580,27 @@ class PLC:
                 program.rungs = list(self._logic)
                 program.subroutines = {}
             self._pdg_cache = build_program_graph(program)
-            self._pdg_consumed_tags = frozenset(self._pdg_cache.readers_of.keys())
+            consumed = set(self._pdg_cache.readers_of.keys())
+            # Union in every Bool-typed tag the PDG observed.  A mixed
+            # rung (e.g. ``out(BoolFlag) + Timer.acc``) keeps the Bool
+            # write intact while the counter acc still drops — the
+            # intern pool stays small (only Bool patterns) so the rung
+            # never hits the fired-only threshold and causal chains on
+            # the Bool flag remain intact indefinitely.
+            for name, tag in self._pdg_cache.tags.items():
+                if getattr(tag, "type", None) == TagType.BOOL:
+                    consumed.add(name)
+            self._pdg_consumed_tags = frozenset(consumed)
         return self._pdg_cache
 
     def _consumed_tags_for_capture(self) -> frozenset[str] | None:
-        """Consumed-tag set for ``ScanContext.capturing_rung`` to filter
-        against, or ``None`` when the filter should be bypassed.
+        """Capture-worthy tag set for ``ScanContext.capturing_rung``
+        to filter against, or ``None`` when the filter should be
+        bypassed.
 
-        ``None`` bypasses the filter entirely — used for the
+        The set is consumed-tags (per PDG ``readers_of``) unioned with
+        every Bool-typed tag — see :meth:`_ensure_pdg`.  ``None``
+        bypasses the filter entirely — used for the
         ``record_all_tags=True`` escape hatch, for logic-less PLCs (no
         rung = no consumer, filter would silently drop every write),
         and for programs with rungs the PDG cannot model (synthetic
