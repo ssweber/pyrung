@@ -446,6 +446,8 @@ def recorded_cause(
     rung_firings_fn: Any,  # Callable[[int], PMap]
     tag: Tag | str,
     scan_id: int | None = None,
+    *,
+    pdg: ProgramGraph | None = None,
 ) -> CausalChain | None:
     """Build a retrospective causal chain for a tag transition.
 
@@ -456,6 +458,11 @@ def recorded_cause(
             for a given scan_id.
         tag: The tag (or tag name) whose transition to explain.
         scan_id: Specific scan to examine, or ``None`` for most recent.
+        pdg: Static program graph used as a fallback when the firing
+            log has been PDG-filtered.  Terminal outputs (tags no rung
+            reads) have their rung-firing writes dropped from the log;
+            this fallback recovers the writing rung by evaluating each
+            candidate from ``writers_of`` against the historical state.
 
     Returns:
         A ``CausalChain``, or ``None`` if no transition was found.
@@ -480,6 +487,7 @@ def recorded_cause(
         conjunctive_roots=conjunctive_roots,
         ambiguous_roots=ambiguous_roots,
         visited=visited,
+        pdg=pdg,
     )
 
     return CausalChain(
@@ -501,6 +509,7 @@ def _walk_backward(
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
     visited: set[str],
+    pdg: ProgramGraph | None = None,
 ) -> None:
     """Recursive backward walk from a single transition."""
     tag_name = transition.tag_name
@@ -517,6 +526,21 @@ def _walk_backward(
         writes = firings[rung_idx]
         if tag_name in writes and writes[tag_name] == transition.to_value:
             writing_rungs.append(rung_idx)
+
+    if not writing_rungs and pdg is not None:
+        # The firing log has been PDG-filtered — writes to tags no rung
+        # reads never landed.  Recover the writer by evaluating each
+        # static candidate from ``writers_of`` against the historical
+        # state at ``scan_id``.  A rung whose SP tree was true at that
+        # scan is treated as the writer; unconditional rungs (no SP
+        # tree) always qualify.
+        writing_rungs = _fallback_writers_from_pdg(
+            pdg=pdg,
+            logic=logic,
+            history=history,
+            tag_name=tag_name,
+            scan_id=scan_id,
+        )
 
     if not writing_rungs:
         # No rung wrote this value — root cause (external input / patch)
@@ -595,7 +619,41 @@ def _walk_backward(
                     conjunctive_roots=conjunctive_roots,
                     ambiguous_roots=ambiguous_roots,
                     visited=visited,
+                    pdg=pdg,
                 )
+
+
+def _fallback_writers_from_pdg(
+    *,
+    pdg: ProgramGraph,
+    logic: list[Rung],
+    history: History,
+    tag_name: str,
+    scan_id: int,
+) -> list[int]:
+    """Recover candidate writers of ``tag_name`` at ``scan_id`` from the PDG.
+
+    Used when the firing log has dropped the write under PDG filtering —
+    the structural ``writers_of`` set tells us which rungs *can* write
+    the tag; re-evaluating each rung's SP tree against the historical
+    state narrows to those that *did* fire at ``scan_id``.
+    """
+    candidates = pdg.writers_of.get(tag_name, frozenset())
+    if not candidates:
+        return []
+    state = history.at(scan_id)
+    view = _HistoricalView(state)
+
+    def _eval(cond: Condition, _v: Any = view) -> bool:
+        return cond.evaluate(_v)  # type: ignore[arg-type]
+
+    writers: list[int] = []
+    for rung_idx in sorted(candidates):
+        rung = logic[rung_idx]
+        sp_tree = rung.sp_tree()
+        if sp_tree is None or evaluate_sp(sp_tree, _eval):
+            writers.append(rung_idx)
+    return writers
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +725,7 @@ def recorded_effect(
     *,
     steady_state_k: int = 3,
     max_scans: int = 1000,
+    pdg: ProgramGraph | None = None,
 ) -> CausalChain | None:
     """Build a retrospective forward chain from a tag transition.
 
@@ -682,9 +741,12 @@ def recorded_effect(
         steady_state_k: Stop after this many consecutive scans with no new
             tags entering the chain (default 3).
         max_scans: Hard cap on scans to walk forward (default 1000).
-
-    Returns:
-        A ``CausalChain``, or ``None`` if no transition was found.
+        pdg: Static program graph used to widen the per-scan candidate
+            rung set when firings are PDG-filtered.  Rungs that fired
+            but wrote only unconsumed tags are missing from the log;
+            ``readers_of`` recovers them by flagging rungs that read any
+            frontier tag.  Downstream tag values are resolved via
+            history regardless of whether the rung was in the log.
     """
     tag_name = tag if isinstance(tag, str) else tag.name
 
@@ -717,9 +779,35 @@ def recorded_effect(
         firings = rung_firings_fn(current_scan)
         new_effects_this_scan = False
 
-        for rung_idx in firings:
+        # Iterate rungs in index order: within a single scan the frontier
+        # grows as earlier rungs produce effects (e.g. Rung 0 writes
+        # Sts_FaultTripped, then Rung 2 reads it), and the per-rung
+        # reads-vs-frontier check must be against the *current* frontier.
+        # Rungs not in ``firings`` may have fired with all writes dropped
+        # by PDG filtering — we consider them only if they statically read
+        # some frontier tag, and we synthesize candidate writes from the
+        # PDG node so the downstream history lookup can pick up real
+        # transitions.
+        rung_count = len(logic) if pdg is not None else 0
+        rung_range = range(rung_count) if pdg is not None else sorted(firings.keys())
+
+        for rung_idx in rung_range:
             rung = logic[rung_idx]
-            writes = firings[rung_idx]
+            if rung_idx in firings:
+                writes: Any = firings[rung_idx]
+                if not writes and pdg is not None:
+                    # Rung fired but filter emptied its writes — synthesize
+                    # candidate written tags from the PDG so the history
+                    # lookup below can recover real transitions.
+                    writes = pdg.rung_nodes[rung_idx].writes
+            elif pdg is not None:
+                node = pdg.rung_nodes[rung_idx]
+                reads = node.condition_reads | node.data_reads
+                if reads.isdisjoint(frontier):
+                    continue
+                writes = node.writes
+            else:
+                continue
             sp_tree = rung.sp_tree()
 
             if sp_tree is None:

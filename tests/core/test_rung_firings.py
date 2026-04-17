@@ -2,6 +2,10 @@
 
 Verifies that the engine records which rungs wrote which tags during each
 scan, stored as PMap[int, PMap[str, Any]] for structural sharing.
+
+These tests exercise the raw capture-and-diff path, so they construct
+PLCs with ``record_all_tags=True`` to bypass PDG-based filtering.
+Filter behavior is covered by ``test_rung_firings_pdg_filter.py``.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ def test_simple_rung_fires_and_records_write() -> None:
         with Rung(Button):
             out(Light)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.patch({"Button": True})
     runner.step()
 
@@ -39,7 +43,7 @@ def test_rung_disabled_out_resets_to_same_value_absent() -> None:
         with Rung(Button):
             out(Light)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     # Button=False, Light defaults to False.  out(Light) writes False when
     # disabled, but Light is already False in committed state.  On scan 1
     # the write lands in _tags_pending (first write), so it DOES diff.
@@ -61,7 +65,7 @@ def test_latch_fires_and_records() -> None:
         with Rung(Enable):
             latch(Latched)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.patch({"Enable": True})
     runner.step()
 
@@ -83,7 +87,7 @@ def test_multiple_rungs_write_different_tags() -> None:
         with Rung(B):
             out(Y)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.patch({"A": True, "B": True})
     runner.step()
 
@@ -104,7 +108,7 @@ def test_two_rungs_write_same_tag_both_recorded() -> None:
         with Rung(B):
             reset(X)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.patch({"A": True, "B": True})
     runner.step()
 
@@ -122,7 +126,7 @@ def test_history_eviction_removes_firings() -> None:
         with Rung():
             out(Bool("X"))
 
-    runner = PLC(logic, history_limit=3)
+    runner = PLC(logic, history_limit=3, record_all_tags=True)
 
     runner.step()  # scan 1 — [0, 1]
     runner.step()  # scan 2 — [0, 1, 2]
@@ -142,7 +146,7 @@ def test_default_scan_id_uses_playhead() -> None:
         with Rung():
             out(X)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.step()
     runner.step()
 
@@ -169,7 +173,7 @@ def test_firings_are_pmap_instances() -> None:
         with Rung():
             out(X)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.step()
 
     firings = runner.rung_firings()
@@ -186,7 +190,7 @@ def test_firings_across_multiple_scans() -> None:
         with Rung(Button):
             latch(Light)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
 
     # Scan 1: Button=False, latch doesn't fire — no write from rung 0
     runner.step()
@@ -209,7 +213,7 @@ def test_debug_namespace_exposes_rung_firings() -> None:
         with Rung():
             out(X)
 
-    runner = PLC(logic)
+    runner = PLC(logic, record_all_tags=True)
     runner.step()
 
     assert runner.debug.rung_firings() == runner.rung_firings()

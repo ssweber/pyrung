@@ -111,6 +111,7 @@ class ScanContext:
         "_condition_snapshot",
         "_condition_scope_token",
         "_rung_firings",
+        "_consumed_tags_getter",
     )
 
     def __init__(
@@ -119,11 +120,21 @@ class ScanContext:
         *,
         resolver: TagResolver | None = None,
         read_only_tags: frozenset[str] = frozenset(),
+        consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
     ) -> None:
         """Create a new ScanContext from a SystemState.
 
         Args:
             state: The current system state to build upon.
+            resolver: Optional fallback for unresolved tag reads.
+            read_only_tags: System points that must not be written.
+            consumed_tags_getter: Optional callable returning the set of
+                tag names that at least one rung reads.  When provided
+                and non-None, :meth:`capturing_rung` drops writes to
+                tags outside the set — the firing log is consumed by
+                the simulator's own analysis APIs, which by definition
+                don't ask about unread tags.  Returning ``None`` from
+                the callable bypasses the filter (escape hatch).
         """
         self._state = state
         self._tags_evolver = state.tags.evolver()
@@ -135,6 +146,7 @@ class ScanContext:
         self._condition_snapshot: ConditionView | None = None
         self._condition_scope_token = object()
         self._rung_firings: dict[int, dict[str, Any]] = {}
+        self._consumed_tags_getter = consumed_tags_getter
 
     # =========================================================================
     # Read operations (with pending visibility)
@@ -304,12 +316,26 @@ class ScanContext:
             yield
         finally:
             pending = self._tags_pending
-            writes = {
+            raw_writes = {
                 name: pending[name]
                 for name in pending
                 if name not in before or before[name] != pending[name]
             }
-            if writes:
+            if raw_writes:
+                consumed = (
+                    self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+                )
+                if consumed is None:
+                    writes = raw_writes
+                else:
+                    writes = {name: val for name, val in raw_writes.items() if name in consumed}
+                # Record the rung_index even when the filter emptied
+                # ``writes`` — the non-empty ``raw_writes`` establishes
+                # that the rung fired, which ``query.cold_rungs`` /
+                # ``query.hot_rungs`` and ``effect()``'s PDG fallback
+                # both need.  Consumers that care about per-tag values
+                # (like ``cause()``'s value-match) see the filtered view
+                # and fall through cleanly when it's empty.
                 self._rung_firings[rung_index] = writes
 
     @property

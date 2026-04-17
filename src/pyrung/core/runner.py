@@ -323,6 +323,7 @@ class PLC:
         realtime: bool = False,
         history_limit: int | None = None,
         checkpoint_interval: int | None = None,
+        record_all_tags: bool = False,
     ) -> None:
         """Create a new PLC.
 
@@ -337,6 +338,12 @@ class PLC:
                 Use None for unbounded history.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
+            record_all_tags: Bypass the PDG-based rung-firing capture
+                filter.  By default the firing log drops writes to tags
+                that no rung reads, since the simulator's analysis APIs
+                don't need them.  Set this to True when a diagnostic
+                session needs the unfiltered firing history (e.g. when
+                the PDG is suspected of misclassifying a consumer).
         """
         if realtime and dt is not None:
             raise ValueError("Cannot specify dt= with realtime=True")
@@ -412,6 +419,15 @@ class PLC:
         # breakpoint labels, and the RTC setter during a replay walk.
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
+        # PDG-filtered rung-firing capture.  When the filter is active
+        # (``record_all_tags=False``), ``capturing_rung`` drops writes to
+        # tags that no rung reads — the firing log is consumed only by
+        # ``cause``/``effect``/``query`` which never ask about an unread
+        # tag.  Populated lazily alongside ``_pdg_cache`` the first time
+        # a scan captures; rebuilt atomically whenever the PDG is
+        # invalidated.
+        self._record_all_tags: bool = record_all_tags
+        self._pdg_consumed_tags: frozenset[str] | None = None
         # One-slot cache for ``replay_trace_at``.  Reconstructing rung
         # traces for a historical scan costs one fork + up to K plain
         # scans + one debug scan; caching a back-to-back repeat query
@@ -529,7 +545,15 @@ class PLC:
         return changed
 
     def _ensure_pdg(self) -> Any:
-        """Lazily build and cache the static program dependency graph."""
+        """Lazily build and cache the static program dependency graph.
+
+        Also populates ``_pdg_consumed_tags`` — every tag any rung reads,
+        combining condition-reads and data-reads via ``readers_of``.  The
+        rung-firing capture path filters against this set so writes to
+        tags nobody reads stay out of the firing log.  Any future site
+        that invalidates ``_pdg_cache`` must clear ``_pdg_consumed_tags``
+        together — the two caches share a lifetime.
+        """
         if not hasattr(self, "_pdg_cache") or self._pdg_cache is None:
             from pyrung.core.analysis.pdg import build_program_graph
             from pyrung.core.program import Program
@@ -540,7 +564,30 @@ class PLC:
                 program.rungs = list(self._logic)
                 program.subroutines = {}
             self._pdg_cache = build_program_graph(program)
+            self._pdg_consumed_tags = frozenset(self._pdg_cache.readers_of.keys())
         return self._pdg_cache
+
+    def _consumed_tags_for_capture(self) -> frozenset[str] | None:
+        """Consumed-tag set for ``ScanContext.capturing_rung`` to filter
+        against, or ``None`` when the filter should be bypassed.
+
+        ``None`` bypasses the filter entirely — used for the
+        ``record_all_tags=True`` escape hatch, for logic-less PLCs (no
+        rung = no consumer, filter would silently drop every write),
+        and for programs with rungs the PDG cannot model (synthetic
+        test rungs that only implement ``evaluate(ctx)``).  Otherwise
+        the PDG is built lazily on first call; every subsequent
+        invocation is a single attribute read.
+        """
+        if self._record_all_tags or not self._logic:
+            return None
+        if self._pdg_consumed_tags is None:
+            from pyrung.core.rung import Rung as RungClass
+
+            if not all(isinstance(rung, RungClass) for rung in self._logic):
+                return None
+            self._ensure_pdg()
+        return self._pdg_consumed_tags
 
     def cause(
         self,
@@ -602,6 +649,7 @@ class PLC:
             rung_firings_fn=self.rung_firings,
             tag=tag,
             scan_id=scan,
+            pdg=self._ensure_pdg() if self._logic else None,
         )
 
     def effect(
@@ -671,6 +719,7 @@ class PLC:
             scan_id=scan,
             steady_state_k=steady_state_k,
             max_scans=max_scans,
+            pdg=self._ensure_pdg() if self._logic else None,
         )
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
@@ -802,6 +851,7 @@ class PLC:
             initial_state=historical_state,
             history_limit=self._history_limit,
             checkpoint_interval=self._checkpoint_interval,
+            record_all_tags=self._record_all_tags,
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
@@ -1583,6 +1633,7 @@ class PLC:
             self._state,
             resolver=self._system_runtime.resolve,
             read_only_tags=self._system_runtime.read_only_tags,
+            consumed_tags_getter=self._consumed_tags_for_capture,
         )
 
         self._system_runtime.on_scan_start(ctx)
