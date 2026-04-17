@@ -106,13 +106,19 @@ class InputOverrideManager:
             return True, self._forces[name]
         return False, None
 
-    def apply_pre_scan(self, ctx: ScanContext) -> None:
+    def apply_pre_scan(self, ctx: ScanContext) -> dict[str, bool | int | float | str]:
+        """Drain patches and apply forces.  Returns a copy of the patches
+        that were drained this scan (empty if none), for the recorder.
+        """
+        drained: dict[str, bool | int | float | str] = {}
         if self._pending_patches:
+            drained = dict(self._pending_patches)
             ctx.set_tags(self._pending_patches)
             self._pending_patches.clear()
 
         if self._forces:
             self._apply_forces_if_changed(ctx)
+        return drained
 
     def apply_post_logic(self, ctx: ScanContext) -> None:
         if self._forces:

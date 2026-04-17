@@ -27,6 +27,7 @@ from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
+from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
@@ -350,13 +351,16 @@ class PLC:
             self._last_step_time = time.perf_counter()
         else:
             self._time_mode = TimeMode.FIXED_STEP
+        self._scan_log = ScanLog(time_mode=self._time_mode)
+        self._forces_last_recorded: dict[str, bool | int | float | str] = {}
+        self._this_scan_drained_patches: dict[str, bool | int | float | str] = {}
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
             time_mode_getter=lambda: self._time_mode,
             fixed_step_dt_getter=lambda: self._dt,
             rtc_now_getter=self._rtc_at_sim_time,
-            rtc_setter=self._set_rtc_internal,
+            rtc_setter=self._set_rtc_and_record,
         )
         self._input_overrides = InputOverrideManager(is_read_only=self._system_runtime.is_read_only)
         # Preserve direct access used in tests/live-tag helpers.
@@ -765,6 +769,7 @@ class PLC:
             mode_run=False,
             battery_present=self._battery_present,
         )
+        self._record_lifecycle("stop")
 
     @property
     def battery_present(self) -> bool:
@@ -773,12 +778,16 @@ class PLC:
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
-        self._battery_present = bool(value)
+        new_value = bool(value)
+        if new_value == self._battery_present:
+            return
+        self._battery_present = new_value
         self._state = self._apply_runtime_memory_flags(
             self._state,
             mode_run=self._running,
             battery_present=self._battery_present,
         )
+        self._record_lifecycle("battery_present", value=new_value)
 
     def reboot(self) -> SystemState:
         """Power-cycle the runner and return the reset state."""
@@ -792,11 +801,12 @@ class PLC:
             preserve_rtc_continuity=self._battery_present,
         )
         self._running = True
+        self._record_lifecycle("reboot")
         return self._state
 
     def set_rtc(self, value: datetime) -> None:
         """Set the current RTC value for the runner."""
-        self._set_rtc_internal(self._normalize_rtc_datetime(value), self._state.timestamp)
+        self._set_rtc_and_record(self._normalize_rtc_datetime(value), self._state.timestamp)
 
     def _set_time_mode(self, mode: TimeMode, *, dt: float = 0.010) -> None:
         """Set the time mode (internal, used by fork)."""
@@ -804,6 +814,11 @@ class PLC:
         self._dt = dt
         if mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
+        # Reinitialize scan log so ``dts`` is present in REALTIME and absent
+        # in FIXED_STEP.  Only called early in fork() so the log is empty
+        # and no recorded history is lost.
+        self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
+        self._forces_last_recorded = dict(self._input_overrides.forces)
 
     @staticmethod
     def _apply_runtime_memory_flags(
@@ -885,6 +900,28 @@ class PLC:
     def _set_rtc_internal(self, value: datetime, sim_time: float) -> None:
         self._rtc_base = value
         self._rtc_base_sim_time = float(sim_time)
+
+    def _set_rtc_and_record(self, value: datetime, sim_time: float) -> None:
+        """Set RTC base and record the change for replay.
+
+        Used for user-initiated (``set_rtc()``) and in-scan
+        (``_apply_rtc_date/time`` via the system-points ``rtc_setter``
+        callback) paths.  Internal lifecycle paths (reboot,
+        stop-to-run) use ``_set_rtc_internal`` directly; the lifecycle
+        event itself implies the RTC transition at replay time.
+        """
+        self._set_rtc_internal(value, sim_time)
+        self._scan_log.record_rtc_base_change(self._state.scan_id + 1, value, float(sim_time))
+
+    def _record_lifecycle(self, kind: LifecycleKind, value: bool | None = None) -> None:
+        self._scan_log.record_lifecycle(
+            LifecycleEvent(
+                at_sim_time=float(self._state.timestamp),
+                at_scan_id=self._state.scan_id + 1,
+                kind=kind,
+                value=value,
+            )
+        )
 
     def _rtc_at_sim_time(self, sim_time: float) -> datetime:
         return self._rtc_base + timedelta(seconds=float(sim_time) - self._rtc_base_sim_time)
@@ -1015,7 +1052,10 @@ class PLC:
         All forced tags resume their logic-computed values starting
         from the next scan.
         """
+        had_forces = bool(self._input_overrides.forces)
         self._input_overrides.clear_forces()
+        if had_forces:
+            self._record_lifecycle("clear_forces")
 
     @contextmanager
     def forced(
@@ -1237,7 +1277,7 @@ class PLC:
         )
 
         self._system_runtime.on_scan_start(ctx)
-        self._input_overrides.apply_pre_scan(ctx)
+        self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
 
         dt = self._calculate_dt()
         if self._state.memory.get("_dt", _SENTINEL) != dt:
@@ -1280,6 +1320,17 @@ class PLC:
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
         self._state = ctx.commit(dt=dt)
+        # Replay recorder: capture nondeterminism for this scan.
+        new_scan_id = self._state.scan_id
+        if self._this_scan_drained_patches:
+            self._scan_log.record_patches(new_scan_id, self._this_scan_drained_patches)
+            self._this_scan_drained_patches = {}
+        current_forces = dict(self._input_overrides.forces)
+        if current_forces != self._forces_last_recorded:
+            self._scan_log.record_force_changes(new_scan_id, current_forces)
+            self._forces_last_recorded = current_forces
+        if self._scan_log.records_dt:
+            self._scan_log.record_dt(new_scan_id, dt)
         # Always record firings for scans that executed logic — even an
         # empty pmap distinguishes "rung didn't fire this scan" from "no
         # data for this scan" (important for ``query.hot_rungs`` etc.).
