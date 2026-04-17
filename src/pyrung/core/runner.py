@@ -28,7 +28,7 @@ from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
-from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog
+from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
@@ -412,6 +412,13 @@ class PLC:
         # breakpoint labels, and the RTC setter during a replay walk.
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
+        # One-slot cache for ``replay_trace_at``.  Reconstructing rung
+        # traces for a historical scan costs one fork + up to K plain
+        # scans + one debug scan; caching a back-to-back repeat query
+        # (common when the user hovers/expands a scan in the UI) saves
+        # that work.  Cleared on tip advance (``_run_single_scan``) and
+        # on any reset that invalidates the log (reboot, stop→run).
+        self._cached_replay_trace: tuple[int, dict[int, RungTrace]] | None = None
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -833,6 +840,60 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
+    def _build_replay_fork(
+        self, anchor: int | None
+    ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
+        """Construct a replay fork anchored at the given checkpoint scan_id.
+
+        ``anchor`` is either a key in ``self._checkpoints`` (from
+        ``_nearest_checkpoint_at_or_before``) or ``None``.  When ``None``
+        the fork anchors at ``self._initial_scan_id``.  The returned
+        fork has ``_replay_mode=True`` and (when anchored at a real
+        checkpoint) its force map seeded from the log.  The Stage 3
+        bypass guarantees every checkpoint scan carries a full force
+        snapshot; anchoring at ``_initial_scan_id`` starts with an empty
+        force map, matching default PLC construction.
+        """
+        log = self._scan_log.snapshot()
+        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
+        replay = self.fork(scan_id=anchor_scan_id)
+        replay._replay_mode = True
+        if anchor is not None:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+        return replay, log, anchor_scan_id, lifecycle_by_scan
+
+    def _apply_log_entries_for_scan(
+        self,
+        replay: PLC,
+        scan_id: int,
+        log: ScanLogSnapshot,
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]],
+    ) -> None:
+        """Prepare ``replay`` to step scan ``scan_id`` from the log.
+
+        Applies captured lifecycle events, force-map replacements, RTC
+        base changes, patches, and per-scan ``dt`` (REALTIME).  Does not
+        call ``replay.step()`` — the caller decides whether to advance
+        via ``step()`` (plain path) or by driving ``_scan_steps_debug``
+        directly (trace-regeneration path).
+        """
+        for event in lifecycle_by_scan.get(scan_id, []):
+            _apply_lifecycle_to_replay(replay, event)
+        if scan_id in log.force_changes_by_scan:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+        if scan_id in log.rtc_base_changes:
+            base, base_sim_time = log.rtc_base_changes[scan_id]
+            replay._set_rtc_internal(base, base_sim_time)
+        if scan_id in log.patches_by_scan:
+            replay.patch(log.patches_by_scan[scan_id])
+        if log.dts is not None:
+            replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+
     def replay_to(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
 
@@ -856,38 +917,11 @@ class PLC:
                 f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
             )
 
-        log = self._scan_log.snapshot()
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
-        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-
-        replay = self.fork(scan_id=anchor_scan_id)
-        replay._replay_mode = True
-
-        # Seed the force map at the anchor.  When anchor is a real
-        # checkpoint the Stage 3 bypass guarantees a full snapshot is
-        # recorded at that scan_id; from scan 0 the force map starts
-        # empty (matches the default PLC construction).
-        if anchor is not None:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
-
-        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
-        for event in log.lifecycle_events:
-            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
-            for event in lifecycle_by_scan.get(scan_id, []):
-                _apply_lifecycle_to_replay(replay, event)
-            if scan_id in log.force_changes_by_scan:
-                replay._input_overrides._forces.clear()
-                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
-            if scan_id in log.rtc_base_changes:
-                base, base_sim_time = log.rtc_base_changes[scan_id]
-                replay._set_rtc_internal(base, base_sim_time)
-            if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
-            if log.dts is not None:
-                replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             replay.step()
 
         # Trailing lifecycle events that fired after the last committed
@@ -896,6 +930,62 @@ class PLC:
             _apply_lifecycle_to_replay(replay, event)
 
         return replay
+
+    def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:
+        """Reconstruct the rung-trace dict for a historical scan.
+
+        Runs the same replay walk as ``replay_to`` up to
+        ``target_scan_id - 1`` on the plain scan path, then drives
+        ``_scan_steps_debug`` for ``target_scan_id`` so the replay
+        fork's ``_current_rung_traces`` gets populated.  Returns a copy
+        of that dict; the replay fork is discarded.
+
+        The ``_replay_mode`` guards in ``_commit_scan`` (monitors,
+        breakpoints) and ``_set_rtc_and_record`` cover the debug path
+        too — both generators funnel through the same commit sink.
+
+        A one-slot cache (``_cached_replay_trace``) hits when the same
+        ``target_scan_id`` is requested back-to-back.  It is cleared on
+        any tip advance (``_run_single_scan``) and on reset paths that
+        reset the log (reboot, stop→run, via
+        ``_clear_retained_debug_trace_caches``).
+
+        Traces only exist for scans that actually executed — the fork
+        anchor / initial scan was never stepped in debug mode — so
+        ``target_scan_id`` must be strictly greater than
+        ``_initial_scan_id``.
+        """
+        if target_scan_id <= self._initial_scan_id:
+            raise ValueError(
+                f"target_scan_id must be > {self._initial_scan_id} "
+                f"(no traces exist for the initial scan), got {target_scan_id}"
+            )
+        if target_scan_id > self._state.scan_id:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+            )
+
+        cached = self._cached_replay_trace
+        if cached is not None and cached[0] == target_scan_id:
+            return dict(cached[1])
+
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
+
+        for scan_id in range(anchor_scan_id + 1, target_scan_id):
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
+            replay.step()
+
+        # Final scan: drive the debug generator directly so the replay
+        # fork's ``_current_rung_traces`` / ``_current_rung_traces_scan_id``
+        # slots land populated post-commit.
+        self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
+        for _step in replay._scan_steps_debug():
+            pass
+
+        traces = dict(replay._current_rung_traces)
+        self._cached_replay_trace = (target_scan_id, traces)
+        return dict(traces)
 
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         """Reconstruct ``SystemState`` for every scan in ``[start, end]``.
@@ -917,38 +1007,15 @@ class PLC:
             return []
         end_scan_id = min(end_scan_id, tip)
 
-        log = self._scan_log.snapshot()
         anchor = self._nearest_checkpoint_at_or_before(start_scan_id)
-        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
-
-        replay = self.fork(scan_id=anchor_scan_id)
-        replay._replay_mode = True
-
-        if anchor is not None:
-            replay._input_overrides._forces.clear()
-            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
-
-        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
-        for event in log.lifecycle_events:
-            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+        replay, log, anchor_scan_id, lifecycle_by_scan = self._build_replay_fork(anchor)
 
         results: list[SystemState] = []
         if anchor_scan_id >= start_scan_id:
             results.append(replay.current_state)
 
         for scan_id in range(anchor_scan_id + 1, end_scan_id + 1):
-            for event in lifecycle_by_scan.get(scan_id, []):
-                _apply_lifecycle_to_replay(replay, event)
-            if scan_id in log.force_changes_by_scan:
-                replay._input_overrides._forces.clear()
-                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
-            if scan_id in log.rtc_base_changes:
-                base, base_sim_time = log.rtc_base_changes[scan_id]
-                replay._set_rtc_internal(base, base_sim_time)
-            if scan_id in log.patches_by_scan:
-                replay.patch(log.patches_by_scan[scan_id])
-            if log.dts is not None:
-                replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+            self._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)
             replay.step()
             if scan_id >= start_scan_id:
                 results.append(replay.current_state)
@@ -1117,6 +1184,7 @@ class PLC:
         self._current_rung_traces_scan_id = None
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
+        self._cached_replay_trace = None
 
     def _normalize_rtc_datetime(self, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -1778,6 +1846,7 @@ class PLC:
         return self._run_single_scan(consume_pause_request=True)
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
+        self._cached_replay_trace = None
         for _ in self._scan_steps():
             pass
 

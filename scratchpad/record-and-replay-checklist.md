@@ -121,11 +121,60 @@ Invariants to protect across all stages:
 - [x] Tests updated: `tests/core/test_history.py` rewritten for facade semantics (eviction tests inverted to assert no eviction; label tests use a runner-owned `History`; new `test_history_labels_survive_window_rotation`). `tests/core/test_breakpoints_labels.py::test_snapshot_labels_are_evicted_with_history` → `..._survive_history_window_rotation`.
 - [x] Stage 4 mutation sweep + Stage 1/3 invariants intact: `make test` 2692 passed (+3 net rewrites). `make lint` clean.
 
-## Stage 6 — DAP trace regeneration
+## Stage 6 — Historical rung-trace reconstruction ✅
 
-- [ ] `_current_rung_traces` remains live-state on main PLC — no change.
-- [ ] Historical trace request: replay up to N-1 with `_scan_steps`, run scan N with `_scan_steps_debug`, return.
-- [ ] `fork._debug_mode = True` in `PLC.fork()` at `runner.py:727` — forks are investigation sessions.
+**Narrowed from the original draft.**  The DAP adapter wire-up and the
+`_debug_mode` flag on `PLC` are both deferred — no DAP caller requests
+historical traces today (`_live_trace_body_locked` only publishes the
+live committed scan), and a projection API doesn't exist yet.  Adding
+`_debug_mode` + dispatch in `_run_single_scan` now would be machinery
+for a consumer that hasn't landed, and the projection UX (abandon-fork
+vs. switch-fork vs. overlay) is still open.  The Python-side primitive
+ships; the adapter and projection pieces pick their entry shape once a
+concrete caller lands.
+
+- [x] `PLC.replay_trace_at(target_scan_id) -> dict[int, RungTrace]` at
+  `runner.py:890`.  Validates `_initial_scan_id < target <= tip`
+  (strict-greater than initial because the anchor scan was never
+  stepped in debug mode, so no traces exist).  Anchors via
+  `_nearest_checkpoint_at_or_before`, walks anchor+1 → target-1 on the
+  plain `_scan_steps()` path, then drives `_scan_steps_debug()` on the
+  replay fork for the target scan and returns a copy of the fork's
+  `_current_rung_traces`.
+- [x] Shared setup factored into `PLC._build_replay_fork(anchor)` and
+  `PLC._apply_log_entries_for_scan(replay, scan_id, log, lifecycle_by_scan)`.
+  `replay_to` and `_replay_range` rewritten against the helpers; no
+  behavior change for either (covered by existing Stage 2/4 tests).
+- [x] One-slot cache `self._cached_replay_trace: tuple[int, dict[int, RungTrace]] | None`.
+  Hits on repeat `target_scan_id`.  Invalidated at the top of
+  `_run_single_scan` (any tip advance) and in
+  `_clear_retained_debug_trace_caches` (reboot, stop→run, all
+  reset paths).  Each hit returns a fresh dict copy so caller mutation
+  doesn't corrupt the cached entry.
+- [x] `_replay_mode` guards (`_commit_scan` monitors/breakpoints at
+  `runner.py:1616`, `_set_rtc_and_record` at `runner.py:1151`) cover
+  the debug scan path too — `_scan_steps` and `_scan_steps_debug`
+  funnel through the same `_commit_scan` sink.  Verified by the
+  existing Stage 4 mutation sweep plus the Stage 6 tests.
+- [x] Tests — new file `tests/core/test_replay_trace.py` (5 tests):
+  `returns_traces_for_historical_scan`, `does_not_disturb_live_state`,
+  `validates_target_scan_id`, `one_slot_cache_hits_on_repeat`,
+  `cache_invalidates_on_step`.  The cache tests patch
+  `_build_replay_fork` on the instance and count calls.
+- [x] `make test`: 2697 passed (+5 from Stage 5).  `make lint` clean.
+
+**Deferred — pick up once a concrete caller lands:**
+- `_debug_mode` flag + dispatch in `_run_single_scan` so `fork.step()`
+  auto-populates traces.  Load-bearing for projection ("show me what
+  might happen for k scans"); not needed by anything today.
+- DAP adapter wire-up — making `_live_trace_body_locked` (or a sibling
+  historical body builder) call `replay_trace_at` when the user has
+  seeked / forked to a non-live scan.  Requires a `pyrungTraceAt` (or
+  equivalent) request from the extension; the current webview panels
+  drive history through seek / tagChanges / causal, none of which ask
+  for rung traces.
+- Projection API proper — `PLC.project_traces(max_scans)` or whatever
+  shape the UX demands.  Cap lives at this layer, not in `fork()`.
 
 ## Stage 7 — Rung firings refactor (absorbs memory-savings.md #2)
 
