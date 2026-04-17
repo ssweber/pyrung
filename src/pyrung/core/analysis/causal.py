@@ -11,6 +11,47 @@ Projected walks (``cause(to=)``, ``effect(from_=)``): project from the
 current state using the static PDG to find reachable causal paths.
 Returns ``mode='projected'`` when reachable, ``mode='unreachable'`` with
 populated ``blockers`` when not.
+
+PDG fallback for filtered firing logs
+-------------------------------------
+
+The recorded walks consume the rung-firings log via ``rung_firings_fn``.
+Under PDG-filtered capture (see ``context.py::capturing_rung``), writes
+to tags no rung reads are dropped from the log at capture time — the
+filter saves memory on internal churn like timer accumulators.
+
+The filter's *downstream* claim (a write that no rung reads can't
+matter to analysis) holds for the **recursive** walk step: once we
+identify the writing rung, its causes are reads by upstream rungs,
+all of which are consumed-and-therefore-logged by definition.  The
+filter's claim **fails at the root step** whenever the analysis
+target is a terminal output — e.g. ``cause("Alarm_Horn")`` where
+nothing downstream reads ``Alarm_Horn``.  Without a fallback, the
+firing log lacks the rung that wrote the alarm, and the chain's
+first step never materializes.
+
+The fix is a PDG fallback keyed off the static ``writers_of`` /
+``readers_of`` sets.  When the firing log doesn't identify a writer
+for a transition, :func:`_fallback_writers_from_pdg` iterates the
+PDG's static writers and re-evaluates each candidate's SP-tree
+against the historical state at that scan.  A candidate whose tree
+evaluates True is treated as the writer.  Symmetric logic widens
+the effect forward walk: for each scan, rungs missing from the log
+but reading a current frontier tag are re-entered and evaluated
+with PDG-synthesized candidate writes (history then filters via
+``_find_transition_at_scan``).
+
+Trade-off: the fallback adds one SP-tree eval per candidate rung
+per unresolved step — bounded by ``len(writers_of[tag])``, typically
+1–2.  Memory/correctness both preserved; the filter's cache miss
+turns into a handful of extra evaluations, not a lost answer.
+
+``FiredOnly`` rungs deliberately do *not* round-trip through
+``cause``'s value match: their synthesized writes carry a sentinel
+that never equals a real transition value.  Such rungs drop out of
+recorded backward chains past their promotion point.  The
+assumption is monotonic counters don't carry useful causal signal;
+analysis that truly needs the value replays to the scan.
 """
 
 from __future__ import annotations

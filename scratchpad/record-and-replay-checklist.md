@@ -176,16 +176,65 @@ concrete caller lands.
 - Projection API proper — `PLC.project_traces(max_scans)` or whatever
   shape the UX demands.  Cap lives at this layer, not in `fork()`.
 
-## Stage 7 — Rung firings refactor (absorbs memory-savings.md #2)
+## Stage 7 — Rung firings refactor (absorbs memory-savings.md #2) ✅
 
-- [ ] PDG-filtered capture in `context.py:289-313`: filter through `ProgramGraph.readers_of` (`analysis/pdg.py:69`) consumed-tag set.
-- [ ] `_pdg_consumed_tags: frozenset[str]` on PLC, refreshed on rung change; `record_all_tags=True` escape hatch.
-- [ ] New module `src/pyrung/core/rung_firings.py`: `RungFiringRange`, `PatternRef`, `AlternatingRun`, `FiredOnly`, per-rung intern dicts.
-- [ ] Replace `_rung_firings_by_scan: dict[int, PMap]` (`runner.py:346, 1304-1318`) with `_rung_firings: dict[int, list[RungFiringRange]]`.
-- [ ] Append logic: A,B,A detection for `AlternatingRun`; 100-pattern threshold for cycle→fired-only transition (one-way).
-- [ ] **Parity-relative-to-run-start test** — guards the off-by-one trap called out in design doc :575-579.
-- [ ] Rewrite `plc.cause()` / `plc.effect()` (`runner.py:420, 542`) lookup path to use `rung_firings_at(scan_id)` binary search over per-rung timelines.
-- [ ] Sweep-on-log-trim eviction: trim ranges, preserve `AlternatingRun` parity on odd-delta `start_scan_id`, walk intern dicts for unreferenced patterns.
+Shipped as three commits:
+
+- **6483ec2 — `feat(core): PDG-filter rung-firing capture`** — PDG
+  consumed-tag set wired through a `consumed_tags_getter` on
+  `ScanContext`; filter drops writes to unread tags in
+  `context.py:capturing_rung`.  `record_all_tags=False` default,
+  inherited through `fork()`.  The filter creates a semantic split
+  at the root step of `cause()` / `effect()` on terminal outputs —
+  fix is a PDG-`writers_of` / `readers_of` fallback in
+  `analysis/causal.py` that re-evaluates candidate rungs via SP-tree
+  against historical state when the firing log doesn't answer.
+  `capturing_rung` now records the rung_index with an empty writes
+  map when the filter empties everything, so `query.cold/hot_rungs`
+  and the cause-fallback still see "fired."  10 new tests in
+  `tests/core/test_rung_firings_pdg_filter.py`.
+
+- **e38091b — `refactor(core): per-rung RLE firing timelines`** —
+  new module `src/pyrung/core/rung_firings.py` with
+  `RungFiringRange`, `PatternRef`, `AlternatingRun`, `FiredOnly`,
+  and a stateful `RungFiringTimelines` manager (per-rung intern
+  pools, mode markers, fired-only sentinels).  `append()` detects
+  A,B,A collapse into `AlternatingRun`; the 100-pattern threshold
+  promotes to `FiredOnly` one-way.  Replaces
+  `_rung_firings_by_scan: dict[int, PMap]`; runner's
+  `rung_firings()` delegates to `.at(scan_id)`.  Query's
+  `cold_rungs` / `hot_rungs` switch to `ever_fired` / `fired_on`.
+  Reboot resets via `_reset_runtime_scope`.  14 tests in
+  `tests/core/test_rung_firings_timelines.py`; the vestigial
+  `test_idle_scan_avoids_fresh_rung_firings_pmap` was rewritten as
+  a timeline-shape assertion.
+
+- **0a28de9 — `feat(core): sweep-on-log-trim hook`** —
+  `RungFiringTimelines.trim_before(N)` + `PLC._trim_firings_before`
+  wrapper.  Drops ranges entirely past N, advances straddling
+  ranges (with parity swap for odd-delta `AlternatingRun`), walks
+  intern pools for unreferenced patterns, resets fully-trimmed
+  rungs to never-fired.  No caller yet — Stage 8 wires log trim.
+  8 tests added to `test_rung_firings_timelines.py` (parity swap,
+  even-delta no-op, intern prune, fired-only sentinel survival, PLC
+  hook).
+
+**Final test count: 2729 passed** (+32 from Stage 6: 10 pdg-filter
++ 22 timelines).  `make lint` clean.
+
+**Parity-relative-to-run-start** guarded by
+`test_alternating_run_parity_relative_to_start` (direct test on
+`RungFiringTimelines`) and by
+`test_sweep_on_log_trim_preserves_alternating_parity` (odd-delta
+swap on the sweep path).
+
+**Design-doc divergence worth pinning:** the spec's claim that
+PDG-filtered capture is safe for `cause` / `effect` because
+"rung-level analysis only chases causal dependencies, which by
+definition means a downstream rung reads the tag" is correct for
+the recursive step but false at the root step when the target is
+terminal.  The PDG fallback closes the gap — see module docstring
+at the top of `analysis/causal.py` for the architecture.
 
 ## Stage 8 — Tune K, finalize
 
