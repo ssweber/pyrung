@@ -342,3 +342,176 @@ def test_ever_fired_and_fired_on_queries() -> None:
     assert timelines.fired_on(1) == {0, 2}
     assert timelines.fired_on(2) == {0}
     assert timelines.fired_on(3) == set()
+
+
+# ---------------------------------------------------------------------------
+# Sweep-on-log-trim eviction
+# ---------------------------------------------------------------------------
+
+
+def test_trim_before_drops_ranges_entirely_past() -> None:
+    """Ranges with end_scan_id < N are removed; later ranges stay."""
+    timelines = RungFiringTimelines()
+    pat = pmap({"X": True})
+    for scan_id in range(1, 6):
+        timelines.append(0, scan_id, pat)
+    # Gap at scan 6 -> new range after trim horizon.
+    for scan_id in range(7, 11):
+        timelines.append(0, scan_id, pat)
+
+    # Before trim: two ranges (1-5) and (7-10).
+    assert len(timelines._timelines[0]) == 2
+
+    timelines.trim_before(7)
+    # First range (ends at 5) is fully past the horizon and dropped.
+    remaining = timelines._timelines[0]
+    assert len(remaining) == 1
+    assert remaining[0].start_scan_id == 7
+    assert remaining[0].end_scan_id == 10
+
+
+def test_trim_before_advances_straddling_range_start() -> None:
+    """A range straddling N has its start_scan_id pulled forward to N."""
+    timelines = RungFiringTimelines()
+    pat = pmap({"X": True})
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pat)
+
+    timelines.trim_before(4)
+    (range_,) = timelines._timelines[0]
+    assert range_.start_scan_id == 4
+    assert range_.end_scan_id == 10
+
+
+def test_sweep_on_log_trim_preserves_alternating_parity() -> None:
+    """Advancing AlternatingRun's start by an odd delta swaps even/odd slots.
+
+    Guards design doc §"Eviction: sweep on log-trim" — parity is
+    anchored at the current ``start_scan_id``, so trimming shifts the
+    anchor and the per-slot patterns must swap when the delta is odd.
+    """
+    timelines = RungFiringTimelines()
+    pat_a = pmap({"C": "a"})
+    pat_b = pmap({"C": "b"})
+    # Build an alternating run from scan 10 to scan 1000 with
+    # pattern_on_even=A (anchor-parity 0 at scan 10) and
+    # pattern_on_odd=B.
+    for offset in range(10, 1001):
+        scan_id = offset
+        pattern = pat_a if (scan_id - 10) % 2 == 0 else pat_b
+        timelines.append(0, scan_id, pattern)
+    (before_trim,) = timelines._timelines[0]
+    assert isinstance(before_trim.payload, AlternatingRun)
+    assert before_trim.payload.pattern_on_even == pat_a
+    assert before_trim.payload.pattern_on_odd == pat_b
+
+    # Trim to N=17.  Delta = 17-10 = 7 (odd) -> slots must swap.
+    timelines.trim_before(17)
+    (after_trim,) = timelines._timelines[0]
+    assert isinstance(after_trim.payload, AlternatingRun)
+    assert after_trim.start_scan_id == 17
+    assert after_trim.end_scan_id == 1000
+    assert after_trim.payload.pattern_on_even == pat_b
+    assert after_trim.payload.pattern_on_odd == pat_a
+    # Lookup at scan 17 must return the same pattern as before the
+    # trim.  Under the old anchor (scan 10), scan 17 had parity
+    # (17-10)%2 = 1 → pat_b.  Under the new anchor (scan 17), parity
+    # (17-17)%2 = 0 → pattern_on_even (which was swapped to pat_b).
+    # The two answers agree — that's the whole point of the swap.
+    assert timelines.at(17) == pmap({0: pat_b})
+
+
+def test_sweep_on_log_trim_alternating_even_delta_preserves_slots() -> None:
+    """Even-delta trim leaves pattern_on_even / pattern_on_odd as-is."""
+    timelines = RungFiringTimelines()
+    pat_a = pmap({"C": 1})
+    pat_b = pmap({"C": 2})
+    for offset in range(10, 100):
+        scan_id = offset
+        pattern = pat_a if (scan_id - 10) % 2 == 0 else pat_b
+        timelines.append(0, scan_id, pattern)
+
+    # Delta = 18 - 10 = 8 (even) -> no swap.
+    timelines.trim_before(18)
+    (after_trim,) = timelines._timelines[0]
+    assert isinstance(after_trim.payload, AlternatingRun)
+    assert after_trim.payload.pattern_on_even == pat_a
+    assert after_trim.payload.pattern_on_odd == pat_b
+
+
+def test_sweep_drops_unreferenced_intern_patterns() -> None:
+    """After trim, intern pool keeps only patterns still referenced."""
+    timelines = RungFiringTimelines()
+    pat_a = pmap({"T": "a"})
+    pat_b = pmap({"T": "b"})
+    # Two stable runs: A (scans 1-5), B (scans 6-10).  Intern pool
+    # holds both.
+    for scan_id in range(1, 6):
+        timelines.append(0, scan_id, pat_a)
+    for scan_id in range(6, 11):
+        timelines.append(0, scan_id, pat_b)
+    assert timelines.intern_size(0) == 2
+
+    # Trim past the A range.  Only B survives; intern pool shrinks.
+    timelines.trim_before(6)
+    assert timelines.intern_size(0) == 1
+    survivors = set(timelines._intern[0])
+    assert pat_b in survivors
+    assert pat_a not in survivors
+
+
+def test_trim_fully_empty_rung_resets_rung_state() -> None:
+    """A rung whose timeline is fully past N reverts to a fresh state."""
+    timelines = RungFiringTimelines()
+    pat = pmap({"X": 1})
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pat)
+
+    # Trim past every range -> rung is effectively unseen again.
+    timelines.trim_before(20)
+    assert 0 not in timelines._timelines
+    assert 0 not in timelines._intern
+    assert timelines.mode(0) == "cycle"
+    assert timelines.ever_fired() == set()
+
+
+def test_trim_preserves_fired_only_sentinel() -> None:
+    """Trimming a fired-only rung keeps the sentinel and FiredOnly ranges."""
+    timelines = RungFiringTimelines()
+    # Promote the rung to fired-only.
+    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
+        timelines.append(0, scan_id, pmap({"N": scan_id}))
+    for scan_id in range(_FIRED_ONLY_THRESHOLD + 1, _FIRED_ONLY_THRESHOLD + 50):
+        timelines.append(0, scan_id, pmap({"N": scan_id}))
+    assert timelines.mode(0) == "fired_only"
+    pre_sentinel_keys = set(timelines._fired_only_writes[0].keys())
+
+    # Trim in the middle of the fired-only tail range.
+    trim_to = _FIRED_ONLY_THRESHOLD + 10
+    timelines.trim_before(trim_to)
+    assert timelines.mode(0) == "fired_only"
+    # Sentinel PMap survives unchanged.
+    assert set(timelines._fired_only_writes[0].keys()) == pre_sentinel_keys
+
+
+def test_plc_trim_hook_is_idempotent() -> None:
+    """PLC._trim_firings_before runs cleanly with no caller wired yet."""
+    Enable = Bool("Enable")
+    Light = Bool("Light")
+
+    with Program() as logic:
+        with Rung(Enable):
+            out(Light)
+
+    runner = PLC(logic, record_all_tags=True)
+    runner.patch({"Enable": True})
+    for _ in range(5):
+        runner.step()
+    # No-op: horizon before any recorded scan.
+    runner._trim_firings_before(0)
+    assert runner._rung_firing_timelines.ever_fired() == {0}
+
+    # Trim to midway — first half of the range drops.
+    runner._trim_firings_before(3)
+    remaining = runner._rung_firing_timelines._timelines[0]
+    assert remaining[0].start_scan_id == 3

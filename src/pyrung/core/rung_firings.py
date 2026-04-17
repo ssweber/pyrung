@@ -334,6 +334,91 @@ class RungFiringTimelines:
         """
         return len(self._intern.get(rung_index, {}))
 
+    def trim_before(self, min_scan_id: int) -> None:
+        """Drop firing data older than ``min_scan_id``.
+
+        Designed to run together with scan-log trimming so the two
+        datasets stay in lockstep.  For each rung:
+
+        - Ranges entirely before ``min_scan_id`` are removed.
+        - A range straddling ``min_scan_id`` has its ``start_scan_id``
+          advanced to ``min_scan_id``.  For ``AlternatingRun``
+          payloads, advancing by an odd delta swaps ``pattern_on_even``
+          and ``pattern_on_odd`` — the parity is anchored at the new
+          ``start_scan_id``, and odd advances reverse which canonical
+          pattern lands on the even/odd slots.
+        - The rung's intern pool is walked afterward; patterns no
+          longer referenced by any surviving range are dropped.
+          Fired-only rungs have no intern pool to walk.
+
+        No caller exists yet — log trimming lands in a later stage.
+        The hook ships now so it grows in lockstep with the rest of
+        the record-and-replay machinery rather than as a retrofit.
+        """
+        if min_scan_id <= 0:
+            return
+        for rung_index in list(self._timelines):
+            timeline = self._timelines[rung_index]
+            kept: list[RungFiringRange] = []
+            for range_ in timeline:
+                if range_.end_scan_id < min_scan_id:
+                    continue
+                if range_.start_scan_id < min_scan_id:
+                    delta = min_scan_id - range_.start_scan_id
+                    kept.append(_advance_range_start(range_, delta))
+                else:
+                    kept.append(range_)
+            if kept:
+                self._timelines[rung_index] = kept
+            else:
+                # Rung fully trimmed: drop every associated cache slot
+                # so the rung reverts to its initial never-fired state
+                # (intern pool empty, mode back to cycle, no fired-only
+                # sentinel).  Subsequent appends begin a fresh timeline.
+                del self._timelines[rung_index]
+                self._intern.pop(rung_index, None)
+                self._mode.pop(rung_index, None)
+                self._fired_only_writes.pop(rung_index, None)
+                continue
+            # Prune the intern pool to patterns still referenced by
+            # some surviving range.  Fired-only rungs already have
+            # an empty pool; skip them.
+            if self._mode.get(rung_index, "cycle") == "fired_only":
+                continue
+            intern = self._intern.get(rung_index)
+            if not intern:
+                continue
+            live: set[int] = set()
+            for range_ in kept:
+                payload = range_.payload
+                if isinstance(payload, PatternRef):
+                    live.add(id(payload.pattern))
+                elif isinstance(payload, AlternatingRun):
+                    live.add(id(payload.pattern_on_even))
+                    live.add(id(payload.pattern_on_odd))
+            self._intern[rung_index] = {
+                pattern: canonical for pattern, canonical in intern.items() if id(canonical) in live
+            }
+
+
+def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange:
+    """Advance a range's ``start_scan_id`` by ``delta``, preserving semantics.
+
+    For ``AlternatingRun``, an odd delta swaps ``pattern_on_even`` and
+    ``pattern_on_odd`` — the parity of the new anchor differs from
+    the old by exactly ``delta % 2``, and lookup is anchored to the
+    current ``start_scan_id``.
+    """
+    assert delta > 0, "advance must move the start forward"
+    payload = range_.payload
+    new_start = range_.start_scan_id + delta
+    if isinstance(payload, AlternatingRun) and delta % 2 == 1:
+        payload = AlternatingRun(
+            pattern_on_even=payload.pattern_on_odd,
+            pattern_on_odd=payload.pattern_on_even,
+        )
+    return RungFiringRange(new_start, range_.end_scan_id, payload)
+
 
 def _binary_search_range(timeline: list[RungFiringRange], scan_id: int) -> RungFiringRange | None:
     """Return the range covering ``scan_id``, or ``None`` if none covers it.

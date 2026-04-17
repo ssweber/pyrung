@@ -901,6 +901,16 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
+    def _trim_firings_before(self, min_scan_id: int) -> None:
+        """Sweep rung-firing timelines to drop data older than ``min_scan_id``.
+
+        Exists so that when a later stage wires log-trim retention, the
+        rung-firing side trims in lockstep (design doc §"Eviction:
+        sweep on log-trim").  No caller today — log trimming lands in
+        a later stage.
+        """
+        self._rung_firing_timelines.trim_before(min_scan_id)
+
     def _build_replay_fork(
         self, anchor: int | None
     ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
