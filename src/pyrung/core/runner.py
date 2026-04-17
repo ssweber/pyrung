@@ -48,6 +48,8 @@ if TYPE_CHECKING:
 
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
+_CHECKPOINT_INTERVAL_DEFAULT = 200
+
 
 def _validate_assume(logic: list[Any], assume: dict[str, Any]) -> None:
     """Raise ``ValueError`` if *assume* targets a readonly tag."""
@@ -290,6 +292,7 @@ class PLC:
         dt: float | None = None,
         realtime: bool = False,
         history_limit: int | None = None,
+        checkpoint_interval: int | None = None,
     ) -> None:
         """Create a new PLC.
 
@@ -302,6 +305,8 @@ class PLC:
                 Mutually exclusive with dt.
             history_limit: Max retained snapshots including initial state.
                 Use None for unbounded history.
+            checkpoint_interval: Number of scans between replay checkpoints.
+                Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
         """
         if realtime and dt is not None:
             raise ValueError("Cannot specify dt= with realtime=True")
@@ -309,6 +314,10 @@ class PLC:
             dt = 0.010
         if history_limit is not None and history_limit < 1:
             raise ValueError("history_limit must be >= 1 or None")
+        if checkpoint_interval is None:
+            checkpoint_interval = _CHECKPOINT_INTERVAL_DEFAULT
+        if checkpoint_interval < 1:
+            raise ValueError("checkpoint_interval must be >= 1")
 
         self._logic: list[Rung]
         self._program: Any = None
@@ -352,6 +361,8 @@ class PLC:
         else:
             self._time_mode = TimeMode.FIXED_STEP
         self._scan_log = ScanLog(time_mode=self._time_mode)
+        self._checkpoint_interval = checkpoint_interval
+        self._checkpoints: dict[int, SystemState] = {}
         self._forces_last_recorded: dict[str, bool | int | float | str] = {}
         self._this_scan_drained_patches: dict[str, bool | int | float | str] = {}
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
@@ -734,6 +745,7 @@ class PLC:
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=historical_state,
             history_limit=self._history_limit,
+            checkpoint_interval=self._checkpoint_interval,
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
@@ -743,6 +755,10 @@ class PLC:
     def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
+
+    def _nearest_checkpoint_at_or_before(self, scan_id: int) -> int | None:
+        """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
+        return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
     @property
     def simulation_time(self) -> float:
@@ -818,6 +834,7 @@ class PLC:
         # in FIXED_STEP.  Only called early in fork() so the log is empty
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
+        self._checkpoints = {}
         self._forces_last_recorded = dict(self._input_overrides.forces)
 
     @staticmethod
@@ -1322,13 +1339,19 @@ class PLC:
         self._state = ctx.commit(dt=dt)
         # Replay recorder: capture nondeterminism for this scan.
         new_scan_id = self._state.scan_id
+        # Checkpoint bypass: the force-map write at checkpoint boundaries
+        # is unconditional — replay reads force state from the checkpoint
+        # scan's log entry, so diff-eliding it would strand reconstruction.
+        is_checkpoint = new_scan_id > 0 and new_scan_id % self._checkpoint_interval == 0
         if self._this_scan_drained_patches:
             self._scan_log.record_patches(new_scan_id, self._this_scan_drained_patches)
             self._this_scan_drained_patches = {}
         current_forces = dict(self._input_overrides.forces)
-        if current_forces != self._forces_last_recorded:
+        if is_checkpoint or current_forces != self._forces_last_recorded:
             self._scan_log.record_force_changes(new_scan_id, current_forces)
             self._forces_last_recorded = current_forces
+        if is_checkpoint:
+            self._checkpoints[new_scan_id] = self._state
         if self._scan_log.records_dt:
             self._scan_log.record_dt(new_scan_id, dt)
         # Always record firings for scans that executed logic — even an

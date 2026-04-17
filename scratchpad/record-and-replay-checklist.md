@@ -84,13 +84,15 @@ Invariants to protect across all stages:
 - [x] `make test`: 2686 passed (+13 from Stage 1). `ruff check` +
   `ruff format` clean.
 
-## Stage 3 — Checkpoints
+## Stage 3 — Checkpoints ✅
 
-- [ ] `self._checkpoints: dict[int, SystemState]`, interval `K` (default 200, to be tuned in Stage 8).
-- [ ] `_nearest_checkpoint_at_or_before(scan_id)` helper.
-- [ ] Checkpoint write path writes full current force map to `force_changes_by_scan[checkpoint_scan_id]` — unconditional, bypasses diff-guard.
-- [ ] `test_replay_forces_across_checkpoint` — runs past a checkpoint with no force changes, asserts replay still reconstructs the map.
-- [ ] Eviction policy: drop checkpoints only on explicit session reset (for now).
+- [x] `self._checkpoints: dict[int, SystemState]` added; `_CHECKPOINT_INTERVAL_DEFAULT = 200` module constant, `checkpoint_interval=` keyword-only PLC constructor param with ValueError on <1, propagated through `fork()`.
+- [x] `_nearest_checkpoint_at_or_before(scan_id)` helper — `max((c for c in self._checkpoints if c <= scan_id), default=None)`.
+- [x] Force-map bypass in `_commit_scan`: `is_checkpoint = new_scan_id > 0 and new_scan_id % self._checkpoint_interval == 0`; recorder fires unconditionally at checkpoint scans, then `_checkpoints[new_scan_id] = self._state`. `scan_id > 0` skip matches the "fork(0) handles the initial state" contract.
+- [x] `tests/core/test_record_and_replay.py::test_replay_forces_across_checkpoint` runs a force held across scans 5 and 10 at `checkpoint_interval=5`; asserts `force_changes_by_scan` keys == {1, 5, 10} with full `{"X": True}` at each, and exercises a mini replay from the nearest checkpoint that would KeyError if the bypass were removed. Plus `test_checkpoint_interval_rejects_non_positive` and `test_checkpoints_cleared_on_fork`.
+- [x] Eviction policy: `_checkpoints = {}` reset in `_set_time_mode` alongside the existing scan-log reset — shares the fork boundary. Otherwise unbounded (Stage 5 adds log-trim coupling).
+- [x] Stage 1 test adjusted: `test_idle_scans_cost_zero_bytes` now builds an idle PLC with `checkpoint_interval=10_001` so the 10K-idle-scan log-level zero-bytes claim still holds. Checkpoint cost is a separate budget line.
+- [x] `make test`: 2689 passed (+3 new). `make lint`: clean aside from the pre-existing ty error on `_calculate_dt` method-assign in Stage 2's `_replay_from_log_for_test` helper (resolved in Stage 4 when `_dt_override_for_next_scan` replaces monkey-patching).
 
 ## Stage 4 — `replay_to(scan_id)` and `_replay_mode` guards
 
@@ -130,6 +132,7 @@ Invariants to protect across all stages:
 - [ ] Benchmark `K ∈ {100, 200, 500}` on `click_conveyor.py` and a busy program — scrub latency vs. checkpoint memory.
 - [ ] Verify success criteria: idle 0 bytes/scan, 1-hour FIXED_STEP <10 MB, fork-at-history <100 ms worst case.
 - [ ] Retire `_rung_firings_by_scan` residuals; delete `tests/core/test_scan_pmap_sharing.py` if it now tests an obsolete property (replaced by direct log-bytes assertions).
+- [ ] **Scrub stage markers from the codebase.** `git grep -n 'Stage [0-9]'` across `src/` and `tests/` — module/test docstrings, section banners, comments all reference Stages 0–9 during the migration. Once everything ships the staging is ancient history; leaving the markers in rots into noise. Keep only commentary whose meaning outlives the migration (e.g. "replay correctness invariant"), drop the "Stage N ..." framing.
 
 ## Stage 9 — Derived edge tags (side quest; small, optional)
 

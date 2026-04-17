@@ -429,3 +429,100 @@ def test_assert_plc_state_equal_catches_forces_mismatch() -> None:
     # itself.  Either way the divergence is caught.
     with pytest.raises(AssertionError):
         assert_plc_state_equal(source, replay)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3 — checkpoints + force-map bypass invariant.
+# --------------------------------------------------------------------------- #
+
+
+def test_replay_forces_across_checkpoint() -> None:
+    """Checkpoints unconditionally write the full force map to the log.
+
+    Protects the replay correctness invariant: at a checkpoint scan the
+    force diff-guard must be bypassed, otherwise a replay that starts at
+    that checkpoint has no force entry to read and silently loses the
+    force map.  Exercised with a force set at scan 1 and held steady
+    past two checkpoint boundaries (5 and 10) — the diff-guard would
+    elide scans 5 and 10 without the bypass.
+    """
+    source = PLC(dt=0.01, checkpoint_interval=5)
+
+    source.force(Bool("X"), True)
+    for _ in range(12):  # scan 1..12
+        source.step()
+
+    assert source.current_state.scan_id == 12
+
+    # Checkpoints retained, each carrying the correct SystemState.
+    assert set(source._checkpoints.keys()) == {5, 10}
+    assert source._checkpoints[5].scan_id == 5
+    assert source._checkpoints[10].scan_id == 10
+
+    # Helper lookup.
+    assert source._nearest_checkpoint_at_or_before(4) is None
+    assert source._nearest_checkpoint_at_or_before(5) == 5
+    assert source._nearest_checkpoint_at_or_before(7) == 5
+    assert source._nearest_checkpoint_at_or_before(10) == 10
+    assert source._nearest_checkpoint_at_or_before(999) == 10
+
+    # The invariant: force_changes_by_scan has entries at both
+    # checkpoint scans even though the force map never changed after
+    # scan 1.  A reintroduced diff-guard at checkpoints would drop 5
+    # and 10 from this dict.
+    snap = source._scan_log.snapshot()
+    assert set(snap.force_changes_by_scan.keys()) == {1, 5, 10}
+    assert dict(snap.force_changes_by_scan[1]) == {"X": True}
+    assert dict(snap.force_changes_by_scan[5]) == {"X": True}
+    assert dict(snap.force_changes_by_scan[10]) == {"X": True}
+
+    # Invariant guard: simulate a Stage-4-style replay starting at the
+    # nearest checkpoint rather than from scan 0.  Seeds the force map
+    # from ``force_changes_by_scan[anchor]`` — without the checkpoint
+    # bypass this lookup would KeyError and the test fails loudly.
+    anchor = source._nearest_checkpoint_at_or_before(12)
+    assert anchor == 10
+    replay = PLC(
+        dt=0.01,
+        initial_state=source._checkpoints[anchor],
+        checkpoint_interval=5,
+    )
+    replay._set_rtc_internal(source._rtc_base, source._rtc_base_sim_time)
+    replay._input_overrides._forces.clear()
+    replay._input_overrides._forces.update(snap.force_changes_by_scan[anchor])
+    while replay.current_state.scan_id < source.current_state.scan_id:
+        next_scan = replay.current_state.scan_id + 1
+        if next_scan in snap.force_changes_by_scan:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(snap.force_changes_by_scan[next_scan])
+        if next_scan in snap.patches_by_scan:
+            replay.patch(snap.patches_by_scan[next_scan])
+        replay.step()
+
+    assert dict(replay._input_overrides.forces_mutable) == {"X": True}
+    assert dict(replay.current_state.tags) == dict(source.current_state.tags)
+    assert replay.current_state.scan_id == source.current_state.scan_id
+
+
+def test_checkpoint_interval_rejects_non_positive() -> None:
+    with pytest.raises(ValueError, match="checkpoint_interval"):
+        PLC(checkpoint_interval=0)
+    with pytest.raises(ValueError, match="checkpoint_interval"):
+        PLC(checkpoint_interval=-1)
+
+
+def test_checkpoints_cleared_on_fork() -> None:
+    """Fork resets the log and checkpoints together — a fork is a fresh
+    recording session rooted at the chosen scan."""
+    source = PLC(dt=0.01, checkpoint_interval=5)
+    for _ in range(12):
+        source.step()
+    assert set(source._checkpoints.keys()) == {5, 10}
+
+    fork = source.fork(scan_id=10)
+    assert fork._checkpoints == {}
+    assert fork._checkpoint_interval == 5  # propagates through fork
+    # Forked PLC accumulates its own checkpoints starting fresh.
+    for _ in range(6):  # scan 11..16
+        fork.step()
+    assert set(fork._checkpoints.keys()) == {15}

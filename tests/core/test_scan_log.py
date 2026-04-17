@@ -19,8 +19,8 @@ from pyrung.core.scan_log import ScanLog
 from pyrung.core.time_mode import TimeMode
 
 
-def _idle_plc() -> PLC:
-    return PLC(logic=[], dt=0.01)
+def _idle_plc(*, checkpoint_interval: int | None = None) -> PLC:
+    return PLC(logic=[], dt=0.01, checkpoint_interval=checkpoint_interval)
 
 
 def test_fresh_log_is_empty():
@@ -35,7 +35,12 @@ def test_fresh_log_is_empty():
 
 
 def test_idle_scans_cost_zero_bytes():
-    plc = _idle_plc()
+    # Checkpoints (Stage 3) force-write the current force map every K
+    # scans as a replay correctness invariant — that cost lives in a
+    # separate budget line, not the per-scan log growth this test
+    # pins down.  Disable checkpoints for this run so the log-level
+    # "idle scans contribute zero bytes" claim stays testable.
+    plc = _idle_plc(checkpoint_interval=10_001)
     for _ in range(10_000):
         plc.step()
     assert plc._scan_log.bytes_estimate() == 0
