@@ -2,8 +2,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`PLC(history_limit=...)` replaced by `PLC(history_cache=...)`** — the constructor parameter that bounded retained history now takes a **byte budget** (default 100 MB) instead of a snapshot count. Internally, the fixed 20-scan `_recent_state_window` deque is replaced by a byte-bounded `OrderedDict` cache that evicts oldest entries when over budget, with a floor of 20 entries to preserve monitor `previous_value` / `_prev:*` contracts. Raises `ValueError` below 1 MB.
+
 ### New features
 
+- **Byte-budgeted recent-state cache (Stage 8)** — `history.at()` now serves any scan inside the 100 MB cache directly; older scans continue to reconstruct via `replay_to` from the nearest checkpoint. Forks inherit the parent's byte budget. States are structurally shared (`pyrsistent` PMaps), so the cache-size estimator is a deliberately coarse ceiling rather than an allocator-accurate measurement.
+- **Timeline-routed transition finding in `cause()` / `effect()`** — `_find_transition`, `_find_last_transition_scan`, and `_find_recent_transition` now consult the per-rung firing timeline before touching state. Per-contact `history.at()` reads disappear from chain walks whenever a writer timeline can answer the question (O(W × log S) where W is the writer count). `rung_writes_at()` and `last_tag_write_before()` on `RungFiringTimelines` expose the underlying lookups.
+- **Mixed-fidelity causal chains** — new `ChainStep.fidelity: Literal["full", "timeline"]` field. `"full"` uses SP-tree attribution against cached state to classify contacts as proximate (transitioned) vs enabling (held steady). `"timeline"` falls back to timeline + structural intersection when state is out of cache — `proximate_causes` becomes a superset of the true set and `enabling_conditions` is empty. A single chain can mix fidelities: recent steps full, deeper steps timeline-only. Round-trips through `to_dict()` / `to_config()` and renders a `(partial; re-run with scan_id to hydrate)` note in `__str__`.
+- **`PLC.hydrate((lo, hi))`** — warm the recent-state cache across a scan range ahead of batch analysis. Dispatches `replay_to` for uncached scans; no-op for scans already cached. Callers who want a firm guarantee should raise the `history_cache` budget rather than rely on `hydrate` alone, since subsequent activity may evict.
 - **VS Code Graph View** — new `Pyrung: Open Graph View` command opens an interactive tag dependency graph in the editor area. Cytoscape.js + dagre renders a left-to-right bipartite layout (tag nodes + rung nodes) with role-based coloring (blue inputs, amber pivots, green terminals). Click a tag to highlight neighbors, double-click to slice upstream (blue) / downstream (green), right-click to add to Data View or History. Includes abbreviation-aware search, role filter toggles, pin/hide with workspace persistence, and live value badges during debugging.
 - **Static program graph analysis** — new `pyrung.core.analysis.build_program_graph()` builds a `ProgramGraph` with rung summaries, `TagRole` classification, and SSA-style `TagVersion` def-use chains for whole-program tooling.
 - **VS Code Data View and live debugger updates** — the debugger now adds a Data View panel for watching, forcing, unforcing, and patching tags, live inline tag values, drag-to-reorder, and live History updates while a program is running. Tag flag badges (`RO`, `P`) appear next to tag names. Read-only tags are locked by default (inputs disabled) with a lock/unlock toggle for debugging. A "Public" filter checkbox hides all non-public tags when checked (greyed out until the debugger starts). DAP now also emits live `pyrungTrace` events during `continue` runs and structured force/patch requests for UI integrations.
@@ -27,6 +35,10 @@
 - **Snapshot-stable instruction helper conditions** — embedded helper conditions such as `.reset(...)`, counter `.down(...)`, shift `.clock()` / `.reset()`, and drum event/jump/jog/reset inputs now evaluate against the rung's frozen `ConditionView` instead of live mid-rung writes. `.continued()` snapshot reuse is now explicitly fenced to the same execution scope, so snapshots cannot leak across subroutine boundaries.
 - **Click subroutine export filenames** — `LadderBundle.write()` now preserves original subroutine CSV filenames instead of slugifying them, matching Click Programming Software expectations.
 - **VS Code webview script regressions** — fixed template-literal escaping bugs that could break the Data View or History panel, and `make lint` now syntax-checks embedded webview scripts to catch similar failures earlier.
+
+### Migration
+
+- Replace `PLC(logic, history_limit=N)` with `PLC(logic, history_cache=bytes)` — or drop the argument entirely to accept the 100 MB default. The semantics differ: `history_limit` capped retained state by snapshot count; `history_cache` caps by byte budget with a 20-entry floor. Older scans outside the cache reconstruct on demand via `replay_to`, so addressable history is unchanged — only the hot hit zone moves.
 
 ## v0.5.2 — Friendlier timer/counter API
 

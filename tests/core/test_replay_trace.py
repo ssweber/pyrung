@@ -64,7 +64,7 @@ def test_replay_trace_at_does_not_disturb_live_state() -> None:
 
     before_state = source.current_state
     before_playhead = source.playhead
-    before_window = list(source._recent_state_window)
+    before_cache_ids = list(source._recent_state_cache.keys())
     before_snapshot = source._scan_log.snapshot()
     before_traces = dict(source._current_rung_traces)
     before_traces_scan_id = source._current_rung_traces_scan_id
@@ -73,7 +73,7 @@ def test_replay_trace_at_does_not_disturb_live_state() -> None:
 
     assert source.current_state is before_state
     assert source.playhead == before_playhead
-    assert list(source._recent_state_window) == before_window
+    assert list(source._recent_state_cache.keys()) == before_cache_ids
     after_snapshot = source._scan_log.snapshot()
     assert after_snapshot.base_scan == before_snapshot.base_scan
     assert dict(after_snapshot.patches_by_scan) == dict(before_snapshot.patches_by_scan)

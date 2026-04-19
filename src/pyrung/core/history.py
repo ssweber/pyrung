@@ -2,8 +2,8 @@
 
 Stage 5 of the record-and-replay migration replaced the per-scan
 deque/dict snapshot store with a thin facade over the PLC's
-``_recent_state_window`` (~20 most recent committed scans, kept live
-for monitor ``previous_value`` and ``_prev:*`` edge detection) and
+byte-bounded recent-state cache (``_recent_state_cache``, an
+``OrderedDict[int, tuple[SystemState, int]]`` keyed by scan_id) and
 ``replay_to`` (reconstructs older scans on demand from the
 ``ScanLog`` plus checkpoints).
 
@@ -39,8 +39,8 @@ class LabeledSnapshot:
 class History:
     """Read-only query surface for historical ``SystemState``.
 
-    Backed by the owning PLC's ``_recent_state_window`` (cheap, recent
-    scans) and ``replay_to`` (older scans, reconstructed on demand).
+    Backed by the owning PLC's byte-bounded recent-state cache (cheap,
+    recent scans) and ``replay_to`` (older scans, reconstructed on demand).
     """
 
     def __init__(self, plc: PLC) -> None:
@@ -56,9 +56,9 @@ class History:
     def at(self, scan_id: int) -> SystemState:
         """Return the ``SystemState`` for ``scan_id``.
 
-        Recent scans (within the PLC's ``_recent_state_window``) and
-        scan-log checkpoints return live snapshots.  Older scans are
-        reconstructed via ``plc.replay_to(scan_id).current_state``;
+        Recent scans (within the PLC's byte-bounded recent-state cache)
+        and scan-log checkpoints return live snapshots.  Older scans
+        are reconstructed via ``plc.replay_to(scan_id).current_state``;
         each reconstruction forks from the nearest checkpoint and
         walks the scan log forward.
 
@@ -80,17 +80,18 @@ class History:
         if lo > hi:
             return []
 
-        window = self._plc._recent_state_window
-        window_lo = window[0].scan_id if window else tip + 1
+        cache = self._plc._recent_state_cache
+        cache_lo = self._plc._cache_oldest_scan_id()
+        window_lo = cache_lo if cache_lo is not None else tip + 1
         if lo >= window_lo:
-            return [s for s in window if lo <= s.scan_id <= hi]
+            return [state for sid, (state, _) in cache.items() if lo <= sid <= hi]
         if hi < window_lo:
             return self._plc._replay_range(lo, hi)
-        # Range straddles the window boundary: replay the older slice,
-        # serve the rest from the window.
+        # Range straddles the cache boundary: replay the older slice,
+        # serve the rest from the cache.
         replayed = self._plc._replay_range(lo, window_lo - 1)
-        windowed = [s for s in window if window_lo <= s.scan_id <= hi]
-        return replayed + windowed
+        cached = [state for sid, (state, _) in cache.items() if window_lo <= sid <= hi]
+        return replayed + cached
 
     def latest(self, n: int) -> list[SystemState]:
         """Return up to the latest ``n`` states (oldest -> newest)."""
@@ -124,10 +125,10 @@ class History:
         """Return the latest state with ``state.timestamp <= timestamp``.
 
         FIXED_STEP: ``scan_id = floor(timestamp / dt)``, clamped to the
-        addressable range.  REALTIME: walks the recent-state window for
+        addressable range.  REALTIME: walks the recent-state cache for
         in-range targets, otherwise walks the ``ScanLog`` ``dts`` array
         cumulatively to locate the scan.  REALTIME lookups outside the
-        window are O(N) in the number of recorded dts.
+        cache are O(N) in the number of recorded dts.
         """
         from pyrung.core.time_mode import TimeMode
 
@@ -147,16 +148,18 @@ class History:
             target = min(target, tip)
             return self.at(target)
 
-        # REALTIME: prefer the live window when the target falls inside it.
-        window = self._plc._recent_state_window
-        if window and timestamp >= window[0].timestamp:
-            best: SystemState | None = None
-            for state in window:
-                if state.timestamp <= timestamp:
-                    best = state
-                else:
-                    break
-            return best
+        # REALTIME: prefer the cache when the target falls inside it.
+        cache = self._plc._recent_state_cache
+        if cache:
+            first_state = next(iter(cache.values()))[0]
+            if timestamp >= first_state.timestamp:
+                best: SystemState | None = None
+                for _, (state, _) in cache.items():
+                    if state.timestamp <= timestamp:
+                        best = state
+                    else:
+                        break
+                return best
 
         # Older targets: walk dts cumulatively.  ``timestamp(scan_id) ==
         # sum(dts[:scan_id])``; find the largest scan_id with that

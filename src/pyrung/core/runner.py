@@ -11,7 +11,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import time
-from collections import deque
+from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
 from contextvars import Token
@@ -52,12 +52,33 @@ _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
 
-# Number of most recent committed scans retained as live ``SystemState``
-# objects.  These back ``History.at()`` for hot-path callers (monitor
-# ``previous_value``, ``_prev:*`` edge detection, recent diff/seek/
-# fork) without paying a replay walk.  Older scans are reconstructed
-# on demand via ``PLC.replay_to`` / ``PLC._replay_range``.
-_RECENT_STATE_WINDOW_SIZE = 20
+# Byte budget for the recent-state cache.  Replaces the fixed-count
+# ``deque(maxlen=20)`` with a byte-bounded ``OrderedDict`` that evicts
+# oldest entries when the budget is exceeded.  States are structurally
+# shared PMaps, so the per-entry estimator is a conservative ceiling.
+_RECENT_STATE_CACHE_BUDGET_BYTES = 100 * 1024 * 1024  # 100 MB
+
+# Floor: never evict below this many entries regardless of byte budget.
+# Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
+# present; the Stage 5 contract must not regress under budget pressure.
+_RECENT_STATE_CACHE_MIN_ENTRIES = 20
+
+# Conservative per-entry byte estimate for PMap HAMT nodes.
+_PER_PMAP_ENTRY_BYTES = 200
+
+# Fixed overhead for PRecord shell (scan_id, timestamp, two PMap roots).
+_STATE_BASE_BYTES = 200
+
+
+def _estimate_state_bytes(state: SystemState) -> int:
+    """Conservative ceiling estimate of a ``SystemState``'s memory footprint.
+
+    Uses PMap entry count times a fixed per-entry constant.  States are
+    structurally shared, so summing independent sizes would massively
+    overcount; this estimator is deliberately coarse.
+    """
+    entries = len(state.tags) + len(state.memory)
+    return _STATE_BASE_BYTES + entries * _PER_PMAP_ENTRY_BYTES
 
 
 def _validate_assume(logic: list[Any], assume: dict[str, Any]) -> None:
@@ -322,7 +343,7 @@ class PLC:
         *,
         dt: float | None = None,
         realtime: bool = False,
-        history_limit: int | None = None,
+        history_cache: int | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
     ) -> None:
@@ -335,8 +356,9 @@ class PLC:
                 Only used in fixed-step mode.
             realtime: Use wall-clock timing instead of fixed step.
                 Mutually exclusive with dt.
-            history_limit: Max retained snapshots including initial state.
-                Use None for unbounded history.
+            history_cache: Byte budget for the recent-state cache.
+                Defaults to ``_RECENT_STATE_CACHE_BUDGET_BYTES``
+                (100 MB).  Raises ``ValueError`` below 1 MB.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
             record_all_tags: Bypass the PDG-based rung-firing capture
@@ -350,12 +372,14 @@ class PLC:
             raise ValueError("Cannot specify dt= with realtime=True")
         if dt is None:
             dt = 0.010
-        if history_limit is not None and history_limit < 1:
-            raise ValueError("history_limit must be >= 1 or None")
         if checkpoint_interval is None:
             checkpoint_interval = _CHECKPOINT_INTERVAL_DEFAULT
         if checkpoint_interval < 1:
             raise ValueError("checkpoint_interval must be >= 1")
+        if history_cache is None:
+            history_cache = _RECENT_STATE_CACHE_BUDGET_BYTES
+        if history_cache < 1_048_576:
+            raise ValueError("history_cache must be >= 1 MB (1048576)")
 
         self._logic: list[Rung]
         self._program: Any = None
@@ -374,7 +398,6 @@ class PLC:
             self._logic = [logic]
 
         self._state = initial_state if initial_state is not None else SystemState()
-        self._history_limit = history_limit
         self._running = True
         self._battery_present = True
         self._state = self._apply_runtime_memory_flags(
@@ -382,11 +405,13 @@ class PLC:
             mode_run=self._running,
             battery_present=self._battery_present,
         )
-        # Recent committed-state ring buffer feeding ``History.at()`` on
+        # Byte-bounded recent-state cache feeding ``History.at()`` on
         # the hot path.  ``History`` itself is a stateless facade.
-        self._recent_state_window: deque[SystemState] = deque(
-            [self._state], maxlen=_RECENT_STATE_WINDOW_SIZE
-        )
+        # Keyed by scan_id → (SystemState, estimated_bytes).
+        self._recent_state_cache_budget = history_cache
+        self._recent_state_cache: OrderedDict[int, tuple[SystemState, int]] = OrderedDict()
+        self._recent_state_cache_bytes = 0
+        self._cache_state(self._state)
         # The "implicit anchor" for replay walks below the earliest
         # checkpoint.  Pinned at construction and refreshed only on
         # ``_reset_runtime_scope`` (reboot), so it remains valid even
@@ -471,8 +496,7 @@ class PLC:
         }
         if seed:
             self._state = self._state.with_tags(seed)
-            self._recent_state_window.clear()
-            self._recent_state_window.append(self._state)
+            self._reset_cache(self._state)
             self._initial_state = self._state
 
     @property
@@ -668,6 +692,7 @@ class PLC:
                 to_value=to,
                 pdg=self._ensure_pdg(),
                 assume=assume,
+                timelines=self._rung_firing_timelines,
             )
 
         from pyrung.core.analysis.causal import recorded_cause
@@ -679,6 +704,8 @@ class PLC:
             tag=tag,
             scan_id=scan,
             pdg=self._ensure_pdg() if self._logic else None,
+            timelines=self._rung_firing_timelines,
+            state_in_cache_fn=self._state_in_cache,
         )
 
     def effect(
@@ -749,7 +776,24 @@ class PLC:
             steady_state_k=steady_state_k,
             max_scans=max_scans,
             pdg=self._ensure_pdg() if self._logic else None,
+            timelines=self._rung_firing_timelines,
         )
+
+    def hydrate(self, scan_range: tuple[int, int]) -> None:
+        """Warm the recent-state cache across *scan_range* (inclusive).
+
+        Dispatches ``replay_to`` for uncached scans in the range.
+        Callers use this before batch analysis to convert would-be
+        cache-miss cause/effect steps to cache-hit.  No-op for scans
+        already cached.
+        """
+        lo, hi = scan_range
+        lo = max(lo, self._initial_scan_id)
+        hi = min(hi, self._state.scan_id)
+        for scan_id in range(lo, hi + 1):
+            if scan_id not in self._recent_state_cache:
+                state = self._state_at(scan_id)
+                self._cache_state(state)
 
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.
@@ -878,9 +922,9 @@ class PLC:
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=historical_state,
-            history_limit=self._history_limit,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
+            history_cache=self._recent_state_cache_budget,
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
@@ -904,9 +948,9 @@ class PLC:
         """
         if scan_id == self._state.scan_id:
             return self._state
-        for state in self._recent_state_window:
-            if state.scan_id == scan_id:
-                return state
+        entry = self._recent_state_cache.get(scan_id)
+        if entry is not None:
+            return entry[0]
         if scan_id in self._checkpoints:
             return self._checkpoints[scan_id]
         if scan_id == self._initial_scan_id:
@@ -914,6 +958,34 @@ class PLC:
         if self._initial_scan_id <= scan_id <= self._state.scan_id:
             return self.replay_to(scan_id).current_state
         raise KeyError(scan_id)
+
+    def _cache_state(self, state: SystemState) -> None:
+        """Add *state* to the recent-state cache, evicting if over budget."""
+        est = _estimate_state_bytes(state)
+        self._recent_state_cache[state.scan_id] = (state, est)
+        self._recent_state_cache_bytes += est
+        while (
+            self._recent_state_cache_bytes > self._recent_state_cache_budget
+            and len(self._recent_state_cache) > _RECENT_STATE_CACHE_MIN_ENTRIES
+        ):
+            _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
+            self._recent_state_cache_bytes -= evicted_est
+
+    def _reset_cache(self, state: SystemState) -> None:
+        """Clear cache and seed with a single *state*."""
+        self._recent_state_cache.clear()
+        self._recent_state_cache_bytes = 0
+        self._cache_state(state)
+
+    def _state_in_cache(self, scan_id: int) -> bool:
+        """True if *scan_id* is in the recent-state cache."""
+        return scan_id in self._recent_state_cache
+
+    def _cache_oldest_scan_id(self) -> int | None:
+        """Scan_id of the oldest cached entry, or None if empty."""
+        if not self._recent_state_cache:
+            return None
+        return next(iter(self._recent_state_cache))
 
     def _nearest_checkpoint_at_or_before(self, scan_id: int) -> int | None:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
@@ -1335,8 +1407,7 @@ class PLC:
             battery_present=self._battery_present,
         )
         self._set_rtc_internal(rtc_after_reset, self._state.timestamp)
-        self._recent_state_window.clear()
-        self._recent_state_window.append(self._state)
+        self._reset_cache(self._state)
         self._initial_scan_id = self._state.scan_id
         self._initial_state = self._state
         self._history._reset_labels()
@@ -1755,7 +1826,7 @@ class PLC:
             self._current_rung_traces = {}
             self._current_rung_traces_scan_id = None
             self._latest_committed_trace_event = None
-        self._recent_state_window.append(self._state)
+        self._cache_state(self._state)
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:

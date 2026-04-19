@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.history import History
     from pyrung.core.rung import Rung
+    from pyrung.core.rung_firings import RungFiringTimelines
     from pyrung.core.tag import Tag
 
 
@@ -154,20 +155,28 @@ class ChainStep:
     ``transition`` is the tag change produced by this rung.
     ``proximate_causes`` are inputs that transitioned (what flipped the rung).
     ``enabling_conditions`` are inputs that held steady (required but didn't change).
+    ``fidelity`` is ``"full"`` when SP-tree attribution was used (state
+    was cached), or ``"timeline"`` when only structural + timeline
+    data was available (cache miss — ``enabling_conditions`` will be
+    empty and ``proximate_causes`` is a superset of the true set).
     """
 
     transition: Transition
     rung_index: int
     proximate_causes: tuple[Transition, ...]
     enabling_conditions: tuple[EnablingCondition, ...]
+    fidelity: Literal["full", "timeline"] = "full"
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "transition": self.transition.to_dict(),
             "rung_index": self.rung_index,
             "proximate_causes": [t.to_dict() for t in self.proximate_causes],
             "enabling_conditions": [e.to_dict() for e in self.enabling_conditions],
         }
+        if self.fidelity != "full":
+            d["fidelity"] = self.fidelity
+        return d
 
 
 @dataclass
@@ -255,18 +264,21 @@ class CausalChain:
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable compact serialization for DAP / presets."""
+        steps: list[dict[str, Any]] = []
+        for s in self.steps:
+            entry: dict[str, Any] = {
+                "tag": s.transition.tag_name,
+                "scan": s.transition.scan_id,
+                "rung": s.rung_index,
+            }
+            if s.fidelity != "full":
+                entry["fidelity"] = s.fidelity
+            steps.append(entry)
         return {
             "effect": self.effect.tag_name,
             "scan": self.effect.scan_id,
             "mode": self.mode,
-            "steps": [
-                {
-                    "tag": s.transition.tag_name,
-                    "scan": s.transition.scan_id,
-                    "rung": s.rung_index,
-                }
-                for s in self.steps
-            ],
+            "steps": steps,
             "confidence": self.confidence,
         }
 
@@ -294,11 +306,15 @@ class CausalChain:
 
         for step in self.steps:
             t = step.transition
-            lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}")
+            fidelity_note = ""
+            if step.fidelity == "timeline":
+                fidelity_note = "  (partial; re-run with scan_id to hydrate)"
+            lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
             for pc in step.proximate_causes:
                 lines.append(f"    proximate: {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
-            for ec in step.enabling_conditions:
-                lines.append(f"    enabling:  {ec.tag_name} = {ec.value!r}")
+            if step.fidelity == "full":
+                for ec in step.enabling_conditions:
+                    lines.append(f"    enabling:  {ec.tag_name} = {ec.value!r}")
 
         return "\n".join(lines)
 
@@ -376,38 +392,52 @@ def _find_transition(
     history: History,
     tag_name: str,
     scan_id: int | None = None,
+    *,
+    timelines: RungFiringTimelines | None = None,
+    pdg: ProgramGraph | None = None,
 ) -> Transition | None:
     """Find a transition of *tag_name* in addressable history.
 
     If *scan_id* is given, check whether the tag changed at that exact scan.
     Otherwise find the most recent transition.
+
+    When *timelines* and *pdg* are provided, uses the firing timeline
+    instead of per-scan state reads — O(W × log S) where W is the
+    number of writer rungs for the tag.
     """
-    # TODO(stage-7): each ``history.at()`` past the recent-state window
-    # triggers a replay walk; replace this scan-by-scan loop with the
-    # rung-firings index once Stage 7 lands.
     ids = list(history.scan_ids())
 
     if scan_id is not None:
-        idx = None
-        for i, sid in enumerate(ids):
-            if sid == scan_id:
-                idx = i
-                break
-        if idx is None:
-            return None
-        state = history.at(scan_id)
-        to_value = state.tags.get(tag_name)
-        if idx > 0:
-            prev_state = history.at(ids[idx - 1])
-            from_value = prev_state.tags.get(tag_name)
-        else:
-            # First retained scan — treat default as from_value
-            from_value = None
-        if from_value != to_value:
-            return Transition(tag_name, scan_id, from_value, to_value)
-        return None
+        return _find_transition_at_scan(
+            history,
+            tag_name,
+            scan_id,
+            timelines=timelines,
+            pdg=pdg,
+        )
 
-    # Walk backward to find most recent transition
+    # Walk backward to find most recent transition.
+    # Timeline path: check each scan for a writer that changed the value.
+    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+    if timelines is not None and writers is not None and writers:
+        # Walk backward through scans using the timeline for value checks.
+        for i in range(len(ids) - 1, 0, -1):
+            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
+            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
+            if cur_val is not _NO_WRITE and prev_val is not _NO_WRITE and cur_val != prev_val:
+                return Transition(tag_name, ids[i], prev_val, cur_val)
+            if cur_val is not _NO_WRITE and prev_val is _NO_WRITE:
+                # No rung wrote the tag at the previous scan — fall
+                # back to state to get the prior value (could be a
+                # default or an external input).
+                prev_state_val = history.at(ids[i - 1]).tags.get(tag_name)
+                if cur_val != prev_state_val:
+                    return Transition(tag_name, ids[i], prev_state_val, cur_val)
+        # Timeline didn't find a write — may be PDG-filtered.
+        # Fall through to state reads.
+
+    # State-based fallback: external inputs (no writers), PDG-filtered
+    # writes, or no timeline available.
     for i in range(len(ids) - 1, 0, -1):
         cur_state = history.at(ids[i])
         prev_state = history.at(ids[i - 1])
@@ -422,21 +452,87 @@ def _find_transition_at_scan(
     history: History,
     tag_name: str,
     scan_id: int,
+    *,
+    timelines: RungFiringTimelines | None = None,
+    pdg: ProgramGraph | None = None,
 ) -> Transition | None:
-    """Check if *tag_name* transitioned at exactly *scan_id*."""
-    return _find_transition(history, tag_name, scan_id=scan_id)
+    """Check if *tag_name* transitioned at exactly *scan_id*.
+
+    Timeline path avoids state reads by checking writer firings.
+    """
+    ids = list(history.scan_ids())
+    idx = None
+    for i, sid in enumerate(ids):
+        if sid == scan_id:
+            idx = i
+            break
+    if idx is None:
+        return None
+
+    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+    if timelines is not None and writers is not None and writers:
+        to_value = _tag_value_at_scan(timelines, writers, tag_name, scan_id)
+        if to_value is not _NO_WRITE:
+            if idx > 0:
+                prev_result = timelines.last_tag_write_before(writers, tag_name, scan_id)
+                if prev_result is not None:
+                    from_value = prev_result[1]
+                else:
+                    from_value = history.at(ids[idx - 1]).tags.get(tag_name)
+            else:
+                from_value = None
+            if from_value != to_value:
+                return Transition(tag_name, scan_id, from_value, to_value)
+            return None
+        # _NO_WRITE — fall through to state reads (PDG-filtered or
+        # external input).
+
+    # State-based fallback
+    state = history.at(scan_id)
+    to_value = state.tags.get(tag_name)
+    if idx > 0:
+        prev_state = history.at(ids[idx - 1])
+        from_value = prev_state.tags.get(tag_name)
+    else:
+        from_value = None
+    if from_value != to_value:
+        return Transition(tag_name, scan_id, from_value, to_value)
+    return None
 
 
 def _find_last_transition_scan(
     history: History,
     tag_name: str,
     before_scan_id: int,
+    *,
+    timelines: RungFiringTimelines | None = None,
+    pdg: ProgramGraph | None = None,
 ) -> int | None:
     """Find the most recent scan where *tag_name* changed, before *before_scan_id*.
 
     Returns the scan_id, or None if no transition found in addressable history.
+
+    Timeline path uses reverse iteration over writer rung timelines —
+    O(W × log S) where W is the writer count.
     """
-    # TODO(stage-7): replace scan-by-scan walk with rung-firings index lookup.
+    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+    if timelines is not None and writers is not None and writers:
+        # Walk backward via the timeline's range lists.
+        ids = list(history.scan_ids())
+        for i in range(len(ids) - 1, 0, -1):
+            if ids[i] >= before_scan_id:
+                continue
+            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
+            if cur_val is _NO_WRITE:
+                continue
+            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
+            if prev_val is _NO_WRITE:
+                prev_val = history.at(ids[i - 1]).tags.get(tag_name)
+            if cur_val != prev_val:
+                return ids[i]
+        return None
+
+    # State-based fallback (also used for external-input tags with no writers)
     ids = list(history.scan_ids())
     for i in range(len(ids) - 1, 0, -1):
         if ids[i] >= before_scan_id:
@@ -452,6 +548,9 @@ def _find_recent_transition(
     history: History,
     tag_name: str,
     scan_id: int,
+    *,
+    timelines: RungFiringTimelines | None = None,
+    pdg: ProgramGraph | None = None,
 ) -> Transition | None:
     """Find a transition of *tag_name* at *scan_id* or the immediately preceding scan.
 
@@ -461,7 +560,13 @@ def _find_recent_transition(
     current and previous scan captures this one-scan propagation delay.
     """
     # Check exact scan first
-    t = _find_transition_at_scan(history, tag_name, scan_id)
+    t = _find_transition_at_scan(
+        history,
+        tag_name,
+        scan_id,
+        timelines=timelines,
+        pdg=pdg,
+    )
     if t is not None:
         return t
 
@@ -474,11 +579,44 @@ def _find_recent_transition(
             break
     if idx is not None and idx > 0:
         prev_scan = ids[idx - 1]
-        t = _find_transition_at_scan(history, tag_name, prev_scan)
+        t = _find_transition_at_scan(
+            history,
+            tag_name,
+            prev_scan,
+            timelines=timelines,
+            pdg=pdg,
+        )
         if t is not None:
             return t
 
     return None
+
+
+# Sentinel for "no rung wrote this tag at this scan".
+_NO_WRITE: Any = object()
+
+
+def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:
+    """Return the set of rung indices that can write *tag_name*."""
+    return pdg.writers_of.get(tag_name, frozenset())
+
+
+def _tag_value_at_scan(
+    timelines: RungFiringTimelines,
+    writers: frozenset[int],
+    tag_name: str,
+    scan_id: int,
+) -> Any:
+    """Return the value written to *tag_name* at *scan_id*, or ``_NO_WRITE``.
+
+    Checks each writer rung's timeline for a firing at ``scan_id``
+    that includes ``tag_name`` in its writes.
+    """
+    for rung_index in writers:
+        writes = timelines.rung_writes_at(rung_index, scan_id)
+        if writes is not None and tag_name in writes:
+            return writes[tag_name]
+    return _NO_WRITE
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +632,8 @@ def recorded_cause(
     scan_id: int | None = None,
     *,
     pdg: ProgramGraph | None = None,
+    timelines: RungFiringTimelines | None = None,
+    state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
 ) -> CausalChain | None:
     """Build a retrospective causal chain for a tag transition.
 
@@ -509,13 +649,21 @@ def recorded_cause(
             reads) have their rung-firing writes dropped from the log;
             this fallback recovers the writing rung by evaluating each
             candidate from ``writers_of`` against the historical state.
+        timelines: Per-rung firing timelines for O(log S) transition
+            detection without state reads.
 
     Returns:
         A ``CausalChain``, or ``None`` if no transition was found.
     """
     tag_name = tag if isinstance(tag, str) else tag.name
 
-    transition = _find_transition(history, tag_name, scan_id)
+    transition = _find_transition(
+        history,
+        tag_name,
+        scan_id,
+        timelines=timelines,
+        pdg=pdg,
+    )
     if transition is None:
         return None
 
@@ -534,6 +682,8 @@ def recorded_cause(
         ambiguous_roots=ambiguous_roots,
         visited=visited,
         pdg=pdg,
+        timelines=timelines,
+        state_in_cache_fn=state_in_cache_fn,
     )
 
     return CausalChain(
@@ -556,6 +706,8 @@ def _walk_backward(
     ambiguous_roots: list[Transition],
     visited: set[str],
     pdg: ProgramGraph | None = None,
+    timelines: RungFiringTimelines | None = None,
+    state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
 ) -> None:
     """Recursive backward walk from a single transition."""
     tag_name = transition.tag_name
@@ -610,45 +762,92 @@ def _walk_backward(
             conjunctive_roots.append(transition)
             continue
 
-        # Evaluate the SP tree against the historical state at this scan
-        state = history.at(scan_id)
-        view = _HistoricalView(state)
+        # Check if state is cached for full-fidelity SP-tree attribution.
+        cached = state_in_cache_fn is None or state_in_cache_fn(scan_id)
 
-        def _eval(cond: Condition, _v: Any = view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
+        if cached:
+            # Full fidelity: SP-tree attribution classifies contacts as
+            # proximate (transitioned) vs enabling (held steady).
+            state = history.at(scan_id)
+            view = _HistoricalView(state)
 
-        attributions = attribute(sp_tree, _eval)
+            def _eval(cond: Condition, _v: Any = view) -> bool:
+                return cond.evaluate(_v)  # type: ignore[arg-type]
 
-        # Classify each attributed contact
-        proximate: list[Transition] = []
-        enabling: list[EnablingCondition] = []
+            attributions = attribute(sp_tree, _eval)
 
-        for attr in attributions:
-            cond_tag = _condition_tag_name(attr.condition)
-            if cond_tag is None:
-                continue
+            proximate: list[Transition] = []
+            enabling: list[EnablingCondition] = []
 
-            cond_transition = _find_recent_transition(history, cond_tag, scan_id)
-            if cond_transition is not None:
-                proximate.append(cond_transition)
-            else:
-                held_since = _find_last_transition_scan(history, cond_tag, scan_id)
-                enabling.append(
-                    EnablingCondition(
-                        tag_name=cond_tag,
-                        value=state.tags.get(cond_tag),
-                        held_since_scan=held_since,
-                    )
+            for attr in attributions:
+                cond_tag = _condition_tag_name(attr.condition)
+                if cond_tag is None:
+                    continue
+
+                cond_transition = _find_recent_transition(
+                    history,
+                    cond_tag,
+                    scan_id,
+                    timelines=timelines,
+                    pdg=pdg,
                 )
+                if cond_transition is not None:
+                    proximate.append(cond_transition)
+                else:
+                    held_since = _find_last_transition_scan(
+                        history,
+                        cond_tag,
+                        scan_id,
+                        timelines=timelines,
+                        pdg=pdg,
+                    )
+                    enabling.append(
+                        EnablingCondition(
+                            tag_name=cond_tag,
+                            value=state.tags.get(cond_tag),
+                            held_since_scan=held_since,
+                        )
+                    )
 
-        steps.append(
-            ChainStep(
-                transition=transition,
-                rung_index=rung_idx,
-                proximate_causes=tuple(proximate),
-                enabling_conditions=tuple(enabling),
+            steps.append(
+                ChainStep(
+                    transition=transition,
+                    rung_index=rung_idx,
+                    proximate_causes=tuple(proximate),
+                    enabling_conditions=tuple(enabling),
+                )
             )
-        )
+        else:
+            # Timeline-only fidelity: no state available, so no SP-tree
+            # attribution.  Proximate candidates = rung contacts whose
+            # writers fired at N or N-1 (timeline + structural).
+            # Enabling conditions are empty (require state).
+            proximate_tl: list[Transition] = []
+            leaves = _collect_sp_leaves(sp_tree)
+            for leaf in leaves:
+                cond_tag = _condition_tag_name(leaf.condition)
+                if cond_tag is None:
+                    continue
+                cond_transition = _find_recent_transition(
+                    history,
+                    cond_tag,
+                    scan_id,
+                    timelines=timelines,
+                    pdg=pdg,
+                )
+                if cond_transition is not None:
+                    proximate_tl.append(cond_transition)
+
+            steps.append(
+                ChainStep(
+                    transition=transition,
+                    rung_index=rung_idx,
+                    proximate_causes=tuple(proximate_tl),
+                    enabling_conditions=(),
+                    fidelity="timeline",
+                )
+            )
+            proximate = proximate_tl  # for recursion check below
 
         if not proximate:
             # All contacts were enabling — the transition itself is a root
@@ -666,6 +865,8 @@ def _walk_backward(
                     ambiguous_roots=ambiguous_roots,
                     visited=visited,
                     pdg=pdg,
+                    timelines=timelines,
+                    state_in_cache_fn=state_in_cache_fn,
                 )
 
 
@@ -772,6 +973,7 @@ def recorded_effect(
     steady_state_k: int = 3,
     max_scans: int = 1000,
     pdg: ProgramGraph | None = None,
+    timelines: RungFiringTimelines | None = None,
 ) -> CausalChain | None:
     """Build a retrospective forward chain from a tag transition.
 
@@ -793,10 +995,18 @@ def recorded_effect(
             ``readers_of`` recovers them by flagging rungs that read any
             frontier tag.  Downstream tag values are resolved via
             history regardless of whether the rung was in the log.
+        timelines: Per-rung firing timelines for O(log S) transition
+            detection without state reads.
     """
     tag_name = tag if isinstance(tag, str) else tag.name
 
-    transition = _find_transition(history, tag_name, scan_id)
+    transition = _find_transition(
+        history,
+        tag_name,
+        scan_id,
+        timelines=timelines,
+        pdg=pdg,
+    )
     if transition is None:
         return None
 
@@ -807,8 +1017,6 @@ def recorded_effect(
     steps: list[ChainStep] = []
     seen_effects: set[str] = {tag_name}  # don't re-add the cause itself
 
-    # TODO(stage-7): forward walk replays state per scan past the recent
-    # window — replace with rung-firings index once Stage 7 lands.
     ids = list(history.scan_ids())
     try:
         start_idx = ids.index(transition.scan_id)
@@ -874,7 +1082,13 @@ def recorded_effect(
                     if written_tag in seen_effects:
                         continue
 
-                    effect_trans = _find_transition_at_scan(history, written_tag, current_scan)
+                    effect_trans = _find_transition_at_scan(
+                        history,
+                        written_tag,
+                        current_scan,
+                        timelines=timelines,
+                        pdg=pdg,
+                    )
                     if effect_trans is None:
                         continue
 
@@ -893,7 +1107,13 @@ def recorded_effect(
                         attr_tag = _condition_tag_name(attr.condition)
                         if attr_tag is None or attr_tag == cause_tag:
                             continue
-                        held_since = _find_last_transition_scan(history, attr_tag, current_scan)
+                        held_since = _find_last_transition_scan(
+                            history,
+                            attr_tag,
+                            current_scan,
+                            timelines=timelines,
+                            pdg=pdg,
+                        )
                         enabling.append(
                             EnablingCondition(
                                 tag_name=attr_tag,
@@ -992,11 +1212,30 @@ def _rung_writes_value_when_enabled(
 # ---------------------------------------------------------------------------
 
 
-def _has_observed_transition(history: History, tag_name: str, to_value: Any) -> bool:
+def _has_observed_transition(
+    history: History,
+    tag_name: str,
+    to_value: Any,
+    *,
+    timelines: RungFiringTimelines | None = None,
+    pdg: ProgramGraph | None = None,
+) -> bool:
     """Check whether *tag_name* has ever transitioned to *to_value* in history."""
-    # TODO(stage-7): scan-by-scan walk past the recent window replays
-    # state per scan; switch to a rung-firings index lookup in Stage 7.
     ids = list(history.scan_ids())
+    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
+    if timelines is not None and writers is not None and writers:
+        for i in range(1, len(ids)):
+            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
+            if cur_val is _NO_WRITE:
+                continue
+            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
+            if prev_val is _NO_WRITE:
+                prev_val = history.at(ids[i - 1]).tags.get(tag_name)
+            if cur_val != prev_val and cur_val == to_value:
+                return True
+        return False
+
+    # State-based fallback (also used for external-input tags with no writers)
     for i in range(1, len(ids)):
         cur_val = history.at(ids[i]).tags.get(tag_name)
         prev_val = history.at(ids[i - 1]).tags.get(tag_name)
@@ -1012,6 +1251,8 @@ def projected_cause(
     to_value: Any,
     pdg: ProgramGraph,
     assume: dict[str, Any] | None = None,
+    *,
+    timelines: RungFiringTimelines | None = None,
 ) -> CausalChain:
     """Build a projected causal chain: what would need to happen for *tag*
     to reach *to_value*?
@@ -1166,7 +1407,11 @@ def projected_cause(
                 # assume dict are reachable by stipulation.
                 is_input = not pdg.writers_of.get(cond_tag, frozenset())
                 reachable = (assume and cond_tag in assume) or _has_observed_transition(
-                    history, cond_tag, needed_value
+                    history,
+                    cond_tag,
+                    needed_value,
+                    timelines=timelines,
+                    pdg=pdg,
                 )
 
                 if reachable or is_input:

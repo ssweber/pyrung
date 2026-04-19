@@ -1,12 +1,10 @@
 """Tests for PLC history retention and queries.
 
 Stage 5 (record-and-replay) replaced ``History``'s deque/dict storage
-with a thin facade over the PLC's ``_recent_state_window`` and
-``replay_to``.  The ``history_limit`` constructor parameter is
-preserved for backward compat (it still validates ``>= 1`` or
-``None``) but no longer evicts state — every scan from ``0`` to the
-current tip is addressable.  Stage 8 will pick a real retention
-bound; for now the only practical limit is process memory.
+with a thin facade over the PLC's byte-bounded recent-state cache and
+``replay_to``.  Every scan from ``0`` to the current tip is
+addressable; recent scans are served from the cache, older scans are
+reconstructed via ``replay_to`` from the nearest checkpoint.
 """
 
 from __future__ import annotations
@@ -73,33 +71,18 @@ def test_history_latest_returns_chronological_window_with_bounds() -> None:
 
 
 def test_unbounded_history_retains_all_scans() -> None:
-    runner = PLC(logic=[], history_limit=None)
+    runner = PLC(logic=[])
     runner.run(cycles=6)
 
     assert _scan_ids(runner) == [0, 1, 2, 3, 4, 5, 6]
 
 
-def test_history_limit_is_no_op_after_facade_swap() -> None:
-    """``history_limit=N`` accepts the value but no longer evicts state."""
-    runner = PLC(logic=[], history_limit=3)
+def test_history_cache_validation_rejects_below_1mb() -> None:
+    with pytest.raises(ValueError, match="history_cache must be >= 1 MB"):
+        PLC(logic=[], history_cache=0)
 
-    runner.step()
-    runner.step()
-    runner.step()
-    runner.step()
-
-    # All scans 0..4 remain addressable through the replay-backed facade.
-    assert _scan_ids(runner) == [0, 1, 2, 3, 4]
-    for scan_id in range(5):
-        assert runner.history.at(scan_id).scan_id == scan_id
-
-
-def test_history_limit_validation_rejects_zero_or_negative() -> None:
-    with pytest.raises(ValueError, match="history_limit must be >= 1 or None"):
-        PLC(logic=[], history_limit=0)
-
-    with pytest.raises(ValueError, match="history_limit must be >= 1 or None"):
-        PLC(logic=[], history_limit=-5)
+    with pytest.raises(ValueError, match="history_cache must be >= 1 MB"):
+        PLC(logic=[], history_cache=500_000)
 
 
 def test_playhead_starts_at_tip_and_tracks_new_scans() -> None:
@@ -338,12 +321,14 @@ def test_fork_from_starts_with_same_rtc_as_parent_at_selected_scan() -> None:
     assert fork.debug.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
-def test_fork_from_inherits_history_limit_param_without_eviction() -> None:
-    """``history_limit`` is preserved across fork as a no-op constructor arg."""
-    runner = PLC(logic=[], history_limit=3)
+def test_fork_from_inherits_history_cache_budget() -> None:
+    """``history_cache`` is propagated across fork."""
+    budget = 2 * 1024 * 1024  # 2 MB
+    runner = PLC(logic=[], history_cache=budget)
     runner.run(cycles=5)
 
     fork = runner.fork_from(4)
+    assert fork._recent_state_cache_budget == budget
     assert _scan_ids(fork) == [4]
 
     fork.step()

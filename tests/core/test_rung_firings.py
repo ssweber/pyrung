@@ -126,7 +126,7 @@ def test_history_eviction_removes_firings() -> None:
         with Rung():
             out(Bool("X"))
 
-    runner = PLC(logic, history_limit=3, record_all_tags=True)
+    runner = PLC(logic, record_all_tags=True)
 
     runner.step()  # scan 1 — [0, 1]
     runner.step()  # scan 2 — [0, 1, 2]

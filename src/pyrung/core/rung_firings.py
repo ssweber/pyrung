@@ -311,6 +311,61 @@ class RungFiringTimelines:
         """Rung indices with at least one range in their timeline."""
         return {idx for idx, tl in self._timelines.items() if tl}
 
+    def rung_writes_at(self, rung_index: int, scan_id: int) -> PMap | None:
+        """Return the writes for a single rung at ``scan_id``, or ``None``.
+
+        O(log S) per call — binary search over the rung's range list.
+        """
+        timeline = self._timelines.get(rung_index)
+        if timeline is None:
+            return None
+        range_ = _binary_search_range(timeline, scan_id)
+        if range_ is None:
+            return None
+        payload = range_.payload
+        if isinstance(payload, PatternRef):
+            return payload.pattern
+        if isinstance(payload, AlternatingRun):
+            parity = (scan_id - range_.start_scan_id) % 2
+            return payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
+        return self._fired_only_writes[rung_index]
+
+    def last_tag_write_before(
+        self,
+        writer_indices: frozenset[int],
+        tag_name: str,
+        before_scan_id: int,
+    ) -> tuple[int, Any] | None:
+        """Find the most recent scan < ``before_scan_id`` where any rung in
+        ``writer_indices`` wrote ``tag_name``.
+
+        Returns ``(scan_id, value)`` or ``None``.  For ``FiredOnly``
+        payloads the value is the sentinel — callers that need a real
+        value must fall back to state reads.  Iterates range lists
+        backward; O(W × log S) where W = ``len(writer_indices)``.
+        """
+        best_scan: int | None = None
+        best_value: Any = None
+        for rung_index in writer_indices:
+            timeline = self._timelines.get(rung_index)
+            if not timeline:
+                continue
+            result = _last_tag_write_in_timeline(
+                timeline,
+                rung_index,
+                tag_name,
+                before_scan_id,
+                self._fired_only_writes.get(rung_index),
+            )
+            if result is not None:
+                scan, value = result
+                if best_scan is None or scan > best_scan:
+                    best_scan = scan
+                    best_value = value
+        if best_scan is None:
+            return None
+        return (best_scan, best_value)
+
     # ---------------------------------------------------------------
     # Lifecycle
     # ---------------------------------------------------------------
@@ -418,6 +473,46 @@ def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange
             pattern_on_odd=payload.pattern_on_even,
         )
     return RungFiringRange(new_start, range_.end_scan_id, payload)
+
+
+def _last_tag_write_in_timeline(
+    timeline: list[RungFiringRange],
+    rung_index: int,
+    tag_name: str,
+    before_scan_id: int,
+    fired_only_writes: PMap | None,
+) -> tuple[int, Any] | None:
+    """Find the most recent scan < ``before_scan_id`` where this rung wrote ``tag_name``.
+
+    Walks ranges backward from the tail.  Returns ``(scan_id, value)``
+    or ``None``.
+    """
+    for i in range(len(timeline) - 1, -1, -1):
+        range_ = timeline[i]
+        if range_.start_scan_id >= before_scan_id:
+            continue
+        # Clamp to just before before_scan_id
+        effective_end = min(range_.end_scan_id, before_scan_id - 1)
+        payload = range_.payload
+        if isinstance(payload, PatternRef):
+            val = payload.pattern.get(tag_name)
+            if val is not None:
+                return (effective_end, val)
+        elif isinstance(payload, AlternatingRun):
+            # Check effective_end and effective_end-1 (covers both parities)
+            for scan in (effective_end, effective_end - 1):
+                if scan < range_.start_scan_id:
+                    continue
+                parity = (scan - range_.start_scan_id) % 2
+                pat = payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
+                val = pat.get(tag_name)
+                if val is not None:
+                    return (scan, val)
+        else:
+            # FiredOnly — return sentinel value
+            if fired_only_writes is not None and tag_name in fired_only_writes:
+                return (effective_end, fired_only_writes[tag_name])
+    return None
 
 
 def _binary_search_range(timeline: list[RungFiringRange], scan_id: int) -> RungFiringRange | None:
