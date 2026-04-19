@@ -1,13 +1,13 @@
-"""Stage 1 recorder-shim tests.
+"""ScanLog recorder-shim tests.
 
 These tests exercise the capture surface of ``ScanLog`` without any
-replay consumer — Stage 2/4 add replay and a full determinism harness.
-The goal here is to confirm:
+replay consumer.  The goal here is to confirm:
 
 - Every nondeterminism channel (patches, force changes, RTC base,
   dt in REALTIME, lifecycle) lands in the log under the right scan_id.
 - Idle scans add zero bytes to the log.
 - The log ``snapshot()`` is truly decoupled from subsequent writes.
+- ``trim_before`` correctly advances the replay horizon.
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ def test_fresh_log_is_empty():
 
 
 def test_idle_scans_cost_zero_bytes():
-    # Checkpoints (Stage 3) force-write the current force map every K
-    # scans as a replay correctness invariant — that cost lives in a
-    # separate budget line, not the per-scan log growth this test
+    # Checkpoints force-write the current force map every K scans as a
+    # replay correctness invariant — that cost lives in a separate
+    # budget line, not the per-scan log growth this test
     # pins down.  Disable checkpoints for this run so the log-level
     # "idle scans contribute zero bytes" claim stays testable.
     plc = _idle_plc(checkpoint_interval=10_001)
@@ -227,3 +227,98 @@ def test_scan_log_direct_construction():
     log = ScanLog(time_mode=TimeMode.REALTIME, base_scan=42)
     assert log.base_scan == 42
     assert log.records_dt is True
+
+
+# ---------------------------------------------------------------------------
+# trim_before tests
+# ---------------------------------------------------------------------------
+
+
+def test_trim_before_drops_sparse_dict_entries():
+    plc = _idle_plc(checkpoint_interval=1000)
+    plc.patch({"X": 1})
+    plc.step()  # scan 1 — patch lands here
+    plc.patch({"Y": 2})
+    plc.step()  # scan 2
+    plc.patch({"Z": 3})
+    plc.step()  # scan 3
+
+    plc._scan_log.trim_before(2)  # drop scan 1
+
+    snap = plc._scan_log.snapshot()
+    assert 1 not in snap.patches_by_scan
+    assert 2 in snap.patches_by_scan
+    assert 3 in snap.patches_by_scan
+    assert plc._scan_log.base_scan == 2
+
+
+def test_trim_before_noop_when_at_or_below_base():
+    log = ScanLog(time_mode=TimeMode.FIXED_STEP)
+    log.record_patches(5, {"A": 1})
+    log.trim_before(0)  # no-op
+    assert log.base_scan == 0
+    snap = log.snapshot()
+    assert 5 in snap.patches_by_scan
+
+
+def test_trim_before_idle_tail_still_zero_bytes():
+    plc = _idle_plc(checkpoint_interval=1000)
+    plc.patch({"X": 1})
+    plc.step()  # scan 1
+    # 10 idle scans
+    for _ in range(10):
+        plc.step()
+
+    plc._scan_log.trim_before(2)  # trim the one patch entry
+
+    assert plc._scan_log.bytes_estimate() == 0
+
+
+def test_trim_before_realtime_rebases_dts():
+    plc = PLC(logic=[], realtime=True)
+    for _ in range(5):
+        plc.step()  # scans 1–5
+
+    log = plc._scan_log
+    before_base = log.base_scan
+    assert before_base == 0
+
+    log.trim_before(3)
+
+    assert log.base_scan == 3
+    # The dts array should now start at index 0 == scan 3
+    snap = log.snapshot()
+    assert snap.base_scan == 3
+    assert len(snap.dts) == 3  # scans 3, 4, 5
+
+    # Appending a new scan after trim must use the new base
+    log.record_dt(6, 0.012)
+    assert len(log._dts) == 4  # index 6-3=3 → slot 3
+
+
+def test_trim_before_drops_lifecycle_events():
+    plc = _idle_plc()
+    plc.step()  # scan 1
+    plc.stop()  # lifecycle at_scan_id=2
+    plc.step()  # scan 2
+
+    snap_before = plc._scan_log.snapshot()
+    assert len(snap_before.lifecycle_events) == 1
+    assert snap_before.lifecycle_events[0].at_scan_id == 2
+
+    plc._scan_log.trim_before(3)  # drop scan 2 lifecycle
+
+    snap_after = plc._scan_log.snapshot()
+    assert snap_after.lifecycle_events == ()
+
+
+def test_trim_before_keeps_lifecycle_at_horizon():
+    plc = _idle_plc()
+    plc.step()  # scan 1
+    plc.stop()  # lifecycle at_scan_id=2
+    plc.step()  # scan 2
+
+    plc._scan_log.trim_before(2)  # horizon = 2, event at_scan_id=2 — keep
+
+    snap = plc._scan_log.snapshot()
+    assert len(snap.lifecycle_events) == 1

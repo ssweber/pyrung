@@ -494,8 +494,8 @@ def test_trim_preserves_fired_only_sentinel() -> None:
     assert set(timelines._fired_only_writes[0].keys()) == pre_sentinel_keys
 
 
-def test_plc_trim_hook_is_idempotent() -> None:
-    """PLC._trim_firings_before runs cleanly with no caller wired yet."""
+def test_plc_trim_history_before_trims_firings() -> None:
+    """_trim_history_before trims rung-firing timelines in lockstep."""
     Enable = Bool("Enable")
     Light = Bool("Light")
 
@@ -503,15 +503,15 @@ def test_plc_trim_hook_is_idempotent() -> None:
         with Rung(Enable):
             out(Light)
 
-    runner = PLC(logic, record_all_tags=True)
+    runner = PLC(logic, record_all_tags=True, checkpoint_interval=10)
     runner.patch({"Enable": True})
     for _ in range(5):
         runner.step()
-    # No-op: horizon before any recorded scan.
-    runner._trim_firings_before(0)
+    # No-op: horizon below any recorded scan.
+    runner._trim_history_before(0)
     assert runner._rung_firing_timelines.ever_fired() == {0}
 
     # Trim to midway — first half of the range drops.
-    runner._trim_firings_before(3)
+    runner._trim_history_before(3)
     remaining = runner._rung_firing_timelines._timelines[0]
     assert remaining[0].start_scan_id == 3

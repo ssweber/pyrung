@@ -80,9 +80,9 @@ def test_snapshot_labels_deduplicate_same_label_on_same_scan() -> None:
 
 
 def test_snapshot_labels_survive_history_window_rotation() -> None:
-    """Labels are decoupled from state storage post-Stage-5 — early
-    snapshots stay findable even after the recent-state window has
-    rotated past their scans."""
+    """Labels are decoupled from state storage — early snapshots stay
+    findable even after the recent-state window has rotated past their
+    scans."""
     runner = PLC(logic=[])
     runner.when(lambda state: state.scan_id in {1, 3}).snapshot("milestone")
 

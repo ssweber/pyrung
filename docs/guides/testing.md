@@ -218,7 +218,7 @@ def test_motor_transitions():
 
 ```python
 def test_capture_fault_state():
-    with PLC(logic, history_limit=1000, dt=0.1) as plc:
+    with PLC(logic, dt=0.1) as plc:
         plc.when(Fault).snapshot("fault_triggered")
 
         Start.value = True
@@ -237,7 +237,7 @@ For debugging tests, `diff` shows exactly what changed between two scans:
 
 ```python
 def test_inspect_changes():
-    with PLC(logic, history_limit=100, dt=0.1) as plc:
+    with PLC(logic, dt=0.1) as plc:
         Start.value = True
         plc.step()   # scan 1
 

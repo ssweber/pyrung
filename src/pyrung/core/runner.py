@@ -60,7 +60,7 @@ _RECENT_STATE_CACHE_BUDGET_BYTES = 100 * 1024 * 1024  # 100 MB
 
 # Floor: never evict below this many entries regardless of byte budget.
 # Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
-# present; the Stage 5 contract must not regress under budget pressure.
+# present; the recent-state cache floor must not regress under budget pressure.
 _RECENT_STATE_CACHE_MIN_ENTRIES = 20
 
 # Conservative per-entry byte estimate for PMap HAMT nodes.
@@ -444,7 +444,7 @@ class PLC:
         self._checkpoints: dict[int, SystemState] = {}
         self._forces_last_recorded: dict[str, bool | int | float | str] = {}
         self._this_scan_drained_patches: dict[str, bool | int | float | str] = {}
-        # Stage 4 replay plumbing. ``_dt_override_for_next_scan`` lets
+        # Replay plumbing. ``_dt_override_for_next_scan`` lets
         # ``replay_to`` inject the recorded dt for each replayed scan in
         # REALTIME mode; ``_replay_mode`` suppresses user monitors,
         # breakpoint labels, and the RTC setter during a replay walk.
@@ -991,15 +991,21 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
-    def _trim_firings_before(self, min_scan_id: int) -> None:
-        """Sweep rung-firing timelines to drop data older than ``min_scan_id``.
+    def _trim_history_before(self, scan_id: int) -> None:
+        """Advance the replay horizon to scan_id.
 
-        Exists so that when a later stage wires log-trim retention, the
-        rung-firing side trims in lockstep (design doc §"Eviction:
-        sweep on log-trim").  No caller today — log trimming lands in
-        a later stage.
+        Trims the scan log, rung-firing timelines, and checkpoints in
+        lockstep.  After this call, ``history.at(k)`` for k < scan_id
+        raises (no log data, no checkpoint to anchor from).
+
+        No default caller — a retention policy decides when to call
+        this.  Callers must ensure at least one checkpoint at or after
+        scan_id survives to anchor future replays.
         """
-        self._rung_firing_timelines.trim_before(min_scan_id)
+        self._scan_log.trim_before(scan_id)
+        self._rung_firing_timelines.trim_before(scan_id)
+        for cp in [k for k in self._checkpoints if k < scan_id]:
+            del self._checkpoints[cp]
 
     def _build_replay_fork(
         self, anchor: int | None
@@ -1010,7 +1016,7 @@ class PLC:
         ``_nearest_checkpoint_at_or_before``) or ``None``.  When ``None``
         the fork anchors at ``self._initial_scan_id``.  The returned
         fork has ``_replay_mode=True`` and (when anchored at a real
-        checkpoint) its force map seeded from the log.  The Stage 3
+        checkpoint) its force map seeded from the log.  The checkpoint
         bypass guarantees every checkpoint scan carries a full force
         snapshot; anchoring at ``_initial_scan_id`` starts with an empty
         force map, matching default PLC construction.
@@ -1076,6 +1082,12 @@ class PLC:
         if target_scan_id > self._state.scan_id:
             raise ValueError(
                 f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+            )
+        log_base = self._scan_log.base_scan
+        if target_scan_id < log_base:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} predates the log horizon "
+                f"({log_base}); those scans have been trimmed"
             )
 
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)

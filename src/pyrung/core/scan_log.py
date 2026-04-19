@@ -144,6 +144,30 @@ class ScanLog:
             lifecycle_events=tuple(self._lifecycle_events),
         )
 
+    def trim_before(self, scan_id: int) -> None:
+        """Advance the replay horizon: drop all log entries for scans < scan_id.
+
+        After this call, replay_to(k) for k < scan_id is unsupported —
+        the inputs needed to reconstruct those scans are gone.  The
+        caller is responsible for trimming checkpoints in lockstep so
+        that at least one anchor at or after scan_id survives.
+
+        No-op if scan_id <= base_scan (nothing to drop).
+        """
+        if scan_id <= self._base_scan:
+            return
+        for d in (self._patches_by_scan, self._force_changes_by_scan, self._rtc_base_changes):
+            for k in [k for k in d if k < scan_id]:
+                del d[k]
+        if self._dts is not None:
+            drop = scan_id - self._base_scan
+            if drop > 0:
+                del self._dts[:drop]
+            self._base_scan = scan_id
+        else:
+            self._base_scan = scan_id
+        self._lifecycle_events = [e for e in self._lifecycle_events if e.at_scan_id >= scan_id]
+
     def bytes_estimate(self) -> int:
         """Rough memory estimate for tests and benchmarking.
 

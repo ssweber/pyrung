@@ -1,10 +1,10 @@
 """Tests for PLC history retention and queries.
 
-Stage 5 (record-and-replay) replaced ``History``'s deque/dict storage
-with a thin facade over the PLC's byte-bounded recent-state cache and
-``replay_to``.  Every scan from ``0`` to the current tip is
-addressable; recent scans are served from the cache, older scans are
-reconstructed via ``replay_to`` from the nearest checkpoint.
+``History`` is a stateless facade over the PLC's byte-bounded
+recent-state cache and ``replay_to``.  Every scan from ``0`` to the
+current tip is addressable; recent scans are served from the cache,
+older scans are reconstructed via ``replay_to`` from the nearest
+checkpoint.
 """
 
 from __future__ import annotations

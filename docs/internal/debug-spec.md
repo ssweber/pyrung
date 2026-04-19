@@ -378,10 +378,11 @@ History stores immutable `SystemState` snapshots (including initial state).
 
 ### Capacity
 
-- Configurable `history_limit: int | None` (`None` = unbounded).
-- When limit is exceeded, oldest scans are evicted (ring buffer behavior).
-- Labels and traces for evicted scans are evicted too.
-- If playhead points to an evicted scan, it moves to oldest retained scan.
+- Configurable `history_cache` (byte budget, default 100 MB, minimum 1 MB).
+- Recent scans served from the byte-bounded state cache; older scans
+  reconstructed on demand via `replay_to` from the nearest checkpoint.
+- Every scan from initial to tip is addressable regardless of cache pressure.
+- Labels survive state-cache eviction (overlay, not tied to state storage).
 
 ### Time travel
 

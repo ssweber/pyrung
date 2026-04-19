@@ -238,10 +238,18 @@ at the top of `analysis/causal.py` for the architecture.
 
 ## Stage 8 — Tune K, finalize
 
+Note: commit `4ac815b` (labeled "Stage 8") actually landed the companion
+cause/effect work from `record-and-replay-cause-effect.md` (byte-budgeted
+state cache, timeline-routed transition finding, `ChainStep.fidelity`,
+`PLC.hydrate()`).  The original Stage 8 items below are the true finalization
+tasks:
+
 - [ ] Benchmark `K ∈ {100, 200, 500}` on `click_conveyor.py` and a busy program — scrub latency vs. checkpoint memory.
-- [ ] Verify success criteria: idle 0 bytes/scan, 1-hour FIXED_STEP <10 MB, fork-at-history <100 ms worst case.
-- [ ] Retire `_rung_firings_by_scan` residuals; delete `tests/core/test_scan_pmap_sharing.py` if it now tests an obsolete property (replaced by direct log-bytes assertions).
-- [ ] **Scrub stage markers from the codebase.** `git grep -n 'Stage [0-9]'` across `src/` and `tests/` — module/test docstrings, section banners, comments all reference Stages 0–9 during the migration. Once everything ships the staging is ancient history; leaving the markers in rots into noise. Keep only commentary whose meaning outlives the migration (e.g. "replay correctness invariant"), drop the "Stage N ..." framing.
+- [ ] Verify success criteria: idle 0 bytes/scan, fork-at-history <100 ms worst case. (1-hour <10 MB is now blocked on wiring a retention policy into `_trim_history_before` — see below.)
+- [x] Retire `_rung_firings_by_scan` residuals — fully removed from `src/` and `tests/` (only scratchpad docs reference the old name). `tests/core/test_scan_pmap_sharing.py` retained: its idle-PMap-identity and idle-timeline-range-extension tests are still load-bearing regressions; the module name is stale but the tests are not.
+- [x] **Scrub stage markers from the codebase.** Done: `history.py`, `runner.py`, `test_scan_log.py`, `test_record_and_replay.py`, `test_replay_trace.py`, `test_history.py`, `test_breakpoints_labels.py` all cleaned. Remaining `Stage N` hits are the validation pipeline's permanent stage names (`src/pyrung/core/validation/__init__.py` and its tests) — intentionally left.
+- [x] **Log-trim plumbing shipped.** `ScanLog.trim_before(N)` + `PLC._trim_history_before(N)` (trims log, firings, and checkpoints in lockstep). `replay_to` guards against trimmed targets (`ValueError: trimmed`). No default caller / retention policy wired yet — pick a policy shape after K benchmarks reveal realistic budgets.
+- [x] **Doc scrub.** `history_limit` → `history_cache` in `CLAUDE.md`, `docs/guides/runner.md`, `docs/guides/testing.md`, `docs/internal/debug-spec.md`.
 
 ## Stage 9 — Derived edge tags (side quest; small, optional)
 

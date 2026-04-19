@@ -1,11 +1,11 @@
 """Historical rung-trace reconstruction via ``PLC.replay_trace_at``.
 
-Covers the Stage 6 primitive that regenerates per-rung traces for a
-historical scan by replaying to ``target_scan_id - 1`` on the plain
-path and driving ``_scan_steps_debug`` for the final scan.  The
-``_replay_mode`` guards (monitors, breakpoints, in-scan RTC setter)
-suppress side effects on both paths — commit is shared between
-``_scan_steps`` and ``_scan_steps_debug``.
+``replay_trace_at`` regenerates per-rung traces for a historical scan
+by replaying to ``target_scan_id - 1`` on the plain path and driving
+``_scan_steps_debug`` for the final scan.  The ``_replay_mode`` guards
+(monitors, breakpoints, in-scan RTC setter) suppress side effects on
+both paths — commit is shared between ``_scan_steps`` and
+``_scan_steps_debug``.
 
 Also covers the one-slot cache (``_cached_replay_trace``), which hits
 on repeat queries for the same ``target_scan_id`` and invalidates on

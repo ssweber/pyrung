@@ -67,7 +67,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 ### Debug System
 
-- **History**: `runner.history.at(scan_id)`, `.range()`, `.latest()`, configurable `history_limit`
+- **History**: `runner.history.at(scan_id)`, `.range()`, `.latest()`, configurable `history_cache` (byte budget, default 100 MB)
 - **Breakpoints**: `runner.when(condition).pause()` / `.snapshot("label")`
 - **Monitors**: `runner.monitor(tag, callback)` fires on committed value changes
 - **Time travel**: `runner.seek(scan_id)`, `runner.rewind(seconds)`, `runner.playhead`

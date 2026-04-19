@@ -1,11 +1,10 @@
 """Historical SystemState query facade for PLC debug APIs.
 
-Stage 5 of the record-and-replay migration replaced the per-scan
-deque/dict snapshot store with a thin facade over the PLC's
-byte-bounded recent-state cache (``_recent_state_cache``, an
-``OrderedDict[int, tuple[SystemState, int]]`` keyed by scan_id) and
-``replay_to`` (reconstructs older scans on demand from the
-``ScanLog`` plus checkpoints).
+``History`` is a stateless facade over the owning PLC.  State storage
+lives in the PLC's byte-bounded recent-state cache (``_recent_state_cache``,
+an ``OrderedDict[int, tuple[SystemState, int]]`` keyed by scan_id) for
+recent scans and in ``replay_to`` (reconstructs older scans on demand
+from the ``ScanLog`` plus checkpoints) for the rest.
 
 This class no longer holds ``SystemState`` objects directly except
 through its back-reference to the owning ``PLC``.  Labels remain on

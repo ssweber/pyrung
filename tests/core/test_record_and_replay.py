@@ -1,18 +1,10 @@
 """Per-channel determinism tests routed through ``PLC.replay_to``.
 
-Originally introduced in Stage 2 against a test-only walker
-(``_replay_from_log_for_test``); Stage 4 retires that helper in favor
-of the public ``PLC.replay_to`` entry point backed by real checkpoints
-and a ``_replay_mode`` guard that silences user monitors, breakpoint
-labels, and the in-scan RTC setter during replay.
-
 Every nondeterminism channel is exercised in isolation so a regression
 in one surfaces as a specific failing test.  The ``reboot()``
-lifecycle — deferred in Stage 2 because the log couldn't sequence
-pre/post-reboot scans — is now covered: Stage 4 treats reboot as a
-destructive log reset (Option B from the design doc), so post-reboot
-replay anchors on the fresh log and the pre-reboot era is simply not
-replay-addressable.
+lifecycle is covered: reboot is treated as a destructive log reset
+(Option B), so post-reboot replay anchors on the fresh log and the
+pre-reboot era is not replay-addressable.
 
 Mutation verification — each mutation confirmed to surface as the
 listed failing test(s) against a deliberately broken ``replay_to``
@@ -20,7 +12,7 @@ listed failing test(s) against a deliberately broken ``replay_to``
 
 - Skip applying forces → ``forces_add_remove`` +
   ``lifecycle_clear_forces`` + ``across_multiple_checkpoints`` +
-  ``forces_across_checkpoint`` (Stage 3) fail.
+  ``forces_across_checkpoint`` fail.
   (``forces_interact_with_patches`` passes because the force map is
   cleared by the test's end — redundant coverage from the others.)
 - Drop the final patch (skip when ``scan_id == target_scan_id``) →
@@ -33,9 +25,9 @@ listed failing test(s) against a deliberately broken ``replay_to``
   ``fork()``'s RTC rebase at the anchor is mathematically equivalent
   to applying source's whole trajectory — so each RTC test also
   captures a mid-run RTC base and compares against
-  ``replay_to(intermediate_scan)``.  The Stage 2 gap on the
-  apply-tags path closes now that ``_replay_mode`` blocks the
-  in-scan setter from reconstructing the base independently.
+  ``replay_to(intermediate_scan)``.  The replay-mode guard blocks the
+  in-scan RTC setter from reconstructing the base independently,
+  making the per-channel RTC test load-bearing.
 - Skip a lifecycle event → ``lifecycle_stop`` +
   ``lifecycle_battery_present_toggle`` fail.
   (``lifecycle_clear_forces`` passes on this mutation because the
@@ -55,7 +47,7 @@ from pyrung import Rung, program
 from pyrung.core import PLC, Bool, Dint, calc, out
 
 # --------------------------------------------------------------------------- #
-# Equality helper — explicit field coverage per Stage 2 design.
+# Equality helper — explicit field coverage for every replay channel.
 # --------------------------------------------------------------------------- #
 
 
@@ -123,7 +115,7 @@ def test_replay_idle_scans() -> None:
     for _ in range(100):
         source.step()
 
-    assert source._scan_log.bytes_estimate() == 0  # Stage 1 invariant
+    assert source._scan_log.bytes_estimate() == 0  # sparse-by-field invariant
     replay = source.replay_to(source.current_state.scan_id)
     assert_plc_state_equal(source, replay)
 
@@ -217,10 +209,10 @@ def test_replay_rtc_changes_via_set_rtc() -> None:
 def test_replay_rtc_changes_via_apply_tags() -> None:
     """In-scan ``rtc.new_*`` + ``rtc.apply_*`` path — downstream of patch.
 
-    Closes the Stage 2 mutation gap: with ``_replay_mode`` guarding
-    ``_set_rtc_and_record``, the in-scan ``_apply_rtc_date/time``
-    path no longer reconstructs the base independently — the log's
-    ``rtc_base_changes`` entry is load-bearing.
+    The ``_replay_mode`` guard on ``_set_rtc_and_record`` is
+    load-bearing here: the in-scan ``_apply_rtc_date/time`` path no
+    longer reconstructs the base independently — the log's
+    ``rtc_base_changes`` entry is authoritative.
     """
     source = PLC(logic=[], dt=0.01)
 
@@ -416,7 +408,7 @@ def test_assert_plc_state_equal_catches_forces_mismatch() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Stage 4 — replay_to with multi-checkpoint anchoring.
+# replay_to with multi-checkpoint anchoring.
 # --------------------------------------------------------------------------- #
 
 
@@ -483,7 +475,7 @@ def test_replay_fork_is_in_replay_mode() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Stage 3 — checkpoints + force-map bypass invariant (retained).
+# Checkpoints + force-map bypass invariant (replay correctness invariant).
 # --------------------------------------------------------------------------- #
 
 
@@ -528,8 +520,8 @@ def test_replay_forces_across_checkpoint() -> None:
     assert dict(snap.force_changes_by_scan[10]) == {"X": True}
 
     # Route the invariant check through the public replay_to API.  Without
-    # the Stage 3 bypass, anchor=10 would not find {"X": True} in
-    # ``force_changes_by_scan[10]`` and the force map would be lost.
+    # the unconditional checkpoint write, anchor=10 would not find {"X": True}
+    # in ``force_changes_by_scan[10]`` and the force map would be lost.
     anchor = source._nearest_checkpoint_at_or_before(12)
     assert anchor == 10
     replay = source.replay_to(12)
@@ -560,3 +552,60 @@ def test_checkpoints_cleared_on_fork() -> None:
     for _ in range(6):  # scan 11..16
         fork.step()
     assert set(fork._checkpoints.keys()) == {15}
+
+
+# ---------------------------------------------------------------------------
+# _trim_history_before coordinator tests
+# ---------------------------------------------------------------------------
+
+
+def test_trim_history_before_rejects_replay_below_horizon() -> None:
+    """After trimming, replay_to for scans below the horizon must raise."""
+    plc = PLC(dt=0.01, checkpoint_interval=5)
+    for _ in range(10):  # scans 1–10; checkpoints at 5, 10
+        plc.step()
+
+    plc._trim_history_before(5)
+
+    # scan 4 is below the horizon
+    with pytest.raises(ValueError, match="trimmed"):
+        plc.replay_to(4)
+
+
+def test_trim_history_before_allows_replay_at_horizon() -> None:
+    """replay_to at exactly the horizon scan must succeed when a checkpoint
+    at that scan survived the trim."""
+    plc = PLC(dt=0.01, checkpoint_interval=5)
+    for _ in range(10):  # scans 1–10; checkpoints at 5, 10
+        plc.step()
+
+    plc._trim_history_before(5)
+
+    # scan 5 is the horizon AND a checkpoint — must succeed
+    assert plc.replay_to(5).current_state.scan_id == 5
+    # scan 7 is above the horizon
+    assert plc.replay_to(7).current_state.scan_id == 7
+
+
+def test_trim_history_before_prunes_checkpoints() -> None:
+    plc = PLC(dt=0.01, checkpoint_interval=5)
+    for _ in range(15):  # checkpoints at 5, 10, 15
+        plc.step()
+
+    plc._trim_history_before(10)
+
+    assert 5 not in plc._checkpoints
+    assert 10 in plc._checkpoints
+    assert 15 in plc._checkpoints
+
+
+def test_trim_history_before_trims_firings_in_lockstep() -> None:
+    """The rung-firing timelines must trim alongside the log."""
+    plc = PLC(logic=[], dt=0.01, checkpoint_interval=20)
+    for _ in range(10):
+        plc.step()
+
+    assert plc._scan_log.base_scan == 0
+    plc._trim_history_before(5)
+
+    assert plc._scan_log.base_scan == 5

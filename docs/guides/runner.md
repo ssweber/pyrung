@@ -19,7 +19,7 @@ The constructor accepts:
 Optional keyword arguments:
 
 - `initial_state` — a `SystemState` to start from instead of the default
-- `history_limit` — how many state snapshots to retain (default: `None`, meaning no history)
+- `history_cache` — byte budget for the recent-state cache (default: `100 * 1024 * 1024` = 100 MB; minimum 1 MB)
 
 ## Time modes
 
@@ -191,28 +191,38 @@ Both `scan_id` and `timestamp` reset to 0 on STOP→RUN transition or `reboot()`
 Enable history retention to keep immutable state snapshots:
 
 ```python
-runner = PLC(logic, history_limit=1000)  # keep latest 1000
+runner = PLC(logic)  # 100 MB default cache, all scans addressable
 
-runner.history.at(5)          # snapshot at scan 5
-runner.history.range(3, 7)    # [scan 3, 4, 5, 6] if retained
+runner.history.at(5)          # state at scan 5
+runner.history.range(3, 7)    # [scan 3, 4, 5, 6]
 runner.history.latest(10)     # up to 10 most recent (oldest → newest)
 ```
 
-Without `history_limit`, no snapshots are retained. The initial state (scan 0) is always included.
+Every scan from 0 to the current tip is addressable.  Recent scans are served
+from an in-memory state cache (byte-bounded, default 100 MB); older scans are
+reconstructed on demand from the scan log and checkpoints.
+
+To tighten the cache budget:
+
+```python
+runner = PLC(logic, history_cache=20 * 1024 * 1024)  # 20 MB cache
+```
+
+`history_cache` must be at least 1 MB (raises `ValueError` below that).
 
 ## Time-travel playhead
 
-The playhead is a read-only cursor into retained history. It doesn't affect execution — `step()` always appends at the history tip.
+The playhead is a read-only cursor into history. It doesn't affect execution — `step()` always appends at the history tip.
 
 ```python
 runner.playhead              # current inspection scan_id
-runner.seek(scan_id=5)       # jump to retained scan (KeyError if evicted)
+runner.seek(scan_id=5)       # jump to a historical scan
 runner.rewind(seconds=1.0)   # move backward by simulation time
 
 snapshot = runner.history.at(runner.playhead)
 ```
 
-`rewind(seconds)` finds the nearest retained snapshot where `timestamp <= target`. If the current playhead's scan gets evicted by `history_limit`, the playhead moves to the oldest retained scan.
+`rewind(seconds)` finds the nearest state where `timestamp <= target`.
 
 ## Diff
 
