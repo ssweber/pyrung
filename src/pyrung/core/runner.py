@@ -21,12 +21,14 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrsistent import PMap
 
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
+from pyrung.core.kernel import CompiledKernel
 from pyrung.core.live_binding import reset_active_runner, set_active_runner
 from pyrung.core.rung_firings import RungFiringTimelines
 from pyrung.core.scan_log import LifecycleEvent, LifecycleKind, ScanLog, ScanLogSnapshot
@@ -34,11 +36,14 @@ from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _MODE_RUN_KEY,
+    READ_ONLY_SYSTEM_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
 )
 from pyrung.core.time_mode import TimeMode
 from pyrung.core.trace_formatter import TraceFormatter
+from pyrung.core.validation._common import _collect_write_sites
+from pyrung.core.validation.readonly_write import _any_write_targets
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterator
@@ -229,7 +234,7 @@ def _iter_referenced_tags(root: Any) -> tuple[Tag, ...]:
     return tuple(found_by_name.values())
 
 
-def _apply_lifecycle_to_replay(replay: PLC, event: LifecycleEvent) -> None:
+def _apply_lifecycle_to_replay(replay: Any, event: LifecycleEvent) -> None:
     """Apply a captured lifecycle event to a replay PLC.
 
     ``reboot`` never appears in a live log snapshot because
@@ -249,6 +254,33 @@ def _apply_lifecycle_to_replay(replay: PLC, event: LifecycleEvent) -> None:
         )
     else:  # pragma: no cover - exhaustive
         raise AssertionError(f"unknown lifecycle kind: {event.kind!r}")
+
+
+def _program_writes_read_only_system_tags(program: Any) -> bool:
+    from pyrung.core.program import Program
+
+    if not isinstance(program, Program):
+        return False
+    for site in _collect_write_sites(program, target_extractor=_any_write_targets):
+        if site.target_name in READ_ONLY_SYSTEM_TAG_NAMES:
+            return True
+    return False
+
+
+def _looks_like_compiled_replay_gap(exc: Exception) -> bool:
+    if isinstance(exc, NotImplementedError):
+        return True
+    if not isinstance(exc, ValueError | TypeError):
+        return False
+    message = str(exc)
+    return any(
+        needle in message
+        for needle in (
+            "requires generate_circuitpy",
+            "Could not inspect source for callable",
+            "Unsupported",
+        )
+    )
 
 
 class _DebugNamespace:
@@ -450,6 +482,7 @@ class PLC:
         # breakpoint labels, and the RTC setter during a replay walk.
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
+        self._compiled_replay_kernel: CompiledKernel | None | bool = None
         # PDG-filtered rung-firing capture.  When the filter is active
         # (``record_all_tags=False``), ``capturing_rung`` drops writes to
         # tags that no rung reads — the firing log is consumed only by
@@ -1007,6 +1040,58 @@ class PLC:
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
 
+    def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        cached = self._compiled_replay_kernel
+        if isinstance(cached, CompiledKernel):
+            return cached
+        if cached is False:
+            return None
+        if self._time_mode != TimeMode.FIXED_STEP or self._program is None:
+            self._compiled_replay_kernel = False
+            return None
+        if _program_writes_read_only_system_tags(self._program):
+            self._compiled_replay_kernel = False
+            return None
+        try:
+            kernel = compile_kernel(self._program)
+        except Exception as exc:
+            if _looks_like_compiled_replay_gap(exc):
+                self._compiled_replay_kernel = False
+                return None
+            raise
+        self._compiled_replay_kernel = kernel
+        return kernel
+
+    def _fork_from_reconstructed_state(
+        self,
+        state: SystemState,
+        *,
+        rtc_at_state: datetime,
+        forces: Mapping[str, bool | int | float | str],
+        replay_mode: bool,
+    ) -> PLC:
+        fork = PLC(
+            logic=self._program if self._program is not None else list(self._logic),
+            initial_state=state,
+            checkpoint_interval=self._checkpoint_interval,
+            record_all_tags=self._record_all_tags,
+            history_cache=self._recent_state_cache_budget,
+        )
+        fork._state = state
+        fork._reset_cache(state)
+        fork._initial_scan_id = state.scan_id
+        fork._initial_state = state
+        fork._playhead = state.scan_id
+        fork._set_time_mode(TimeMode.FIXED_STEP, dt=self._dt)
+        fork._set_rtc_internal(rtc_at_state, state.timestamp)
+        fork._input_overrides._forces.clear()
+        fork._input_overrides._forces.update(forces)
+        fork._replay_mode = replay_mode
+        fork._sync_runtime_flags_from_state()
+        return fork
+
     def _build_replay_fork(
         self, anchor: int | None
     ) -> tuple[PLC, ScanLogSnapshot, int, dict[int, list[LifecycleEvent]]]:
@@ -1061,7 +1146,7 @@ class PLC:
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
 
-    def replay_to(self, target_scan_id: int) -> PLC:
+    def _replay_to_classic(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
 
         Anchors at the nearest retained checkpoint ``<= target_scan_id``
@@ -1103,6 +1188,73 @@ class PLC:
             _apply_lifecycle_to_replay(replay, event)
 
         return replay
+
+    def _replay_to_compiled(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
+        anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+        log = self._scan_log.snapshot()
+        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
+        anchor_state = self._checkpoints[anchor] if anchor is not None else self._initial_state
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+
+        replay = CompiledPLC(
+            self._program,
+            initial_state=anchor_state,
+            dt=self._dt,
+            compiled=kernel,
+        )
+        replay._set_rtc_internal(
+            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
+        )
+        if anchor is not None:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
+
+        for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
+            for event in lifecycle_by_scan.get(scan_id, []):
+                _apply_lifecycle_to_replay(replay, event)
+            if scan_id in log.force_changes_by_scan:
+                replay._input_overrides._forces.clear()
+                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+            if scan_id in log.rtc_base_changes:
+                base, base_sim_time = log.rtc_base_changes[scan_id]
+                replay._set_rtc_internal(base, base_sim_time)
+            if scan_id in log.patches_by_scan:
+                replay.patch(log.patches_by_scan[scan_id])
+            replay.step()
+
+        for event in lifecycle_by_scan.get(target_scan_id + 1, []):
+            _apply_lifecycle_to_replay(replay, event)
+
+        return self._fork_from_reconstructed_state(
+            replay.current_state,
+            rtc_at_state=replay._rtc_at_sim_time(replay.current_state.timestamp),
+            forces=replay._input_overrides.forces_mutable,
+            replay_mode=True,
+        )
+
+    def replay_to(self, target_scan_id: int) -> PLC:
+        """Reconstruct historical state, preferring compiled replay when supported."""
+        if target_scan_id < self._initial_scan_id:
+            raise ValueError(
+                f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
+            )
+        if target_scan_id > self._state.scan_id:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+            )
+        log_base = self._scan_log.base_scan
+        if target_scan_id < log_base:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} predates the log horizon "
+                f"({log_base}); those scans have been trimmed"
+            )
+
+        kernel = self._compiled_replay_supported_kernel()
+        if kernel is None:
+            return self._replay_to_classic(target_scan_id)
+        return self._replay_to_compiled(target_scan_id, kernel)
 
     def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:
         """Reconstruct the rung-trace dict for a historical scan.
@@ -1160,7 +1312,7 @@ class PLC:
         self._cached_replay_trace = (target_scan_id, traces)
         return dict(traces)
 
-    def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+    def _replay_range_classic(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         """Reconstruct ``SystemState`` for every scan in ``[start, end]``.
 
         Anchors once at the nearest checkpoint ``<= start`` (falling
@@ -1194,6 +1346,60 @@ class PLC:
                 results.append(replay.current_state)
 
         return results
+
+    def _replay_range_compiled(
+        self,
+        start_scan_id: int,
+        end_scan_id: int,
+        kernel: CompiledKernel,
+    ) -> list[SystemState]:
+        anchor = self._nearest_checkpoint_at_or_before(start_scan_id)
+        log = self._scan_log.snapshot()
+        anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
+        anchor_state = self._checkpoints[anchor] if anchor is not None else self._initial_state
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+
+        replay = CompiledPLC(
+            self._program,
+            initial_state=anchor_state,
+            dt=self._dt,
+            compiled=kernel,
+        )
+        replay._set_rtc_internal(
+            self._system_runtime._rtc_now(anchor_state), anchor_state.timestamp
+        )
+        if anchor is not None:
+            replay._input_overrides._forces.clear()
+            replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
+
+        results: list[SystemState] = []
+        if anchor_scan_id >= start_scan_id:
+            results.append(replay.current_state)
+
+        for scan_id in range(anchor_scan_id + 1, end_scan_id + 1):
+            for event in lifecycle_by_scan.get(scan_id, []):
+                _apply_lifecycle_to_replay(replay, event)
+            if scan_id in log.force_changes_by_scan:
+                replay._input_overrides._forces.clear()
+                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+            if scan_id in log.rtc_base_changes:
+                base, base_sim_time = log.rtc_base_changes[scan_id]
+                replay._set_rtc_internal(base, base_sim_time)
+            if scan_id in log.patches_by_scan:
+                replay.patch(log.patches_by_scan[scan_id])
+            replay.step()
+            if scan_id >= start_scan_id:
+                results.append(replay.current_state)
+
+        return results
+
+    def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+        kernel = self._compiled_replay_supported_kernel()
+        if kernel is None:
+            return self._replay_range_classic(start_scan_id, end_scan_id)
+        return self._replay_range_compiled(start_scan_id, end_scan_id, kernel)
 
     @property
     def simulation_time(self) -> float:

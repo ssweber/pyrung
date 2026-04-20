@@ -8,6 +8,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 """
 
 from pyrung.core.analysis import DataView, ProgramGraph, TagRole, TagVersion, build_program_graph
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.context import ScanContext
 from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent
@@ -127,6 +128,7 @@ from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not i
 
 __all__ = [
     "PLC",
+    "CompiledPLC",
     "ScanContext",
     "SystemState",
     "DataView",
