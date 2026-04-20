@@ -179,6 +179,31 @@ class PyrungHistoryPanelProvider {
     });
   }
 
+  appendLiveChanges(changes, scanId) {
+    if (!this._watchedTags.size || !changes.length) {
+      return;
+    }
+    const relevant = changes.filter((c) => this._watchedTags.has(c.tag));
+    if (!relevant.length) {
+      return;
+    }
+    const changesMap = {};
+    for (const c of relevant) {
+      changesMap[c.tag] = [c.previous, c.current];
+    }
+    const prevScanId = this._entries.length
+      ? this._entries[0].scanId
+      : scanId - 1;
+    const entry = {
+      scanId,
+      prevScanId,
+      timestamp: null,
+      changes: changesMap,
+    };
+    this._entries = [entry, ...this._entries];
+    this._postState();
+  }
+
   liveRefresh() {
     if (!this._session || !this._watchedTags.size) {
       return;

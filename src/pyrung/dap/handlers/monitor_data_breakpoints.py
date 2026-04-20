@@ -319,17 +319,19 @@ def build_monitor_callback(
             if runner is None:
                 return
             state = runner.current_state
-            adapter._enqueue_internal_event(
-                "pyrungMonitor",
-                {
-                    "id": monitor_id,
-                    "tag": tag_name,
-                    "current": adapter._format_value(current),
-                    "previous": adapter._format_value(previous),
-                    "scanId": state.scan_id,
-                    "timestamp": state.timestamp,
-                },
-            )
+            payload = {
+                "id": monitor_id,
+                "tag": tag_name,
+                "current": adapter._format_value(current),
+                "previous": adapter._format_value(previous),
+                "scanId": state.scan_id,
+                "timestamp": state.timestamp,
+            }
+            buffer = adapter._session.scan_frame_buffer
+            if buffer is not None:
+                buffer.monitors.append(payload)
+            else:
+                adapter._enqueue_internal_event("pyrungMonitor", payload)
         except Exception:
             return
 

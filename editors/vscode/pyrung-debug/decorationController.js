@@ -118,6 +118,10 @@ class PyrungDecorationController {
     }
 
     switch (message.event) {
+      case "pyrungScanFrame":
+        this._lastTrace = (message.body && message.body.trace) || null;
+        this._renderVisibleEditors();
+        break;
       case "pyrungTrace":
         this._lastTrace = message.body || null;
         this._renderVisibleEditors();

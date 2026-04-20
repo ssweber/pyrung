@@ -87,6 +87,10 @@ def _events(messages: list[dict[str, Any]], event_name: str) -> list[dict[str, A
     ]
 
 
+def _scan_frame_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _events(messages, "pyrungScanFrame")
+
+
 def _drain_internal_events_with_wait(adapter: DAPAdapter, *, timeout: float = 0.1) -> int:
     processed = adapter._drain_internal_events()
     if processed:
@@ -102,8 +106,6 @@ def _drain_internal_events_with_wait(adapter: DAPAdapter, *, timeout: float = 0.
         return 0
 
     adapter._send_event(item["event"], item.get("body"))
-    if item.get("event") == "stopped":
-        adapter._emit_trace_event()
     return 1 + adapter._drain_internal_events()
 
 
@@ -1678,32 +1680,34 @@ def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={"source": {"path": str(script)}, "lines": [8]},
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
     breakpoint_stops = 0
-    traces = 0
+    frames = 0
     for _ in range(100):
         flushed = _drain_messages(out_stream)
         for stopped in _stopped_events(flushed):
             if stopped["body"]["reason"] == "breakpoint":
                 breakpoint_stops += 1
-        traces += len(_trace_events(flushed))
-        if breakpoint_stops and traces:
+        frames += len(_scan_frame_events(flushed))
+        if breakpoint_stops and frames:
             break
         _drain_internal_events_with_wait(adapter)
 
     assert breakpoint_stops == 1
-    assert traces >= 1
+    assert frames >= 1
 
     for _ in range(5):
         adapter._drain_internal_events()
@@ -2142,11 +2146,13 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2155,41 +2161,40 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
     saw_snapshot = False
     saw_output = False
     snapshot_event_body: dict[str, Any] | None = None
     for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
         flushed = _drain_messages(out_stream)
-        snapshots = _events(flushed, "pyrungSnapshot")
-        if snapshots:
-            saw_snapshot = True
-            snapshot_event_body = snapshots[-1].get("body", {})
-        outputs = _events(flushed, "output")
-        if any(
-            "Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", ""))
-            for event in outputs
-        ):
-            saw_output = True
+        for frame in _scan_frame_events(flushed):
+            body = frame.get("body", {})
+            for s in body.get("snapshots", []):
+                if s.get("label") == "tick_hit":
+                    saw_snapshot = True
+                    snapshot_event_body = s
+            for o in body.get("outputs", []):
+                if "Snapshot taken: tick_hit" in o:
+                    saw_output = True
         if saw_snapshot and saw_output:
             break
-        _drain_internal_events_with_wait(adapter)
     assert saw_snapshot is True
     assert saw_output is True
     assert snapshot_event_body is not None
     assert isinstance(snapshot_event_body.get("rtcIso"), str)
     assert isinstance(snapshot_event_body.get("rtcOffsetSeconds"), (int, float))
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=5,
+        seq=6,
         command="pyrungFindLabel",
         arguments={"label": "tick_hit"},
     )
@@ -2209,11 +2214,13 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2228,21 +2235,32 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    snapshot_event = _wait_for_event(adapter, out_stream, event_name="pyrungSnapshot")
-    snapshot_scan_id = int(snapshot_event["body"]["scanId"]) if snapshot_event is not None else None
+    snapshot_scan_id = None
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for s in frame.get("body", {}).get("snapshots", []):
+                if s.get("label") == "tick_once":
+                    snapshot_scan_id = int(s["scanId"])
+                    break
+            if snapshot_scan_id is not None:
+                break
+        if snapshot_scan_id is not None:
+            break
     assert snapshot_scan_id is not None
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=5,
+        seq=6,
         command="pyrungFindLabel",
         arguments={"label": "tick_once"},
     )
@@ -2263,11 +2281,13 @@ def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2276,18 +2296,25 @@ def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    output_event = _wait_for_event(
-        adapter,
-        out_stream,
-        event_name="output",
-        predicate=lambda event: "Tick executed" in str(event.get("body", {}).get("output", "")),
-    )
-    assert output_event is not None
+    found_output = False
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for o in frame.get("body", {}).get("outputs", []):
+                if "Tick executed" in o:
+                    found_output = True
+                    break
+            if found_output:
+                break
+        if found_output:
+            break
+    assert found_output is True
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
@@ -2616,24 +2643,37 @@ def test_monitor_callback_emits_custom_event(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="pyrungAddMonitor",
         arguments={"tag": "Tick"},
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    monitor_event = _wait_for_event(adapter, out_stream, event_name="pyrungMonitor")
-    assert monitor_event is not None
-    event_body = monitor_event["body"]
-    assert event_body["tag"] == "Tick"
+    found_monitor = None
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for m in frame.get("body", {}).get("monitors", []):
+                if m.get("tag") == "Tick":
+                    found_monitor = m
+                    break
+            if found_monitor:
+                break
+        if found_monitor:
+            break
+    assert found_monitor is not None
+    assert found_monitor["tag"] == "Tick"
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
@@ -2962,7 +3002,7 @@ def test_pyrung_fork_at_replaces_runner_and_can_step_from_branch(tmp_path: Path)
 # ---------------------------------------------------------------------------
 
 
-def test_continue_emits_live_traces_with_step_none(tmp_path: Path):
+def test_continue_emits_scan_frames(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -2981,30 +3021,27 @@ def test_continue_emits_live_traces_with_step_none(tmp_path: Path):
     _drain_messages(out_stream)
 
     # Collect all messages until the pause stop.
-    live_traces: list[dict[str, Any]] = []
-    on_stop_traces: list[dict[str, Any]] = []
+    frames: list[dict[str, Any]] = []
     stopped = False
     for _ in range(200):
         _drain_internal_events_with_wait(adapter)
         flushed = _drain_messages(out_stream)
-        live_traces.extend(
-            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is None
-        )
-        on_stop_traces.extend(
-            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is not None
-        )
+        frames.extend(_scan_frame_events(flushed))
         if _stopped_events(flushed):
             stopped = True
             break
 
     assert stopped, "Expected pause stop"
-    assert len(live_traces) >= 1, "Expected at least one live trace with step=None"
-    for trace in live_traces:
-        assert trace["body"]["step"] is None
-    assert len(on_stop_traces) >= 1, "Expected on-stop trace with step populated"
+    assert len(frames) >= 1, "Expected at least one pyrungScanFrame"
+    for frame in frames:
+        body = frame["body"]
+        assert body["trace"]["step"] is None
+        assert "tagValues" in body["trace"]
+        assert "changes" in body
+        assert "monitors" in body
 
 
-def test_continue_live_trace_requires_configuration_done(tmp_path: Path):
+def test_continue_scan_frame_requires_configuration_done(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3016,25 +3053,23 @@ def test_continue_live_trace_requires_configuration_done(tmp_path: Path):
     _send_request(adapter, out_stream, seq=2, command="continue")
     _drain_messages(out_stream)
 
-    # Let the continue thread run — scans complete, but no live traces should emit.
+    # Let the continue thread run — scans complete, but no frames should emit.
     time.sleep(0.05)
     _send_request(adapter, out_stream, seq=3, command="pause")
     _drain_messages(out_stream)
 
-    live_traces: list[dict[str, Any]] = []
+    frames: list[dict[str, Any]] = []
     for _ in range(200):
         _drain_internal_events_with_wait(adapter)
         flushed = _drain_messages(out_stream)
-        live_traces.extend(
-            t for t in _trace_events(flushed) if t.get("body", {}).get("step") is None
-        )
+        frames.extend(_scan_frame_events(flushed))
         if _stopped_events(flushed):
             break
 
-    assert live_traces == [], "No live traces should emit without configurationDone"
+    assert frames == [], "No scan frames should emit without configurationDone"
 
 
-def test_continue_live_trace_not_emitted_during_step(tmp_path: Path):
+def test_scan_frame_not_emitted_during_step(tmp_path: Path):
     out_stream = io.BytesIO()
     adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
     script = _write_script(tmp_path, "logic.py", _runner_script())
@@ -3052,6 +3087,7 @@ def test_continue_live_trace_not_emitted_during_step(tmp_path: Path):
             assert trace["body"]["step"] is not None, (
                 "Step commands should never emit traces with step=None"
             )
+        assert _scan_frame_events(messages) == [], "Step commands should never emit pyrungScanFrame"
 
 
 # ---------------------------------------------------------------------------

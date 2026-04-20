@@ -183,8 +183,6 @@ class DAPAdapter:
                 continue
             if kind == "internal_event":
                 self._send_event(item["event"], item.get("body"))
-                if item.get("event") == "stopped":
-                    self._emit_trace_event()
                 continue
             if kind == "eof":
                 self._stop_event.set()
@@ -478,10 +476,15 @@ class DAPAdapter:
             return
 
         message = breakpoint.log_message or ""
-        self._enqueue_internal_event(
-            "output",
-            {"category": "console", "output": f"{message}\n"},
-        )
+        output_text = f"{message}\n"
+        buffer = self._session.scan_frame_buffer
+        if buffer is not None:
+            buffer.outputs.append(output_text)
+        else:
+            self._enqueue_internal_event(
+                "output",
+                {"category": "console", "output": output_text},
+            )
 
     def _record_snapshot_locked(self, *, label: str, state: SystemState) -> None:
         runner = self._runner
@@ -489,23 +492,24 @@ class DAPAdapter:
             return
         metadata = runner._snapshot_metadata_for_state(state)
         runner.history._label_scan(label, state.scan_id, metadata=metadata)
-        self._enqueue_internal_event(
-            "pyrungSnapshot",
-            {
-                "label": label,
-                "scanId": state.scan_id,
-                "timestamp": state.timestamp,
-                "rtcIso": metadata["rtc_iso"],
-                "rtcOffsetSeconds": metadata["rtc_offset_seconds"],
-            },
-        )
-        self._enqueue_internal_event(
-            "output",
-            {
-                "category": "console",
-                "output": f"Snapshot taken: {label} (scan {state.scan_id})\n",
-            },
-        )
+        snapshot_payload = {
+            "label": label,
+            "scanId": state.scan_id,
+            "timestamp": state.timestamp,
+            "rtcIso": metadata["rtc_iso"],
+            "rtcOffsetSeconds": metadata["rtc_offset_seconds"],
+        }
+        output_text = f"Snapshot taken: {label} (scan {state.scan_id})\n"
+        buffer = self._session.scan_frame_buffer
+        if buffer is not None:
+            buffer.snapshots.append(snapshot_payload)
+            buffer.outputs.append(output_text)
+        else:
+            self._enqueue_internal_event("pyrungSnapshot", snapshot_payload)
+            self._enqueue_internal_event(
+                "output",
+                {"category": "console", "output": output_text},
+            )
 
     def _flush_pending_snapshots_locked(self) -> None:
         runner = self._runner
@@ -696,8 +700,6 @@ class DAPAdapter:
                 break
             if item.get("kind") == "internal_event":
                 self._send_event(item["event"], item.get("body"))
-                if item.get("event") == "stopped":
-                    self._emit_trace_event()
                 processed += 1
                 continue
             pending.append(item)

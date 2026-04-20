@@ -536,10 +536,35 @@ exports.activate = function (context) {
               return;
             }
 
-            if (message.event === "pyrungTrace") {
+            if (message.event === "pyrungScanFrame") {
+              const body = message.body || {};
+              const trace = body.trace || {};
+              historyPanel.updateHints(trace.tagHints || {});
+              historyPanel.appendLiveChanges(body.changes || [], body.scanId);
+              if (trace.tagValues) {
+                dataView.updateTrace(
+                  trace.tagValues,
+                  trace.forces || {},
+                  trace.tagTypes || {},
+                  trace.tagGroups || {},
+                  trace.tagHints || {}
+                );
+                graphPanel.updateTrace(trace.tagValues, trace.forces || {});
+              }
+              for (const m of body.monitors || []) {
+                output.appendLine(
+                  `[scan ${m.scanId}] ${m.tag}: ${m.previous} -> ${m.current}`
+                );
+              }
+              for (const s of body.snapshots || []) {
+                output.appendLine(`[scan ${s.scanId}] snapshot: ${s.label}`);
+              }
+              for (const o of body.outputs || []) {
+                output.appendLine(o.replace(/\n$/, ""));
+              }
+            } else if (message.event === "pyrungTrace") {
               const body = message.body || {};
               historyPanel.updateHints(body.tagHints || {});
-              historyPanel.liveRefresh();
               if (body.tagValues) {
                 dataView.updateTrace(
                   body.tagValues,

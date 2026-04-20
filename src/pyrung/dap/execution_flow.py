@@ -93,27 +93,72 @@ def on_pause(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def continue_worker(adapter: Any) -> None:
+    from pyrung.dap.session import ScanFrameBuffer
+
     last_emit_time = 0.0
 
-    def _emit_live_trace(*, force: bool = False) -> None:
+    def _emit_scan_frame(*, force: bool = False) -> None:
         nonlocal last_emit_time
         if not adapter._configuration_done:
             return
         now = time.monotonic()
         if not force and (now - last_emit_time) < 0.033:
             return
-        with adapter._state_lock:
-            body = adapter._live_trace_body_locked()
-        if body is None:
+
+        buffer = adapter._session.scan_frame_buffer
+        if buffer is None:
             return
-        adapter._enqueue_internal_event("pyrungTrace", body)
+
+        with adapter._state_lock:
+            trace_body = adapter._live_trace_body_locked()
+            if trace_body is None and not force:
+                return
+            current_tags = dict(adapter._runner.current_state.tags)
+
+        changes: list[dict[str, Any]] = []
+        prev = buffer.previous_tags
+        for tag_name in set(prev.keys()) | set(current_tags.keys()):
+            old_val = prev.get(tag_name)
+            new_val = current_tags.get(tag_name)
+            if old_val != new_val:
+                changes.append(
+                    {
+                        "tag": tag_name,
+                        "previous": adapter._format_value(old_val),
+                        "current": adapter._format_value(new_val),
+                    }
+                )
+
+        frame_body: dict[str, Any] = {
+            "scanId": trace_body.get("scanId") if trace_body else None,
+            "trace": trace_body,
+            "monitors": buffer.monitors,
+            "changes": changes,
+            "snapshots": buffer.snapshots,
+            "outputs": buffer.outputs,
+        }
+
+        adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
         last_emit_time = now
+
+        buffer.monitors = []
+        buffer.snapshots = []
+        buffer.outputs = []
+        buffer.previous_tags = current_tags
 
     try:
         adapter._pending_predicate_pause = False
+        with adapter._state_lock:
+            runner = adapter._runner
+            if runner is None:
+                return
+            adapter._session.scan_frame_buffer = ScanFrameBuffer(
+                previous_tags=dict(runner.current_state.tags),
+            )
+
         while not adapter._stop_event.is_set():
             if adapter._pause_event.is_set():
-                _emit_live_trace(force=True)
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("pause"))
                 return
 
@@ -133,26 +178,27 @@ def continue_worker(adapter: Any) -> None:
                 )
 
             if scan_completed:
-                _emit_live_trace()
+                _emit_scan_frame()
 
             if hit_breakpoint:
-                _emit_live_trace(force=True)
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("breakpoint"))
                 return
 
             if hit_data_breakpoint:
-                _emit_live_trace(force=True)
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("data breakpoint"))
                 return
 
             if not advanced:
                 time.sleep(0.005)
 
-        _emit_live_trace(force=True)
+        _emit_scan_frame(force=True)
     finally:
         with adapter._state_lock:
             adapter._continue_thread = None
             adapter._pending_predicate_pause = False
+            adapter._session.scan_frame_buffer = None
         adapter._pause_event.clear()
 
 
