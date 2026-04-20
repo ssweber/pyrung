@@ -74,6 +74,28 @@ class AlternatingRun:
 
 
 @dataclass(frozen=True)
+class ArithmeticRun:
+    """Timeline payload: tags with a constant per-scan integer delta.
+
+    ``base_pattern`` holds the PMap at ``start_scan_id``.  ``deltas``
+    maps tag names to their per-scan integer increment; tags absent
+    from ``deltas`` are constant across the range.
+
+    Value at *scan_id*::
+
+        base_pattern[tag] + deltas[tag] * (scan_id - start_scan_id)
+
+    Detection mirrors the A,B,A collapse — three contiguous single-scan
+    ``PatternRef`` ranges whose per-tag differences are constant.
+    Extension bypasses the intern pool entirely, so a timer accumulator
+    ticking +1 per scan never grows the pool past its initial 3 entries.
+    """
+
+    base_pattern: PMap
+    deltas: PMap  # tag_name -> int
+
+
+@dataclass(frozen=True)
 class FiredOnly:
     """Timeline payload: the rung fired but per-scan values are discarded.
 
@@ -82,7 +104,7 @@ class FiredOnly:
     """
 
 
-FiringPayload = PatternRef | AlternatingRun | FiredOnly
+FiringPayload = PatternRef | AlternatingRun | ArithmeticRun | FiredOnly
 
 
 @dataclass(frozen=True)
@@ -154,6 +176,17 @@ class RungFiringTimelines:
             self._append_fired_only(rung_index, scan_id, timeline)
             return
 
+        # Fast path: extend an active ArithmeticRun without interning.
+        # This is the key win — a timer accumulator ticking +1/scan
+        # never adds entries to the intern pool after the initial collapse.
+        if timeline:
+            last = timeline[-1]
+            payload = last.payload
+            if isinstance(payload, ArithmeticRun) and last.end_scan_id == scan_id - 1:
+                if _arithmetic_matches(payload, last.start_scan_id, scan_id, writes):
+                    timeline[-1] = RungFiringRange(last.start_scan_id, scan_id, payload)
+                    return
+
         # Cycle mode: intern the pattern, then decide whether to extend
         # the previous range, collapse into an AlternatingRun, or start
         # a new range.  After every append, check whether the intern
@@ -197,11 +230,10 @@ class RungFiringTimelines:
                     timeline[-1] = RungFiringRange(last.start_scan_id, scan_id, last.payload)
                     return
 
-        # A,B,A collapse: need two prior length-1 PatternRef ranges
-        # with patterns (Y, X) followed by incoming X, all three scans
-        # contiguous.  The collapse replaces all three with a single
-        # AlternatingRun anchored at the first (Y) scan, with the
-        # even/odd slots resolved from the Y anchor.
+        # Collapse detection: two prior length-1 PatternRef ranges plus
+        # the incoming scan, all three contiguous.  Two flavors:
+        #   A,B,A  → AlternatingRun   (identity: prev_prev pattern IS canonical)
+        #   V,V+d,V+2d → ArithmeticRun (constant integer deltas)
         if len(timeline) >= 2:
             prev = timeline[-1]
             prev_prev = timeline[-2]
@@ -210,17 +242,28 @@ class RungFiringTimelines:
                 and prev_prev.start_scan_id == prev_prev.end_scan_id == scan_id - 2
                 and isinstance(prev.payload, PatternRef)
                 and isinstance(prev_prev.payload, PatternRef)
-                and prev.payload.pattern is not prev_prev.payload.pattern
-                and prev_prev.payload.pattern is canonical
             ):
-                # Anchor at prev_prev (scan_id - 2).  Even slot holds the
-                # anchor's pattern, odd slot holds the middle pattern.
-                alt = AlternatingRun(
-                    pattern_on_even=prev_prev.payload.pattern,
-                    pattern_on_odd=prev.payload.pattern,
-                )
-                timeline[-2:] = [RungFiringRange(prev_prev.start_scan_id, scan_id, alt)]
-                return
+                pp_pat = prev_prev.payload.pattern
+                p_pat = prev.payload.pattern
+
+                # A,B,A → AlternatingRun
+                if pp_pat is not p_pat and pp_pat is canonical:
+                    alt = AlternatingRun(
+                        pattern_on_even=pp_pat,
+                        pattern_on_odd=p_pat,
+                    )
+                    timeline[-2:] = [RungFiringRange(prev_prev.start_scan_id, scan_id, alt)]
+                    return
+
+                # V, V+d, V+2d → ArithmeticRun
+                deltas = _compute_arithmetic_deltas(pp_pat, p_pat, canonical)
+                if deltas is not None:
+                    arith = ArithmeticRun(
+                        base_pattern=pp_pat,
+                        deltas=pmap(deltas),
+                    )
+                    timeline[-2:] = [RungFiringRange(prev_prev.start_scan_id, scan_id, arith)]
+                    return
 
         # Default: start a new length-1 PatternRef range.
         timeline.append(RungFiringRange(scan_id, scan_id, PatternRef(canonical)))
@@ -291,6 +334,8 @@ class RungFiringTimelines:
             elif isinstance(payload, AlternatingRun):
                 parity = (scan_id - range_.start_scan_id) % 2
                 out[rung_index] = payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
+            elif isinstance(payload, ArithmeticRun):
+                out[rung_index] = _reconstruct_arithmetic(payload, range_.start_scan_id, scan_id)
             else:
                 out[rung_index] = self._fired_only_writes[rung_index]
         return pmap(out)
@@ -328,6 +373,8 @@ class RungFiringTimelines:
         if isinstance(payload, AlternatingRun):
             parity = (scan_id - range_.start_scan_id) % 2
             return payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
+        if isinstance(payload, ArithmeticRun):
+            return _reconstruct_arithmetic(payload, range_.start_scan_id, scan_id)
         return self._fired_only_writes[rung_index]
 
     def last_tag_write_before(
@@ -451,6 +498,8 @@ class RungFiringTimelines:
                 elif isinstance(payload, AlternatingRun):
                     live.add(id(payload.pattern_on_even))
                     live.add(id(payload.pattern_on_odd))
+                elif isinstance(payload, ArithmeticRun):
+                    live.add(id(payload.base_pattern))
             self._intern[rung_index] = {
                 pattern: canonical for pattern, canonical in intern.items() if id(canonical) in live
             }
@@ -460,9 +509,8 @@ def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange
     """Advance a range's ``start_scan_id`` by ``delta``, preserving semantics.
 
     For ``AlternatingRun``, an odd delta swaps ``pattern_on_even`` and
-    ``pattern_on_odd`` — the parity of the new anchor differs from
-    the old by exactly ``delta % 2``, and lookup is anchored to the
-    current ``start_scan_id``.
+    ``pattern_on_odd``.  For ``ArithmeticRun``, the base pattern is
+    rebased to the new start by applying ``deltas * delta``.
     """
     assert delta > 0, "advance must move the start forward"
     payload = range_.payload
@@ -472,7 +520,68 @@ def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange
             pattern_on_even=payload.pattern_on_odd,
             pattern_on_odd=payload.pattern_on_even,
         )
+    elif isinstance(payload, ArithmeticRun):
+        new_base = payload.base_pattern
+        for tag, per_scan_d in payload.deltas.items():
+            new_base = new_base.set(tag, payload.base_pattern[tag] + per_scan_d * delta)
+        payload = ArithmeticRun(base_pattern=new_base, deltas=payload.deltas)
     return RungFiringRange(new_start, range_.end_scan_id, payload)
+
+
+def _compute_arithmetic_deltas(p0: PMap, p1: PMap, p2: PMap) -> dict[str, int] | None:
+    """Check if three patterns form an arithmetic progression.
+
+    Returns ``{tag_name: delta}`` for tags that change by a constant
+    integer amount, or ``None`` if the patterns don't qualify.  All
+    three must have the same key set, and at least one tag must have
+    a non-zero integer delta.
+    """
+    if set(p0.keys()) != set(p1.keys()) or set(p1.keys()) != set(p2.keys()):
+        return None
+    deltas: dict[str, int] = {}
+    for tag in p0:
+        v0, v1, v2 = p0[tag], p1[tag], p2[tag]
+        if v0 == v1 == v2:
+            continue
+        if not (
+            isinstance(v0, int)
+            and not isinstance(v0, bool)
+            and isinstance(v1, int)
+            and not isinstance(v1, bool)
+            and isinstance(v2, int)
+            and not isinstance(v2, bool)
+        ):
+            return None
+        d = v1 - v0
+        if v2 - v1 != d:
+            return None
+        deltas[tag] = d
+    return deltas if deltas else None
+
+
+def _arithmetic_matches(
+    payload: ArithmeticRun, start_scan_id: int, scan_id: int, writes: PMap
+) -> bool:
+    """True if ``writes`` matches the ArithmeticRun's prediction at ``scan_id``."""
+    if set(writes.keys()) != set(payload.base_pattern.keys()):
+        return False
+    offset = scan_id - start_scan_id
+    for tag in writes:
+        if tag in payload.deltas:
+            if writes[tag] != payload.base_pattern[tag] + payload.deltas[tag] * offset:
+                return False
+        elif writes[tag] != payload.base_pattern[tag]:
+            return False
+    return True
+
+
+def _reconstruct_arithmetic(payload: ArithmeticRun, start_scan_id: int, scan_id: int) -> PMap:
+    """Reconstruct the full write PMap at ``scan_id`` from an ArithmeticRun."""
+    offset = scan_id - start_scan_id
+    result = payload.base_pattern
+    for tag, delta in payload.deltas.items():
+        result = result.set(tag, payload.base_pattern[tag] + delta * offset)
+    return result
 
 
 def _last_tag_write_in_timeline(
@@ -508,6 +617,17 @@ def _last_tag_write_in_timeline(
                 val = pat.get(tag_name)
                 if val is not None:
                     return (scan, val)
+        elif isinstance(payload, ArithmeticRun):
+            if tag_name in payload.deltas:
+                offset = effective_end - range_.start_scan_id
+                return (
+                    effective_end,
+                    payload.base_pattern[tag_name] + payload.deltas[tag_name] * offset,
+                )
+            else:
+                val = payload.base_pattern.get(tag_name)
+                if val is not None:
+                    return (effective_end, val)
         else:
             # FiredOnly — return sentinel value
             if fired_only_writes is not None and tag_name in fired_only_writes:

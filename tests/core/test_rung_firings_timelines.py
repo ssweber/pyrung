@@ -23,6 +23,7 @@ from pyrung.core import PLC, Bool, Int, Program, Rung, out
 from pyrung.core.rung_firings import (
     _FIRED_ONLY_THRESHOLD,
     AlternatingRun,
+    ArithmeticRun,
     FiredOnly,
     PatternRef,
     RungFiringTimelines,
@@ -183,19 +184,238 @@ def test_alternating_run_breaks_on_repeat() -> None:
     assert second.end_scan_id == 4
 
 
+# ---------------------------------------------------------------------------
+# ArithmeticRun detection and extension
+# ---------------------------------------------------------------------------
+
+
+def test_arithmetic_run_basic_detection() -> None:
+    """Three contiguous scans with constant integer delta collapse to ArithmeticRun."""
+    timelines = RungFiringTimelines()
+    timelines.append(0, 1, pmap({"Acc": 10}))
+    timelines.append(0, 2, pmap({"Acc": 11}))
+    timelines.append(0, 3, pmap({"Acc": 12}))
+
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.start_scan_id == 1
+    assert range_.end_scan_id == 3
+    assert range_.payload.base_pattern == pmap({"Acc": 10})
+    assert range_.payload.deltas == pmap({"Acc": 1})
+
+
+def test_arithmetic_run_extension() -> None:
+    """Once detected, an ArithmeticRun extends without growing the intern pool."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 1001):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
+
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.start_scan_id == 1
+    assert range_.end_scan_id == 1000
+    # Only the initial 3 patterns were interned before collapse.
+    assert timelines.intern_size(0) == 3
+    assert timelines.mode(0) == "cycle"
+
+
+def test_arithmetic_run_lookup() -> None:
+    """Lookups reconstruct correct values at any scan in the range."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 51):
+        timelines.append(0, scan_id, pmap({"Acc": 100 + scan_id * 2}))
+
+    assert timelines.rung_writes_at(0, 1) == pmap({"Acc": 102})
+    assert timelines.rung_writes_at(0, 25) == pmap({"Acc": 150})
+    assert timelines.rung_writes_at(0, 50) == pmap({"Acc": 200})
+
+    full = timelines.at(25)
+    assert full[0] == pmap({"Acc": 150})
+
+
+def test_arithmetic_run_negative_delta() -> None:
+    """Negative deltas (counting down) produce an ArithmeticRun."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pmap({"Acc": 100 - scan_id}))
+
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.payload.deltas == pmap({"Acc": -1})
+    assert timelines.rung_writes_at(0, 10) == pmap({"Acc": 90})
+
+
+def test_arithmetic_run_mixed_constant_and_delta() -> None:
+    """ArithmeticRun with some tags constant and some incrementing."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 21):
+        timelines.append(0, scan_id, pmap({"Done": False, "Acc": scan_id}))
+
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.payload.deltas == pmap({"Acc": 1})
+    assert timelines.rung_writes_at(0, 15) == pmap({"Done": False, "Acc": 15})
+
+
+def test_arithmetic_run_multi_delta() -> None:
+    """Multiple tags incrementing by different amounts."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pmap({"A": scan_id, "B": scan_id * 3}))
+
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.payload.deltas == pmap({"A": 1, "B": 3})
+    assert timelines.rung_writes_at(0, 10) == pmap({"A": 10, "B": 30})
+
+
+def test_arithmetic_run_break_and_restart() -> None:
+    """Breaking an ArithmeticRun starts a new sequence after re-detection."""
+    timelines = RungFiringTimelines()
+    # First run: +1 for scans 1-10
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
+    # Break: reset to 0
+    timelines.append(0, 11, pmap({"Acc": 0}))
+    # New run: 0, 1, 2, ... detected at scan 13
+    timelines.append(0, 12, pmap({"Acc": 1}))
+    timelines.append(0, 13, pmap({"Acc": 2}))
+    # Extend the new run
+    for scan_id in range(14, 21):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id - 11}))
+
+    timeline = timelines._timelines[0]
+    # First ArithmeticRun, then PatternRef (break), then new ArithmeticRun
+    assert isinstance(timeline[0].payload, ArithmeticRun)
+    assert timeline[0].end_scan_id == 10
+    assert isinstance(timeline[-1].payload, ArithmeticRun)
+    assert timeline[-1].start_scan_id == 11
+    assert timeline[-1].end_scan_id == 20
+
+
+def test_arithmetic_run_does_not_trigger_fired_only() -> None:
+    """A long arithmetic run keeps the intern pool small, never promoting to fired-only."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, _FIRED_ONLY_THRESHOLD * 10 + 1):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
+
+    assert timelines.mode(0) == "cycle"
+    assert timelines.intern_size(0) == 3
+    assert len(timelines._timelines[0]) == 1
+
+
+def test_arithmetic_run_last_tag_write_before() -> None:
+    """last_tag_write_before computes correct values for ArithmeticRun ranges."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 51):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id * 5}))
+
+    result = timelines.last_tag_write_before(frozenset({0}), "Acc", 40)
+    assert result is not None
+    scan, value = result
+    assert scan == 39
+    assert value == 195  # 39 * 5
+
+
+def test_arithmetic_run_non_adjacent_breaks() -> None:
+    """A gap in firings breaks the ArithmeticRun and starts fresh."""
+    timelines = RungFiringTimelines()
+    timelines.append(0, 1, pmap({"Acc": 1}))
+    timelines.append(0, 2, pmap({"Acc": 2}))
+    timelines.append(0, 3, pmap({"Acc": 3}))
+    # Gap: skip scan 4
+    timelines.append(0, 5, pmap({"Acc": 5}))
+
+    timeline = timelines._timelines[0]
+    # ArithmeticRun for 1-3, then new PatternRef at 5
+    assert isinstance(timeline[0].payload, ArithmeticRun)
+    assert timeline[0].end_scan_id == 3
+    assert isinstance(timeline[-1].payload, PatternRef)
+    assert timeline[-1].start_scan_id == 5
+
+
+def test_arithmetic_run_trim_rebases() -> None:
+    """trim_before rebases ArithmeticRun's base_pattern to the new start."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 101):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id * 2}))
+
+    timelines.trim_before(50)
+
+    # Range should be trimmed to start at 50
+    timeline = timelines._timelines[0]
+    assert len(timeline) == 1
+    (range_,) = timeline
+    assert isinstance(range_.payload, ArithmeticRun)
+    assert range_.start_scan_id == 50
+    assert range_.end_scan_id == 100
+    # Rebased: base value at scan 50 should be 100
+    assert range_.payload.base_pattern == pmap({"Acc": 100})
+    assert range_.payload.deltas == pmap({"Acc": 2})
+    # Lookup at scan 75 still works: 100 + 2*(75-50) = 150
+    assert timelines.rung_writes_at(0, 75) == pmap({"Acc": 150})
+
+
+def test_arithmetic_rejects_bool_values() -> None:
+    """Bool tag changes don't trigger ArithmeticRun (True - False is int in Python)."""
+    timelines = RungFiringTimelines()
+    timelines.append(0, 1, pmap({"Flag": False}))
+    timelines.append(0, 2, pmap({"Flag": True}))
+    timelines.append(0, 3, pmap({"Flag": False}))
+
+    timeline = timelines._timelines[0]
+    # Should be AlternatingRun, not ArithmeticRun
+    assert len(timeline) == 1
+    assert isinstance(timeline[0].payload, AlternatingRun)
+
+
+def test_arithmetic_rejects_string_values() -> None:
+    """String-valued tags don't trigger ArithmeticRun."""
+    timelines = RungFiringTimelines()
+    timelines.append(0, 1, pmap({"Msg": "a"}))
+    timelines.append(0, 2, pmap({"Msg": "b"}))
+    timelines.append(0, 3, pmap({"Msg": "c"}))
+
+    timeline = timelines._timelines[0]
+    # Three separate PatternRef ranges (no collapse)
+    assert all(isinstance(r.payload, PatternRef) for r in timeline)
+
+
+def test_arithmetic_fired_on_and_ever_fired() -> None:
+    """ArithmeticRun ranges are visible to fired_on() and ever_fired()."""
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, 11):
+        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
+
+    assert timelines.fired_on(5) == {0}
+    assert timelines.fired_on(11) == set()
+    assert timelines.ever_fired() == {0}
+
+
 def test_cycle_to_fired_only_transition() -> None:
     """Intern pool hitting the threshold flips the rung to fired-only permanently."""
     timelines = RungFiringTimelines()
     # Feed _FIRED_ONLY_THRESHOLD distinct patterns, one per scan.
+    # Use quadratic values so ArithmeticRun detection doesn't collapse them.
     for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"Counter": scan_id}))
+        timelines.append(0, scan_id, pmap({"Counter": scan_id**2}))
 
     assert timelines.mode(0) == "fired_only"
     assert timelines.intern_size(0) == 0  # pool dropped at promotion
 
     # Next append lands as a FiredOnly range.
     next_scan = _FIRED_ONLY_THRESHOLD + 1
-    timelines.append(0, next_scan, pmap({"Counter": next_scan}))
+    timelines.append(0, next_scan, pmap({"Counter": next_scan**2}))
     timeline = timelines._timelines[0]
     last = timeline[-1]
     assert isinstance(last.payload, FiredOnly)
@@ -207,7 +427,7 @@ def test_fired_only_transition_is_one_way() -> None:
     """Once promoted, even 100 identical patterns don't revert to cycle mode."""
     timelines = RungFiringTimelines()
     for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"C": scan_id}))
+        timelines.append(0, scan_id, pmap({"C": scan_id**2}))
     assert timelines.mode(0) == "fired_only"
 
     stable = pmap({"C": 999})
@@ -270,7 +490,7 @@ def test_timelines_reset_clears_state() -> None:
     timelines = RungFiringTimelines()
     timelines.append(0, 1, pmap({"X": 1}))
     for scan_id in range(2, _FIRED_ONLY_THRESHOLD + 2):
-        timelines.append(1, scan_id, pmap({"Y": scan_id}))
+        timelines.append(1, scan_id, pmap({"Y": scan_id**2}))
     assert timelines.mode(1) == "fired_only"
 
     timelines.reset()
@@ -478,11 +698,11 @@ def test_trim_fully_empty_rung_resets_rung_state() -> None:
 def test_trim_preserves_fired_only_sentinel() -> None:
     """Trimming a fired-only rung keeps the sentinel and FiredOnly ranges."""
     timelines = RungFiringTimelines()
-    # Promote the rung to fired-only.
+    # Promote the rung to fired-only (quadratic values defeat ArithmeticRun).
     for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"N": scan_id}))
+        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
     for scan_id in range(_FIRED_ONLY_THRESHOLD + 1, _FIRED_ONLY_THRESHOLD + 50):
-        timelines.append(0, scan_id, pmap({"N": scan_id}))
+        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
     assert timelines.mode(0) == "fired_only"
     pre_sentinel_keys = set(timelines._fired_only_writes[0].keys())
 
