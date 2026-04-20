@@ -65,6 +65,17 @@ class _RunnerPair:
         assert dict(self._classic.forces) == dict(self._compiled.forces)
         return self._classic.forces
 
+    @property
+    def battery_present(self) -> bool:
+        assert self._classic.battery_present == self._compiled.battery_present
+        return self._classic.battery_present
+
+    @battery_present.setter
+    def battery_present(self, value: bool) -> None:
+        self._classic.battery_present = value
+        self._compiled.battery_present = value
+        assert self._classic.battery_present == self._compiled.battery_present
+
     def patch(self, updates: dict[str, Any]) -> None:
         self._classic.patch(updates)
         self._compiled.patch(updates)
@@ -119,6 +130,12 @@ class _RunnerPair:
         self._classic.stop()
         self._compiled.stop()
         _assert_states_match(self._classic, self._compiled)
+
+    def reboot(self) -> SystemState:
+        self._classic.reboot()
+        self._compiled.reboot()
+        _assert_states_match(self._classic, self._compiled)
+        return self._classic.current_state
 
 
 @pytest.fixture

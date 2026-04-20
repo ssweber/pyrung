@@ -19,7 +19,6 @@ from typing import Any, cast
 import pytest
 
 from pyrung.core import (
-    PLC,
     Bool,
     Dint,
     Field,
@@ -41,7 +40,7 @@ Timer2 = Timer.clone("Timer2")
 class TestOnDelayTON:
     """Test On-Delay Timer (TON) - on_delay without .reset()."""
 
-    def test_ton_accumulates_time_while_enabled(self):
+    def test_ton_accumulates_time_while_enabled(self, runner_factory):
         """TON accumulates elapsed time each scan while rung is true."""
         Enable = Bool("Enable")
 
@@ -49,7 +48,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -63,7 +62,7 @@ class TestOnDelayTON:
                 f"After {i + 1} scans, acc should be {expected}"
             )
 
-    def test_ton_done_bit_when_preset_reached(self):
+    def test_ton_done_bit_when_preset_reached(self, runner_factory):
         """TON done bit turns ON when accumulator >= preset."""
         Enable = Bool("Enable")
 
@@ -71,7 +70,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=50)  # 50ms preset
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -93,7 +92,7 @@ class TestOnDelayTON:
         assert runner.current_state.tags["Timer_Acc"] == 60
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_ton_resets_immediately_when_disabled(self):
+    def test_ton_resets_immediately_when_disabled(self, runner_factory):
         """TON resets acc and done to 0/False immediately when rung goes false."""
         Enable = Bool("Enable")
 
@@ -101,7 +100,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -117,7 +116,7 @@ class TestOnDelayTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_ton_restarts_fresh_when_re_enabled(self):
+    def test_ton_restarts_fresh_when_re_enabled(self, runner_factory):
         """TON starts from 0 when re-enabled after being disabled."""
         Enable = Bool("Enable")
 
@@ -125,7 +124,7 @@ class TestOnDelayTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -146,7 +145,7 @@ class TestOnDelayTON:
 class TestOnDelayRTON:
     """Test Retentive On-Delay Timer (RTON) - on_delay with .reset()."""
 
-    def test_rton_accumulates_time_while_enabled(self):
+    def test_rton_accumulates_time_while_enabled(self, runner_factory):
         """RTON accumulates elapsed time each scan while rung is true."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -155,7 +154,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -165,7 +164,7 @@ class TestOnDelayRTON:
             expected = (i + 1) * 10
             assert runner.current_state.tags["Timer_Acc"] == expected
 
-    def test_rton_holds_value_when_disabled(self):
+    def test_rton_holds_value_when_disabled(self, runner_factory):
         """RTON retains accumulated time when rung goes false."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -174,7 +173,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -194,7 +193,7 @@ class TestOnDelayRTON:
             runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 30
 
-    def test_rton_continues_from_held_value_when_re_enabled(self):
+    def test_rton_continues_from_held_value_when_re_enabled(self, runner_factory):
         """RTON continues accumulating from held value when re-enabled."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -203,7 +202,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -223,7 +222,7 @@ class TestOnDelayRTON:
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 50  # 40 + 10
 
-    def test_rton_only_resets_via_reset_condition(self):
+    def test_rton_only_resets_via_reset_condition(self, runner_factory):
         """RTON only resets when reset condition is true."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -232,7 +231,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=50).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -255,7 +254,7 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_rton_reset_condition_uses_rung_entry_snapshot(self):
+    def test_rton_reset_condition_uses_rung_entry_snapshot(self, runner_factory):
         """Same-rung writes do not trip the helper reset until the next snapshot."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -265,7 +264,7 @@ class TestOnDelayRTON:
                 copy(True, ResetBtn)
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True, "ResetBtn": False})
 
         runner.step()
@@ -276,7 +275,7 @@ class TestOnDelayRTON:
         assert runner.current_state.tags["Timer_Acc"] == 0
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_rton_retentive_accumulator_survives_stop_to_run_transition(self):
+    def test_rton_retentive_accumulator_survives_stop_to_run_transition(self, runner_factory):
         """RTON accumulator preserves value across STOP->RUN when retentive."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -285,7 +284,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -303,7 +302,9 @@ class TestOnDelayRTON:
 
         assert runner.current_state.tags["Timer_Acc"] == 30
 
-    def test_rton_non_retentive_accumulator_uses_default_after_batteryless_reboot(self):
+    def test_rton_non_retentive_accumulator_uses_default_after_batteryless_reboot(
+        self, runner_factory
+    ):
         """Batteryless reboot resets non-retentive RTON acc to tag default."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -317,7 +318,7 @@ class TestOnDelayRTON:
             with Rung(Enable):
                 on_delay(NRTimer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -341,7 +342,7 @@ class TestOnDelayRTON:
 class TestOffDelayTOF:
     """Test Off-Delay Timer (TOF) - off_delay without .reset()."""
 
-    def test_tof_done_true_while_enabled(self):
+    def test_tof_done_true_while_enabled(self, runner_factory):
         """TOF done bit is True while rung is true, acc stays at 0."""
         Enable = Bool("Enable")
 
@@ -349,7 +350,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -367,7 +368,7 @@ class TestOffDelayTOF:
         assert runner.current_state.tags["Timer_Done"] is True
         assert runner.current_state.tags["Timer_Acc"] == 0
 
-    def test_tof_counts_after_disable_done_stays_true(self):
+    def test_tof_counts_after_disable_done_stays_true(self, runner_factory):
         """TOF counts up after disable, done stays True until preset."""
         Enable = Bool("Enable")
 
@@ -375,7 +376,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -391,7 +392,7 @@ class TestOffDelayTOF:
             assert runner.current_state.tags["Timer_Acc"] == expected
             assert runner.current_state.tags["Timer_Done"] is True  # Still True
 
-    def test_tof_done_false_when_preset_reached(self):
+    def test_tof_done_false_when_preset_reached(self, runner_factory):
         """TOF done goes False when acc >= preset after disable."""
         Enable = Bool("Enable")
 
@@ -399,7 +400,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -419,7 +420,7 @@ class TestOffDelayTOF:
         assert runner.current_state.tags["Timer_Acc"] == 50
         assert runner.current_state.tags["Timer_Done"] is False  # Done goes False
 
-    def test_tof_auto_resets_when_re_enabled(self):
+    def test_tof_auto_resets_when_re_enabled(self, runner_factory):
         """TOF auto-resets (done=True, acc=0) when re-enabled."""
         Enable = Bool("Enable")
 
@@ -427,7 +428,7 @@ class TestOffDelayTOF:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -450,7 +451,7 @@ class TestOffDelayTOF:
 class TestTimerIntegration:
     """Integration tests for timer instructions."""
 
-    def test_timer_mid_scan_visible_to_later_rungs(self):
+    def test_timer_mid_scan_visible_to_later_rungs(self, runner_factory):
         """Timer accumulator updates mid-scan and is visible to later rungs.
 
         Hardware-verified: With 2ms fixed scan, CapturedAcc values were 2,4,6,8,10
@@ -467,7 +468,7 @@ class TestTimerIntegration:
             with Rung(Enable):
                 copy(Timer[1].Acc, CapturedAcc)
 
-        runner = PLC(logic, dt=0.002)
+        runner = runner_factory(logic, dt=0.002)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -485,7 +486,7 @@ class TestTimerIntegration:
         runner.step()
         assert runner.current_state.tags["CapturedAcc"] == 6
 
-    def test_timer_with_multiple_time_units(self):
+    def test_timer_with_multiple_time_units(self, runner_factory):
         """Timer works with different time unit scaling.
 
         Note: This test assumes Tms (milliseconds) as default.
@@ -498,7 +499,7 @@ class TestTimerIntegration:
                 # Using default Tms - accumulator in milliseconds
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.025)
+        runner = runner_factory(logic, dt=0.025)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -516,7 +517,7 @@ class TestTimerIntegration:
         assert runner.current_state.tags["Timer_Acc"] == 100
         assert runner.current_state.tags["Timer_Done"] is True  # Done at preset
 
-    def test_ton_and_tof_in_same_program(self):
+    def test_ton_and_tof_in_same_program(self, runner_factory):
         """TON and TOF can coexist in the same program."""
 
         Motor = Bool("Motor")
@@ -535,7 +536,7 @@ class TestTimerIntegration:
             with Rung(Timer[1].Done, Timer2.Done):
                 out(MotorOutput)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"StartBtn": False, "Motor": False})
         runner.step()
 
@@ -561,7 +562,7 @@ class TestTimerIntegration:
         # Output goes off because TON is false
         assert runner.current_state.tags["MotorOutput"] is False
 
-    def test_pump_delay_scenario(self):
+    def test_pump_delay_scenario(self, runner_factory):
         """Real-world scenario: Pump runs 5 minutes after motor starts."""
         MotorRunning = Bool("MotorRunning")
         PumpOutput = Bool("PumpOutput")
@@ -574,7 +575,7 @@ class TestTimerIntegration:
             with Rung(Timer[1].Done):
                 out(PumpOutput)
 
-        runner = PLC(logic, dt=1.0)
+        runner = runner_factory(logic, dt=1.0)
         runner.patch({"MotorRunning": False})
         runner.step()
 
@@ -602,7 +603,7 @@ class TestTimerIntegration:
 class TestDynamicpresets:
     """Tests for dynamic presets (Tag references instead of literals)."""
 
-    def test_ton_with_dynamic_preset(self):
+    def test_ton_with_dynamic_preset(self, runner_factory):
         """TON supports Tag preset that can change at runtime."""
         Enable = Bool("Enable")
         preset = Int("preset")
@@ -611,7 +612,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 on_delay(Timer[1], preset=preset)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
@@ -641,7 +642,7 @@ class TestDynamicpresets:
         assert runner.current_state.tags["Timer_Acc"] == 100
         assert runner.current_state.tags["Timer_Done"] is True  # Done again
 
-    def test_tof_preset_increase_after_timeout_re_enables_done(self):
+    def test_tof_preset_increase_after_timeout_re_enables_done(self, runner_factory):
         """TOF: If preset increases past acc after timeout, done goes True.
 
         This matches CLICK behavior per the manual warning:
@@ -657,7 +658,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 off_delay(Timer[1], preset=preset)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "preset": 50})
         runner.step()
 
@@ -685,7 +686,7 @@ class TestDynamicpresets:
         assert runner.current_state.tags["Timer_Acc"] == 100
         assert runner.current_state.tags["Timer_Done"] is False  # Timed out again
 
-    def test_rton_with_dynamic_preset(self):
+    def test_rton_with_dynamic_preset(self, runner_factory):
         """RTON supports Tag preset."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -695,7 +696,7 @@ class TestDynamicpresets:
             with Rung(Enable):
                 on_delay(Timer[1], preset=preset).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False, "preset": 50})
         runner.step()
 
@@ -730,7 +731,7 @@ class TestTimerAccumulatorOverflow:
 
     INT16_MAX = 32767
 
-    def test_ton_accumulates_past_preset(self):
+    def test_ton_accumulates_past_preset(self, runner_factory):
         """TON accumulator continues past preset towards max int."""
         Enable = Bool("Enable")
 
@@ -738,7 +739,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -758,7 +759,7 @@ class TestTimerAccumulatorOverflow:
         assert runner.current_state.tags["Timer_Acc"] == 250
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_ton_accumulator_clamps_at_max_int(self):
+    def test_ton_accumulator_clamps_at_max_int(self, runner_factory):
         """TON accumulator clamps at max int value (32767).
 
         Uses large dt to reach max int quickly.
@@ -769,7 +770,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=10.0)  # 10000ms per scan — reach max int quickly
+        runner = runner_factory(logic, dt=10.0)  # 10000ms per scan — reach max int quickly
         runner.patch({"Enable": False})
         runner.step()
 
@@ -795,7 +796,7 @@ class TestTimerAccumulatorOverflow:
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 32767
 
-    def test_rton_accumulator_continues_past_preset(self):
+    def test_rton_accumulator_continues_past_preset(self, runner_factory):
         """RTON accumulator continues past preset when enabled."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -804,7 +805,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer[1], preset=50).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -817,7 +818,7 @@ class TestTimerAccumulatorOverflow:
         assert runner.current_state.tags["Timer_Acc"] == 200
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_rton_accumulator_clamps_at_max_int(self):
+    def test_rton_accumulator_clamps_at_max_int(self, runner_factory):
         """RTON clamps at max int when re-enabled and continuing."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -826,7 +827,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=10.0)
+        runner = runner_factory(logic, dt=10.0)
         runner.patch({"Enable": False, "ResetBtn": False})
         runner.step()
 
@@ -851,7 +852,7 @@ class TestTimerAccumulatorOverflow:
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 32767
 
-    def test_tof_accumulator_continues_past_preset(self):
+    def test_tof_accumulator_continues_past_preset(self, runner_factory):
         """TOF accumulator continues counting past preset while disabled."""
         Enable = Bool("Enable")
 
@@ -859,7 +860,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -875,7 +876,7 @@ class TestTimerAccumulatorOverflow:
         assert runner.current_state.tags["Timer_Acc"] == 100
         assert runner.current_state.tags["Timer_Done"] is False
 
-    def test_tof_accumulator_clamps_at_max_int(self):
+    def test_tof_accumulator_clamps_at_max_int(self, runner_factory):
         """TOF accumulator clamps at max int value (32767) while disabled."""
         Enable = Bool("Enable")
 
@@ -883,7 +884,7 @@ class TestTimerAccumulatorOverflow:
             with Rung(Enable):
                 off_delay(Timer[1], preset=50)
 
-        runner = PLC(logic, dt=10.0)
+        runner = runner_factory(logic, dt=10.0)
         runner.patch({"Enable": False})
         runner.step()
 
@@ -928,7 +929,7 @@ class TestTimerConditionTypeGuards:
 class TestTimerStructuralContract:
     """Timer instructions accept any UDT with Done: Bool and Acc: Int|Dint."""
 
-    def test_custom_udt_with_int_acc_works(self):
+    def test_custom_udt_with_int_acc_works(self, runner_factory):
         Enable = Bool("Enable")
 
         @udt()
@@ -940,12 +941,12 @@ class TestTimerStructuralContract:
             with Rung(Enable):
                 on_delay(MyTimer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["MyTimer_Acc"] == 10
 
-    def test_custom_udt_with_dint_acc_works(self):
+    def test_custom_udt_with_dint_acc_works(self, runner_factory):
         Enable = Bool("Enable")
 
         @udt()
@@ -957,7 +958,7 @@ class TestTimerStructuralContract:
             with Rung(Enable):
                 on_delay(BigTimer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["BigTimer_Acc"] == 10
@@ -992,7 +993,7 @@ class TestTimerStructuralContract:
 class TestPositionalAndUnitAliases:
     """Test positional preset/unit args and human-friendly unit strings."""
 
-    def test_on_delay_positional_preset(self):
+    def test_on_delay_positional_preset(self, runner_factory):
         """on_delay(timer, 100) works as positional preset."""
         Enable = Bool("Enable")
 
@@ -1000,12 +1001,12 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], 100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 10
 
-    def test_on_delay_positional_preset_and_unit(self):
+    def test_on_delay_positional_preset_and_unit(self, runner_factory):
         """on_delay(timer, 5, 's') works — 5 seconds in Ts unit."""
         Enable = Bool("Enable")
 
@@ -1013,7 +1014,7 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], 5, "s")
 
-        runner = PLC(logic, dt=1.0)
+        runner = runner_factory(logic, dt=1.0)
         runner.patch({"Enable": True})
 
         for _ in range(5):
@@ -1022,7 +1023,7 @@ class TestPositionalAndUnitAliases:
         assert runner.current_state.tags["Timer_Done"] is True
         assert runner.current_state.tags["Timer_Acc"] == 5
 
-    def test_off_delay_positional_preset_and_unit(self):
+    def test_off_delay_positional_preset_and_unit(self, runner_factory):
         """off_delay(timer, 10, 'ms') works positionally."""
         Enable = Bool("Enable")
 
@@ -1030,12 +1031,12 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 off_delay(Timer[1], 10, "ms")
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_on_delay_unit_alias_minutes(self):
+    def test_on_delay_unit_alias_minutes(self, runner_factory):
         """on_delay with unit='min' normalizes to Tm."""
         Enable = Bool("Enable")
 
@@ -1043,7 +1044,7 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], preset=2, unit="min")
 
-        runner = PLC(logic, dt=60.0)
+        runner = runner_factory(logic, dt=60.0)
         runner.patch({"Enable": True})
 
         runner.step()
@@ -1051,7 +1052,7 @@ class TestPositionalAndUnitAliases:
         runner.step()
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_on_delay_unit_alias_hours(self):
+    def test_on_delay_unit_alias_hours(self, runner_factory):
         """on_delay with unit='h' normalizes to Th."""
         Enable = Bool("Enable")
 
@@ -1059,12 +1060,12 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], preset=1, unit="h")
 
-        runner = PLC(logic, dt=3600.0)
+        runner = runner_factory(logic, dt=3600.0)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Timer_Done"] is True
 
-    def test_on_delay_unit_canonical_still_works(self):
+    def test_on_delay_unit_canonical_still_works(self, runner_factory):
         """Canonical unit strings like 'Tms' and 'Ts' still work."""
         Enable = Bool("Enable")
 
@@ -1072,12 +1073,12 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], 100, "Tms")
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 10
 
-    def test_on_delay_keyword_preset_still_works(self):
+    def test_on_delay_keyword_preset_still_works(self, runner_factory):
         """Keyword preset= still works after making it positional."""
         Enable = Bool("Enable")
 
@@ -1085,12 +1086,12 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], preset=100)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True})
         runner.step()
         assert runner.current_state.tags["Timer_Acc"] == 10
 
-    def test_on_delay_positional_with_reset(self):
+    def test_on_delay_positional_with_reset(self, runner_factory):
         """on_delay(timer, 100, 'ms').reset(tag) works."""
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
@@ -1099,7 +1100,7 @@ class TestPositionalAndUnitAliases:
             with Rung(Enable):
                 on_delay(Timer[1], 100, "ms").reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.050)
+        runner = runner_factory(logic, dt=0.050)
         runner.patch({"Enable": True, "ResetBtn": False})
         runner.run(cycles=3)
         assert runner.current_state.tags["Timer_Acc"] == 150
