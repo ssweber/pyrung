@@ -1,7 +1,7 @@
 const vscode = require("vscode");
 
 class PyrungHistoryPanelProvider {
-  constructor() {
+  constructor({ getExecutionState } = {}) {
     this._view = null;
     this._isReady = false;
     this._session = null;
@@ -16,6 +16,9 @@ class PyrungHistoryPanelProvider {
     this._mode = "tags";
     this._chainResult = null;
     this._chainError = null;
+    this._fetchGeneration = 0;
+    this._getExecutionState =
+      typeof getExecutionState === "function" ? getExecutionState : () => "unknown";
   }
 
   resolveWebviewView(webviewView) {
@@ -47,6 +50,7 @@ class PyrungHistoryPanelProvider {
           this._postState();
           return;
         }
+        this._syncEntriesToWatchedTags();
         this._postState();
         await this.refresh();
         return;
@@ -118,6 +122,7 @@ class PyrungHistoryPanelProvider {
 
   setSession(session) {
     this._cancelLiveRefresh();
+    this._fetchGeneration += 1;
     this._session = session;
     if (!session) {
       this._entries = [];
@@ -134,6 +139,48 @@ class PyrungHistoryPanelProvider {
     this._postState();
   }
 
+  _executionState() {
+    if (!this._session) {
+      return "unknown";
+    }
+    try {
+      const executionState = this._getExecutionState(this._session);
+      return executionState === "running" || executionState === "stopped"
+        ? executionState
+        : "unknown";
+    } catch (_error) {
+      return "unknown";
+    }
+  }
+
+  _canFetchHistory() {
+    return Boolean(this._session) && this._executionState() === "stopped";
+  }
+
+  _syncEntriesToWatchedTags() {
+    if (!this._entries.length) {
+      return;
+    }
+
+    this._entries = this._entries
+      .map((entry) => {
+        const changes = {};
+        for (const [tag, delta] of Object.entries(entry.changes || {})) {
+          if (this._watchedTags.has(tag)) {
+            changes[tag] = delta;
+          }
+        }
+        if (!Object.keys(changes).length) {
+          return null;
+        }
+        return {
+          ...entry,
+          changes,
+        };
+      })
+      .filter(Boolean);
+  }
+
   addTag(tagName) {
     if (typeof tagName !== "string" || !tagName.trim()) {
       return;
@@ -146,7 +193,7 @@ class PyrungHistoryPanelProvider {
 
     this._watchedTags.add(cleaned);
     this._postState();
-    if (this._session) {
+    if (this._canFetchHistory()) {
       void this.refresh();
     }
   }
@@ -166,11 +213,16 @@ class PyrungHistoryPanelProvider {
       return;
     }
 
+    if (!this._canFetchHistory()) {
+      this._postState();
+      return;
+    }
+
     await this._fetchEntries({ append: false });
   }
 
   async _loadOlder() {
-    if (!this._session || !this._watchedTags.size || !this._entries.length) {
+    if (!this._canFetchHistory() || !this._watchedTags.size || !this._entries.length) {
       return;
     }
     await this._fetchEntries({
@@ -200,12 +252,12 @@ class PyrungHistoryPanelProvider {
       timestamp: null,
       changes: changesMap,
     };
-    this._entries = [entry, ...this._entries];
+    this._entries = [entry, ...this._entries.slice(0, this._pageSize - 1)];
     this._postState();
   }
 
   liveRefresh() {
-    if (!this._session || !this._watchedTags.size) {
+    if (!this._canFetchHistory() || !this._watchedTags.size) {
       return;
     }
     if (this._liveTimer) {
@@ -225,11 +277,12 @@ class PyrungHistoryPanelProvider {
   }
 
   async _fetchNewEntries() {
-    if (!this._session || !this._watchedTags.size) {
+    if (!this._canFetchHistory() || !this._watchedTags.size) {
       return;
     }
 
     const afterScan = this._entries.length ? this._entries[0].scanId : undefined;
+    const generation = this._fetchGeneration;
 
     try {
       const result = await this._session.customRequest("pyrungTagChanges", {
@@ -237,6 +290,9 @@ class PyrungHistoryPanelProvider {
         count: this._pageSize,
         afterScan,
       });
+      if (this._fetchGeneration !== generation) {
+        return;
+      }
       const newEntries = Array.isArray(result?.entries) ? result.entries : [];
       if (!afterScan) {
         this._entries = newEntries;
@@ -311,16 +367,20 @@ class PyrungHistoryPanelProvider {
   }
 
   async _fetchEntries({ append, beforeScan } = {}) {
-    if (!this._session) {
+    if (!this._canFetchHistory()) {
       return;
     }
 
+    const generation = this._fetchGeneration;
     try {
       const result = await this._session.customRequest("pyrungTagChanges", {
         tags: Array.from(this._watchedTags),
         count: this._pageSize,
         beforeScan,
       });
+      if (this._fetchGeneration !== generation) {
+        return;
+      }
       const nextEntries = Array.isArray(result?.entries) ? result.entries : [];
       this._entries = append ? this._entries.concat(nextEntries) : nextEntries;
       this._hasMore = nextEntries.length === this._pageSize;
