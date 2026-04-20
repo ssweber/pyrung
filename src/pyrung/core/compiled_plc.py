@@ -31,6 +31,32 @@ from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
 
 
+class _TrackedList:
+    """List wrapper that records which indices were assigned during a step.
+
+    7 codegen instruction compilers write to block arrays (shift, fill,
+    blockcopy, blockcopy_converter, copy_converter, unpack_bits,
+    unpack_words).  Rather than threading a write-report through each
+    compiler, this wrapper captures writes generically at negligible cost.
+    """
+
+    __slots__ = ("data", "written_indices")
+
+    def __init__(self, data: list) -> None:  # noqa: ANN401
+        self.data = data
+        self.written_indices: set[int] = set()
+
+    def __getitem__(self, idx: int) -> Any:
+        return self.data[idx]
+
+    def __setitem__(self, idx: int, value: Any) -> None:
+        self.data[idx] = value
+        self.written_indices.add(idx)
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+
 class _KernelRuntimeContext:
     """Mutable tag/memory view for runtime hooks around one kernel scan."""
 
@@ -136,22 +162,26 @@ class CompiledPLC:
         self._referenced_system_tags = frozenset(
             name for name in self._compiled.referenced_tags if name in SYSTEM_TAGS_BY_NAME
         )
+        self._block_element_names: frozenset[str] = frozenset(
+            name for spec in self._compiled.block_specs.values() for name in spec.tag_names
+        )
         self._known_tags_by_name: dict[str, Tag] = {
             name: tag
             for name, tag in self._compiled.referenced_tags.items()
             if name not in SYSTEM_TAGS_BY_NAME
         }
         self._state = initial_state if initial_state is not None else SystemState()
-        self._initialize_from_state(self._state)
-
         seed = {
             t.name: t.default
             for t in self._known_tags_by_name.values()
-            if t.name not in self._state.tags
+            if t.name not in self._state.tags and t.name not in self._block_element_names
         }
         if seed:
             self._state = self._state.with_tags(seed)
-            self._initialize_from_state(self._state)
+        self._live_block_tags: set[str] = set(
+            name for name in self._state.tags if name in self._block_element_names
+        )
+        self._initialize_from_state(self._state)
 
     @property
     def current_state(self) -> SystemState:
@@ -171,9 +201,16 @@ class CompiledPLC:
         | Mapping[Tag, bool | int | float | str]
         | Mapping[str | Tag, bool | int | float | str],
     ) -> None:
+        for key in tags:
+            name = key.name if isinstance(key, Tag) else key
+            if name in self._block_element_names:
+                self._live_block_tags.add(name)
         self._input_overrides.patch(tags)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
+        name = tag.name if isinstance(tag, Tag) else tag
+        if name in self._block_element_names:
+            self._live_block_tags.add(name)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -209,6 +246,19 @@ class CompiledPLC:
         self._kernel.memory[_MODE_RUN_KEY] = False
         self._state = self._state.with_memory({_MODE_RUN_KEY: False})
 
+    def reboot(self) -> SystemState:
+        tag_values = self._rebuild_tags_for_reset(
+            preserve_all=self._battery_present,
+            preserve_retentive=False,
+        )
+        self._reset_runtime_scope(
+            tag_values=tag_values,
+            mode_run=True,
+            preserve_rtc_continuity=self._battery_present,
+        )
+        self._running = True
+        return self._state
+
     def step(self) -> SystemState:
         self._ensure_running()
 
@@ -229,6 +279,11 @@ class CompiledPLC:
 
         for spec in self._compiled.block_specs.values():
             self._kernel.load_block_from_tags(spec)
+        tracked_blocks: dict[str, _TrackedList] = {}
+        for sym, arr in self._kernel.blocks.items():
+            tracked = _TrackedList(arr)
+            tracked_blocks[sym] = tracked
+            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]
         self._compiled.step_fn(
             self._kernel.tags,
             self._kernel.blocks,
@@ -237,7 +292,12 @@ class CompiledPLC:
             self._dt,
         )
         for spec in self._compiled.block_specs.values():
+            tracked = tracked_blocks[spec.symbol]
+            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
             self._kernel.flush_block_to_tags(spec)
+            for idx in tracked.written_indices:
+                if idx < len(spec.tag_names):
+                    self._live_block_tags.add(spec.tag_names[idx])
 
         self._input_overrides.apply_post_logic(scan_ctx)
         self._capture_previous_states()
@@ -303,7 +363,12 @@ class CompiledPLC:
 
     def _capture_previous_states(self) -> None:
         committed_names = set(self._state.tags)
-        committed_names.update(name for name in self._kernel.tags if name not in _DERIVED_TAG_NAMES)
+        committed_names.update(
+            name
+            for name in self._kernel.tags
+            if name not in _DERIVED_TAG_NAMES
+            and (name not in self._block_element_names or name in self._live_block_tags)
+        )
         for name in committed_names:
             value = self._kernel.tags.get(name)
             self._kernel.memory[f"_prev:{name}"] = value
@@ -316,6 +381,7 @@ class CompiledPLC:
             name: value
             for name, value in self._kernel.tags.items()
             if name not in _DERIVED_TAG_NAMES
+            and (name not in self._block_element_names or name in self._live_block_tags)
         }
 
     def _ensure_running(self) -> None:
