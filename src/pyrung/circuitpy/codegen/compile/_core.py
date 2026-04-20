@@ -88,6 +88,55 @@ def _contact_tag_name(tag: Tag | ImmediateRef) -> str:
     return tag.name
 
 
+def _collect_helper_conditions(
+    rung: LogicRung,
+) -> list[tuple[Any, str, Any]]:
+    """Walk a rung tree and collect instruction-internal conditions.
+
+    Returns (instruction, field_name, condition) tuples for conditions that
+    must be evaluated at rung entry (before any instructions execute) to match
+    the core engine's ``instruction_condition_view`` snapshot semantics.
+    """
+    result: list[tuple[Any, str, Any]] = []
+
+    def _walk(r: LogicRung) -> None:
+        for item in r._execution_items:
+            if isinstance(item, LogicRung):
+                _walk(item)
+                continue
+            if isinstance(item, OnDelayInstruction):
+                if item.reset_condition is not None:
+                    result.append((item, "reset_condition", item.reset_condition))
+            elif isinstance(item, CountUpInstruction):
+                if item.reset_condition is not None:
+                    result.append((item, "reset_condition", item.reset_condition))
+                if item.down_condition is not None:
+                    result.append((item, "down_condition", item.down_condition))
+            elif isinstance(item, CountDownInstruction):
+                if item.reset_condition is not None:
+                    result.append((item, "reset_condition", item.reset_condition))
+            elif isinstance(item, ShiftInstruction):
+                result.append((item, "clock_condition", item.clock_condition))
+                result.append((item, "reset_condition", item.reset_condition))
+            elif isinstance(item, EventDrumInstruction):
+                result.append((item, "reset_condition", item.reset_condition))
+                if item.jump_condition is not None:
+                    result.append((item, "jump_condition", item.jump_condition))
+                if item.jog_condition is not None:
+                    result.append((item, "jog_condition", item.jog_condition))
+                for i, cond in enumerate(item.events):
+                    result.append((item, f"events[{i}]", cond))
+            elif isinstance(item, TimeDrumInstruction):
+                result.append((item, "reset_condition", item.reset_condition))
+                if item.jump_condition is not None:
+                    result.append((item, "jump_condition", item.jump_condition))
+                if item.jog_condition is not None:
+                    result.append((item, "jog_condition", item.jog_condition))
+
+    _walk(rung)
+    return result
+
+
 def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
     """Return a Python boolean expression string."""
     if isinstance(cond, BitCondition):
@@ -147,6 +196,17 @@ def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
 def compile_expression(expr: Expression, ctx: CodegenContext) -> str:
     """Return a Python expression string with explicit parentheses."""
     return _compile_expression_impl(expr, ctx)
+
+
+def _get_condition_snapshot(instr: Any, field_name: str, ctx: CodegenContext) -> str | None:
+    """Return the rung-entry snapshot variable for a helper condition, if available."""
+    entry = ctx._helper_condition_snapshots.get(id(instr))
+    if entry is not None:
+        snap = entry.get(field_name)
+        if snap is not None:
+            assert isinstance(snap, str)
+            return snap
+    return None
 
 
 from ._instructions_basic import (
@@ -251,11 +311,30 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
     """Compile one rung into Python source lines."""
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
+    saved_snapshots = dict(ctx._helper_condition_snapshots)
     try:
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
         cond_expr = _compile_condition_group(rung._conditions, ctx)
         lines = [f"{' ' * indent}{enabled_var} = {cond_expr}"]
+
+        helpers = _collect_helper_conditions(rung)
+        if helpers:
+            snap_idx = 0
+            for instr, field_name, condition in helpers:
+                snap_var = f"_{rung_id}_snap_{snap_idx}"
+                snap_idx += 1
+                expr = compile_condition(condition, ctx)
+                lines.append(f"{' ' * indent}{snap_var} = {expr}")
+                instr_id = id(instr)
+                entry = ctx._helper_condition_snapshots.setdefault(instr_id, {})
+                if field_name.startswith("events["):
+                    event_list = entry.setdefault("events", [])
+                    assert isinstance(event_list, list)
+                    event_list.append(snap_var)
+                else:
+                    entry[field_name] = snap_var
+
         lines.extend(
             _compile_rung_items(
                 rung=rung,
@@ -267,6 +346,7 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
         )
         return lines
     finally:
+        ctx._helper_condition_snapshots = saved_snapshots
         ctx.set_current_function(previous)
 
 

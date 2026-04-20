@@ -26,7 +26,7 @@ from pyrung.core.instruction import (
 )
 from pyrung.core.tag import TagType
 
-from ._core import compile_condition
+from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_guarded_instruction,
     _compile_range_setup,
@@ -313,8 +313,12 @@ def _compile_shift_instruction(
     if static_len == 0:
         raise ValueError("shift bit_range resolved to an empty range")
     shift_len_expr = str(static_len) if static_len is not None else f"len({range_indices})"
-    clock_expr = compile_condition(instr.clock_condition, ctx)
-    reset_expr = compile_condition(instr.reset_condition, ctx)
+    clock_expr = _get_condition_snapshot(instr, "clock_condition", ctx) or compile_condition(
+        instr.clock_condition, ctx
+    )
+    reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+        instr.reset_condition, ctx
+    )
     lines = [
         *range_setup,
         f"_clock_curr = {clock_expr}",
@@ -368,8 +372,15 @@ def _compile_event_drum_instruction(
     jump_prev_key = f"_drum_jump_prev:{key_base}"
     jog_prev_key = f"_drum_jog_prev:{key_base}"
 
-    event_exprs = [f"bool({compile_condition(cond, ctx)})" for cond in instr.events]
-    reset_expr = compile_condition(instr.reset_condition, ctx)
+    snap_events = ctx._helper_condition_snapshots.get(id(instr), {}).get("events")
+    if snap_events is not None:
+        assert isinstance(snap_events, list)
+        event_exprs = [f"bool({v})" for v in snap_events]
+    else:
+        event_exprs = [f"bool({compile_condition(cond, ctx)})" for cond in instr.events]
+    reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+        instr.reset_condition, ctx
+    )
 
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
@@ -385,7 +396,9 @@ def _compile_event_drum_instruction(
     ]
 
     if instr.jump_condition is not None:
-        jump_expr = compile_condition(instr.jump_condition, ctx)
+        jump_expr = _get_condition_snapshot(instr, "jump_condition", ctx) or compile_condition(
+            instr.jump_condition, ctx
+        )
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
@@ -397,7 +410,9 @@ def _compile_event_drum_instruction(
         lines.extend(["_jump_curr = False", "_jump_edge = False"])
 
     if instr.jog_condition is not None:
-        jog_expr = compile_condition(instr.jog_condition, ctx)
+        jog_expr = _get_condition_snapshot(instr, "jog_condition", ctx) or compile_condition(
+            instr.jog_condition, ctx
+        )
         lines.extend(
             [
                 f"_jog_curr = bool({jog_expr})",
@@ -527,7 +542,9 @@ def _compile_time_drum_instruction(
     max_acc = _INT_MAX if instr.accumulator.type == TagType.INT else _DINT_MAX
 
     preset_exprs = [f"int({_compile_value(preset, ctx)})" for preset in instr.presets]
-    reset_expr = compile_condition(instr.reset_condition, ctx)
+    reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+        instr.reset_condition, ctx
+    )
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
 
     lines: list[str] = [
@@ -548,7 +565,9 @@ def _compile_time_drum_instruction(
     ]
 
     if instr.jump_condition is not None:
-        jump_expr = compile_condition(instr.jump_condition, ctx)
+        jump_expr = _get_condition_snapshot(instr, "jump_condition", ctx) or compile_condition(
+            instr.jump_condition, ctx
+        )
         lines.extend(
             [
                 f"_jump_curr = bool({jump_expr})",
@@ -560,7 +579,9 @@ def _compile_time_drum_instruction(
         lines.extend(["_jump_curr = False", "_jump_edge = False"])
 
     if instr.jog_condition is not None:
-        jog_expr = compile_condition(instr.jog_condition, ctx)
+        jog_expr = _get_condition_snapshot(instr, "jog_condition", ctx) or compile_condition(
+            instr.jog_condition, ctx
+        )
         lines.extend(
             [
                 f"_jog_curr = bool({jog_expr})",
