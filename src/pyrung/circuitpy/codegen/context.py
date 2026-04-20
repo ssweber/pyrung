@@ -117,6 +117,7 @@ class CodegenContext:
             target_scan_ms=0.0,
             watchdog_ms=None,
         )
+        ctx._runtime_state_keys = True
         ctx.collect_program_references()
         ctx.assign_symbols()
         return ctx
@@ -148,6 +149,7 @@ class CodegenContext:
     _name_counters: dict[str, int] = field(default_factory=dict)
     _state_key_counter: int = 0
     _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
+    _runtime_state_keys: bool = False
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
@@ -405,6 +407,8 @@ class CodegenContext:
 
     def state_key_for(self, obj: Any) -> str:
         obj_id = id(obj)
+        if self._runtime_state_keys:
+            return str(obj_id)
         existing = self._state_keys_by_obj.get(obj_id)
         if existing is not None:
             return existing
