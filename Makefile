@@ -15,7 +15,7 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis"
+	uv run pytest -m "not integration and not hypothesis" --runner-backend=both
 
 test-hypothesis:
 	uv run pytest -m hypothesis
