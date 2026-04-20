@@ -26,10 +26,10 @@ During investigation we found one semantic difference between the two paths that
 - [ ] Add regression test: intra-rung write NOT visible to timer reset condition
 
 ### Phase 1: `ReplayKernel` + `CompiledKernel` dataclass
-- [ ] Create `src/pyrung/core/kernel.py`
-- [ ] `ReplayKernel` class (plain-dict state container)
-- [ ] `BlockSpec` dataclass (symbol, size, default, tag_type)
-- [ ] `CompiledKernel` dataclass (step_fn, referenced_tags, block_specs, edge_tags, source)
+- [x] Create `src/pyrung/core/kernel.py`
+- [x] `ReplayKernel` class (plain-dict state container)
+- [x] `BlockSpec` dataclass (symbol, size, default, tag_type)
+- [x] `CompiledKernel` dataclass (step_fn, referenced_tags, block_specs, edge_tags, source)
 
 ### Phase 2: Hardware-free `CodegenContext` + kernel renderer
 - [ ] Add `CodegenContext.for_kernel(program)` classmethod in `context.py`
