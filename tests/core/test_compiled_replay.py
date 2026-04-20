@@ -105,6 +105,34 @@ def test_compiled_plc_matches_plc_for_rtc_apply_and_system_points() -> None:
     _assert_states_equivalent(plc, compiled)
 
 
+def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> None:
+    """Regression: compiled kernel must snapshot helper conditions at rung entry."""
+    Enable = Bool("Enable")
+    ResetBtn = Bool("ResetBtn")
+
+    with Program(strict=False) as program:
+        with Rung(Enable):
+            copy(True, ResetBtn)
+            on_delay(Timer[1], preset=100).reset(ResetBtn)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    plc.patch({"Enable": True, "ResetBtn": False})
+    compiled.patch({"Enable": True, "ResetBtn": False})
+
+    plc.step()
+    compiled.step()
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["ResetBtn"] is True
+    assert compiled.current_state.tags["Timer_Acc"] == 10
+
+    plc.step()
+    compiled.step()
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["Timer_Acc"] == 0
+
+
 def test_replay_to_prefers_compiled_path_when_supported() -> None:
     enable = Bool("Enable")
     light = Bool("Light")

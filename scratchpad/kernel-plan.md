@@ -1,10 +1,26 @@
-# Replay Kernel Compiler — Implementation Plan
+# Compiled Replay Cutover Plan
+
+## End Goal
+
+Use `CompiledPLC` as the replay-correct kernel runner, then cut it into `PLC` so normal historical state access uses compiled replay automatically when the program is kernel-supported.
+
+The user-facing goal is unchanged APIs with seamless long, low-memory history. `CompiledPLC` is an internal stepping stone, not a new workflow.
+
+Classic replay remains available as the automatic fallback for unsupported programs, and stays in place for trace/debug-heavy paths such as `replay_trace_at()`.
+
+---
 
 ## Context
 
-pyrung replays historical PLC states by re-running the full 8-phase scan cycle (ScanContext, condition trees, Rung objects, debug hooks). This is expensive. The CircuitPy codegen already compiles `Program` into flat Python code — no Rung objects, no ScanContext. We want to reuse that compilation pipeline to produce a fast in-process replay kernel: `f(state_dict, dt, patches, forces) -> next_state_dict`.
+`pyrung` historically reconstructs PLC state by re-running the full 8-phase scan cycle with `ScanContext`, condition trees, rung objects, and debug plumbing. That is replay-correct, but expensive for older history reads.
 
-During investigation we found one semantic difference between the two paths that should be fixed first: **instruction-internal conditions** (timer/counter reset, counter down, shift clock/reset, drum jog/reset) read live mutable state in the codegen but read a rung-entry frozen snapshot in the core engine.
+The CircuitPy codegen path already compiles a `Program` into flat Python code over plain state containers. The revised direction is:
+
+1. Keep compiling programs into a replay-capable kernel.
+2. Wrap that kernel in `CompiledPLC` so it reproduces replay-critical scan semantics.
+3. Use that engine inside `PLC` historical reconstruction without requiring users to opt into a new API.
+
+During the earlier compiler work we also found and fixed an important semantic gap: instruction-internal helper conditions in codegen must read rung-entry snapshots, not live mutable state.
 
 ---
 
@@ -23,75 +39,105 @@ During investigation we found one semantic difference between the two paths that
 - [x] Update `_compile_time_drum_instruction` to use snapshot (reset + jump + jog)
 - [x] All 2754 tests pass
 - [x] Lint clean (ruff + ty + codespell)
-- [ ] Add regression test: intra-rung write NOT visible to timer reset condition
+- [x] Add regression test: intra-rung write NOT visible to timer reset condition
 
-### Phase 1: `ReplayKernel` + `CompiledKernel` dataclass
+### Phase 1: `ReplayKernel` + `CompiledKernel` foundation
 - [x] Create `src/pyrung/core/kernel.py`
-- [x] `ReplayKernel` class (plain-dict state container)
-- [x] `BlockSpec` dataclass (symbol, size, default, tag_type)
-- [x] `CompiledKernel` dataclass (step_fn, referenced_tags, block_specs, edge_tags, source)
+- [x] Add `ReplayKernel` class (plain-dict state container)
+- [x] Add `BlockSpec` dataclass (symbol, size, default, tag_type)
+- [x] Add `CompiledKernel` dataclass (step_fn, referenced_tags, block_specs, edge_tags, source)
 
-### Phase 2: Hardware-free `CodegenContext` + kernel renderer
-- [x] Add `CodegenContext.for_kernel(program)` classmethod in `context.py`
+### Phase 2: Hardware-free kernel compilation
+- [x] Add `CodegenContext.for_kernel(program)` in `context.py`
 - [x] Create `src/pyrung/circuitpy/codegen/render_kernel.py`
-- [x] `_render_kernel_function(ctx)` — prologue (read from kernel), body (compile_rung), epilogue (write back + prev capture)
-- [x] Inline helper functions (_clamp_int, _rise, _fall, etc.) in rendered source
-- [x] Subroutine compilation support
-- [x] `compile_kernel(program)` top-level entry point (exec + return CompiledKernel)
-- [x] Basic smoke test: compile a trivial program, verify generated source compiles
+- [x] Render kernel prologue/body/epilogue against `ReplayKernel`
+- [x] Inline kernel helper functions (`_clamp_int`, `_rise`, `_fall`, etc.)
+- [x] Support subroutine compilation in the kernel renderer
+- [x] Add `compile_kernel(program)` as a supported entry point
+- [x] Export `compile_kernel` from `pyrung.circuitpy.codegen`
+- [x] Basic smoke test: compile a trivial program and verify generated source compiles
 
-### Phase 3: `CompiledPLC` wrapper
-- [ ] Create `src/pyrung/core/compiled_plc.py`
-- [ ] `__init__` compiles program, initializes ReplayKernel with tag defaults
-- [ ] `step()` — 8-phase scan cycle (patches, pre-force, dt, logic, post-force, prev, advance)
-- [ ] `patch()`, `force()`, `unforce()`, `clear_forces()`
-- [ ] `current_state` property (dict view of tags + memory)
-- [ ] `run()` / `run_for()` convenience methods
+### Phase 3: `CompiledPLC` replay engine
+- [x] Create `src/pyrung/core/compiled_plc.py`
+- [x] Initialize from compiled kernel + `ReplayKernel` defaults
+- [x] Support `step()`, `run()`, and `run_for()`
+- [x] Support `patch()`, `force()`, `unforce()`, and `clear_forces()`
+- [x] Expose `simulation_time` and `current_state`
+- [x] Reproduce replay-critical scan semantics:
+- [x] Patch drain ordering
+- [x] Pre-force and post-force ordering
+- [x] `_dt` updates
+- [x] `_prev` capture from post-force final values
+- [x] Block/tag synchronization
+- [x] RTC/system-point derived values needed for replay parity
+- [x] Transient fault/status clearing
+- [x] Use `InputOverrideManager` plus a small runtime shim instead of `ScanContext`
+- [x] Export `CompiledPLC` from `pyrung.core`
 
-### Phase 4: Equivalence test harness
-- [ ] Create `tests/core/test_kernel_equivalence.py`
-- [ ] `assert_equivalent()` helper (runs both PLC and CompiledPLC, compares per-scan)
-- [ ] Tier 1 tests: out, latch, reset
-- [ ] Tier 1 tests: on_delay, off_delay (multiple time units)
-- [ ] Tier 1 tests: count_up, count_down (with reset, with down)
-- [ ] Tier 1 tests: edge detection (rise, fall)
-- [ ] Tier 1 tests: copy, calc
-- [ ] Tier 1 tests: branches (nested, condition snapshotting)
-- [ ] Tier 1 tests: drums (event, time)
-- [ ] Tier 1 tests: shift register
-- [ ] Tier 1 tests: for-loop, call/return
-- [ ] Tier 1 tests: blocks, indirect refs
-- [ ] Tier 2 tests: multi-instruction programs with forces/patches
-- [ ] Tier 3 tests: existing test programs reused
+### Phase 4: Transparent historical replay cutover inside `PLC`
+- [x] Add a cheap "is this program kernel-supported?" gate for replay internals
+- [x] Update `runner.py` replay internals to choose compiled replay when supported
+- [x] Keep automatic fallback to classic replay for unsupported programs
+- [x] Route `PLC.replay_to()` through the compiled-or-classic facade
+- [x] Route `History.at()` through the same unchanged facade
+- [x] Keep `seek`, `rewind`, `diff`, and history-driven cause/effect reads on unchanged public APIs
+- [x] Preserve correct behavior for DAP history consumers through the existing surface
+- [x] Keep `replay_trace_at()` on the classic replay path for now
+- [x] Avoid introducing any required caller-facing API changes in this slice
 
-### Phase 5: Gap fixes
-- [ ] Fix any semantic differences exposed by equivalence tests
-- [ ] System points: exclude or stub
-- [ ] Modbus: exclude from kernel (requires protocol stack)
-- [ ] Verify `_prev` coverage matches
+### Phase 5: Replay parity coverage
+- [x] Add kernel bootstrap tests for `compile_kernel()` / `ReplayKernel`
+- [x] Add `CompiledPLC` parity tests for patch/force ordering and `_prev` capture
+- [x] Add coverage for timers, counters, branches with snapshot semantics, shift/drum basics, block-backed tags, and subroutine/call behavior
+- [x] Add replay cutover tests verifying `PLC.replay_to()` and `History.at()` match classic replay for kernel-supported programs
+- [x] Add automatic fallback tests for unsupported programs
+- [x] Verify `replay_trace_at()` still works via the classic path
+- [ ] Add broader benchmark coverage for `examples/click_conveyor.py`
+- [ ] Add benchmark coverage for one busy real-world style program
+- [ ] Record perf comparisons for single historical lookup and `_replay_range`
+
+### Phase 6: Transitional cleanup
+- [ ] Prove cache warming is no longer meaningfully helped by `hydrate()`
+- [ ] Make `hydrate()` a compatibility wrapper or deprecate it
+- [ ] Remove any remaining internal assumptions that classic replay is the default reconstruction path
+- [ ] Decide whether a temporary feature flag is needed only if parity gaps appear
 
 ---
 
-## Key files
+## What Landed In This Slice
+
+- [x] `CompiledPLC` exists and is replay-correct enough to drive historical reconstruction.
+- [x] `compile_kernel` is exported as a supported API.
+- [x] `PLC` historical reconstruction now prefers compiled replay automatically for supported fixed-step `Program` instances.
+- [x] Unsupported programs transparently fall back to the classic replay path.
+- [x] Public `PLC` and `History` APIs remain unchanged.
+- [x] Debug trace reconstruction is intentionally still on the classic replay engine.
+- [ ] Benchmarks and `hydrate()` deprecation/removal are still follow-up work.
+
+---
+
+## Key Files
 
 | File | Role |
 |------|------|
-| `src/pyrung/circuitpy/codegen/compile/_core.py` | `compile_rung()`, `compile_condition()` — reused as-is for body |
-| `src/pyrung/circuitpy/codegen/compile/_instructions_basic.py` | Timer/counter compilers — Phase 0 snapshot fix |
-| `src/pyrung/circuitpy/codegen/compile/_instructions_block.py` | Drum/shift/search compilers — Phase 0 snapshot fix |
-| `src/pyrung/circuitpy/codegen/context.py` | `CodegenContext` — add `for_kernel()` classmethod |
-| `src/pyrung/circuitpy/codegen/render.py` | Existing renderer — reference for prologue/epilogue patterns |
-| `src/pyrung/core/runner.py` | `PLC._scan_steps()` (line 1894), `_prepare_scan()` (1756), `_commit_scan()` (1794) |
-| `src/pyrung/core/context.py` | `ScanContext`, `ConditionView` — reference for snapshot semantics |
-| `src/pyrung/core/input_overrides.py` | `InputOverrideManager` — reference for force/patch application |
-| `src/pyrung/core/kernel.py` | **NEW** — `ReplayKernel`, `CompiledKernel` |
-| `src/pyrung/core/compiled_plc.py` | **NEW** — `CompiledPLC` wrapper |
-| `src/pyrung/circuitpy/codegen/render_kernel.py` | **NEW** — kernel function renderer |
-| `tests/core/test_kernel_equivalence.py` | **NEW** — oracle-based equivalence tests |
+| `src/pyrung/circuitpy/codegen/compile/_core.py` | `compile_rung()`, `compile_condition()` reused by kernel compilation |
+| `src/pyrung/circuitpy/codegen/compile/_instructions_basic.py` | Timer/counter helpers and snapshot-sensitive instruction compilers |
+| `src/pyrung/circuitpy/codegen/compile/_instructions_block.py` | Drum/shift/search helpers and snapshot-sensitive instruction compilers |
+| `src/pyrung/circuitpy/codegen/context.py` | `CodegenContext.for_kernel()` |
+| `src/pyrung/circuitpy/codegen/render.py` | Existing renderer used as reference for emitted program structure |
+| `src/pyrung/circuitpy/codegen/render_kernel.py` | Kernel function renderer |
+| `src/pyrung/circuitpy/codegen/__init__.py` | `compile_kernel` export |
+| `src/pyrung/core/kernel.py` | `ReplayKernel`, `CompiledKernel`, `BlockSpec` |
+| `src/pyrung/core/compiled_plc.py` | `CompiledPLC` wrapper |
+| `src/pyrung/core/runner.py` | Replay cutover and compiled/classic replay selection |
+| `src/pyrung/core/input_overrides.py` | Force/patch application model reused by compiled replay |
+| `src/pyrung/core/__init__.py` | `CompiledPLC` export |
+| `tests/core/test_compiled_replay.py` | Kernel bootstrap, parity, cutover, and fallback coverage |
 
 ## Verification
 
-1. `make lint` — all new code passes ruff + ty + codespell
-2. `make test` — all existing tests still pass
-3. Equivalence tests pass for all instruction types
-4. Inspect generated kernel source (`CompiledKernel.source`) for a non-trivial program to verify it looks correct
+- [x] `make lint`
+- [x] `uv run pytest tests/core tests/circuitpy/test_codegen.py -q`
+- [x] Compiled replay cutover covered by focused replay parity tests
+- [ ] Benchmark evidence captured for `click_conveyor.py` and another busy program
+- [ ] `hydrate()` retirement decision documented from measured results
