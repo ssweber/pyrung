@@ -46,6 +46,20 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
     assert kernel.prev == {}
 
 
+def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defaults() -> None:
+    program = Program(strict=False)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    _assert_states_equivalent(plc, compiled)
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+
+
 def test_compiled_plc_matches_plc_for_patch_force_and_prev_capture() -> None:
     enable = Bool("Enable")
     reset_tag = Bool("Reset")

@@ -6,7 +6,7 @@ These tests verify:
 3. Edge detection works correctly across scan cycles
 """
 
-from pyrung.core import PLC, Bool, Program, Rung, latch, out, reset
+from pyrung.core import Bool, Program, Rung, latch, out, reset
 
 
 class TestRiseDSL:
@@ -23,7 +23,7 @@ class TestRiseDSL:
         assert isinstance(cond, RisingEdgeCondition)
         assert cond.tag is Button
 
-    def test_rise_in_rung_fires_on_transition(self):
+    def test_rise_in_rung_fires_on_transition(self, runner_factory):
         """Rung with rise() should fire only on 0->1 transition."""
         from pyrung.core import rise
 
@@ -34,7 +34,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Initial state: Button=False, Light=False
         runner.patch({"Button": False, "Light": False})
@@ -54,7 +54,7 @@ class TestRiseDSL:
         runner.step()
         assert runner.current_state.tags.get("Light") is False  # Back to False!
 
-    def test_rise_does_not_fire_when_already_on(self):
+    def test_rise_does_not_fire_when_already_on(self, runner_factory):
         """rise() should not fire if signal was already True."""
         from pyrung.core import rise
 
@@ -65,7 +65,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 latch(Counter)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Start with Button already True
         runner.patch({"Button": True, "Counter": False})
@@ -81,7 +81,7 @@ class TestRiseDSL:
         runner.step()  # Button still True, prev=True -> no edge
         assert runner.current_state.tags.get("Counter") is False
 
-    def test_rise_fires_again_after_off_on_cycle(self):
+    def test_rise_fires_again_after_off_on_cycle(self, runner_factory):
         """rise() should fire again after signal goes off then on."""
         from pyrung.core import rise
 
@@ -92,7 +92,7 @@ class TestRiseDSL:
             with Rung(rise(Button)):
                 latch(PulseCount)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # First rising edge
         runner.patch({"Button": False, "PulseCount": False})
@@ -130,7 +130,7 @@ class TestFallDSL:
         assert isinstance(cond, FallingEdgeCondition)
         assert cond.tag is Button
 
-    def test_fall_in_rung_fires_on_transition(self):
+    def test_fall_in_rung_fires_on_transition(self, runner_factory):
         """Rung with fall() should fire only on 1->0 transition."""
         from pyrung.core import fall
 
@@ -141,7 +141,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 out(Light)  # out() resets when rung false - shows one-shot behavior
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Initial state: Button=True, Light=False
         runner.patch({"Button": True, "Light": False})
@@ -162,7 +162,7 @@ class TestFallDSL:
         runner.step()
         assert runner.current_state.tags.get("Light") is False  # Back to False!
 
-    def test_fall_does_not_fire_when_already_off(self):
+    def test_fall_does_not_fire_when_already_off(self, runner_factory):
         """fall() should not fire if signal was already False."""
         from pyrung.core import fall
 
@@ -173,7 +173,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 latch(Counter)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Start with Button already False
         runner.patch({"Button": False, "Counter": False})
@@ -185,7 +185,7 @@ class TestFallDSL:
         runner.step()
         assert runner.current_state.tags.get("Counter") is False
 
-    def test_fall_fires_again_after_on_off_cycle(self):
+    def test_fall_fires_again_after_on_off_cycle(self, runner_factory):
         """fall() should fire again after signal goes on then off."""
         from pyrung.core import fall
 
@@ -196,7 +196,7 @@ class TestFallDSL:
             with Rung(fall(Button)):
                 latch(PulseCount)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Setup: Button on
         runner.patch({"Button": True, "PulseCount": False})
@@ -226,7 +226,7 @@ class TestFallDSL:
 class TestPrevValueTracking:
     """Test that PLC properly tracks _prev:* values in memory."""
 
-    def test_runner_updates_prev_values_after_scan(self):
+    def test_runner_updates_prev_values_after_scan(self, runner_factory):
         """Runner should update _prev:* in memory after each scan."""
         Button = Bool("Button")
         Light = Bool("Light")
@@ -235,7 +235,7 @@ class TestPrevValueTracking:
             with Rung(Button):
                 out(Light)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Set initial value
         runner.patch({"Button": True})
@@ -251,7 +251,7 @@ class TestPrevValueTracking:
         # _prev:Button should now be False (from previous scan)
         assert runner.current_state.memory.get("_prev:Button") is False
 
-    def test_runner_tracks_multiple_tags(self):
+    def test_runner_tracks_multiple_tags(self, runner_factory):
         """Runner should track _prev:* for all tags that change."""
         A = Bool("A")
         B = Bool("B")
@@ -261,7 +261,7 @@ class TestPrevValueTracking:
             with Rung(A, B):
                 out(Out)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         runner.patch({"A": True, "B": False})
         runner.step()
@@ -279,7 +279,7 @@ class TestPrevValueTracking:
 class TestEdgeCombinations:
     """Test edge conditions combined with other conditions."""
 
-    def test_rise_with_other_conditions(self):
+    def test_rise_with_other_conditions(self, runner_factory):
         """rise() can be combined with other conditions in a rung."""
         from pyrung.core import rise
 
@@ -291,7 +291,7 @@ class TestEdgeCombinations:
             with Rung(rise(Button), Enable):  # Both must be true
                 latch(Light)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         # Rising edge but Enable is False
         runner.patch({"Button": False, "Enable": False, "Light": False})
@@ -311,7 +311,7 @@ class TestEdgeCombinations:
         runner.step()
         assert runner.current_state.tags.get("Light") is True
 
-    def test_rise_and_fall_in_different_rungs(self):
+    def test_rise_and_fall_in_different_rungs(self, runner_factory):
         """rise() and fall() can control set/reset of same output."""
         from pyrung.core import fall, rise
 
@@ -324,7 +324,7 @@ class TestEdgeCombinations:
             with Rung(fall(Button)):
                 reset(Light)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
 
         runner.patch({"Button": False, "Light": False})
         runner.step()

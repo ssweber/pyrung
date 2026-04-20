@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, copy, event_drum, out, time_drum
+from pyrung.core import Bool, Int, Program, Rung, copy, event_drum, out, time_drum
 
 
 def test_event_drum_requires_reset_builder() -> None:
@@ -66,7 +66,7 @@ def test_drum_is_terminal_in_flow() -> None:
                 out(light)
 
 
-def test_event_drum_pause_reset_and_disabled_jump_jog_behavior() -> None:
+def test_event_drum_pause_reset_and_disabled_jump_jog_behavior(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -91,7 +91,7 @@ def test_event_drum_pause_reset_and_disabled_jump_jog_behavior() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=1).jog(jog)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {"Enable": True, "Reset": False, "Jump": False, "Jog": False, "E1": False, "E2": False}
     )
@@ -119,7 +119,7 @@ def test_event_drum_pause_reset_and_disabled_jump_jog_behavior() -> None:
     assert runner.current_state.tags["Y2"] is False
 
 
-def test_event_drum_event_must_see_new_rising_edge_after_step_entry() -> None:
+def test_event_drum_event_must_see_new_rising_edge_after_step_entry(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -145,7 +145,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry() -> None:
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Reset": False, "E1": False, "E2": True, "E3": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -167,7 +167,7 @@ def test_event_drum_event_must_see_new_rising_edge_after_step_entry() -> None:
     assert runner.current_state.tags["Step"] == 3
 
 
-def test_event_drum_events_use_rung_entry_snapshot() -> None:
+def test_event_drum_events_use_rung_entry_snapshot(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     event = Bool("Event")
@@ -187,7 +187,7 @@ def test_event_drum_events_use_rung_entry_snapshot() -> None:
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Reset": False, "Event": False})
 
     runner.step()
@@ -198,7 +198,7 @@ def test_event_drum_events_use_rung_entry_snapshot() -> None:
     assert runner.current_state.tags["Step"] == 2
 
 
-def test_time_drum_precedence_auto_reset_jump_jog() -> None:
+def test_time_drum_precedence_auto_reset_jump_jog(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -227,7 +227,7 @@ def test_time_drum_precedence_auto_reset_jump_jog() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=3).jog(jog)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": False, "Reset": False, "Jump": False, "Jog": False})
     runner.step()
 
@@ -239,7 +239,7 @@ def test_time_drum_precedence_auto_reset_jump_jog() -> None:
     assert runner.current_state.tags["Y4"] is True
 
 
-def test_time_drum_jump_uses_rung_entry_snapshot() -> None:
+def test_time_drum_jump_uses_rung_entry_snapshot(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -261,7 +261,7 @@ def test_time_drum_jump_uses_rung_entry_snapshot() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=2)
 
-    runner = PLC(logic, dt=0.010)
+    runner = runner_factory(logic, dt=0.010)
     runner.patch({"Enable": True, "Reset": False, "Jump": False})
 
     runner.step()
@@ -272,7 +272,7 @@ def test_time_drum_jump_uses_rung_entry_snapshot() -> None:
     assert runner.current_state.tags["Step"] == 2
 
 
-def test_time_drum_ignores_jump_target_out_of_range() -> None:
+def test_time_drum_ignores_jump_target_out_of_range(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump = Bool("Jump")
@@ -292,7 +292,7 @@ def test_time_drum_ignores_jump_target_out_of_range() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump, step=99)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Reset": False, "Jump": False})
     runner.step()
     assert runner.current_state.tags["Step"] == 1
@@ -302,7 +302,7 @@ def test_time_drum_ignores_jump_target_out_of_range() -> None:
     assert runner.current_state.tags["Step"] == 1
 
 
-def test_event_drum_completion_sticky_until_reset() -> None:
+def test_event_drum_completion_sticky_until_reset(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -322,7 +322,7 @@ def test_event_drum_completion_sticky_until_reset() -> None:
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Reset": False, "E1": False, "E2": False})
     runner.step()
     runner.patch({"E1": True})
@@ -342,7 +342,7 @@ def test_event_drum_completion_sticky_until_reset() -> None:
     assert runner.current_state.tags["Done"] is False
 
 
-def test_time_drum_accumulates_and_resets_accumulator_on_step_transition() -> None:
+def test_time_drum_accumulates_and_resets_accumulator_on_step_transition(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     step = Int("Step")
@@ -362,7 +362,7 @@ def test_time_drum_accumulates_and_resets_accumulator_on_step_transition() -> No
                 completion_flag=done,
             ).reset(reset)
 
-    runner = PLC(logic, dt=0.010)
+    runner = runner_factory(logic, dt=0.010)
     runner.patch({"Enable": True, "Reset": False})
 
     for _ in range(4):

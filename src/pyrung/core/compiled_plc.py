@@ -279,6 +279,13 @@ class CompiledPLC:
         self._battery_present = bool(self._kernel.memory.get(_BATTERY_PRESENT_KEY, True))
         self._kernel.memory.setdefault(_MODE_RUN_KEY, self._running)
         self._kernel.memory.setdefault(_BATTERY_PRESENT_KEY, self._battery_present)
+        state_memory_defaults: dict[str, Any] = {}
+        if _MODE_RUN_KEY not in self._state.memory:
+            state_memory_defaults[_MODE_RUN_KEY] = self._running
+        if _BATTERY_PRESENT_KEY not in self._state.memory:
+            state_memory_defaults[_BATTERY_PRESENT_KEY] = self._battery_present
+        if state_memory_defaults:
+            self._state = self._state.with_memory(state_memory_defaults)
         for name in self._compiled.edge_tags:
             self._kernel.prev[name] = state.memory.get(
                 f"_prev:{name}",
