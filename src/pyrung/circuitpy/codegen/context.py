@@ -108,6 +108,19 @@ class CodegenContext:
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
 
+    @classmethod
+    def for_kernel(cls, program: Program) -> CodegenContext:
+        """Create a hardware-free context for kernel compilation."""
+        ctx = cls(
+            program=program,
+            hw=P1AM(),
+            target_scan_ms=0.0,
+            watchdog_ms=None,
+        )
+        ctx.collect_program_references()
+        ctx.assign_symbols()
+        return ctx
+
     slot_bindings: list[SlotBinding] = field(default_factory=list)
     block_bindings: dict[int, BlockBinding] = field(default_factory=dict)
     scalar_tags: dict[str, Tag] = field(default_factory=dict)

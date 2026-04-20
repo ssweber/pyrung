@@ -32,13 +32,13 @@ During investigation we found one semantic difference between the two paths that
 - [x] `CompiledKernel` dataclass (step_fn, referenced_tags, block_specs, edge_tags, source)
 
 ### Phase 2: Hardware-free `CodegenContext` + kernel renderer
-- [ ] Add `CodegenContext.for_kernel(program)` classmethod in `context.py`
-- [ ] Create `src/pyrung/circuitpy/codegen/render_kernel.py`
-- [ ] `_render_kernel_function(ctx)` — prologue (read from kernel), body (compile_rung), epilogue (write back + prev capture)
-- [ ] Inline helper functions (_clamp_int, _rise, _fall, etc.) in rendered source
-- [ ] Subroutine compilation support
-- [ ] `compile_kernel(program)` top-level entry point (exec + return CompiledKernel)
-- [ ] Basic smoke test: compile a trivial program, verify generated source compiles
+- [x] Add `CodegenContext.for_kernel(program)` classmethod in `context.py`
+- [x] Create `src/pyrung/circuitpy/codegen/render_kernel.py`
+- [x] `_render_kernel_function(ctx)` — prologue (read from kernel), body (compile_rung), epilogue (write back + prev capture)
+- [x] Inline helper functions (_clamp_int, _rise, _fall, etc.) in rendered source
+- [x] Subroutine compilation support
+- [x] `compile_kernel(program)` top-level entry point (exec + return CompiledKernel)
+- [x] Basic smoke test: compile a trivial program, verify generated source compiles
 
 ### Phase 3: `CompiledPLC` wrapper
 - [ ] Create `src/pyrung/core/compiled_plc.py`
