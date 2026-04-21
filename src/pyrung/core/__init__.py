@@ -40,7 +40,6 @@ from pyrung.core.instruction.send_receive import (
     receive,
     send,
 )
-from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -53,6 +52,7 @@ from pyrung.core.memory_block import (
     RangeSlotView,
     SlotView,
 )
+from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,

@@ -43,12 +43,24 @@ def _tag_meta_from_hints(
     external: object = False,
     final: object = False,
     public: object = False,
+    min: object = None,
+    max: object = None,
+    uom: object = None,
 ) -> TagMeta | None:
     r = bool(readonly)
     e = bool(external)
     f = bool(final)
     p = bool(public)
-    if choices is None and not r and not e and not f and not p:
+    if (
+        choices is None
+        and not r
+        and not e
+        and not f
+        and not p
+        and min is None
+        and max is None
+        and uom is None
+    ):
         return None
     return TagMeta(
         readonly=r,
@@ -56,6 +68,9 @@ def _tag_meta_from_hints(
         external=e,
         final=f,
         public=p,
+        min=cast(int | float | None, min),
+        max=cast(int | float | None, max),
+        uom=cast(str | None, uom),
     )
 
 
@@ -179,6 +194,9 @@ def tag_map_from_nickname_file(
             external = tag_meta.external if tag_meta is not None else False
             final = tag_meta.final if tag_meta is not None else False
             public = tag_meta.public if tag_meta is not None else False
+            min_val = tag_meta.min if tag_meta is not None else None
+            max_val = tag_meta.max if tag_meta is not None else None
+            uom = tag_meta.uom if tag_meta is not None else None
             retentive_changed = row.retentive != sv.retentive
             default_changed = default != sv.default
             comment_changed = comment != sv.comment
@@ -187,6 +205,9 @@ def tag_map_from_nickname_file(
             external_changed = external != sv.external
             final_changed = final != sv.final
             public_changed = public != sv.public
+            min_changed = min_val != sv.min
+            max_changed = max_val != sv.max
+            uom_changed = uom != sv.uom
             if (
                 retentive_changed
                 or default_changed
@@ -196,6 +217,9 @@ def tag_map_from_nickname_file(
                 or external_changed
                 or final_changed
                 or public_changed
+                or min_changed
+                or max_changed
+                or uom_changed
             ):
                 slot_kw: dict[str, Any] = {}
                 if retentive_changed:
@@ -214,6 +238,12 @@ def tag_map_from_nickname_file(
                     slot_kw["final"] = final
                 if public_changed:
                     slot_kw["public"] = public
+                if min_changed:
+                    slot_kw["min"] = min_val
+                if max_changed:
+                    slot_kw["max"] = max_val
+                if uom_changed:
+                    slot_kw["uom"] = uom
                 logical_block.slot(logical_addr, **slot_kw)
 
     def inferred_block_start(spec: _BlockImportSpec, explicit_start: int | None) -> int:
@@ -483,6 +513,9 @@ def tag_map_from_nickname_file(
                     external = tag_meta.external if tag_meta is not None else False
                     final = tag_meta.final if tag_meta is not None else False
                     public = tag_meta.public if tag_meta is not None else False
+                    min_val = tag_meta.min if tag_meta is not None else None
+                    max_val = tag_meta.max if tag_meta is not None else None
+                    uom = tag_meta.uom if tag_meta is not None else None
                     retentive_changed = row.retentive != sv.retentive
                     default_changed = default != sv.default
                     comment_changed = comment != sv.comment
@@ -491,6 +524,9 @@ def tag_map_from_nickname_file(
                     external_changed = external != sv.external
                     final_changed = final != sv.final
                     public_changed = public != sv.public
+                    min_changed = min_val != sv.min
+                    max_changed = max_val != sv.max
+                    uom_changed = uom != sv.uom
                     if (
                         retentive_changed
                         or default_changed
@@ -500,6 +536,9 @@ def tag_map_from_nickname_file(
                         or external_changed
                         or final_changed
                         or public_changed
+                        or min_changed
+                        or max_changed
+                        or uom_changed
                     ):
                         slot_kw: dict[str, Any] = {}
                         if retentive_changed:
@@ -518,6 +557,12 @@ def tag_map_from_nickname_file(
                             slot_kw["final"] = final
                         if public_changed:
                             slot_kw["public"] = public
+                        if min_changed:
+                            slot_kw["min"] = min_val
+                        if max_changed:
+                            slot_kw["max"] = max_val
+                        if uom_changed:
+                            slot_kw["uom"] = uom
                         block.slot(instance, **slot_kw)
 
             mappings.extend(runtime.map_to(spec.hardware_range))
@@ -632,6 +677,9 @@ def tag_map_from_nickname_file(
             external=tag_meta.external if tag_meta is not None else False,
             final=tag_meta.final if tag_meta is not None else False,
             public=tag_meta.public if tag_meta is not None else False,
+            min=tag_meta.min if tag_meta is not None else None,
+            max=tag_meta.max if tag_meta is not None else None,
+            uom=tag_meta.uom if tag_meta is not None else None,
         )
         hardware = _hardware_block_for(memory_type)[row.address]
         mappings.append(logical.map_to(hardware))
@@ -683,6 +731,9 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             external=getattr(entry.logical, "external", False),
             final=getattr(entry.logical, "final", False),
             public=getattr(entry.logical, "public", False),
+            min=getattr(entry.logical, "min", None),
+            max=getattr(entry.logical, "max", None),
+            uom=getattr(entry.logical, "uom", None),
         )
         records[get_addr_key(memory_type, address)] = AddressRecord(
             memory_type=memory_type,
@@ -725,6 +776,9 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 external=slot.external,
                 final=slot.final,
                 public=slot.public,
+                min=slot.min,
+                max=slot.max,
+                uom=slot.uom,
             )
 
             records[get_addr_key(memory_type, hardware_addr)] = AddressRecord(

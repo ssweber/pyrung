@@ -110,8 +110,21 @@ class Field:
         max: int | float | None = None,
         uom: str | None = None,
     ) -> Any:
-        _ = (type, default, retentive, choices, readonly, external, final, public,
-             physical, link, min, max, uom)
+        _ = (
+            type,
+            default,
+            retentive,
+            choices,
+            readonly,
+            external,
+            final,
+            public,
+            physical,
+            link,
+            min,
+            max,
+            uom,
+        )
         return super().__new__(cls)
 
 
@@ -284,6 +297,8 @@ class _StructRuntime:
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
 
+        _validate_field_links(field_specs)
+
         for field_spec in field_specs:
             self._field_specs[field_spec.name] = field_spec
             block = Block(
@@ -350,6 +365,11 @@ class _StructRuntime:
                 external=spec.external,
                 final=spec.final,
                 public=spec.public,
+                physical=spec.physical,
+                link=spec.link,
+                min=spec.min,
+                max=spec.max,
+                uom=spec.uom,
             )
             for name, spec in self._field_specs.items()
         }
@@ -855,6 +875,26 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
             f"Field {field_name!r} uses auto() but type {type.name} is not numeric. "
             "Supported types: INT, DINT, WORD."
         )
+
+
+def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
+    field_by_name = {spec.name: spec for spec in field_specs}
+    for spec in field_specs:
+        if spec.link is None:
+            continue
+        if spec.link not in field_by_name:
+            raise ValueError(
+                f"Field {spec.name!r} links to unknown field {spec.link!r}; "
+                "links must refer to a field in the same structure."
+            )
+        if spec.type != TagType.BOOL:
+            continue
+        physical = spec.physical
+        if physical is None or (physical.on_delay is None and physical.off_delay is None):
+            raise ValueError(
+                f"Field {spec.name!r} is a linked BOOL feedback and requires physical "
+                "timing via on_delay and/or off_delay."
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -103,6 +103,18 @@ class SlotView:
         return self._block._effective_slot_hints(self._addr).public
 
     @property
+    def min(self) -> int | float | None:
+        return self._block._effective_slot_hints(self._addr).min
+
+    @property
+    def max(self) -> int | float | None:
+        return self._block._effective_slot_hints(self._addr).max
+
+    @property
+    def uom(self) -> str | None:
+        return self._block._effective_slot_hints(self._addr).uom
+
+    @property
     def name_overridden(self) -> bool:
         return self._addr in self._block._slot_name_overrides
 
@@ -138,6 +150,18 @@ class SlotView:
     def public_overridden(self) -> bool:
         return self._addr in self._block._slot_public_overrides
 
+    @property
+    def min_overridden(self) -> bool:
+        return self._addr in self._block._slot_min_overrides
+
+    @property
+    def max_overridden(self) -> bool:
+        return self._addr in self._block._slot_max_overrides
+
+    @property
+    def uom_overridden(self) -> bool:
+        return self._addr in self._block._slot_uom_overrides
+
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
@@ -150,6 +174,9 @@ class SlotView:
         self._block._slot_external_overrides.pop(self._addr, None)
         self._block._slot_final_overrides.pop(self._addr, None)
         self._block._slot_public_overrides.pop(self._addr, None)
+        self._block._slot_min_overrides.pop(self._addr, None)
+        self._block._slot_max_overrides.pop(self._addr, None)
+        self._block._slot_uom_overrides.pop(self._addr, None)
 
     def __repr__(self) -> str:
         return (
@@ -187,6 +214,9 @@ class RangeSlotView:
             self._block._slot_external_overrides.pop(addr, None)
             self._block._slot_final_overrides.pop(addr, None)
             self._block._slot_public_overrides.pop(addr, None)
+            self._block._slot_min_overrides.pop(addr, None)
+            self._block._slot_max_overrides.pop(addr, None)
+            self._block._slot_uom_overrides.pop(addr, None)
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -258,6 +288,9 @@ class Block:
     _slot_external_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_final_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_public_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_min_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
+    _slot_max_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
+    _slot_uom_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -446,12 +479,24 @@ class Block:
 
         physical = getattr(self, "_pyrung_field_physical", None)
         link = getattr(self, "_pyrung_field_link", None)
-        min_val = getattr(self, "_pyrung_field_min", None)
-        max_val = getattr(self, "_pyrung_field_max", None)
-        uom = getattr(self, "_pyrung_field_uom", None)
+        if addr in self._slot_min_overrides:
+            min_val = self._slot_min_overrides[addr]
+        else:
+            min_val = getattr(self, "_pyrung_field_min", None)
 
-        return _SlotHints(choices, readonly, external, final, public,
-                          physical, link, min_val, max_val, uom)
+        if addr in self._slot_max_overrides:
+            max_val = self._slot_max_overrides[addr]
+        else:
+            max_val = getattr(self, "_pyrung_field_max", None)
+
+        if addr in self._slot_uom_overrides:
+            uom = self._slot_uom_overrides[addr]
+        else:
+            uom = getattr(self, "_pyrung_field_uom", None)
+
+        return _SlotHints(
+            choices, readonly, external, final, public, physical, link, min_val, max_val, uom
+        )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
         if addr in self._tag_cache:
@@ -477,6 +522,9 @@ class Block:
         external: bool = ...,
         final: bool = ...,
         public: bool = ...,
+        min: int | float | None = ...,
+        max: int | float | None = ...,
+        uom: str | None = ...,
     ) -> SlotView: ...
 
     @overload
@@ -506,6 +554,9 @@ class Block:
         external: object = UNSET,
         final: object = UNSET,
         public: object = UNSET,
+        min: object = UNSET,
+        max: object = UNSET,
+        uom: object = UNSET,
     ) -> SlotView | RangeSlotView:
         """Inspect, configure, or reset one or more block slots.
 
@@ -546,6 +597,9 @@ class Block:
             or external is not UNSET
             or final is not UNSET
             or public is not UNSET
+            or min is not UNSET
+            or max is not UNSET
+            or uom is not UNSET
         )
         if has_config:
             self._assert_not_materialized(addr, action="configure slot")
@@ -578,6 +632,18 @@ class Block:
                 self._slot_final_overrides[addr] = bool(final)
             if public is not UNSET:
                 self._slot_public_overrides[addr] = bool(public)
+            if min is not UNSET:
+                if min is not None and not isinstance(min, (int, float)):
+                    raise TypeError(f"min must be numeric or None, got {type(min).__name__}.")
+                self._slot_min_overrides[addr] = min
+            if max is not UNSET:
+                if max is not None and not isinstance(max, (int, float)):
+                    raise TypeError(f"max must be numeric or None, got {type(max).__name__}.")
+                self._slot_max_overrides[addr] = max
+            if uom is not UNSET:
+                if uom is not None and not isinstance(uom, str):
+                    raise TypeError(f"uom must be a string or None, got {type(uom).__name__}.")
+                self._slot_uom_overrides[addr] = uom
 
         return SlotView(self, addr)
 

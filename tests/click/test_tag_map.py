@@ -10,7 +10,7 @@ import pytest
 from pyclickplc.addresses import AddressRecord, get_addr_key
 from pyclickplc.banks import DataType
 
-from pyrung.click import TagMap, c, ds, x
+from pyrung.click import TagMap, c, df, ds, x
 from pyrung.click.tag_map._parsers import (
     TagMeta,
     _compose_address_comment,
@@ -330,6 +330,32 @@ def test_tag_meta_parser_round_trips_valid_metadata():
     assert format_tag_meta(meta) == "[readonly, choices=IDLE:0|RUN:1]"
 
 
+def test_tag_meta_parser_round_trips_range_metadata():
+    meta, remaining = parse_tag_meta("[min=0,max=100,uom=psi] Pressure")
+
+    assert meta == TagMeta(min=0, max=100, uom="psi")
+    assert remaining == "Pressure"
+    assert format_tag_meta(meta) == "[min=0, max=100, uom=psi]"
+
+
+def test_tag_meta_parser_preserves_deterministic_order_with_range_metadata():
+    meta = TagMeta(
+        readonly=True,
+        external=True,
+        final=True,
+        public=True,
+        choices={0: "Off", 1: "On"},
+        min=0,
+        max=100,
+        uom="psi",
+    )
+
+    assert (
+        format_tag_meta(meta)
+        == "[readonly, external, final, public, min=0, max=100, uom=psi, choices=Off:0|On:1]"
+    )
+
+
 def test_tag_meta_parser_leaves_literal_bracket_text_untouched():
     meta, remaining = parse_tag_meta("[WIP] Motor speed")
     comment, extracted_meta, bg_color = _extract_address_comment("[WIP] Motor speed")
@@ -378,6 +404,24 @@ def test_nickname_file_round_trip_preserves_block_tag_meta_bg_color_and_comment(
     assert restored_block[1].comment == "Motor speed"
     assert restored_block[1].choices == {0: "IDLE", 1: "RUN"}
     assert restored_block[1].readonly is True
+
+
+def test_nickname_file_round_trip_preserves_range_tag_meta(tmp_path):
+    pressure = Tag("Pressure", TagType.REAL, min=0, max=100, uom="psi")
+    mapping = TagMap({pressure: df[101]})
+
+    path = tmp_path / "range_meta_round_trip.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    record = rows[get_addr_key("DF", 101)]
+
+    assert record.comment == "[min=0, max=100, uom=psi]"
+
+    restored = TagMap.from_nickname_file(path)
+    restored_tag = restored.tags()[0].logical
+    assert restored_tag.min == 0
+    assert restored_tag.max == 100
+    assert restored_tag.uom == "psi"
 
 
 def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):

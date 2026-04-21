@@ -8,7 +8,6 @@ Import user-facing DSL symbols from this module:
 from pyrung.core import (
     PLC,
     And,
-    Physical,
     Block,
     Bool,
     Char,
@@ -22,6 +21,7 @@ from pyrung.core import (
     ModbusTcpTarget,
     Or,
     OutputBlock,
+    Physical,
     Program,
     RangeComparison,
     RangeSlotView,

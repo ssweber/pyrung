@@ -157,6 +157,12 @@ class Tag:
                 f"Tag {self.name!r}: readonly and external are mutually exclusive "
                 "(readonly = nothing writes it, external = something outside the ladder writes it)."
             )
+        if self.min is not None and self.max is not None and self.min >= self.max:
+            raise ValueError(f"Tag {self.name!r}: min must be less than max.")
+        if self.choices is not None and (self.min is not None or self.max is not None):
+            raise ValueError(f"Tag {self.name!r}: choices cannot be combined with min/max.")
+        if self.readonly and self.physical is not None:
+            raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
 
     def __hash__(self) -> int:
         return hash(self.name)

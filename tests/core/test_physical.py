@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung import Bool, Field, Real, udt
+from pyrung import Bool, Field, Int, Real, named_array, udt
 from pyrung.core.physical import Physical, parse_duration
 
 
@@ -36,6 +36,11 @@ class TestParseDuration:
 
     def test_whitespace_stripped(self):
         assert parse_duration("  2s  ") == 2000
+
+    def test_iec_duration_prefix(self):
+        assert parse_duration("T#5ms") == 5
+        assert parse_duration("T#3s") == 3000
+        assert parse_duration(" T#1min30s ") == 90_000
 
     def test_empty_string(self):
         with pytest.raises(ValueError, match="empty duration"):
@@ -120,7 +125,7 @@ class TestPhysical:
     def test_frozen(self):
         p = Physical("MotorFb", on_delay="2s")
         with pytest.raises(AttributeError):
-            p.name = "changed"  # type: ignore[misc]
+            p.name = "changed"  # ty: ignore[invalid-assignment]
 
     def test_compound_delay(self):
         p = Physical("SlowMotor", on_delay="2s50ms")
@@ -144,6 +149,18 @@ class TestTagFields:
         assert t.max == 150
         assert t.uom == "degC"
 
+    def test_standalone_range_min_must_be_less_than_max(self):
+        with pytest.raises(ValueError, match="min must be less than max"):
+            Real("Temp", min=100, max=100)
+
+    def test_choices_cannot_combine_with_range(self):
+        with pytest.raises(ValueError, match="choices cannot be combined"):
+            Int("Mode", choices={0: "Off", 1: "On"}, min=0)
+
+    def test_readonly_cannot_combine_with_physical(self):
+        with pytest.raises(ValueError, match="readonly cannot be combined with physical"):
+            Bool("Running", readonly=True, physical=motor_fb)
+
     def test_standalone_tag_defaults_none(self):
         b = Bool("Plain")
         assert b.physical is None
@@ -156,8 +173,10 @@ class TestTagFields:
         @udt()
         class Pump:
             Enable: Bool
-            Running_Fb: Bool = Field(physical=motor_fb, link="Enable")
-            Temp: Real = Field(physical=temp_sensor, min=0, max=150, uom="degC")
+            Running_Fb: Bool = Field(physical=motor_fb, link="Enable")  # ty: ignore[invalid-assignment]
+            Temp: Real = Field(  # ty: ignore[invalid-assignment]
+                physical=temp_sensor, min=0, max=150, uom="degC"
+            )
 
         p = Pump[1]
         assert p.Running_Fb.physical is motor_fb
@@ -179,8 +198,43 @@ class TestTagFields:
         @udt(count=3)
         class Motor:
             Enable: Bool
-            Fb: Bool = Field(physical=motor_fb, link="Enable")
+            Fb: Bool = Field(physical=motor_fb, link="Enable")  # ty: ignore[invalid-assignment]
 
         assert Motor[1].Fb.physical is motor_fb
         assert Motor[2].Fb.physical is motor_fb
         assert Motor[3].Fb.physical is motor_fb
+
+    def test_named_array_link(self):
+        @named_array(Bool, count=2, stride=2)
+        class Valve:
+            Enable = Field()
+            Open_Fb = Field(physical=motor_fb, link="Enable")
+
+        assert Valve[1].Open_Fb.link == "Enable"
+        assert Valve[2].Open_Fb.physical is motor_fb
+
+    def test_bad_same_scope_link_rejects_at_decorator_construction(self):
+        with pytest.raises(ValueError, match="unknown field"):
+
+            @udt()
+            class BadLink:
+                Enable: Bool
+                Running_Fb: Bool = Field(  # ty: ignore[invalid-assignment]
+                    physical=motor_fb, link="Missing"
+                )
+
+    def test_linked_bool_requires_physical_timing(self):
+        with pytest.raises(ValueError, match="linked BOOL feedback"):
+
+            @udt()
+            class BadFeedback:
+                Enable: Bool
+                Running_Fb: Bool = Field(link="Enable")  # ty: ignore[invalid-assignment]
+
+    def test_linked_analog_without_profile_allowed_at_construction(self):
+        @udt()
+        class AnalogLoop:
+            Cmd: Real
+            Pv: Real = Field(link="Cmd")  # ty: ignore[invalid-assignment]
+
+        assert AnalogLoop.Pv.link == "Cmd"

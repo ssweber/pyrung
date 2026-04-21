@@ -31,6 +31,14 @@ from pyrung.core.validation.final_writers import (
     FinalWritersReport,
     validate_final_writers,
 )
+from pyrung.core.validation.physical_realism import (
+    CORE_ANTITOGGLE,
+    CORE_MISSING_PROFILE,
+    CORE_RANGE_VIOLATION,
+    PhysicalRealismFinding,
+    PhysicalRealismReport,
+    validate_physical_realism,
+)
 from pyrung.core.validation.readonly_write import (
     CORE_READONLY_WRITE,
     ReadonlyWriteFinding,
@@ -55,8 +63,11 @@ from pyrung.core.validation.walker import (
 
 __all__ = [
     "CORE_CHOICES_VIOLATION",
+    "CORE_ANTITOGGLE",
     "CORE_CONFLICTING_OUTPUT",
     "CORE_FINAL_MULTIPLE_WRITERS",
+    "CORE_MISSING_PROFILE",
+    "CORE_RANGE_VIOLATION",
     "CORE_READONLY_WRITE",
     "CORE_STUCK_HIGH",
     "CORE_STUCK_LOW",
@@ -69,6 +80,8 @@ __all__ = [
     "FinalWritersReport",
     "OperandFact",
     "OutputSite",
+    "PhysicalRealismFinding",
+    "PhysicalRealismReport",
     "ProgramFacts",
     "ProgramLocation",
     "ReadonlyWriteFinding",
@@ -79,6 +92,7 @@ __all__ = [
     "validate_choices",
     "validate_conflicting_outputs",
     "validate_final_writers",
+    "validate_physical_realism",
     "validate_readonly_writes",
     "validate_stuck_bits",
     "walk_program",

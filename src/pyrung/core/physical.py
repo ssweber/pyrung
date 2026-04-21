@@ -32,6 +32,8 @@ def parse_duration(text: str) -> int:
     Raises ``ValueError`` for empty or unparseable strings.
     """
     stripped = text.strip()
+    if stripped.startswith("T#"):
+        stripped = stripped[2:].strip()
     if not stripped:
         raise ValueError("empty duration string")
 
@@ -43,9 +45,7 @@ def parse_duration(text: str) -> int:
         if match.start() != pos:
             bad = stripped[pos : match.start()].strip()
             if bad:
-                raise ValueError(
-                    f"unexpected '{bad}' in duration '{text}'"
-                )
+                raise ValueError(f"unexpected '{bad}' in duration '{text}'")
         value = float(match.group(1))
         unit = match.group(2)
         total += value * _UNIT_TO_MS[unit]

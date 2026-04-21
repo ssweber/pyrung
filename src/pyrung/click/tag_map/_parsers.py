@@ -55,6 +55,9 @@ class TagMeta:
     external: bool = False
     final: bool = False
     public: bool = False
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -389,6 +392,20 @@ def _parse_tag_meta_value(token: str) -> int | float | str:
         return text
 
 
+def _parse_tag_meta_scalar(token: str, *, field_name: str) -> int | float | str:
+    text = token.strip()
+    if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
+        raise ValueError(f"Invalid TagMeta {field_name} value {token!r}.")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
 def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     text = raw.strip()
     if text == "":
@@ -408,6 +425,7 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
 
 
 _BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
+_VALUE_TOKENS = frozenset({"min", "max", "uom"})
 
 
 def _parse_tag_meta_group(content: str) -> TagMeta | None:
@@ -416,11 +434,18 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         return None
 
     first = tokens[0]
-    if first not in _BOOL_FLAG_TOKENS and not first.startswith("choices="):
+    if (
+        first not in _BOOL_FLAG_TOKENS
+        and not first.startswith("choices=")
+        and not any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
+    ):
         return None
 
     flags: dict[str, bool] = {}
     choices: ChoiceMap | None = None
+    min_val: int | float | None = None
+    max_val: int | float | None = None
+    uom: str | None = None
     for token in tokens:
         if token in _BOOL_FLAG_TOKENS:
             flags[token] = True
@@ -430,6 +455,20 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
                 raise ValueError("TagMeta choices may only be specified once.")
             choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
             continue
+        key, sep, value = token.partition("=")
+        if sep == "=" and key in _VALUE_TOKENS:
+            parsed_value = _parse_tag_meta_scalar(value, field_name=key)
+            if key == "min":
+                if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
+                    raise ValueError(f"Invalid TagMeta min value {value!r}.")
+                min_val = parsed_value
+            elif key == "max":
+                if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
+                    raise ValueError(f"Invalid TagMeta max value {value!r}.")
+                max_val = parsed_value
+            else:
+                uom = str(parsed_value)
+            continue
         raise ValueError(f"Unsupported TagMeta token {token!r}.")
 
     return TagMeta(
@@ -438,6 +477,9 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         external=flags.get("external", False),
         final=flags.get("final", False),
         public=flags.get("public", False),
+        min=min_val,
+        max=max_val,
+        uom=uom,
     )
 
 
@@ -451,6 +493,9 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     external = False
     final = False
     public = False
+    min_val: int | float | None = None
+    max_val: int | float | None = None
+    uom: str | None = None
     cursor = 0
 
     for match in _TAG_META_GROUP_RE.finditer(comment):
@@ -463,6 +508,12 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
             external = external or parsed.external
             final = final or parsed.final
             public = public or parsed.public
+            if parsed.min is not None:
+                min_val = parsed.min
+            if parsed.max is not None:
+                max_val = parsed.max
+            if parsed.uom is not None:
+                uom = parsed.uom
             if parsed.choices is not None:
                 if choices is not None:
                     raise ValueError("TagMeta choices may only be specified once.")
@@ -471,10 +522,26 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
 
     remaining_parts.append(comment[cursor:])
     remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
-    if not readonly and choices is None and not external and not final and not public:
+    if (
+        not readonly
+        and choices is None
+        and not external
+        and not final
+        and not public
+        and min_val is None
+        and max_val is None
+        and uom is None
+    ):
         return None, remaining_text
     return TagMeta(
-        readonly=readonly, choices=choices, external=external, final=final, public=public
+        readonly=readonly,
+        choices=choices,
+        external=external,
+        final=final,
+        public=public,
+        min=min_val,
+        max=max_val,
+        uom=uom,
     ), remaining_text
 
 
@@ -485,6 +552,9 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         and not meta.external
         and not meta.final
         and not meta.public
+        and meta.min is None
+        and meta.max is None
+        and meta.uom is None
     ):
         return ""
 
@@ -497,6 +567,14 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append("final")
     if meta.public:
         tokens.append("public")
+    if meta.min is not None:
+        tokens.append(f"min={meta.min}")
+    if meta.max is not None:
+        tokens.append(f"max={meta.max}")
+    if meta.uom is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.uom) is None:
+            raise ValueError(f"Invalid TagMeta uom value {meta.uom!r}.")
+        tokens.append(f"uom={meta.uom}")
     if meta.choices is not None:
         pairs: list[str] = []
         for value, label in meta.choices.items():
