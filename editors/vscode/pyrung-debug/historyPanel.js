@@ -1,7 +1,5 @@
-const vscode = require("vscode");
-
 class PyrungHistoryPanelProvider {
-  constructor({ getExecutionState } = {}) {
+  constructor({ getExecutionState, log } = {}) {
     this._view = null;
     this._isReady = false;
     this._session = null;
@@ -11,14 +9,13 @@ class PyrungHistoryPanelProvider {
     this._activeScanId = null;
     this._hasMore = false;
     this._pageSize = 50;
-    this._liveTimer = null;
-    this._liveIntervalMs = 500;
     this._mode = "tags";
     this._chainResult = null;
     this._chainError = null;
     this._fetchGeneration = 0;
     this._getExecutionState =
       typeof getExecutionState === "function" ? getExecutionState : () => "unknown";
+    this._log = typeof log === "function" ? log : null;
   }
 
   resolveWebviewView(webviewView) {
@@ -29,19 +26,23 @@ class PyrungHistoryPanelProvider {
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === "ready") {
         this._isReady = true;
+        this._debug("webview ready");
         this._postState();
         if (this._session && this._watchedTags.size) {
+          this._debug("ready -> refresh()");
           await this.refresh();
         }
         return;
       }
 
       if (message.type === "addTag") {
+        this._debug(`webview addTag(${message.tag})`);
         this.addTag(message.tag);
         return;
       }
 
       if (message.type === "removeTag" && typeof message.tag === "string") {
+        this._debug(`removeTag(${message.tag})`);
         this._watchedTags.delete(message.tag);
         if (!this._watchedTags.size) {
           this._entries = [];
@@ -121,10 +122,11 @@ class PyrungHistoryPanelProvider {
   }
 
   setSession(session) {
-    this._cancelLiveRefresh();
     this._fetchGeneration += 1;
     this._session = session;
+    this._debug(`setSession(${session ? session.id : "null"})`);
     if (!session) {
+      this._tagHints = {};
       this._entries = [];
       this._hasMore = false;
       this._activeScanId = null;
@@ -135,7 +137,17 @@ class PyrungHistoryPanelProvider {
   }
 
   updateHints(tagHints) {
-    this._tagHints = tagHints || {};
+    const all = tagHints || {};
+    const filtered = {};
+    for (const tag of this._watchedTags) {
+      if (Object.prototype.hasOwnProperty.call(all, tag)) {
+        filtered[tag] = all[tag];
+      }
+    }
+    if (JSON.stringify(this._tagHints) === JSON.stringify(filtered)) {
+      return;
+    }
+    this._tagHints = filtered;
     this._postState();
   }
 
@@ -192,20 +204,25 @@ class PyrungHistoryPanelProvider {
     }
 
     this._watchedTags.add(cleaned);
+    this._debug(
+      `addTag(${cleaned}) watched=${Array.from(this._watchedTags).join(",")} state=${this._executionState()}`
+    );
     this._postState();
     if (this._canFetchHistory()) {
+      this._debug(`addTag(${cleaned}) -> refresh()`);
       void this.refresh();
     }
   }
 
   async refresh() {
-    this._cancelLiveRefresh();
     if (!this._session) {
+      this._debug("refresh skipped: no session");
       this._postState();
       return;
     }
 
     if (!this._watchedTags.size) {
+      this._debug("refresh skipped: no watched tags");
       this._entries = [];
       this._hasMore = false;
       this._activeScanId = null;
@@ -214,10 +231,12 @@ class PyrungHistoryPanelProvider {
     }
 
     if (!this._canFetchHistory()) {
+      this._debug(`refresh skipped: executionState=${this._executionState()}`);
       this._postState();
       return;
     }
 
+    this._debug(`refresh fetching watched=${Array.from(this._watchedTags).join(",")}`);
     await this._fetchEntries({ append: false });
   }
 
@@ -256,57 +275,6 @@ class PyrungHistoryPanelProvider {
     this._postState();
   }
 
-  liveRefresh() {
-    if (!this._canFetchHistory() || !this._watchedTags.size) {
-      return;
-    }
-    if (this._liveTimer) {
-      return;
-    }
-    this._liveTimer = setTimeout(async () => {
-      this._liveTimer = null;
-      await this._fetchNewEntries();
-    }, this._liveIntervalMs);
-  }
-
-  _cancelLiveRefresh() {
-    if (this._liveTimer) {
-      clearTimeout(this._liveTimer);
-      this._liveTimer = null;
-    }
-  }
-
-  async _fetchNewEntries() {
-    if (!this._canFetchHistory() || !this._watchedTags.size) {
-      return;
-    }
-
-    const afterScan = this._entries.length ? this._entries[0].scanId : undefined;
-    const generation = this._fetchGeneration;
-
-    try {
-      const result = await this._session.customRequest("pyrungTagChanges", {
-        tags: Array.from(this._watchedTags),
-        count: this._pageSize,
-        afterScan,
-      });
-      if (this._fetchGeneration !== generation) {
-        return;
-      }
-      const newEntries = Array.isArray(result?.entries) ? result.entries : [];
-      if (!afterScan) {
-        this._entries = newEntries;
-        this._hasMore = newEntries.length === this._pageSize;
-      } else if (newEntries.length) {
-        this._entries = newEntries.concat(this._entries);
-      } else {
-        return;
-      }
-      this._postState();
-    } catch (_error) {
-      // Session may have ended between the trace event and the request.
-    }
-  }
 
   async _suggestTags(context, query) {
     const ctx = context === "chain" ? "chain" : "tags";
@@ -373,6 +341,9 @@ class PyrungHistoryPanelProvider {
 
     const generation = this._fetchGeneration;
     try {
+      this._debug(
+        `_fetchEntries(append=${append ? "true" : "false"}, beforeScan=${beforeScan ?? "none"}) watched=${Array.from(this._watchedTags).join(",")}`
+      );
       const result = await this._session.customRequest("pyrungTagChanges", {
         tags: Array.from(this._watchedTags),
         count: this._pageSize,
@@ -384,10 +355,19 @@ class PyrungHistoryPanelProvider {
       const nextEntries = Array.isArray(result?.entries) ? result.entries : [];
       this._entries = append ? this._entries.concat(nextEntries) : nextEntries;
       this._hasMore = nextEntries.length === this._pageSize;
+      this._debug(`_fetchEntries received ${nextEntries.length} entries`);
       this._postState();
-    } catch (_error) {
+    } catch (error) {
+      this._debug(`_fetchEntries failed: ${String(error?.message || error)}`);
       // Session may have ended between the stopped event and the request.
     }
+  }
+
+  _debug(message) {
+    if (!this._log) {
+      return;
+    }
+    this._log(message);
   }
 
   _postState() {

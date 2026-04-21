@@ -39,3 +39,11 @@ Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events syn
 - `historyPanel.js` — history timeline (live-append from frame, backward-page from request)
 - `dataViewProvider.js` — live tag value grid
 - `graphPanel.js` — Cytoscape dependency graph with live value coloring
+
+## Local Packaging Notes
+
+- On this Windows machine, prefer the globally installed `vsce.cmd` over `npx @vscode/vsce package`. `npx` may fail on npm cache permissions even though `vsce` is already installed.
+- Package with PowerShell from this folder:
+  `& "$env:APPDATA\npm\vsce.cmd" package`
+- If `code` is not on `PATH`, reinstall with:
+  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.1.0.vsix" --force`

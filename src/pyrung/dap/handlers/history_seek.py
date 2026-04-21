@@ -131,46 +131,54 @@ def on_pyrung_tag_changes(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     if not tags:
         return {"entries": []}, []
 
+    # Snapshot only cached states (cheap O(1) lookups) under the lock,
+    # then release immediately so the continue worker isn't starved.
     with adapter._state_lock:
         runner = adapter._require_runner_locked()
-        retained_scan_ids = list(runner.history.scan_ids())
-        entries: list[dict[str, Any]] = []
+        cache = runner._recent_state_cache
+        cached_states = {sid: state for sid, (state, _) in cache.items()}
+        tip = runner._state
+        cached_states[tip.scan_id] = tip
 
-        for index in range(len(retained_scan_ids) - 1, 0, -1):
-            scan_id = retained_scan_ids[index]
-            if raw_before_scan is not None and scan_id >= raw_before_scan:
+    # All states are immutable PRecords — safe to read outside the lock.
+    all_scan_ids = sorted(cached_states.keys())
+    entries: list[dict[str, Any]] = []
+
+    for index in range(len(all_scan_ids) - 1, 0, -1):
+        scan_id = all_scan_ids[index]
+        if raw_before_scan is not None and scan_id >= raw_before_scan:
+            continue
+        if raw_after_scan is not None and scan_id <= raw_after_scan:
+            break
+
+        prev_scan_id = all_scan_ids[index - 1]
+        previous_state = cached_states[prev_scan_id]
+        current_state = cached_states[scan_id]
+
+        changes: dict[str, list[str]] = {}
+        for tag_name in tags:
+            old_value = previous_state.tags.get(tag_name)
+            new_value = current_state.tags.get(tag_name)
+            if old_value == new_value:
                 continue
-            if raw_after_scan is not None and scan_id <= raw_after_scan:
-                break
+            changes[tag_name] = [
+                adapter._format_value(old_value),
+                adapter._format_value(new_value),
+            ]
 
-            prev_scan_id = retained_scan_ids[index - 1]
-            previous_state = runner.history.at(prev_scan_id)
-            current_state = runner.history.at(scan_id)
+        if not changes:
+            continue
 
-            changes: dict[str, list[str]] = {}
-            for tag_name in tags:
-                old_value = previous_state.tags.get(tag_name)
-                new_value = current_state.tags.get(tag_name)
-                if old_value == new_value:
-                    continue
-                changes[tag_name] = [
-                    adapter._format_value(old_value),
-                    adapter._format_value(new_value),
-                ]
-
-            if not changes:
-                continue
-
-            entries.append(
-                {
-                    "scanId": scan_id,
-                    "prevScanId": prev_scan_id,
-                    "timestamp": current_state.timestamp,
-                    "changes": changes,
-                }
-            )
-            if len(entries) >= raw_count:
-                break
+        entries.append(
+            {
+                "scanId": scan_id,
+                "prevScanId": prev_scan_id,
+                "timestamp": current_state.timestamp,
+                "changes": changes,
+            }
+        )
+        if len(entries) >= raw_count:
+            break
 
     return {"entries": entries}, []
 

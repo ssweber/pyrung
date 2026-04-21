@@ -13,6 +13,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "scripts": {
+    "test": "node --test --test-isolation=none"
+  },
   "categories": [
     "Debuggers"
   ],

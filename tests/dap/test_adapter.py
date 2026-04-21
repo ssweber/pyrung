@@ -2838,6 +2838,37 @@ def test_pyrung_seek_updates_playhead(tmp_path: Path):
     assert info_after_seek["playhead"] == 0
 
 
+def test_history_requests_succeed_while_continue_is_running_and_pause_still_works(
+    tmp_path: Path,
+):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="continue")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="pyrungHistoryInfo")
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State"], "count": 10},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    _send_request(adapter, out_stream, seq=5, command="pause")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
+
+
 def test_pyrung_tag_changes_returns_only_matching_scans_and_supports_pagination(
     tmp_path: Path,
 ):

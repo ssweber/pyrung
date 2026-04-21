@@ -56,6 +56,7 @@ class PyrungDecorationController {
   constructor() {
     this._lastTrace = null;
     this._pathCache = new Map();
+    this._renderTimer = null;
 
     this._stepDecoration = vscode.window.createTextEditorDecorationType({
       ...DECORATION_SETTINGS.step,
@@ -103,6 +104,10 @@ class PyrungDecorationController {
   }
 
   dispose() {
+    if (this._renderTimer) {
+      clearTimeout(this._renderTimer);
+      this._renderTimer = null;
+    }
     this._stepDecoration.dispose();
     this._enabledDecoration.dispose();
     this._disabledDecoration.dispose();
@@ -120,11 +125,11 @@ class PyrungDecorationController {
     switch (message.event) {
       case "pyrungScanFrame":
         this._lastTrace = (message.body && message.body.trace) || null;
-        this._renderVisibleEditors();
+        this._scheduleRenderVisibleEditors();
         break;
       case "pyrungTrace":
         this._lastTrace = message.body || null;
-        this._renderVisibleEditors();
+        this._scheduleRenderVisibleEditors();
         break;
       case "stopped":
         if (message.body?.reason === "entry") {
@@ -139,13 +144,23 @@ class PyrungDecorationController {
   }
 
   renderVisibleEditors() {
-    this._renderVisibleEditors();
+    this._scheduleRenderVisibleEditors();
   }
 
   clear() {
     this._lastTrace = null;
     this._pathCache.clear();
-    this._renderVisibleEditors();
+    this._scheduleRenderVisibleEditors();
+  }
+
+  _scheduleRenderVisibleEditors() {
+    if (this._renderTimer) {
+      return;
+    }
+    this._renderTimer = setTimeout(() => {
+      this._renderTimer = null;
+      this._renderVisibleEditors();
+    }, 0);
   }
 
   conditionLinesForDocument(document) {

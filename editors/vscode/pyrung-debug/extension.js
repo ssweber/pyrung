@@ -31,13 +31,29 @@ function pyrungSessionById(sessionId) {
 }
 
 exports.activate = function (context) {
+  const output = vscode.window.createOutputChannel("pyrung: Debug Events");
   const decorator = new PyrungDecorationController();
   const inlineValuesProvider = new PyrungInlineValuesProvider({
     getConditionLinesForDocument: (document) => decorator.conditionLinesForDocument(document),
   });
-  const historyPanel = new PyrungHistoryPanelProvider();
+  const sessionExecutionState = new Map();
+  const requestLogCommands = new Set([
+    "continue",
+    "pause",
+    "pyrungHistoryInfo",
+    "pyrungSeek",
+    "pyrungTagChanges",
+    "pyrungPatch",
+    "pyrungForce",
+    "pyrungUnforce",
+  ]);
+  const historyPanel = new PyrungHistoryPanelProvider({
+    getExecutionState: (session) => sessionExecutionState.get(session.id) || "unknown",
+    log: (message) => output.appendLine(`[history] ${message}`),
+  });
   const dataView = new PyrungDataViewProvider({
     onWatchHistory: async (tagName) => {
+      output.appendLine(`[history] watchHistory(${tagName}) from Data View`);
       historyPanel.addTag(tagName);
       await vscode.commands.executeCommand("pyrung.historySlider.focus");
     },
@@ -45,6 +61,7 @@ exports.activate = function (context) {
   const graphPanel = new PyrungGraphPanelProvider({
     onAddToDataView: (tagName) => dataView.addTag(tagName),
     onAddToHistory: async (tagName) => {
+      output.appendLine(`[history] addToHistory(${tagName}) from Graph`);
       historyPanel.addTag(tagName);
       await vscode.commands.executeCommand("pyrung.historySlider.focus");
     },
@@ -56,7 +73,6 @@ exports.activate = function (context) {
     vscode.window.registerWebviewViewProvider("pyrung.dataView", dataView)
   );
 
-  const output = vscode.window.createOutputChannel("pyrung: Debug Events");
   const monitorStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   monitorStatus.command = "pyrung.monitorMenu";
   monitorStatus.tooltip = "pyrung monitor controls";
@@ -80,8 +96,6 @@ exports.activate = function (context) {
     "disconnect",
     "terminate",
   ]);
-
-  const sessionExecutionState = new Map();
   const rapidState = {
     enabled: false,
     modeCommand: "next",
@@ -502,8 +516,13 @@ exports.activate = function (context) {
               return;
             }
 
+            if (requestLogCommands.has(command)) {
+              output.appendLine(`[dap->] ${command}`);
+            }
+
             if (command === "continue") {
               sessionExecutionState.set(session.id, "running");
+              output.appendLine(`[state] ${session.id} -> running (request: continue)`);
             }
 
             if (!rapidState.enabled || rapidState.sessionId !== session.id) {
@@ -521,6 +540,16 @@ exports.activate = function (context) {
             stopRapidStep();
           },
           onDidSendMessage: (message) => {
+            if (message?.type === "response") {
+              const command = typeof message.command === "string" ? message.command : "";
+              if (requestLogCommands.has(command)) {
+                const suffix = message.success
+                  ? "ok"
+                  : `error: ${message.message || "unknown failure"}`;
+                output.appendLine(`[dap<-] ${command} ${suffix}`);
+              }
+            }
+
             decorator.handleAdapterMessage(message);
 
             // Auto-fetch graph data when configurationDone succeeds
@@ -585,6 +614,9 @@ exports.activate = function (context) {
               output.appendLine(`[scan ${body.scanId}] snapshot: ${body.label}`);
             } else if (message.event === "stopped") {
               sessionExecutionState.set(session.id, "stopped");
+              output.appendLine(
+                `[state] ${session.id} -> stopped (${message.body?.reason || "unknown"})`
+              );
               historyPanel.setSession(session);
               historyPanel.refresh();
               dataView.setSession(session);
@@ -604,8 +636,10 @@ exports.activate = function (context) {
               }
             } else if (message.event === "continued") {
               sessionExecutionState.set(session.id, "running");
+              output.appendLine(`[state] ${session.id} -> running (event: continued)`);
             } else if (message.event === "terminated" || message.event === "exited") {
               sessionExecutionState.delete(session.id);
+              output.appendLine(`[state] ${session.id} -> terminated`);
               if (rapidState.enabled && rapidState.sessionId === session.id) {
                 stopRapidStep();
               } else {
