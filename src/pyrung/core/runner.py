@@ -1222,14 +1222,15 @@ class PLC:
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
                 replay.patch(log.patches_by_scan[scan_id])
-            replay.step()
+            replay.step_replay()
 
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
+        state = replay._materialize_replay_state()
         return self._fork_from_reconstructed_state(
-            replay.current_state,
-            rtc_at_state=replay._rtc_at_sim_time(replay.current_state.timestamp),
+            state,
+            rtc_at_state=replay._rtc_at_sim_time(state.timestamp),
             forces=replay._input_overrides.forces_mutable,
             replay_mode=True,
         )
@@ -1389,9 +1390,11 @@ class PLC:
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
                 replay.patch(log.patches_by_scan[scan_id])
-            replay.step()
             if scan_id >= start_scan_id:
+                replay.step()
                 results.append(replay.current_state)
+            else:
+                replay.step_replay()
 
         return results
 

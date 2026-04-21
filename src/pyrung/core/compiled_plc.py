@@ -262,11 +262,14 @@ class CompiledPLC:
     def step(self) -> SystemState:
         self._ensure_running()
 
+        scan_id = self._kernel.scan_id
+        timestamp = self._kernel.timestamp
+
         ctx = _KernelRuntimeContext(
             tags=self._kernel.tags,
             memory=self._kernel.memory,
-            scan_id=self._state.scan_id,
-            timestamp=self._state.timestamp,
+            scan_id=scan_id,
+            timestamp=timestamp,
         )
         scan_ctx = cast(ScanContext, ctx)
         self._system_runtime.on_scan_start(scan_ctx)
@@ -283,7 +286,7 @@ class CompiledPLC:
         for sym, arr in self._kernel.blocks.items():
             tracked = _TrackedList(arr)
             tracked_blocks[sym] = tracked
-            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]
+            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
         self._compiled.step_fn(
             self._kernel.tags,
             self._kernel.blocks,
@@ -304,8 +307,8 @@ class CompiledPLC:
         self._system_runtime.on_scan_end(scan_ctx)
 
         next_state = SystemState(
-            scan_id=self._state.scan_id + 1,
-            timestamp=self._state.timestamp + self._dt,
+            scan_id=scan_id + 1,
+            timestamp=timestamp + self._dt,
             tags=pmap(self._committed_tags()),
             memory=pmap(dict(self._kernel.memory)),
         )
@@ -314,6 +317,70 @@ class CompiledPLC:
         self._state = next_state
         self._sync_runtime_flags_from_state()
         return self._state
+
+    def step_replay(self) -> None:
+        """Lightweight step for replay — no SystemState construction."""
+        self._ensure_running()
+
+        ctx = _KernelRuntimeContext(
+            tags=self._kernel.tags,
+            memory=self._kernel.memory,
+            scan_id=self._kernel.scan_id,
+            timestamp=self._kernel.timestamp,
+        )
+        scan_ctx = cast(ScanContext, ctx)
+        self._system_runtime.on_scan_start(scan_ctx)
+        self._input_overrides.apply_pre_scan(scan_ctx)
+
+        if self._kernel.memory.get("_dt") != self._dt:
+            ctx.set_memory("_dt", self._dt)
+
+        self._materialize_system_tags(ctx)
+
+        for spec in self._compiled.block_specs.values():
+            self._kernel.load_block_from_tags(spec)
+        tracked_blocks: dict[str, _TrackedList] = {}
+        for sym, arr in self._kernel.blocks.items():
+            tracked = _TrackedList(arr)
+            tracked_blocks[sym] = tracked
+            self._kernel.blocks[sym] = tracked  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+        self._compiled.step_fn(
+            self._kernel.tags,
+            self._kernel.blocks,
+            self._kernel.memory,
+            self._kernel.prev,
+            self._dt,
+        )
+        for spec in self._compiled.block_specs.values():
+            tracked = tracked_blocks[spec.symbol]
+            self._kernel.blocks[spec.symbol] = tracked.data  # type: ignore[assignment]
+            self._kernel.flush_block_to_tags(spec)
+            for idx in tracked.written_indices:
+                if idx < len(spec.tag_names):
+                    self._live_block_tags.add(spec.tag_names[idx])
+
+        self._input_overrides.apply_post_logic(scan_ctx)
+
+        for name in self._compiled.edge_tags:
+            if name in self._kernel.tags:
+                self._kernel.prev[name] = self._kernel.tags[name]
+
+        self._system_runtime.on_scan_end(scan_ctx)
+
+        self._kernel.scan_id += 1
+        self._kernel.timestamp += self._dt
+
+    def _materialize_replay_state(self) -> SystemState:
+        """Build SystemState from current kernel state (replay fast path)."""
+        self._capture_previous_states()
+        state = SystemState(
+            scan_id=self._kernel.scan_id,
+            timestamp=self._kernel.timestamp,
+            tags=pmap(self._committed_tags()),
+            memory=pmap(dict(self._kernel.memory)),
+        )
+        self._state = state
+        return state
 
     def run(self, cycles: int) -> SystemState:
         for _ in range(cycles):

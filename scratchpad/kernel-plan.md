@@ -92,9 +92,9 @@ During the earlier compiler work we also found and fixed an important semantic g
 - [x] Add replay cutover tests verifying `PLC.replay_to()` and `History.at()` match classic replay for kernel-supported programs
 - [x] Add automatic fallback tests for unsupported programs
 - [x] Verify `replay_trace_at()` still works via the classic path
-- [ ] Add broader benchmark coverage for `examples/click_conveyor.py`
-- [ ] Add benchmark coverage for one busy real-world style program
-- [ ] Record perf comparisons for single historical lookup and `_replay_range`
+- [x] Add broader benchmark coverage for `examples/click_conveyor.py`
+- [x] Add benchmark coverage for one busy real-world style program
+- [x] Record perf comparisons for single historical lookup and `_replay_range`
 
 ### Phase 6: Transitional cleanup
 - [ ] Prove cache warming is no longer meaningfully helped by `hydrate()`
@@ -112,7 +112,48 @@ During the earlier compiler work we also found and fixed an important semantic g
 - [x] Unsupported programs transparently fall back to the classic replay path.
 - [x] Public `PLC` and `History` APIs remain unchanged.
 - [x] Debug trace reconstruction is intentionally still on the classic replay engine.
-- [ ] Benchmarks and `hydrate()` deprecation/removal are still follow-up work.
+- [x] Benchmarks captured — compiled replay is 4–7x faster than classic.
+
+---
+
+## Benchmark Results
+
+### Initial measurement (2026-04-20)
+
+Measured via `scratchpad/bench_replay.py` (20 iterations, median). Compiled path uses `step()` for all scans.
+
+| Program | Benchmark | Classic | Compiled | Speedup |
+|---------|-----------|---------|----------|---------|
+| click_conveyor (1k scans) | `replay_to` early | 8.9 ms | 2.1 ms | 4.2x |
+| click_conveyor (1k scans) | `replay_to` mid | 60.4 ms | 14.3 ms | 4.2x |
+| click_conveyor (1k scans) | `_replay_range` 50 scans | 75.1 ms | 17.8 ms | 4.2x |
+| busy_synthetic (1k scans) | `replay_to` early | 19.6 ms | 3.5 ms | 5.6x |
+| busy_synthetic (1k scans) | `replay_to` mid | 163.3 ms | 22.5 ms | 7.3x |
+| busy_synthetic (1k scans) | `_replay_range` 50 scans | 199.4 ms | 27.8 ms | 7.2x |
+| busy_synthetic (5k scans) | `replay_to` mid | 162.8 ms | 22.4 ms | 7.3x |
+
+### After replay fast path (2026-04-21)
+
+Added `step_replay()` — skips intermediate `SystemState` construction and dead `_prev:` memory writes. Profile showed those two accounted for 70% of per-step cost.
+
+| Program | Benchmark | Classic | Compiled | Speedup |
+|---------|-----------|---------|----------|---------|
+| click_conveyor (1k scans) | `replay_to` early | 8.8 ms | 0.9 ms | 9.7x |
+| click_conveyor (1k scans) | `replay_to` mid | 61.4 ms | 2.3 ms | 26.9x |
+| click_conveyor (1k scans) | `_replay_range` 50 scans | 76.6 ms | 8.4 ms | 9.2x |
+| busy_synthetic (1k scans) | `replay_to` early | 19.8 ms | 1.7 ms | 11.4x |
+| busy_synthetic (1k scans) | `replay_to` mid | 165.1 ms | 4.0 ms | 40.9x |
+| busy_synthetic (1k scans) | `_replay_range` 50 scans | 202.4 ms | 13.7 ms | 14.8x |
+| busy_synthetic (5k scans) | `replay_to` mid | 167.1 ms | 4.0 ms | 41.8x |
+
+### Investigation findings
+
+- **Compilation cost**: 3.7 ms one-time, negligible — cached on PLC instance
+- **Steady-state step() ratio**: 6.0x (classic 1.27 ms vs compiled 0.21 ms per step)
+- **step_replay() per-step**: 22.8 μs vs step() 203.9 μs (89% faster)
+- **Kernel itself**: 11.2 μs/call — only 8% of step() but 38% of step_replay()
+- **Locals experiment**: 1.01x — dict access not a bottleneck at 144 accesses/scan
+- **Dead work confirmed**: `_prev:` never appears in generated source; `_capture_previous_states` memory loop was purely dead during compiled execution
 
 ---
 
@@ -139,5 +180,5 @@ During the earlier compiler work we also found and fixed an important semantic g
 - [x] `make lint`
 - [x] `uv run pytest tests/core tests/circuitpy/test_codegen.py -q`
 - [x] Compiled replay cutover covered by focused replay parity tests
-- [ ] Benchmark evidence captured for `click_conveyor.py` and another busy program
+- [x] Benchmark evidence captured for `click_conveyor.py` and another busy program
 - [ ] `hydrate()` retirement decision documented from measured results
