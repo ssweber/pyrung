@@ -10,7 +10,7 @@ import pytest
 
 pytest_plugins = ["pytester"]
 
-from pyrung.core import CompiledPLC, PLC, Program, SystemState
+from pyrung.core import PLC, CompiledPLC, Program, SystemState
 from pyrung.core.condition import Condition
 from pyrung.core.context import ScanContext
 from pyrung.core.instruction import Instruction
@@ -23,11 +23,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption(
         "--runner-backend",
         action="store",
-        default="classic",
-        choices=("classic", "compiled", "both"),
+        default="interpreted",
+        choices=("interpreted", "compiled", "both"),
         help=(
             "Backend used by tests that opt into runner_factory: "
-            "'classic' uses PLC, 'compiled' uses CompiledPLC, "
+            "'interpreted' uses PLC, 'compiled' uses CompiledPLC, "
             "'both' runs both and asserts state parity."
         ),
     )
@@ -45,97 +45,97 @@ def _assert_states_match(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> N
 class _RunnerPair:
     """Run both backends in lockstep and expose a PLC-like test surface."""
 
-    def __init__(self, classic: PLC, compiled: CompiledPLC) -> None:
-        self._classic = classic
+    def __init__(self, interpreted: PLC, compiled: CompiledPLC) -> None:
+        self._interpreted = interpreted
         self._compiled = compiled
-        _assert_states_match(self._classic, self._compiled)
+        _assert_states_match(self._interpreted, self._compiled)
 
     @property
     def current_state(self) -> SystemState:
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.current_state
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.current_state
 
     @property
     def simulation_time(self) -> float:
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.simulation_time
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.simulation_time
 
     @property
     def forces(self):  # noqa: ANN201
-        assert dict(self._classic.forces) == dict(self._compiled.forces)
-        return self._classic.forces
+        assert dict(self._interpreted.forces) == dict(self._compiled.forces)
+        return self._interpreted.forces
 
     @property
     def battery_present(self) -> bool:
-        assert self._classic.battery_present == self._compiled.battery_present
-        return self._classic.battery_present
+        assert self._interpreted.battery_present == self._compiled.battery_present
+        return self._interpreted.battery_present
 
     @battery_present.setter
     def battery_present(self, value: bool) -> None:
-        self._classic.battery_present = value
+        self._interpreted.battery_present = value
         self._compiled.battery_present = value
-        assert self._classic.battery_present == self._compiled.battery_present
+        assert self._interpreted.battery_present == self._compiled.battery_present
 
     def patch(self, updates: dict[str, Any]) -> None:
-        self._classic.patch(updates)
+        self._interpreted.patch(updates)
         self._compiled.patch(updates)
 
     def force(self, tag: str | Any, value: bool | int | float | str) -> None:
-        self._classic.force(tag, value)
+        self._interpreted.force(tag, value)
         self._compiled.force(tag, value)
-        assert dict(self._classic.forces) == dict(self._compiled.forces)
+        assert dict(self._interpreted.forces) == dict(self._compiled.forces)
 
     def unforce(self, tag: str | Any) -> None:
-        self._classic.unforce(tag)
+        self._interpreted.unforce(tag)
         self._compiled.unforce(tag)
-        assert dict(self._classic.forces) == dict(self._compiled.forces)
+        assert dict(self._interpreted.forces) == dict(self._compiled.forces)
 
     def clear_forces(self) -> None:
-        self._classic.clear_forces()
+        self._interpreted.clear_forces()
         self._compiled.clear_forces()
-        assert dict(self._classic.forces) == dict(self._compiled.forces) == {}
+        assert dict(self._interpreted.forces) == dict(self._compiled.forces) == {}
 
     @contextmanager
     def forced(self, overrides: dict[str, Any] | dict[Any, Any]) -> Iterator[_RunnerPair]:
         with ExitStack() as stack:
-            stack.enter_context(self._classic.forced(overrides))
+            stack.enter_context(self._interpreted.forced(overrides))
             stack.enter_context(self._compiled.forced(overrides))
-            assert dict(self._classic.forces) == dict(self._compiled.forces)
+            assert dict(self._interpreted.forces) == dict(self._compiled.forces)
             yield self
-        assert dict(self._classic.forces) == dict(self._compiled.forces)
+        assert dict(self._interpreted.forces) == dict(self._compiled.forces)
 
     def set_rtc(self, value) -> None:  # noqa: ANN001
-        self._classic.set_rtc(value)
+        self._interpreted.set_rtc(value)
         self._compiled.set_rtc(value)
 
     def step(self) -> SystemState:
-        self._classic.step()
+        self._interpreted.step()
         self._compiled.step()
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.current_state
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.current_state
 
     def run(self, cycles: int) -> SystemState:
-        self._classic.run(cycles)
+        self._interpreted.run(cycles)
         self._compiled.run(cycles)
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.current_state
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.current_state
 
     def run_for(self, seconds: float) -> SystemState:
-        self._classic.run_for(seconds)
+        self._interpreted.run_for(seconds)
         self._compiled.run_for(seconds)
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.current_state
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.current_state
 
     def stop(self) -> None:
-        self._classic.stop()
+        self._interpreted.stop()
         self._compiled.stop()
-        _assert_states_match(self._classic, self._compiled)
+        _assert_states_match(self._interpreted, self._compiled)
 
     def reboot(self) -> SystemState:
-        self._classic.reboot()
+        self._interpreted.reboot()
         self._compiled.reboot()
-        _assert_states_match(self._classic, self._compiled)
-        return self._classic.current_state
+        _assert_states_match(self._interpreted, self._compiled)
+        return self._interpreted.current_state
 
 
 @pytest.fixture
@@ -162,14 +162,14 @@ def runner_factory(runner_backend: str):
             joined = ", ".join(unsupported)
             pytest.skip(f"runner_factory compiled backends do not support kwargs: {joined}")
 
-        if runner_backend == "classic":
+        if runner_backend == "interpreted":
             return PLC(logic, **kwargs)
         if runner_backend == "compiled":
             return CompiledPLC(logic, **kwargs)
 
-        classic = PLC(logic, **kwargs)
+        interpreted = PLC(logic, **kwargs)
         compiled = CompiledPLC(logic, **kwargs)
-        return _RunnerPair(classic, compiled)
+        return _RunnerPair(interpreted, compiled)
 
     return _build
 

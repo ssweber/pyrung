@@ -147,12 +147,12 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
         source.step()
 
     compiled_replay = source.replay_to(3)
-    classic_replay = source._replay_to_classic(3)
+    interpreted_replay = source._replay_to_interpreted(3)
 
     assert source._compiled_replay_supported_kernel() is not None
-    _assert_states_equivalent(compiled_replay, classic_replay)
+    _assert_states_equivalent(compiled_replay, interpreted_replay)
     assert dict(compiled_replay._input_overrides.forces_mutable) == dict(
-        classic_replay._input_overrides.forces_mutable
+        interpreted_replay._input_overrides.forces_mutable
     )
 
 
@@ -169,21 +169,21 @@ def test_history_at_and_replay_range_use_compiled_path_when_supported(monkeypatc
     for _ in range(6):
         source.step()
 
-    expected = source._replay_to_classic(2).current_state
-    expected_range = source._replay_range_classic(2, 4)
+    expected = source._replay_to_interpreted(2).current_state
+    expected_range = source._replay_range_interpreted(2, 4)
 
     source._recent_state_cache.clear()
     source._recent_state_cache_bytes = 0
     source._cache_state(source.current_state)
 
     def _boom_replay(_scan_id: int) -> PLC:
-        raise AssertionError("classic replay path should not be used")
+        raise AssertionError("interpreted replay path should not be used")
 
     def _boom_range(_start: int, _end: int) -> list:
-        raise AssertionError("classic replay range path should not be used")
+        raise AssertionError("interpreted replay range path should not be used")
 
-    monkeypatch.setattr(source, "_replay_to_classic", _boom_replay)
-    monkeypatch.setattr(source, "_replay_range_classic", _boom_range)
+    monkeypatch.setattr(source, "_replay_to_interpreted", _boom_replay)
+    monkeypatch.setattr(source, "_replay_range_interpreted", _boom_range)
 
     assert source.history.at(2) == expected
     assert source.history.range(2, 5) == expected_range
@@ -202,7 +202,7 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     source.step()
 
     replay = source.replay_to(2)
-    classic = source._replay_to_classic(2)
+    interpreted = source._replay_to_interpreted(2)
 
     assert source._compiled_replay_supported_kernel() is None
-    _assert_states_equivalent(replay, classic)
+    _assert_states_equivalent(replay, interpreted)

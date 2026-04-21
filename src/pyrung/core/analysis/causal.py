@@ -308,7 +308,7 @@ class CausalChain:
             t = step.transition
             fidelity_note = ""
             if step.fidelity == "timeline":
-                fidelity_note = "  (partial; re-run with scan_id to hydrate)"
+                fidelity_note = "  (partial; re-run with scan_id for full fidelity)"
             lines.append(f"  Rung {step.rung_index}: {t.tag_name} → {t.to_value!r}{fidelity_note}")
             for pc in step.proximate_causes:
                 lines.append(f"    proximate: {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")

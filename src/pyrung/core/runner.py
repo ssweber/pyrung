@@ -812,22 +812,6 @@ class PLC:
             timelines=self._rung_firing_timelines,
         )
 
-    def hydrate(self, scan_range: tuple[int, int]) -> None:
-        """Warm the recent-state cache across *scan_range* (inclusive).
-
-        Dispatches ``replay_to`` for uncached scans in the range.
-        Callers use this before batch analysis to convert would-be
-        cache-miss cause/effect steps to cache-hit.  No-op for scans
-        already cached.
-        """
-        lo, hi = scan_range
-        lo = max(lo, self._initial_scan_id)
-        hi = min(hi, self._state.scan_id)
-        for scan_id in range(lo, hi + 1):
-            if scan_id not in self._recent_state_cache:
-                state = self._state_at(scan_id)
-                self._cache_state(state)
-
     def recovers(self, tag: Tag | str, *, assume: dict[str, Any] | None = None) -> bool:
         """True if *tag* has a reachable clear path from the current state.
 
@@ -1146,7 +1130,7 @@ class PLC:
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
 
-    def _replay_to_classic(self, target_scan_id: int) -> PLC:
+    def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
 
         Anchors at the nearest retained checkpoint ``<= target_scan_id``
@@ -1254,7 +1238,7 @@ class PLC:
 
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
-            return self._replay_to_classic(target_scan_id)
+            return self._replay_to_interpreted(target_scan_id)
         return self._replay_to_compiled(target_scan_id, kernel)
 
     def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:
@@ -1313,7 +1297,7 @@ class PLC:
         self._cached_replay_trace = (target_scan_id, traces)
         return dict(traces)
 
-    def _replay_range_classic(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+    def _replay_range_interpreted(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         """Reconstruct ``SystemState`` for every scan in ``[start, end]``.
 
         Anchors once at the nearest checkpoint ``<= start`` (falling
@@ -1401,7 +1385,7 @@ class PLC:
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
-            return self._replay_range_classic(start_scan_id, end_scan_id)
+            return self._replay_range_interpreted(start_scan_id, end_scan_id)
         return self._replay_range_compiled(start_scan_id, end_scan_id, kernel)
 
     @property
