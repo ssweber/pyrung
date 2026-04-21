@@ -1129,6 +1129,10 @@ class PLC:
             replay.patch(log.patches_by_scan[scan_id])
         if log.dts is not None:
             replay._dt_override_for_next_scan = float(log.dts[scan_id - log.base_scan])
+        submits = log.io_submits_by_scan.get(scan_id, {})
+        drains = log.io_drains_by_scan.get(scan_id, {})
+        if submits or drains:
+            replay._next_scan_replay_io = (submits, drains)
 
     def _replay_to_interpreted(self, target_scan_id: int) -> PLC:
         """Reconstruct historical state by forking and replaying the scan log.
@@ -1207,6 +1211,12 @@ class PLC:
             if scan_id in log.patches_by_scan:
                 replay.patch(log.patches_by_scan[scan_id])
             replay.step_replay()
+            for record in log.io_submits_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay._kernel.tags[tag_name] = value
+            for record in log.io_drains_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay._kernel.tags[tag_name] = value
 
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
@@ -1948,11 +1958,14 @@ class PLC:
 
     def _prepare_scan(self) -> tuple[ScanContext, float]:
         """Create and initialize scan context before logic evaluation."""
+        replay_io = getattr(self, "_next_scan_replay_io", None)
+        self._next_scan_replay_io = None
         ctx = ScanContext(
             self._state,
             resolver=self._system_runtime.resolve,
             read_only_tags=self._system_runtime.read_only_tags,
             consumed_tags_getter=self._consumed_tags_for_capture,
+            replay_io=replay_io,
         )
 
         self._system_runtime.on_scan_start(ctx)
@@ -2016,6 +2029,12 @@ class PLC:
             self._checkpoints[new_scan_id] = self._state
         if self._scan_log.records_dt:
             self._scan_log.record_dt(new_scan_id, dt)
+        if ctx._io_submit_staging:
+            for key, record in ctx._io_submit_staging.items():
+                self._scan_log.record_io_submit(new_scan_id, key, record)
+        if ctx._io_drain_staging:
+            for key, record in ctx._io_drain_staging.items():
+                self._scan_log.record_io_drain(new_scan_id, key, record)
         # Per-rung timeline append.  Only rungs that fired this scan
         # get a timeline update — stable rungs extend the tail range
         # (no allocation), period-2 oscillators collapse into a single

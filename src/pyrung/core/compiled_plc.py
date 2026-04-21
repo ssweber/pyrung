@@ -124,6 +124,22 @@ class _KernelRuntimeContext:
     def timestamp(self) -> float:
         return self._timestamp
 
+    @property
+    def is_replay_io(self) -> bool:
+        return False
+
+    def record_io_submit(self, key: str, record: object) -> None:
+        pass
+
+    def record_io_drain(self, key: str, record: object) -> None:
+        pass
+
+    def has_replay_io_submit(self, key: str) -> bool:
+        return False
+
+    def get_replay_io_drain(self, key: str) -> object:
+        return None
+
 
 class CompiledPLC:
     """Fixed-step replay runner backed by a compiled kernel."""

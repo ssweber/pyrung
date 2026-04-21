@@ -7,13 +7,14 @@ preserving read-after-write visibility.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import PMap, pmap
 
 if TYPE_CHECKING:
+    from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
     from pyrung.core.state import SystemState
 
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
@@ -112,6 +113,11 @@ class ScanContext:
         "_condition_scope_token",
         "_rung_firings",
         "_consumed_tags_getter",
+        "_io_submit_staging",
+        "_io_drain_staging",
+        "_replay_io_submits",
+        "_replay_io_drains",
+        "_is_replay_io",
     )
 
     def __init__(
@@ -121,6 +127,7 @@ class ScanContext:
         resolver: TagResolver | None = None,
         read_only_tags: frozenset[str] = frozenset(),
         consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
+        replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
     ) -> None:
         """Create a new ScanContext from a SystemState.
 
@@ -135,6 +142,8 @@ class ScanContext:
                 the simulator's own analysis APIs, which by definition
                 don't ask about unread tags.  Returning ``None`` from
                 the callable bypasses the filter (escape hatch).
+            replay_io: When replaying, a pair of (submits, drains)
+                for this scan.  ``None`` during live execution.
         """
         self._state = state
         self._tags_evolver = state.tags.evolver()
@@ -147,6 +156,15 @@ class ScanContext:
         self._condition_scope_token = object()
         self._rung_firings: dict[int, dict[str, Any]] = {}
         self._consumed_tags_getter = consumed_tags_getter
+        self._io_submit_staging: dict[str, IoSubmitRecord] = {}
+        self._io_drain_staging: dict[str, IoResultRecord] = {}
+        self._is_replay_io: bool = replay_io is not None
+        self._replay_io_submits: Mapping[str, IoSubmitRecord] = (
+            replay_io[0] if replay_io is not None else {}
+        )
+        self._replay_io_drains: Mapping[str, IoResultRecord] = (
+            replay_io[1] if replay_io is not None else {}
+        )
 
     # =========================================================================
     # Read operations (with pending visibility)
@@ -346,6 +364,26 @@ class ScanContext:
         Empty if no rung scopes were opened during the scan.
         """
         return pmap({i: pmap(w) for i, w in self._rung_firings.items()})
+
+    # =========================================================================
+    # I/O replay recording and lookup
+    # =========================================================================
+
+    @property
+    def is_replay_io(self) -> bool:
+        return self._is_replay_io
+
+    def record_io_submit(self, key: str, record: IoSubmitRecord) -> None:
+        self._io_submit_staging[key] = record
+
+    def record_io_drain(self, key: str, record: IoResultRecord) -> None:
+        self._io_drain_staging[key] = record
+
+    def has_replay_io_submit(self, key: str) -> bool:
+        return key in self._replay_io_submits
+
+    def get_replay_io_drain(self, key: str) -> IoResultRecord | None:
+        return self._replay_io_drains.get(key)
 
     # =========================================================================
     # Commit

@@ -40,6 +40,23 @@ LifecycleKind = Literal["stop", "reboot", "battery_present", "clear_forces"]
 
 
 @dataclass(frozen=True)
+class IoSubmitRecord:
+    """Recorded tag writes for an I/O submit (send/receive start)."""
+
+    tag_writes: tuple[tuple[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class IoResultRecord:
+    """Recorded result of an I/O drain (send/receive completion)."""
+
+    ok: bool
+    exception_code: int
+    values: tuple[Any, ...]
+    tag_writes: tuple[tuple[str, Any], ...]
+
+
+@dataclass(frozen=True)
 class LifecycleEvent:
     """A lifecycle operation between scans.
 
@@ -76,6 +93,8 @@ class ScanLogSnapshot:
     rtc_base_changes: Mapping[int, tuple[datetime, float]]
     dts: array.array | None
     lifecycle_events: tuple[LifecycleEvent, ...]
+    io_submits_by_scan: Mapping[int, Mapping[str, IoSubmitRecord]]
+    io_drains_by_scan: Mapping[int, Mapping[str, IoResultRecord]]
 
 
 class ScanLog:
@@ -92,6 +111,8 @@ class ScanLog:
             array.array("d") if time_mode == _TimeMode.REALTIME else None
         )
         self._lifecycle_events: list[LifecycleEvent] = []
+        self._io_submits_by_scan: dict[int, dict[str, IoSubmitRecord]] = {}
+        self._io_drains_by_scan: dict[int, dict[str, IoResultRecord]] = {}
 
     @property
     def base_scan(self) -> int:
@@ -133,6 +154,12 @@ class ScanLog:
     def record_lifecycle(self, event: LifecycleEvent) -> None:
         self._lifecycle_events.append(event)
 
+    def record_io_submit(self, scan_id: int, key: str, record: IoSubmitRecord) -> None:
+        self._io_submits_by_scan.setdefault(scan_id, {})[key] = record
+
+    def record_io_drain(self, scan_id: int, key: str, record: IoResultRecord) -> None:
+        self._io_drains_by_scan.setdefault(scan_id, {})[key] = record
+
     def snapshot(self) -> ScanLogSnapshot:
         """Return a frozen view of the log, safe to outlive further writes."""
         return ScanLogSnapshot(
@@ -142,6 +169,8 @@ class ScanLog:
             rtc_base_changes=dict(self._rtc_base_changes),
             dts=array.array("d", self._dts) if self._dts is not None else None,
             lifecycle_events=tuple(self._lifecycle_events),
+            io_submits_by_scan=dict(self._io_submits_by_scan),
+            io_drains_by_scan=dict(self._io_drains_by_scan),
         )
 
     def trim_before(self, scan_id: int) -> None:
@@ -156,7 +185,13 @@ class ScanLog:
         """
         if scan_id <= self._base_scan:
             return
-        for d in (self._patches_by_scan, self._force_changes_by_scan, self._rtc_base_changes):
+        for d in (
+            self._patches_by_scan,
+            self._force_changes_by_scan,
+            self._rtc_base_changes,
+            self._io_submits_by_scan,
+            self._io_drains_by_scan,
+        ):
             for k in [k for k in d if k < scan_id]:
                 del d[k]
         if self._dts is not None:
@@ -183,4 +218,8 @@ class ScanLog:
         if self._dts is not None:
             size += 8 * len(self._dts)
         size += 48 * len(self._lifecycle_events)
+        for submits in self._io_submits_by_scan.values():
+            size += 80 + 80 * len(submits)
+        for drains in self._io_drains_by_scan.values():
+            size += 80 + 120 * len(drains)
         return size

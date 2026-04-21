@@ -22,6 +22,7 @@ from pyclickplc.addresses import parse_address
 from pyrung.core._source import _capture_source
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program.context import _require_rung_context
+from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
 from pyrung.core.tag import Tag
 
 from ..base import Instruction
@@ -241,13 +242,21 @@ class ModbusSendInstruction(Instruction):
             device_id=self.device_id,
         )
 
+    @property
+    def _io_key(self) -> str:
+        return f"send:{self.target_name}:{self.sending.name}"
+
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if ctx.is_replay_io:
+            return self._execute_replay(ctx, enabled)
         if not self._is_live():
             return
+        return self._execute_live(ctx, enabled)
+
+    def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
 
         if self._pending is not None:
-            # Drain an in-flight request regardless of enable state — Click
-            # semantics: once submitted, the transaction runs to completion.
             if not self._pending.future.done():
                 ctx.set_tag(self.sending.name, True)
                 return
@@ -259,40 +268,65 @@ class ModbusSendInstruction(Instruction):
 
             self._pending = None
             if result.ok:
-                ctx.set_tags(
-                    {
-                        self.sending.name: False,
-                        self.success.name: True,
-                        self.error.name: False,
-                        self.exception_response.name: 0,
-                    }
-                )
+                drain_writes: dict[str, Any] = {
+                    self.sending.name: False,
+                    self.success.name: True,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
+                }
             else:
-                ctx.set_tags(
-                    {
-                        self.sending.name: False,
-                        self.success.name: False,
-                        self.error.name: True,
-                        self.exception_response.name: int(result.exception_code),
-                    }
-                )
+                drain_writes = {
+                    self.sending.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
+                }
+            ctx.set_tags(drain_writes)
+            ctx.record_io_drain(
+                key,
+                IoResultRecord(
+                    ok=result.ok,
+                    exception_code=result.exception_code,
+                    values=(),
+                    tag_writes=tuple(drain_writes.items()),
+                ),
+            )
             return
 
         if not enabled:
-            # Idle + disabled: leave success/error/exception_response latched.
             return
 
         source_tags = _normalize_operand_tags(self.source, ctx)
         values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
         self._pending = _PendingRequest(future=self._submit(source_tags, values))
-        ctx.set_tags(
-            {
-                self.sending.name: True,
-                self.success.name: False,
-                self.error.name: False,
-                self.exception_response.name: 0,
-            }
-        )
+        submit_writes: dict[str, Any] = {
+            self.sending.name: True,
+            self.success.name: False,
+            self.error.name: False,
+            self.exception_response.name: 0,
+        }
+        ctx.set_tags(submit_writes)
+        ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
+
+    def _execute_replay(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+        drain = ctx.get_replay_io_drain(key)
+        if drain is not None:
+            ctx.set_tags(dict(drain.tag_writes))
+            return
+        if ctx.get_tag(self.sending.name) is True:
+            return
+        if not enabled:
+            return
+        if ctx.has_replay_io_submit(key):
+            ctx.set_tags(
+                {
+                    self.sending.name: True,
+                    self.success.name: False,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
+                }
+            )
 
 
 @dataclass
@@ -366,13 +400,21 @@ class ModbusReceiveInstruction(Instruction):
             list(result.values), target_tags, word_order, self.remote_address.register_type
         )
 
+    @property
+    def _io_key(self) -> str:
+        return f"recv:{self.target_name}:{self.receiving.name}"
+
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if ctx.is_replay_io:
+            return self._execute_replay(ctx, enabled)
         if not self._is_live():
             return
+        return self._execute_live(ctx, enabled)
+
+    def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
 
         if self._pending is not None:
-            # Drain an in-flight request regardless of enable state — Click
-            # semantics: once submitted, the transaction runs to completion.
             if not self._pending.future.done():
                 ctx.set_tag(self.receiving.name, True)
                 return
@@ -385,41 +427,69 @@ class ModbusReceiveInstruction(Instruction):
 
             self._pending = None
             if not result.ok:
-                ctx.set_tags(
-                    {
-                        self.receiving.name: False,
-                        self.success.name: False,
-                        self.error.name: True,
-                        self.exception_response.name: int(result.exception_code),
-                    }
+                drain_writes: dict[str, Any] = {
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
+                }
+                ctx.set_tags(drain_writes)
+                ctx.record_io_drain(
+                    key,
+                    IoResultRecord(
+                        ok=False,
+                        exception_code=result.exception_code,
+                        values=(),
+                        tag_writes=tuple(drain_writes.items()),
+                    ),
                 )
                 return
 
             unpacked = self._unpack_result(result, target_tags)
             if len(unpacked) != len(target_tags):
-                ctx.set_tags(
-                    {
-                        self.receiving.name: False,
-                        self.success.name: False,
-                        self.error.name: True,
-                        self.exception_response.name: 0,
-                    }
+                drain_writes = {
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: 0,
+                }
+                ctx.set_tags(drain_writes)
+                ctx.record_io_drain(
+                    key,
+                    IoResultRecord(
+                        ok=False,
+                        exception_code=0,
+                        values=(),
+                        tag_writes=tuple(drain_writes.items()),
+                    ),
                 )
                 return
 
-            updates = {
-                tag.name: _store_copy_value_to_tag_type(value, tag)
+            typed_values = tuple(
+                _store_copy_value_to_tag_type(value, tag)
                 for tag, value in zip(target_tags, unpacked, strict=True)
+            )
+            drain_writes = {
+                tag.name: typed_val
+                for tag, typed_val in zip(target_tags, typed_values, strict=True)
             }
-            updates[self.receiving.name] = False
-            updates[self.success.name] = True
-            updates[self.error.name] = False
-            updates[self.exception_response.name] = 0
-            ctx.set_tags(updates)
+            drain_writes[self.receiving.name] = False
+            drain_writes[self.success.name] = True
+            drain_writes[self.error.name] = False
+            drain_writes[self.exception_response.name] = 0
+            ctx.set_tags(drain_writes)
+            ctx.record_io_drain(
+                key,
+                IoResultRecord(
+                    ok=True,
+                    exception_code=0,
+                    values=typed_values,
+                    tag_writes=tuple(drain_writes.items()),
+                ),
+            )
             return
 
         if not enabled:
-            # Idle + disabled: leave success/error/exception_response latched.
             return
 
         dest_tags = _normalize_operand_tags(self.dest, ctx)
@@ -427,14 +497,34 @@ class ModbusReceiveInstruction(Instruction):
             future=self._submit(dest_tags),
             target_tags=dest_tags,
         )
-        ctx.set_tags(
-            {
-                self.receiving.name: True,
-                self.success.name: False,
-                self.error.name: False,
-                self.exception_response.name: 0,
-            }
-        )
+        submit_writes: dict[str, Any] = {
+            self.receiving.name: True,
+            self.success.name: False,
+            self.error.name: False,
+            self.exception_response.name: 0,
+        }
+        ctx.set_tags(submit_writes)
+        ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
+
+    def _execute_replay(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+        drain = ctx.get_replay_io_drain(key)
+        if drain is not None:
+            ctx.set_tags(dict(drain.tag_writes))
+            return
+        if ctx.get_tag(self.receiving.name) is True:
+            return
+        if not enabled:
+            return
+        if ctx.has_replay_io_submit(key):
+            ctx.set_tags(
+                {
+                    self.receiving.name: True,
+                    self.success.name: False,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
+                }
+            )
 
 
 # ---------------------------------------------------------------------------
