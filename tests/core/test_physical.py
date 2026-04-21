@@ -143,7 +143,7 @@ class TestTagFields:
         assert fb.link == "Enable"
 
     def test_standalone_tag_range(self):
-        t = Real("Temp", physical=temp_sensor, min=0, max=150, uom="degC")
+        t = Real("Temp", physical=temp_sensor, link="En", min=0, max=150, uom="degC")
         assert t.physical is temp_sensor
         assert t.min == 0
         assert t.max == 150
@@ -175,7 +175,7 @@ class TestTagFields:
             Enable: Bool
             Running_Fb: Bool = Field(physical=motor_fb, link="Enable")  # ty: ignore[invalid-assignment]
             Temp: Real = Field(  # ty: ignore[invalid-assignment]
-                physical=temp_sensor, min=0, max=150, uom="degC"
+                physical=temp_sensor, link="Enable", min=0, max=150, uom="degC"
             )
 
         p = Pump[1]
@@ -239,6 +239,29 @@ class TestTagFields:
             class BadFeedback:
                 Enable: Bool
                 Running_Fb: Bool = Field(link="Enable")  # ty: ignore[invalid-assignment]
+
+    def test_profile_without_link_rejects_tag(self):
+        with pytest.raises(ValueError, match="profile requires link"):
+            Real("Temp", physical=temp_sensor)
+
+    def test_profile_without_link_rejects_field(self):
+        with pytest.raises(ValueError, match="profile requires link"):
+
+            @udt()
+            class BadProfile:
+                Temp: Real = Field(physical=temp_sensor)  # ty: ignore[invalid-assignment]
+
+    def test_bool_with_profile_rejects_tag(self):
+        with pytest.raises(ValueError, match="Bool feedback cannot use physical profile"):
+            Bool("Fb", physical=temp_sensor, link="En")
+
+    def test_bool_with_profile_rejects_field(self):
+        with pytest.raises(ValueError, match="Bool feedback cannot use physical profile"):
+
+            @udt()
+            class BadBool:
+                En: Bool
+                Fb: Bool = Field(physical=temp_sensor, link="En")  # ty: ignore[invalid-assignment]
 
     def test_linked_analog_without_profile_allowed_at_construction(self):
         @udt()

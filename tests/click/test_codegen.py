@@ -3055,7 +3055,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[profile=first_order, min=0, max=100, uom=psi]",
+                    comment="[link=Enable, profile=first_order, min=0, max=100, uom=psi]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,
@@ -3076,7 +3076,8 @@ class TestStructuredCodegen:
 
         assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
         assert (
-            "Pressure = Real(\"Pressure\", physical=Pressure_physical, min=0, max=100, uom='psi')"
+            'Pressure = Real("Pressure", physical=Pressure_physical,'
+            " link='Enable', min=0, max=100, uom='psi')"
         ) in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
@@ -3158,7 +3159,7 @@ class TestStructuredCodegen:
                     memory_type="DF",
                     address=101,
                     nickname="Pressure",
-                    comment="[profile=first_order]",
+                    comment="[link=Enable, profile=first_order]",
                     initial_value="0.0",
                     retentive=True,
                     data_type=DataType.FLOAT,

@@ -163,6 +163,20 @@ class Tag:
             raise ValueError(f"Tag {self.name!r}: choices cannot be combined with min/max.")
         if self.readonly and self.physical is not None:
             raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
+        if self.physical is not None and self.physical.profile is not None and self.link is None:
+            raise ValueError(
+                f"Tag {self.name!r}: physical profile requires link "
+                "(profile defines response to a linked command)."
+            )
+        if (
+            self.type == TagType.BOOL
+            and self.physical is not None
+            and self.physical.profile is not None
+        ):
+            raise ValueError(
+                f"Tag {self.name!r}: Bool feedback cannot use physical profile "
+                "(use on_delay/off_delay for Bool timing)."
+            )
 
     def __hash__(self) -> int:
         return hash(self.name)
