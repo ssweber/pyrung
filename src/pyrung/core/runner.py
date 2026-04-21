@@ -519,6 +519,7 @@ class PLC:
         self._breakpoints_by_id: dict[int, _BreakpointRegistration] = {}
         self._pause_requested_this_scan = False
         self._active_tokens: list[Token[PLC | None]] = []
+        self._pre_scan_callbacks: list[Any] = []
         self._known_tags_by_name: dict[str, Tag] = {}
         self._refresh_known_tags_from_logic()
         # Seed initial state with tag defaults (skip tags already in state).
@@ -1968,6 +1969,8 @@ class PLC:
             replay_io=replay_io,
         )
 
+        for cb in self._pre_scan_callbacks:
+            cb()
         self._system_runtime.on_scan_start(ctx)
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
 

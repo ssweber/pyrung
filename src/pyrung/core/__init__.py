@@ -31,6 +31,7 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
+from pyrung.core.harness import Harness, profile
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -145,6 +146,9 @@ __all__ = [
     # Physical feedback
     "Physical",
     "parse_duration",
+    # Autoharness
+    "Harness",
+    "profile",
     # Structured factories
     "DoneAccUDT",
     "Field",
