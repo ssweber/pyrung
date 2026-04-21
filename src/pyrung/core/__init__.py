@@ -40,6 +40,7 @@ from pyrung.core.instruction.send_receive import (
     receive,
     send,
 )
+from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -141,6 +142,9 @@ __all__ = [
     "TimeUnit",
     "build_program_graph",
     "normalize_unit",
+    # Physical feedback
+    "Physical",
+    "parse_duration",
     # Structured factories
     "DoneAccUDT",
     "Field",
