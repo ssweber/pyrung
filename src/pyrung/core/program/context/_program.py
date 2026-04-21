@@ -134,17 +134,38 @@ class Program:
         """Return registered dialect names in deterministic order."""
         return tuple(sorted(cls._dialect_validators))
 
-    def validate(self, dialect: str, *, mode: str = "warn", **kwargs: Any) -> Any:
-        """Run dialect-specific portability validation for this Program."""
-        validator = self._dialect_validators.get(dialect)
-        if validator is None:
-            available = ", ".join(self.registered_dialects()) or "<none>"
-            raise KeyError(
-                f"Unknown validation dialect {dialect!r}. "
-                f"Available dialects: {available}. "
-                f"Import the dialect package first (example: import pyrung.{dialect})."
-            )
-        return validator(self, mode=mode, **kwargs)
+    def validate(
+        self,
+        dialect: str | None = None,
+        *,
+        mode: str = "warn",
+        select: set[str] | None = None,
+        ignore: set[str] | None = None,
+        dt: float = 0.010,
+        **kwargs: Any,
+    ) -> Any:
+        """Run validation on this Program.
+
+        Without arguments, runs all core validators and returns a
+        ``ValidationReport``.  Use ``select`` / ``ignore`` to filter by
+        rule code, and ``dt`` to configure the physical-realism validator.
+
+        With a ``dialect`` string, runs dialect-specific portability
+        validation (e.g. ``logic.validate("click", mode="strict")``).
+        """
+        if dialect is not None:
+            validator = self._dialect_validators.get(dialect)
+            if validator is None:
+                available = ", ".join(self.registered_dialects()) or "<none>"
+                raise KeyError(
+                    f"Unknown validation dialect {dialect!r}. "
+                    f"Available dialects: {available}. "
+                    f"Import the dialect package first (example: import pyrung.{dialect})."
+                )
+            return validator(self, mode=mode, **kwargs)
+        from pyrung.core.validation.report import validate as _validate_core
+
+        return _validate_core(self, select=select, ignore=ignore, dt=dt)
 
     def dataview(self) -> DataView:
         """Return a chainable query over this program's tag dependency graph.

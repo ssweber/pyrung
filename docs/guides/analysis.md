@@ -358,64 +358,51 @@ With one test, cold rungs and stranded bits are mostly noise. After hundreds of 
 
 ## Static validators
 
-Separate from the runtime analysis, two static validators check program structure at build time — no scans needed.
-
-### Conflicting outputs
+Separate from the runtime analysis, static validators check program structure at build time — no scans needed. Call `logic.validate()` to run them all:
 
 ```python
-from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
-
-report = validate_conflicting_outputs(logic)
+report = logic.validate()
+assert not report, report.summary()
 ```
 
-Detects when multiple instructions that actively write every scan (`out`, timers, counters, drums, shift registers) target the same tag from non-mutually-exclusive execution paths. These instructions reset their target when disabled, so two `out(Motor)` in the same scope means last-writer-wins stomping every scan.
+`ValidationReport` is falsy when clean, truthy when there are findings. It's iterable — each finding carries a `.code`, `.target_name`, and `.message`.
 
-The only safe pattern is different subroutines whose callers have provably exclusive conditions (e.g., `State == 1` vs `State == 2`).
+### Selecting rules
 
-!!! note "Exclusivity patterns recognized"
-    The validator detects `CompareEq` different-constant pairs, `BitCondition`/`NormallyClosedCondition` complements, and range-complement pairs (`Lt`/`Ge`, `Le`/`Gt`) on caller conditions.
-
-### Stuck bits
+By default all rules run. Use `select` to limit or `ignore` to exclude by rule code:
 
 ```python
-from pyrung.core.validation.stuck_bits import validate_stuck_bits
-
-report = validate_stuck_bits(logic)
+report = logic.validate(select={"CORE_STUCK_HIGH", "CORE_STUCK_LOW"})
+report = logic.validate(ignore={"CORE_ANTITOGGLE"})
 ```
 
-Detects latch/reset imbalance: `CORE_STUCK_HIGH` when a tag is latched but never reset anywhere in the program, `CORE_STUCK_LOW` when a tag is reset but never latched. Covers subroutine boundaries. Skips `readonly` and `external` tags.
+Unknown codes raise `ValueError`.
 
-This is the static complement to `plc.query.stranded_bits()` — stuck-bits checks structure ("is there a reset rung at all?"), while stranded-bits checks reachability ("is there a reset rung *and can it actually fire*?").
+### Rule reference
 
-### Read-only writes
+| Code | What it detects |
+|---|---|
+| `CORE_CONFLICTING_OUTPUT` | Multiple `out`/timer/counter/drum/shift instructions targeting the same tag from non-mutually-exclusive paths. Last-writer-wins stomping every scan. |
+| `CORE_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. |
+| `CORE_STUCK_LOW` | Tag is reset but never latched anywhere in the program. |
+| `CORE_READONLY_WRITE` | Write instruction targets a `readonly=True` tag. |
+| `CORE_CHOICES_VIOLATION` | Literal-value write to a tag whose `choices` key set doesn't include that value. |
+| `CORE_FINAL_MULTIPLE_WRITERS` | More than one write site for a `final=True` tag — no mutual-exclusivity exemption. |
+| `CORE_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
+| `CORE_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
+| `CORE_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
+
+The physical-realism rules (`CORE_RANGE_VIOLATION`, `CORE_MISSING_PROFILE`, `CORE_ANTITOGGLE`) accept a `dt` parameter forwarded from `validate()`:
 
 ```python
-from pyrung.core.validation.readonly_write import validate_readonly_write
-
-report = validate_readonly_write(logic)
+report = logic.validate(dt=0.05)
 ```
 
-Flags any write instruction targeting a `readonly=True` tag as `CORE_READONLY_WRITE`. Read-only tags are initialized from their declared default at power-on and should never be written by ladder logic.
+!!! note "Stuck bits vs. stranded bits"
+    `CORE_STUCK_HIGH`/`CORE_STUCK_LOW` check structure — "is there a reset rung at all?" The runtime `plc.query.stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
 
-### Choices violations
-
-```python
-from pyrung.core.validation.choices_violation import validate_choices_violation
-
-report = validate_choices_violation(logic)
-```
-
-Checks every literal-value write against the tag's `choices` key set. If a `copy(5, State)` writes a value not in `State`'s choices map, it's flagged as `CORE_CHOICES_VIOLATION`.
-
-### Final multiple writers
-
-```python
-from pyrung.core.validation.final_writers import validate_final_writers
-
-report = validate_final_writers(logic)
-```
-
-Counts write sites for `final=True` tags. If more than one instruction writes the same `final` tag, it's flagged as `CORE_FINAL_MULTIPLE_WRITERS` — regardless of whether the writers are mutually exclusive. This is stricter than the conflicting-outputs validator, which allows multi-writers behind exclusive conditions.
+!!! note "Conflicting output exclusivity"
+    The validator detects `CompareEq` different-constant pairs, `BitCondition`/`NormallyClosedCondition` complements, and range-complement pairs (`Lt`/`Ge`, `Le`/`Gt`) on caller conditions. Different subroutines with provably exclusive callers are safe.
 
 ## Next steps
 

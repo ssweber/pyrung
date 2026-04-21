@@ -45,6 +45,12 @@ from pyrung.core.validation.readonly_write import (
     ReadonlyWriteReport,
     validate_readonly_writes,
 )
+from pyrung.core.validation.report import (
+    ALL_RULES,
+    Finding,
+    ValidationReport,
+    validate,
+)
 from pyrung.core.validation.stuck_bits import (
     CORE_STUCK_HIGH,
     CORE_STUCK_LOW,
@@ -62,8 +68,9 @@ from pyrung.core.validation.walker import (
 )
 
 __all__ = [
-    "CORE_CHOICES_VIOLATION",
+    "ALL_RULES",
     "CORE_ANTITOGGLE",
+    "CORE_CHOICES_VIOLATION",
     "CORE_CONFLICTING_OUTPUT",
     "CORE_FINAL_MULTIPLE_WRITERS",
     "CORE_MISSING_PROFILE",
@@ -76,6 +83,7 @@ __all__ = [
     "ConflictingOutputFinding",
     "ConflictingOutputReport",
     "FactScope",
+    "Finding",
     "FinalWritersFinding",
     "FinalWritersReport",
     "OperandFact",
@@ -88,7 +96,9 @@ __all__ = [
     "ReadonlyWriteReport",
     "StuckBitFinding",
     "StuckBitReport",
+    "ValidationReport",
     "ValueKind",
+    "validate",
     "validate_choices",
     "validate_conflicting_outputs",
     "validate_final_writers",
