@@ -49,7 +49,8 @@
       },
       {
         "command": "pyrung.openGraph",
-        "title": "pyrung: Open Graph View"
+        "title": "pyrung: Open Graph View",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "pyrung.addToDataView",
@@ -78,6 +79,13 @@
           "command": "pyrung.addToDataView",
           "when": "debugType == 'pyrung'",
           "group": "pyrung"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "pyrung.openGraph",
+          "when": "view == pyrung.historySlider || view == pyrung.dataView",
+          "group": "navigation"
         }
       ]
     },

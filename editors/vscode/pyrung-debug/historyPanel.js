@@ -382,6 +382,7 @@ class PyrungHistoryPanelProvider {
       tagHints: this._tagHints,
       activeScanId: this._activeScanId,
       hasSession: Boolean(this._session),
+      executionState: this._executionState(),
       hasMore: this._hasMore,
       mode: this._mode,
       chainResult: this._chainResult,
@@ -874,6 +875,20 @@ class PyrungHistoryPanelProvider {
     padding-left: 8px;
     border-left: 2px solid rgba(248, 81, 73, 0.3);
   }
+  #chain-pane { position: relative; }
+  .paused-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--vscode-editor-background, rgba(30,30,30,0.85));
+    opacity: 0.85;
+    z-index: 10;
+    font-size: 0.9em;
+    color: var(--vscode-descriptionForeground);
+  }
+  .paused-overlay.hidden { display: none; }
 </style>
 </head>
 <body>
@@ -895,6 +910,7 @@ class PyrungHistoryPanelProvider {
   </div>
 
   <div id="chain-pane" hidden>
+    <div id="chain-paused-overlay" class="paused-overlay hidden">Runs while paused</div>
     <div class="composer">
       <div class="composer-row">
         <select id="chain-cmd" title="Causal query command">
@@ -945,6 +961,7 @@ class PyrungHistoryPanelProvider {
     tagHints: {},
     activeScanId: null,
     hasSession: false,
+    executionState: "unknown",
     hasMore: false,
     mode: "tags",
     chainResult: null,
@@ -1505,6 +1522,8 @@ class PyrungHistoryPanelProvider {
       "</div>";
   }
 
+  const chainOverlay = document.getElementById("chain-paused-overlay");
+
   function renderMode() {
     modeTabs.forEach((btn) => {
       btn.classList.toggle("active", btn.dataset.mode === state.mode);
@@ -1512,6 +1531,8 @@ class PyrungHistoryPanelProvider {
     const chainActive = state.mode === "chain";
     tagsPane.hidden = chainActive;
     chainPane.hidden = !chainActive;
+    const isRunning = state.executionState === "running";
+    chainOverlay.classList.toggle("hidden", !isRunning);
   }
 
   modeTabs.forEach((btn) => {
@@ -1556,6 +1577,7 @@ class PyrungHistoryPanelProvider {
       state.tagHints = msg.tagHints || {};
       state.activeScanId = Number.isInteger(msg.activeScanId) ? msg.activeScanId : null;
       state.hasSession = Boolean(msg.hasSession);
+      state.executionState = msg.executionState || "unknown";
       state.hasMore = Boolean(msg.hasMore);
       state.mode = msg.mode === "chain" ? "chain" : "tags";
       state.chainResult = msg.chainResult || null;
