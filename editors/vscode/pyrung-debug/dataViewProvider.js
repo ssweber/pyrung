@@ -403,6 +403,18 @@ class PyrungDataViewProvider {
     font-size: 0.85em;
     white-space: nowrap;
   }
+  .tag-range {
+    font-size: 0.8em;
+    white-space: nowrap;
+  }
+  .tag-range.default-range {
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.5;
+  }
+  .tag-range.declared-range {
+    color: var(--vscode-foreground);
+    opacity: 0.85;
+  }
   .tag-value {
     font-weight: bold;
     white-space: nowrap;
@@ -712,7 +724,7 @@ ${sortableScript}
       row.className = "edge-row";
       row.dataset.edgeOwner = tagName;
       const td = document.createElement("td");
-      td.colSpan = 7;
+      td.colSpan = 8;
       const arrow = document.createElement("span");
       arrow.className = "edge-arrow";
       arrow.textContent = "\u2190 ";
@@ -738,7 +750,7 @@ ${sortableScript}
       row.className = "edge-row";
       row.dataset.edgeOwner = tagName;
       const td = document.createElement("td");
-      td.colSpan = 7;
+      td.colSpan = 8;
       const arrow = document.createElement("span");
       arrow.className = "edge-arrow";
       arrow.textContent = "\u2192 ";
@@ -839,7 +851,7 @@ ${sortableScript}
         '<table class="tag-table" id="tag-table">' +
         "<thead><tr>" +
         '<th class="row-num">No.</th>' +
-        "<th>Tag</th><th>Type</th><th>Value</th>" +
+        "<th>Tag</th><th>Type</th><th>Range</th><th>Value</th>" +
         "<th>New Value</th><th>Actions</th><th></th>" +
         "</tr></thead>" +
         '<tbody id="tag-body"></tbody></table>';
@@ -1020,6 +1032,31 @@ ${sortableScript}
     entry._publicBadge.classList.toggle("visible", isPublic);
   }
 
+  function formatRange(min, max) {
+    function fmt(v) {
+      if (typeof v !== "number") return String(v);
+      if (Math.abs(v) >= 1e10) return v.toExponential(1);
+      return String(v);
+    }
+    return fmt(min) + ".." + fmt(max);
+  }
+
+  function applyRangeHint(entry) {
+    const hints = entry.tagHints || {};
+    const cell = entry.rangeEl;
+    if (hints.min == null && hints.max == null) {
+      cell.textContent = "";
+      cell.className = "tag-range";
+      cell.title = "";
+      return;
+    }
+    const isDefault = !!hints.rangeDefault;
+    const text = formatRange(hints.min, hints.max);
+    cell.textContent = text;
+    cell.className = "tag-range " + (isDefault ? "default-range" : "declared-range");
+    cell.title = isDefault ? "Type default range" : "Declared range constraint";
+  }
+
   let hintsReceived = false;
 
   function applyPublicFilter() {
@@ -1189,6 +1226,9 @@ ${sortableScript}
     typeCell.className = "tag-type";
     typeCell.textContent = "--";
 
+    const rangeCell = document.createElement("td");
+    rangeCell.className = "tag-range";
+
     const valueCell = document.createElement("td");
     valueCell.className = "tag-value";
     valueCell.textContent = "--";
@@ -1254,6 +1294,7 @@ ${sortableScript}
     row.appendChild(numCell);
     row.appendChild(nameCell);
     row.appendChild(typeCell);
+    row.appendChild(rangeCell);
     row.appendChild(valueCell);
     row.appendChild(newValueCell);
     row.appendChild(forceCell);
@@ -1267,6 +1308,7 @@ ${sortableScript}
 
     const entry = {
       tagName: tag, row, valueEl: valueCell, typeEl: typeCell,
+      rangeEl: rangeCell,
       newValueCell, forceBtn, tagHints: {},
       tagType: null, pendingValue: undefined, forced: false, rawValue: "--",
       _trueBtn: null, _falseBtn: null, _input: null, _select: null,
@@ -1309,7 +1351,7 @@ ${sortableScript}
     chevronCell.title = "Drag to reorder";
 
     const nameCell = document.createElement("td");
-    nameCell.colSpan = 5;
+    nameCell.colSpan = 6;
     const groupToggle = document.createElement("span");
     groupToggle.className = "group-toggle";
     groupToggle.title = "Collapse/expand group";
@@ -1486,6 +1528,7 @@ ${sortableScript}
           entry.tagHints = nextHints;
           applyReadonlyHint(entry);
           applyPublicHint(entry);
+          applyRangeHint(entry);
         }
         if (tag in msg.tagTypes && entry.tagType !== msg.tagTypes[tag]) {
           entry.tagType = msg.tagTypes[tag];

@@ -6,7 +6,7 @@ import queue
 import sys
 import threading
 from collections.abc import Callable, Generator
-from typing import Any, BinaryIO, TypeVar
+from typing import Any, BinaryIO, ClassVar, TypeVar
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
@@ -630,6 +630,13 @@ class DAPAdapter:
     def _tag_types_locked(runner: Any) -> dict[str, str]:
         return {name: tag.type.value for name, tag in runner._known_tags_by_name.items()}
 
+    _TYPE_RANGE_DEFAULTS: ClassVar[dict[str, tuple[int | float, int | float]]] = {
+        "int": (-32768, 32767),
+        "dint": (-2147483648, 2147483647),
+        "real": (-3.4e38, 3.4e38),
+        "word": (0, 65535),
+    }
+
     @staticmethod
     def _tag_hints_locked(runner: Any) -> dict[str, dict[str, Any]]:
         hints: dict[str, dict[str, Any]] = {}
@@ -646,6 +653,20 @@ class DAPAdapter:
                 entry["final"] = True
             if getattr(tag, "public", False):
                 entry["public"] = True
+            tag_min = getattr(tag, "min", None)
+            tag_max = getattr(tag, "max", None)
+            type_val = tag.type.value
+            if tag_min is not None or tag_max is not None:
+                if tag_min is not None:
+                    entry["min"] = tag_min
+                if tag_max is not None:
+                    entry["max"] = tag_max
+                entry["rangeDefault"] = False
+            elif choices is None and type_val in DAPAdapter._TYPE_RANGE_DEFAULTS:
+                default_min, default_max = DAPAdapter._TYPE_RANGE_DEFAULTS[type_val]
+                entry["min"] = default_min
+                entry["max"] = default_max
+                entry["rangeDefault"] = True
             if entry:
                 hints[name] = entry
         return hints

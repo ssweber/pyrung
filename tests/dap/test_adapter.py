@@ -3584,7 +3584,10 @@ def test_trace_tag_hints_present_for_choice_and_readonly_tags(tmp_path: Path):
     traces = _trace_events(messages)
     assert traces
     body = traces[0]["body"]
-    assert body["tagHints"] == {"ModeTag": {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}}
+    mode_hints = body["tagHints"]["ModeTag"]
+    assert mode_hints == {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}
+    plain_hints = body["tagHints"]["Plain"]
+    assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
 
 
 def test_live_trace_body_includes_tag_hints(tmp_path: Path):
@@ -3604,7 +3607,100 @@ def test_live_trace_body_includes_tag_hints(tmp_path: Path):
         body = adapter._live_trace_body_locked()
 
     assert body is not None
-    assert body["tagHints"] == {"ModeTag": {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}}
+    mode_hints = body["tagHints"]["ModeTag"]
+    assert mode_hints == {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}
+    plain_hints = body["tagHints"]["Plain"]
+    assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
+
+
+def _tag_range_hints_script() -> str:
+    return (
+        "from pyrung.core import Bool, Char, Dint, Int, Real, Word, PLC, Program, Rung, copy\n"
+        "\n"
+        "flag = Bool('Flag')\n"
+        "temp = Int('Temp', min=0, max=100)\n"
+        "pressure = Dint('Pressure')\n"
+        "setpoint = Real('Setpoint', min=-10.0, max=50.0)\n"
+        "raw = Word('Raw')\n"
+        "label = Char('Label')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(0, temp)\n"
+        "        copy(0, pressure)\n"
+        "        copy(0.0, setpoint)\n"
+        "        copy(0, raw)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def test_tag_hints_min_max_declared_ranges(tmp_path: Path):
+    """Tags with explicit min/max emit declared ranges."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert hints["Temp"]["min"] == 0
+    assert hints["Temp"]["max"] == 100
+    assert hints["Temp"]["rangeDefault"] is False
+
+    assert hints["Setpoint"]["min"] == -10.0
+    assert hints["Setpoint"]["max"] == 50.0
+    assert hints["Setpoint"]["rangeDefault"] is False
+
+
+def test_tag_hints_min_max_type_defaults(tmp_path: Path):
+    """Tags without explicit min/max emit type-default ranges for numeric types."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert hints["Pressure"]["min"] == -2147483648
+    assert hints["Pressure"]["max"] == 2147483647
+    assert hints["Pressure"]["rangeDefault"] is True
+
+    assert hints["Raw"]["min"] == 0
+    assert hints["Raw"]["max"] == 65535
+    assert hints["Raw"]["rangeDefault"] is True
+
+
+def test_tag_hints_no_min_max_for_bool_and_char(tmp_path: Path):
+    """BOOL and CHAR tags should not have min/max in hints."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert "Flag" not in hints
+    assert "min" not in hints.get("Label", {})
+    assert "max" not in hints.get("Label", {})
 
 
 def test_trace_tag_groups_for_structured_tags(tmp_path: Path):
