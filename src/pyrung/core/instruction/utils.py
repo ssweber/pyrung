@@ -18,9 +18,15 @@ def guard_oneshot_execution(func: F) -> F:
 
     @wraps(func)
     def wrapper(self: Any, ctx: ScanContext, enabled: bool, *args: Any, **kwargs: Any) -> Any:
-        should_execute = getattr(self, "should_execute", None)
-        if callable(should_execute) and not should_execute(enabled):
+        if not enabled:
+            if getattr(self, "_oneshot", False):
+                ctx.set_memory(f"_oneshot:{id(self)}", False)
             return None
+        if getattr(self, "_oneshot", False):
+            key = f"_oneshot:{id(self)}"
+            if ctx.get_memory(key, False):
+                return None
+            ctx.set_memory(key, True)
         return func(self, ctx, enabled, *args, **kwargs)
 
     return cast(F, wrapper)

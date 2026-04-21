@@ -130,6 +130,7 @@ def _render_imports(ctx: CodegenContext) -> list[str]:
         "_render_text_from_numeric" in ctx.used_helpers
         or "_parse_pack_text_value" in ctx.used_helpers
         or "_store_copy_value_to_type" in ctx.used_helpers
+        or "_calc_math_isfinite" in ctx.used_helpers
     )
     needs_struct = (
         "_int_to_float_bits" in ctx.used_helpers

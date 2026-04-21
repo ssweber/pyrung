@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
 from pyrung.circuitpy.codegen._util import (
     _indent_body,
     _source_location,
@@ -78,6 +79,7 @@ from ._primitives import (
     _compile_expression_impl,
     _compile_guarded_instruction,
     _compile_indirect_value,
+    _compile_set_out_of_range_fault_body,
     _compile_value,
 )
 
@@ -397,23 +399,45 @@ def _compile_condition_group(conditions: list[Condition], ctx: CodegenContext) -
     return " and ".join(parts)
 
 
+def _calc_range_condition(value_var: str, dest_type: str, mode: str) -> str | None:
+    if mode == "hex":
+        return f"int({value_var}) < 0 or int({value_var}) > 0xFFFF"
+    if dest_type == "INT":
+        return f"int({value_var}) < -32768 or int({value_var}) > 32767"
+    if dest_type == "DINT":
+        return f"int({value_var}) < -2147483648 or int({value_var}) > 2147483647"
+    if dest_type == "WORD":
+        return f"int({value_var}) < 0 or int({value_var}) > 65535"
+    return None
+
+
 def _compile_calc_instruction(
     instr: CalcInstruction,
     enabled_expr: str,
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    ctx.mark_helper("_calc_math_isfinite")
+    div_err = ctx.symbol_if_referenced(_FAULT_DIVISION_ERROR_TAG)
     value_expr = _compile_value(instr.expression, ctx)
     store_expr = _calc_store_expr("_calc_value", instr.dest.type.name, instr.mode, ctx)
+    div_err_line = f"    {div_err} = True" if div_err else "    pass"
     enabled_body = [
         "try:",
         f"    _calc_value = {value_expr}",
         "except ZeroDivisionError:",
+        div_err_line,
         "    _calc_value = 0",
         "if isinstance(_calc_value, float) and not math.isfinite(_calc_value):",
+        div_err_line,
         "    _calc_value = 0",
-        f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}",
     ]
+    range_cond = _calc_range_condition("_calc_value", instr.dest.type.name, instr.mode)
+    fault_body = _compile_set_out_of_range_fault_body(ctx)
+    if range_cond and fault_body != ["pass"]:
+        enabled_body.append(f"if {range_cond}:")
+        enabled_body.extend(f"    {line}" for line in fault_body)
+    enabled_body.append(f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}")
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 

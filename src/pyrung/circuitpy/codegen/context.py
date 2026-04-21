@@ -40,6 +40,7 @@ from pyrung.core.memory_block import (
 )
 from pyrung.core.program import Program
 from pyrung.core.rung import Rung as LogicRung
+from pyrung.core.system_points import system
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
@@ -310,6 +311,12 @@ class CodegenContext:
         for sub_name in self.subroutine_names:
             for rung in self.program.subroutines[sub_name]:
                 walk_rung(rung)
+        for fault_tag in (
+            system.fault.division_error,
+            system.fault.out_of_range,
+            system.fault.address_error,
+        ):
+            self.referenced_tags.setdefault(fault_tag.name, fault_tag)
         self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
