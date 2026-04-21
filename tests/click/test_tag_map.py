@@ -18,7 +18,7 @@ from pyrung.click.tag_map._parsers import (
     format_tag_meta,
     parse_tag_meta,
 )
-from pyrung.core import Block, Bool, Tag, TagType
+from pyrung.core import Block, Bool, Physical, Tag, TagType
 
 
 def test_resolve_standalone_tag():
@@ -338,6 +338,30 @@ def test_tag_meta_parser_round_trips_range_metadata():
     assert format_tag_meta(meta) == "[min=0, max=100, uom=psi]"
 
 
+def test_tag_meta_parser_round_trips_physical_metadata():
+    meta, remaining = parse_tag_meta(
+        "[link=Enable, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms, system=Line1] Feedback"
+    )
+
+    assert remaining == "Feedback"
+    assert meta == TagMeta(
+        link="Enable",
+        physical="MotorFb",
+        on_delay="T#2ms",
+        off_delay="T#1ms",
+        system="Line1",
+    )
+    assert (
+        format_tag_meta(meta)
+        == "[link=Enable, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms, system=Line1]"
+    )
+
+
+def test_tag_meta_rejects_system_without_physical_details():
+    with pytest.raises(ValueError, match="system requires"):
+        parse_tag_meta("[system=Line1] Feedback")
+
+
 def test_tag_meta_parser_preserves_deterministic_order_with_range_metadata():
     meta = TagMeta(
         readonly=True,
@@ -422,6 +446,84 @@ def test_nickname_file_round_trip_preserves_range_tag_meta(tmp_path):
     assert restored_tag.min == 0
     assert restored_tag.max == 100
     assert restored_tag.uom == "psi"
+
+
+def test_nickname_file_round_trip_preserves_physical_tag_meta(tmp_path):
+    feedback_physical = Physical("MotorFb", on_delay="T#2ms", off_delay="T#1ms")
+    running = Tag("Running", TagType.BOOL, physical=feedback_physical, link="Enable")
+    mapping = TagMap({running: c[101]})
+
+    path = tmp_path / "physical_meta_round_trip.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    record = rows[get_addr_key("C", 101)]
+
+    assert record.comment == "[link=Enable, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]"
+
+    restored = TagMap.from_nickname_file(path)
+    restored_tag = restored.tags()[0].logical
+    assert restored_tag.link == "Enable"
+    assert restored_tag.physical == feedback_physical
+
+
+def test_from_nickname_file_resolves_named_physical_reference(tmp_path):
+    path = tmp_path / "physical_reference.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="FirstFb",
+            comment="[physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="SecondFb",
+            comment="[link=Cmd, physical=MotorFb]",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    restored = TagMap.from_nickname_file(path)
+    first, second = [entry.logical for entry in restored.tags()]
+
+    assert first.physical == Physical("MotorFb", on_delay="T#2ms", off_delay="T#1ms")
+    assert second.physical == first.physical
+    assert second.link == "Cmd"
+
+
+def test_from_nickname_file_rejects_conflicting_physical_definition(tmp_path):
+    path = tmp_path / "physical_conflict.csv"
+    records = {
+        get_addr_key("C", 101): AddressRecord(
+            memory_type="C",
+            address=101,
+            nickname="FirstFb",
+            comment="[physical=MotorFb, on_delay=T#2ms]",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+        get_addr_key("C", 102): AddressRecord(
+            memory_type="C",
+            address=102,
+            nickname="SecondFb",
+            comment="[physical=MotorFb, on_delay=T#3ms]",
+            initial_value="0",
+            retentive=False,
+            data_type=DataType.BIT,
+        ),
+    }
+    pyclickplc.write_csv(path, records)
+
+    with pytest.raises(ValueError, match="conflicts"):
+        TagMap.from_nickname_file(path)
 
 
 def test_from_nickname_file_hydrates_block_slot_runtime_policy(tmp_path):

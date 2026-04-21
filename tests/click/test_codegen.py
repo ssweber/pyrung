@@ -15,8 +15,10 @@ from hypothesis import strategies as st
 from pyrung.click import (
     TagMap,
     c,
+    df,
     ds,
     ladder_to_pyrung,
+    ladder_to_pyrung_project,
     pyrung_to_ladder,
     sc,
     sd,
@@ -34,6 +36,7 @@ from pyrung.core import (
     Int,
     Or,
     Program,
+    Real,
     Rung,
     TagType,
     Timer,
@@ -3029,6 +3032,154 @@ class TestStructuredCodegen:
         pyclickplc.write_csv(path, records)
         return path
 
+    def test_flat_tag_codegen_emits_physical_range_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Pressure = Real("Pressure")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Pressure, Pressure)
+
+        mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DF", 101): AddressRecord(
+                    memory_type="DF",
+                    address=101,
+                    nickname="Pressure",
+                    comment="[profile=first_order, min=0, max=100, uom=psi]",
+                    initial_value="0.0",
+                    retentive=True,
+                    data_type=DataType.FLOAT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
+        assert (
+            "Pressure = Real(\"Pressure\", physical=Pressure_physical, min=0, max=100, uom='psi')"
+        ) in code
+
+    def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Motor_running = Bool("Motor1_running")
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Motor_running)
+
+        mapping = TagMap({Enable: x[1], Motor_running: c[102]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 101): AddressRecord(
+                    memory_type="C",
+                    address=101,
+                    nickname="Motor1_cmd",
+                    comment="<Motor.cmd:udt />",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 102): AddressRecord(
+                    memory_type="C",
+                    address=102,
+                    nickname="Motor1_running",
+                    comment=(
+                        "<Motor.running:udt /> "
+                        "[link=cmd, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]"
+                    ),
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "MotorFb_physical = Physical('MotorFb', on_delay='T#2ms', off_delay='T#1ms')" in code
+        assert "running: Bool = Field(physical=MotorFb_physical, link='cmd')" in code
+
+    def test_project_tags_file_imports_physical_for_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Pressure = Real("Pressure")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Pressure, Pressure)
+
+        mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DF", 101): AddressRecord(
+                    memory_type="DF",
+                    address=101,
+                    nickname="Pressure",
+                    comment="[profile=first_order]",
+                    initial_value="0.0",
+                    retentive=True,
+                    data_type=DataType.FLOAT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "from pyrung import Physical" in files["tags.py"]
+        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in files["tags.py"]
+
     def test_named_array_codegen(self, tmp_path: Path):
         """Named array: codegen emits @named_array decorator and .map_to()."""
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3365,7 +3516,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=1004,
                     nickname="Cmd_Mode_Production",
-                    comment="",
+                    comment="[on_delay=T#2ms]",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -3394,7 +3545,13 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in code
-        assert "CmdTagBits.slot(4, name='Cmd_Mode_Production')" in code
+        assert (
+            "Cmd_Mode_Production_physical = Physical('Cmd_Mode_Production', on_delay='T#2ms')"
+            in code
+        )
+        assert (
+            "CmdTagBits.slot(4, name='Cmd_Mode_Production', physical=Cmd_Mode_Production_physical)"
+        ) in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(CmdTagBits.select(4, 6))" in code

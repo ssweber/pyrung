@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Never, cast, overload
 
+from pyrung.core.physical import Physical
 from pyrung.core.tag import (
     ChoiceMap,
     LiveInputTag,
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
     )
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.expression import Expression, SumExpr
-    from pyrung.core.physical import Physical
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
 
@@ -103,6 +103,14 @@ class SlotView:
         return self._block._effective_slot_hints(self._addr).public
 
     @property
+    def physical(self) -> Physical | None:
+        return self._block._effective_slot_hints(self._addr).physical
+
+    @property
+    def link(self) -> str | None:
+        return self._block._effective_slot_hints(self._addr).link
+
+    @property
     def min(self) -> int | float | None:
         return self._block._effective_slot_hints(self._addr).min
 
@@ -151,6 +159,14 @@ class SlotView:
         return self._addr in self._block._slot_public_overrides
 
     @property
+    def physical_overridden(self) -> bool:
+        return self._addr in self._block._slot_physical_overrides
+
+    @property
+    def link_overridden(self) -> bool:
+        return self._addr in self._block._slot_link_overrides
+
+    @property
     def min_overridden(self) -> bool:
         return self._addr in self._block._slot_min_overrides
 
@@ -174,6 +190,8 @@ class SlotView:
         self._block._slot_external_overrides.pop(self._addr, None)
         self._block._slot_final_overrides.pop(self._addr, None)
         self._block._slot_public_overrides.pop(self._addr, None)
+        self._block._slot_physical_overrides.pop(self._addr, None)
+        self._block._slot_link_overrides.pop(self._addr, None)
         self._block._slot_min_overrides.pop(self._addr, None)
         self._block._slot_max_overrides.pop(self._addr, None)
         self._block._slot_uom_overrides.pop(self._addr, None)
@@ -214,6 +232,8 @@ class RangeSlotView:
             self._block._slot_external_overrides.pop(addr, None)
             self._block._slot_final_overrides.pop(addr, None)
             self._block._slot_public_overrides.pop(addr, None)
+            self._block._slot_physical_overrides.pop(addr, None)
+            self._block._slot_link_overrides.pop(addr, None)
             self._block._slot_min_overrides.pop(addr, None)
             self._block._slot_max_overrides.pop(addr, None)
             self._block._slot_uom_overrides.pop(addr, None)
@@ -288,6 +308,8 @@ class Block:
     _slot_external_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_final_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_public_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_physical_overrides: dict[int, Physical | None] = field(default_factory=dict, repr=False)
+    _slot_link_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
     _slot_min_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
     _slot_max_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
     _slot_uom_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
@@ -477,8 +499,16 @@ class Block:
         else:
             public = bool(getattr(self, "_pyrung_field_public", False))
 
-        physical = getattr(self, "_pyrung_field_physical", None)
-        link = getattr(self, "_pyrung_field_link", None)
+        if addr in self._slot_physical_overrides:
+            physical = self._slot_physical_overrides[addr]
+        else:
+            physical = getattr(self, "_pyrung_field_physical", None)
+
+        if addr in self._slot_link_overrides:
+            link = self._slot_link_overrides[addr]
+        else:
+            link = getattr(self, "_pyrung_field_link", None)
+
         if addr in self._slot_min_overrides:
             min_val = self._slot_min_overrides[addr]
         else:
@@ -522,6 +552,8 @@ class Block:
         external: bool = ...,
         final: bool = ...,
         public: bool = ...,
+        physical: Physical | None = ...,
+        link: str | None = ...,
         min: int | float | None = ...,
         max: int | float | None = ...,
         uom: str | None = ...,
@@ -554,6 +586,8 @@ class Block:
         external: object = UNSET,
         final: object = UNSET,
         public: object = UNSET,
+        physical: object = UNSET,
+        link: object = UNSET,
         min: object = UNSET,
         max: object = UNSET,
         uom: object = UNSET,
@@ -597,6 +631,8 @@ class Block:
             or external is not UNSET
             or final is not UNSET
             or public is not UNSET
+            or physical is not UNSET
+            or link is not UNSET
             or min is not UNSET
             or max is not UNSET
             or uom is not UNSET
@@ -632,6 +668,12 @@ class Block:
                 self._slot_final_overrides[addr] = bool(final)
             if public is not UNSET:
                 self._slot_public_overrides[addr] = bool(public)
+            if physical is not UNSET:
+                self._slot_physical_overrides[addr] = cast(Physical | None, physical)
+            if link is not UNSET:
+                if link is not None and not isinstance(link, str):
+                    raise TypeError(f"link must be a string or None, got {type(link).__name__}.")
+                self._slot_link_overrides[addr] = link
             if min is not UNSET:
                 if min is not None and not isinstance(min, (int, float)):
                     raise TypeError(f"min must be numeric or None, got {type(min).__name__}.")

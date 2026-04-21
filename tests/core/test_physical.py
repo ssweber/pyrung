@@ -2,7 +2,7 @@
 
 import pytest
 
-from pyrung import Bool, Field, Int, Real, named_array, udt
+from pyrung import Block, Bool, Field, Int, Real, TagType, named_array, udt
 from pyrung.core.physical import Physical, parse_duration
 
 
@@ -212,6 +212,15 @@ class TestTagFields:
 
         assert Valve[1].Open_Fb.link == "Enable"
         assert Valve[2].Open_Fb.physical is motor_fb
+
+    def test_block_slot_physical_link_metadata(self):
+        alarms = Block("Alarms", TagType.BOOL, 1, 2)
+        alarms.slot(1, physical=motor_fb, link="Enable")
+
+        assert alarms.slot(1).physical is motor_fb
+        assert alarms.slot(1).link == "Enable"
+        assert alarms[1].physical is motor_fb
+        assert alarms[1].link == "Enable"
 
     def test_bad_same_scope_link_rejects_at_decorator_construction(self):
         with pytest.raises(ValueError, match="unknown field"):

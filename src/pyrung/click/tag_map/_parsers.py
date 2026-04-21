@@ -55,6 +55,12 @@ class TagMeta:
     external: bool = False
     final: bool = False
     public: bool = False
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
     min: int | float | None = None
     max: int | float | None = None
     uom: str | None = None
@@ -425,7 +431,13 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
 
 
 _BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
-_VALUE_TOKENS = frozenset({"min", "max", "uom"})
+_VALUE_TOKENS = frozenset(
+    {"link", "physical", "on_delay", "off_delay", "profile", "system", "min", "max", "uom"}
+)
+_PHYSICAL_DETAIL_TOKENS = frozenset({"on_delay", "off_delay", "profile"})
+_STRING_VALUE_TOKENS = frozenset(
+    {"link", "physical", "on_delay", "off_delay", "profile", "system", "uom"}
+)
 
 
 def _parse_tag_meta_group(content: str) -> TagMeta | None:
@@ -443,6 +455,12 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
 
     flags: dict[str, bool] = {}
     choices: ChoiceMap | None = None
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
     min_val: int | float | None = None
     max_val: int | float | None = None
     uom: str | None = None
@@ -458,7 +476,23 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         key, sep, value = token.partition("=")
         if sep == "=" and key in _VALUE_TOKENS:
             parsed_value = _parse_tag_meta_scalar(value, field_name=key)
-            if key == "min":
+            if key in _STRING_VALUE_TOKENS:
+                parsed_text = str(parsed_value)
+                if key == "link":
+                    link = parsed_text
+                elif key == "physical":
+                    physical = parsed_text
+                elif key == "on_delay":
+                    on_delay = parsed_text
+                elif key == "off_delay":
+                    off_delay = parsed_text
+                elif key == "profile":
+                    profile = parsed_text
+                elif key == "system":
+                    system = parsed_text or None
+                else:
+                    uom = parsed_text
+            elif key == "min":
                 if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
                     raise ValueError(f"Invalid TagMeta min value {value!r}.")
                 min_val = parsed_value
@@ -466,10 +500,15 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
                 if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
                     raise ValueError(f"Invalid TagMeta max value {value!r}.")
                 max_val = parsed_value
-            else:
-                uom = str(parsed_value)
             continue
         raise ValueError(f"Unsupported TagMeta token {token!r}.")
+
+    has_timing = on_delay is not None or off_delay is not None
+    has_profile = profile is not None
+    if has_timing and has_profile:
+        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
+    if system is not None and not has_timing and not has_profile:
+        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
 
     return TagMeta(
         readonly=flags.get("readonly", False),
@@ -477,6 +516,12 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         external=flags.get("external", False),
         final=flags.get("final", False),
         public=flags.get("public", False),
+        link=link,
+        physical=physical,
+        on_delay=on_delay,
+        off_delay=off_delay,
+        profile=profile,
+        system=system,
         min=min_val,
         max=max_val,
         uom=uom,
@@ -493,6 +538,12 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     external = False
     final = False
     public = False
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
     min_val: int | float | None = None
     max_val: int | float | None = None
     uom: str | None = None
@@ -508,6 +559,18 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
             external = external or parsed.external
             final = final or parsed.final
             public = public or parsed.public
+            if parsed.link is not None:
+                link = parsed.link
+            if parsed.physical is not None:
+                physical = parsed.physical
+            if parsed.on_delay is not None:
+                on_delay = parsed.on_delay
+            if parsed.off_delay is not None:
+                off_delay = parsed.off_delay
+            if parsed.profile is not None:
+                profile = parsed.profile
+            if parsed.system is not None:
+                system = parsed.system
             if parsed.min is not None:
                 min_val = parsed.min
             if parsed.max is not None:
@@ -522,12 +585,24 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
 
     remaining_parts.append(comment[cursor:])
     remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
+    has_timing = on_delay is not None or off_delay is not None
+    has_profile = profile is not None
+    if has_timing and has_profile:
+        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
+    if system is not None and not has_timing and not has_profile:
+        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
     if (
         not readonly
         and choices is None
         and not external
         and not final
         and not public
+        and link is None
+        and physical is None
+        and on_delay is None
+        and off_delay is None
+        and profile is None
+        and system is None
         and min_val is None
         and max_val is None
         and uom is None
@@ -539,6 +614,12 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         external=external,
         final=final,
         public=public,
+        link=link,
+        physical=physical,
+        on_delay=on_delay,
+        off_delay=off_delay,
+        profile=profile,
+        system=system,
         min=min_val,
         max=max_val,
         uom=uom,
@@ -552,6 +633,12 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         and not meta.external
         and not meta.final
         and not meta.public
+        and meta.link is None
+        and meta.physical is None
+        and meta.on_delay is None
+        and meta.off_delay is None
+        and meta.profile is None
+        and meta.system is None
         and meta.min is None
         and meta.max is None
         and meta.uom is None
@@ -567,6 +654,30 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append("final")
     if meta.public:
         tokens.append("public")
+    if meta.link is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.link) is None:
+            raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")
+        tokens.append(f"link={meta.link}")
+    if meta.physical is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.physical) is None:
+            raise ValueError(f"Invalid TagMeta physical value {meta.physical!r}.")
+        tokens.append(f"physical={meta.physical}")
+    if meta.on_delay is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.on_delay) is None:
+            raise ValueError(f"Invalid TagMeta on_delay value {meta.on_delay!r}.")
+        tokens.append(f"on_delay={meta.on_delay}")
+    if meta.off_delay is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.off_delay) is None:
+            raise ValueError(f"Invalid TagMeta off_delay value {meta.off_delay!r}.")
+        tokens.append(f"off_delay={meta.off_delay}")
+    if meta.profile is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.profile) is None:
+            raise ValueError(f"Invalid TagMeta profile value {meta.profile!r}.")
+        tokens.append(f"profile={meta.profile}")
+    if meta.system is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.system) is None:
+            raise ValueError(f"Invalid TagMeta system value {meta.system!r}.")
+        tokens.append(f"system={meta.system}")
     if meta.min is not None:
         tokens.append(f"min={meta.min}")
     if meta.max is not None:
