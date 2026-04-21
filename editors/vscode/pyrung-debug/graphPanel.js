@@ -96,27 +96,7 @@ class PyrungGraphPanelProvider {
         return;
       }
 
-      if (message.type === "slice" && this._session) {
-        try {
-          const result = await this._session.customRequest("pyrungSlice", {
-            tag: message.tag,
-            direction: message.direction,
-          });
-          this._panel.webview.postMessage({
-            type: "sliceResult",
-            tag: message.tag,
-            direction: message.direction,
-            tags: result.tags || [],
-            edges: result.edges || [],
-            rungs: result.rungs || [],
-            upstream: result.upstream || [],
-            downstream: result.downstream || [],
-          });
-        } catch (e) {
-          console.error("Slice request failed:", e);
-        }
-        return;
-      }
+      // Slice is computed locally inside the webview — no DAP round-trip needed.
     });
 
     this._panel.onDidDispose(() => {
@@ -937,10 +917,126 @@ class PyrungGraphPanelProvider {
     });
   }
 
+  function computeSliceLocal(tagName, direction) {
+    if (!graphData) return null;
+    const readersOf = graphData.readersOf || {};
+    const writersOf = graphData.writersOf || {};
+    const rungNodes = graphData.rungNodes || [];
+    const allEdges = graphData.graphEdges || [];
+
+    // Build collapse map from block ranges so uncollapsed rung reads/writes
+    // map back to the collapsed tag names visible in the graph.
+    const collapse = {};
+    for (const [label, members] of Object.entries(graphData.blockRanges || {})) {
+      for (const m of members) collapse[m] = label;
+    }
+    const visibleTags = graphData.tagRoles || {};
+
+    function mapTag(t) {
+      const mapped = collapse[t] || t;
+      return mapped in visibleTags ? mapped : null;
+    }
+
+    function bfsUpstream(start) {
+      const visitedTags = new Set();
+      const visitedRungs = new Set();
+      const queue = [start];
+      while (queue.length) {
+        const cur = queue.pop();
+        if (visitedTags.has(cur)) continue;
+        visitedTags.add(cur);
+        for (const ri of (writersOf[cur] || [])) {
+          if (visitedRungs.has(ri)) continue;
+          visitedRungs.add(ri);
+          const rn = rungNodes[ri];
+          if (!rn) continue;
+          for (const t of (rn.conditionReads || []).concat(rn.dataReads || [])) {
+            const m = mapTag(t);
+            if (m && !visitedTags.has(m)) queue.push(m);
+          }
+        }
+      }
+      visitedTags.delete(start);
+      return visitedTags;
+    }
+
+    function bfsDownstream(start) {
+      const visitedTags = new Set();
+      const visitedRungs = new Set();
+      const queue = [start];
+      while (queue.length) {
+        const cur = queue.pop();
+        if (visitedTags.has(cur)) continue;
+        visitedTags.add(cur);
+        for (const ri of (readersOf[cur] || [])) {
+          if (visitedRungs.has(ri)) continue;
+          visitedRungs.add(ri);
+          const rn = rungNodes[ri];
+          if (!rn) continue;
+          for (const t of (rn.writes || [])) {
+            const m = mapTag(t);
+            if (m && !visitedTags.has(m)) queue.push(m);
+          }
+        }
+      }
+      visitedTags.delete(start);
+      return visitedTags;
+    }
+
+    const upTags = (direction === "upstream" || direction === "both") ? bfsUpstream(tagName) : new Set();
+    const dnTags = (direction === "downstream" || direction === "both") ? bfsDownstream(tagName) : new Set();
+    const allTags = new Set([tagName, ...upTags, ...dnTags]);
+
+    // Filter edges to those within the slice (mirrors on_pyrung_slice logic)
+    const sliceEdges = [];
+    const sliceRungs = new Set();
+    for (const edge of allEdges) {
+      const src = edge.source;
+      const tgt = edge.target;
+      const srcIsRung = src.startsWith("rung:");
+      const tgtIsRung = tgt.startsWith("rung:");
+      if (!srcIsRung && !tgtIsRung) {
+        if (allTags.has(src) && allTags.has(tgt)) sliceEdges.push(edge);
+      } else if (!srcIsRung && tgtIsRung) {
+        if (allTags.has(src)) {
+          const ri = parseInt(tgt.split(":")[1], 10);
+          const rn = rungNodes[ri];
+          if (rn && (rn.writes || []).some(w => { const m = mapTag(w); return m && allTags.has(m); })) {
+            sliceEdges.push(edge);
+            sliceRungs.add(tgt);
+          }
+        }
+      } else if (srcIsRung && !tgtIsRung) {
+        if (allTags.has(tgt)) {
+          const ri = parseInt(src.split(":")[1], 10);
+          const rn = rungNodes[ri];
+          if (rn && (rn.conditionReads || []).concat(rn.dataReads || []).some(r => { const m = mapTag(r); return m && allTags.has(m); })) {
+            sliceEdges.push(edge);
+            sliceRungs.add(src);
+          }
+        }
+      }
+    }
+
+    const result = {
+      tag: tagName,
+      direction,
+      tags: [...allTags].sort(),
+      edges: sliceEdges,
+      rungs: [...sliceRungs].sort(),
+    };
+    if (direction === "both") {
+      result.upstream = [...upTags].sort();
+      result.downstream = [...dnTags].sort();
+    }
+    return result;
+  }
+
   function performSlice(tagName, direction) {
     clearSlice();
     sliceHighlight = { tag: tagName, direction, upstream: [], downstream: [] };
-    vscodeApi.postMessage({ type: "slice", tag: tagName, direction });
+    const result = computeSliceLocal(tagName, direction);
+    if (result) applySlice(result);
   }
 
   function selectTagNode(node) {
@@ -1113,12 +1209,8 @@ class PyrungGraphPanelProvider {
     html += '<button class="slice-btn" data-slice-dir="downstream" data-slice-tag="' + esc(tagName) + '">Downstream \u2192</button>';
     html += '</div>';
     html += '<div class="info-row"><b>Role:</b> ' + esc(role) + '</div>';
-    if (value !== undefined) {
-      html += '<div class="info-row"><b>Value:</b> ' + esc(String(value)) + '</div>';
-    }
-    if (isForced) {
-      html += '<div class="info-row" style="color:#D9A441;"><b>Forced:</b> ' + esc(String(forces[tagName])) + '</div>';
-    }
+    html += '<div id="info-value" class="info-row" style="' + (value !== undefined ? '' : 'display:none') + '"><b>Value:</b> <span id="info-value-text">' + (value !== undefined ? esc(String(value)) : '') + '</span></div>';
+    html += '<div id="info-forced" class="info-row" style="color:#D9A441;' + (isForced ? '' : 'display:none') + '"><b>Forced:</b> <span id="info-forced-text">' + (isForced ? esc(String(forces[tagName])) : '') + '</span></div>';
     html += '<div class="info-row"><b>Writers:</b> ' + upstreamCount + ' rung(s)</div>';
     html += '<div class="info-row"><b>Readers:</b> ' + downstreamCount + ' rung(s)</div>';
 
@@ -1237,11 +1329,30 @@ class PyrungGraphPanelProvider {
       });
     });
 
-    // Refresh info panel if a tag is selected
+    // Patch value/force text in the info panel without rebuilding it,
+    // so slice buttons stay clickable during continue.
     if (selectedNode) {
-      const node = cy.getElementById(selectedNode);
-      if (node.length && node.data("nodeType") === "tag") {
-        showInfoPanel(node);
+      const val = tagValues[selectedNode];
+      const valEl = document.getElementById("info-value");
+      const valText = document.getElementById("info-value-text");
+      if (valEl && valText) {
+        if (val !== undefined) {
+          valText.textContent = String(val);
+          valEl.style.display = "";
+        } else {
+          valEl.style.display = "none";
+        }
+      }
+      const isForced = forces && Object.prototype.hasOwnProperty.call(forces, selectedNode);
+      const frcEl = document.getElementById("info-forced");
+      const frcText = document.getElementById("info-forced-text");
+      if (frcEl && frcText) {
+        if (isForced) {
+          frcText.textContent = String(forces[selectedNode]);
+          frcEl.style.display = "";
+        } else {
+          frcEl.style.display = "none";
+        }
       }
     }
   }
@@ -1346,10 +1457,8 @@ class PyrungGraphPanelProvider {
       return;
     }
 
-    if (msg.type === "sliceResult") {
-      applySlice(msg);
-      return;
-    }
+    // sliceResult no longer arrives from the extension host — slices are
+    // computed locally in performSlice() using cached graphData.
   });
 
   // Signal ready
