@@ -285,6 +285,10 @@ with Rung(system.fault.division_error):
 
 The [Click cheatsheet](../guides/click-cheatsheet.md#system-points) has the full point-to-address mapping.
 
+## What's next as your programs grow
+
+Once you have UDTs with command/feedback pairs — solenoids, sensors, actuators — you can annotate the physical behavior of feedback signals with `physical=` and `link=`. The autoharness reads those annotations and drives feedback in tests automatically, so you stop writing boilerplate that toggles inputs by hand. See [Physical Annotations and Autoharness](../guides/physical-harness.md).
+
 ## Next steps
 
 - [Quickstart](quickstart.md) — build and test a traffic light

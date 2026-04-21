@@ -292,8 +292,13 @@ make test       # recommended
 pytest tests/   # or directly
 ```
 
+## Autoharness: automatic feedback for device-heavy programs
+
+When your UDTs declare `physical=` and `link=` on feedback fields, the autoharness can drive all feedback patches automatically — no manual toggling. See [Physical Annotations and Autoharness](physical-harness.md).
+
 ## Next steps
 
+- [Physical Annotations and Autoharness](physical-harness.md) — annotate devices, eliminate feedback boilerplate
 - [Analysis](analysis.md) — dataview, cause/effect chains, coverage queries
 - [Forces & Debug](forces-debug.md) — force semantics, history, time travel
 - [Runner Guide](runner.md) — time modes, execution methods, numeric behavior
