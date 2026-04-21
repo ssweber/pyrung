@@ -39,7 +39,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 - Requires Node.js LTS (`winget install OpenJS.NodeJS.LTS`)
 - Package: `cd editors/vscode/pyrung-debug && npx @vscode/vsce package`
-- Install: `code --install-extension pyrung-debug-0.1.0.vsix`
+- Install: `code --install-extension /absolute/path/to/pyrung-debug-0.1.0.vsix`
 - No `npm install` needed — plain JS, no dependencies
 
 ## Architecture
