@@ -402,13 +402,15 @@ class PyrungDataViewProvider {
     color: var(--vscode-descriptionForeground);
     font-size: 0.85em;
     white-space: nowrap;
+    line-height: 1.2;
   }
   .tag-range {
-    font-size: 0.8em;
+    display: block;
+    font-size: 0.75em;
     white-space: nowrap;
+    line-height: 1.1;
   }
   .tag-range.default-range {
-    color: var(--vscode-descriptionForeground);
     opacity: 0.5;
   }
   .tag-range.declared-range {
@@ -724,7 +726,7 @@ ${sortableScript}
       row.className = "edge-row";
       row.dataset.edgeOwner = tagName;
       const td = document.createElement("td");
-      td.colSpan = 8;
+      td.colSpan = 7;
       const arrow = document.createElement("span");
       arrow.className = "edge-arrow";
       arrow.textContent = "\u2190 ";
@@ -750,7 +752,7 @@ ${sortableScript}
       row.className = "edge-row";
       row.dataset.edgeOwner = tagName;
       const td = document.createElement("td");
-      td.colSpan = 8;
+      td.colSpan = 7;
       const arrow = document.createElement("span");
       arrow.className = "edge-arrow";
       arrow.textContent = "\u2192 ";
@@ -851,7 +853,7 @@ ${sortableScript}
         '<table class="tag-table" id="tag-table">' +
         "<thead><tr>" +
         '<th class="row-num">No.</th>' +
-        "<th>Tag</th><th>Type</th><th>Range</th><th>Value</th>" +
+        "<th>Tag</th><th>Type</th><th>Value</th>" +
         "<th>New Value</th><th>Actions</th><th></th>" +
         "</tr></thead>" +
         '<tbody id="tag-body"></tbody></table>';
@@ -1224,10 +1226,12 @@ ${sortableScript}
 
     const typeCell = document.createElement("td");
     typeCell.className = "tag-type";
-    typeCell.textContent = "--";
-
-    const rangeCell = document.createElement("td");
-    rangeCell.className = "tag-range";
+    const typeLabel = document.createElement("span");
+    typeLabel.textContent = "--";
+    const rangeSpan = document.createElement("span");
+    rangeSpan.className = "tag-range";
+    typeCell.appendChild(typeLabel);
+    typeCell.appendChild(rangeSpan);
 
     const valueCell = document.createElement("td");
     valueCell.className = "tag-value";
@@ -1294,7 +1298,6 @@ ${sortableScript}
     row.appendChild(numCell);
     row.appendChild(nameCell);
     row.appendChild(typeCell);
-    row.appendChild(rangeCell);
     row.appendChild(valueCell);
     row.appendChild(newValueCell);
     row.appendChild(forceCell);
@@ -1308,7 +1311,7 @@ ${sortableScript}
 
     const entry = {
       tagName: tag, row, valueEl: valueCell, typeEl: typeCell,
-      rangeEl: rangeCell,
+      _typeLabel: typeLabel, rangeEl: rangeSpan,
       newValueCell, forceBtn, tagHints: {},
       tagType: null, pendingValue: undefined, forced: false, rawValue: "--",
       _trueBtn: null, _falseBtn: null, _input: null, _select: null,
@@ -1351,7 +1354,7 @@ ${sortableScript}
     chevronCell.title = "Drag to reorder";
 
     const nameCell = document.createElement("td");
-    nameCell.colSpan = 6;
+    nameCell.colSpan = 5;
     const groupToggle = document.createElement("span");
     groupToggle.className = "group-toggle";
     groupToggle.title = "Collapse/expand group";
@@ -1532,7 +1535,7 @@ ${sortableScript}
         }
         if (tag in msg.tagTypes && entry.tagType !== msg.tagTypes[tag]) {
           entry.tagType = msg.tagTypes[tag];
-          entry.typeEl.textContent = entry.tagType;
+          entry._typeLabel.textContent = entry.tagType;
           buildNewValueCell(entry);
         } else if (hintsChanged) {
           buildNewValueCell(entry);
