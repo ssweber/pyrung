@@ -16,7 +16,6 @@ Initial release.
 - Data breakpoints for monitored tags
 - Monitor values in the Variables panel (`PLC Monitors` scope)
 - Trace decorations and inline condition annotations
-- Rapid auto-step mode (`next` / `stepIn` / `scan`)
 - History slider webview for time-travel debugging
 - Debug Console force commands (`force`, `unforce`, `clear_forces`)
 - Inline values provider for tag lookups
