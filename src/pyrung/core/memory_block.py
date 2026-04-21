@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.expression import Expression, SumExpr
+    from pyrung.core.physical import Physical
     from pyrung.core.state import SystemState
     from pyrung.core.tag import MappingEntry
 
@@ -44,6 +45,11 @@ class _SlotHints(NamedTuple):
     external: bool
     final: bool
     public: bool
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 class SlotView:
@@ -331,6 +337,11 @@ class Block:
                 external=hints.external,
                 final=hints.final,
                 public=hints.public,
+                physical=hints.physical,
+                link=hints.link,
+                min=hints.min,
+                max=hints.max,
+                uom=hints.uom,
             )
         return cast(LiveTag, self._tag_cache[addr])
 
@@ -346,6 +357,11 @@ class Block:
         external: bool,
         final: bool,
         public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveTag:
         tag = LiveTag(
             name=self._effective_slot_name(addr),
@@ -358,6 +374,11 @@ class Block:
             external=external,
             final=final,
             public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return self._annotate_tag(tag, addr)
 
@@ -423,7 +444,14 @@ class Block:
         else:
             public = bool(getattr(self, "_pyrung_field_public", False))
 
-        return _SlotHints(choices, readonly, external, final, public)
+        physical = getattr(self, "_pyrung_field_physical", None)
+        link = getattr(self, "_pyrung_field_link", None)
+        min_val = getattr(self, "_pyrung_field_min", None)
+        max_val = getattr(self, "_pyrung_field_max", None)
+        uom = getattr(self, "_pyrung_field_uom", None)
+
+        return _SlotHints(choices, readonly, external, final, public,
+                          physical, link, min_val, max_val, uom)
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
         if addr in self._tag_cache:
@@ -778,6 +806,11 @@ class InputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveInputTag:
         tag = LiveInputTag(
             name=self._effective_slot_name(addr),
@@ -790,6 +823,11 @@ class InputBlock(Block):
             external=external,
             final=final,
             public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return cast(LiveInputTag, self._annotate_tag(tag, addr))
 
@@ -872,6 +910,11 @@ class OutputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveOutputTag:
         tag = LiveOutputTag(
             name=self._effective_slot_name(addr),
@@ -884,6 +927,11 @@ class OutputBlock(Block):
             external=external,
             final=final,
             public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return cast(LiveOutputTag, self._annotate_tag(tag, addr))
 

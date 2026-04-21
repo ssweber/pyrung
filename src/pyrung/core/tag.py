@@ -17,6 +17,7 @@ from pyrung.core.live_binding import get_active_runner
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.memory_block import Block, BlockRange
+    from pyrung.core.physical import Physical
 
 
 class TagType(Enum):
@@ -125,6 +126,11 @@ class Tag:
     external: bool = False
     final: bool = False
     public: bool = False
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
     def __post_init__(self):
         # Set type-appropriate default if not specified
@@ -632,6 +638,11 @@ class _TagTypeBase(LiveTag):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
@@ -648,6 +659,11 @@ class _TagTypeBase(LiveTag):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
@@ -671,6 +687,11 @@ class _TagTypeBase(LiveTag):
             bool(external),
             bool(final),
             bool(public),
+            physical,
+            link,
+            min,
+            max,
+            uom,
         )
 
 

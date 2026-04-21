@@ -13,6 +13,7 @@ from enum import IntEnum
 from typing import Any, ClassVar, Protocol, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
+from pyrung.core.physical import Physical
 from pyrung.core.tag import (
     ChoiceMap,
     LiveTag,
@@ -87,6 +88,11 @@ class Field:
     external: bool | None = None
     final: bool | None = None
     public: bool | None = None
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
     def __new__(
         cls,
@@ -98,8 +104,14 @@ class Field:
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> Any:
-        _ = (type, default, retentive, choices, readonly, external, final, public)
+        _ = (type, default, retentive, choices, readonly, external, final, public,
+             physical, link, min, max, uom)
         return super().__new__(cls)
 
 
@@ -122,6 +134,11 @@ class _FieldSpec:
     external: bool = False
     final: bool = False
     public: bool = False
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 def auto(*, start: int = 1, step: int = 1) -> Any:
@@ -291,6 +308,11 @@ class _StructRuntime:
             block._pyrung_field_external = field_spec.external  # ty: ignore[unresolved-attribute]
             block._pyrung_field_final = field_spec.final  # ty: ignore[unresolved-attribute]
             block._pyrung_field_public = field_spec.public  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_physical = field_spec.physical  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_link = field_spec.link  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_min = field_spec.min  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_max = field_spec.max  # ty: ignore[unresolved-attribute]
+            block._pyrung_field_uom = field_spec.uom  # ty: ignore[unresolved-attribute]
             self._blocks[field_spec.name] = block
 
     def clone(
@@ -692,6 +714,12 @@ def _build_field_spec(
     field_final = bool(final)
     field_public = bool(public)
 
+    field_physical: Physical | None = None
+    field_link: str | None = None
+    field_min: int | float | None = None
+    field_max: int | float | None = None
+    field_uom: str | None = None
+
     if isinstance(raw_default, Field):
         if raw_default.type is not None and raw_default.type != type:
             if source == "named_array":
@@ -718,6 +746,11 @@ def _build_field_spec(
             field_final = bool(raw_default.final)
         if raw_default.public is not None:
             field_public = bool(raw_default.public)
+        field_physical = raw_default.physical
+        field_link = raw_default.link
+        field_min = raw_default.min
+        field_max = raw_default.max
+        field_uom = raw_default.uom
 
     if retentive is None:
         retentive = _TYPE_DEFAULT_RETENTIVE[type]
@@ -733,6 +766,11 @@ def _build_field_spec(
         external=field_external,
         final=field_final,
         public=field_public,
+        physical=field_physical,
+        link=field_link,
+        min=field_min,
+        max=field_max,
+        uom=field_uom,
     )
 
 

@@ -1,7 +1,8 @@
-"""Tests for Physical feedback declarations and duration parsing."""
+"""Tests for Physical feedback declarations, duration parsing, and tag-level fields."""
 
 import pytest
 
+from pyrung import Bool, Field, Real, udt
 from pyrung.core.physical import Physical, parse_duration
 
 
@@ -124,3 +125,62 @@ class TestPhysical:
     def test_compound_delay(self):
         p = Physical("SlowMotor", on_delay="2s50ms")
         assert p.on_delay_ms == 2050
+
+
+motor_fb = Physical("MotorFb", on_delay="2s", off_delay="500ms", system="cooling")
+temp_sensor = Physical("TempSensor", profile="first_order", system="cooling")
+
+
+class TestTagFields:
+    def test_standalone_tag_physical(self):
+        fb = Bool("Running", physical=motor_fb, link="Enable")
+        assert fb.physical is motor_fb
+        assert fb.link == "Enable"
+
+    def test_standalone_tag_range(self):
+        t = Real("Temp", physical=temp_sensor, min=0, max=150, uom="degC")
+        assert t.physical is temp_sensor
+        assert t.min == 0
+        assert t.max == 150
+        assert t.uom == "degC"
+
+    def test_standalone_tag_defaults_none(self):
+        b = Bool("Plain")
+        assert b.physical is None
+        assert b.link is None
+        assert b.min is None
+        assert b.max is None
+        assert b.uom is None
+
+    def test_field_in_udt(self):
+        @udt()
+        class Pump:
+            Enable: Bool
+            Running_Fb: Bool = Field(physical=motor_fb, link="Enable")
+            Temp: Real = Field(physical=temp_sensor, min=0, max=150, uom="degC")
+
+        p = Pump[1]
+        assert p.Running_Fb.physical is motor_fb
+        assert p.Running_Fb.link == "Enable"
+        assert p.Temp.physical is temp_sensor
+        assert p.Temp.min == 0
+        assert p.Temp.max == 150
+        assert p.Temp.uom == "degC"
+
+    def test_field_without_physical(self):
+        @udt()
+        class Simple:
+            Status: Bool
+
+        s = Simple[1]
+        assert s.Status.physical is None
+
+    def test_udt_counted_shares_physical(self):
+        @udt(count=3)
+        class Motor:
+            Enable: Bool
+            Fb: Bool = Field(physical=motor_fb, link="Enable")
+
+        assert Motor[1].Fb.physical is motor_fb
+        assert Motor[2].Fb.physical is motor_fb
+        assert Motor[3].Fb.physical is motor_fb
