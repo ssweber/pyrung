@@ -96,18 +96,64 @@ Use the VS Code `Watch` panel for read-only expression evaluation.
 
 Watch evaluation uses the same visible state as the Variables panel during stepping, including pending mid-scan values.
 
-## Debug console force commands
+## Debug Console
 
-The Debug Console is command-only for force operations:
+The Debug Console accepts typed commands for all PLC operations. Use `help` to list them, or `Watch` for predicate evaluation.
+
+### Forces and patches
 
 ```text
-force TagName value
-remove_force TagName
-unforce TagName
-clear_forces
+force Button true          # persistent override, held across scans
+unforce Button             # remove a force
+clear_forces               # remove all forces
+patch Button true          # one-shot input, consumed after one scan
 ```
 
-Use `Watch` for predicate evaluation.
+### Stepping and running
+
+```text
+step                       # advance one scan
+step 5                     # advance 5 scans
+run 100                    # run 100 scans
+run 500ms                  # run for 500ms of sim time
+run 2s                     # run for 2 seconds of sim time
+```
+
+`step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `min`, `h` — same format as Physical delay declarations.
+
+### Causal queries
+
+```text
+cause Light                # why did Light last change?
+cause Light@5              # why did Light change at scan 5?
+cause Light:true           # how could Light reach true? (projected)
+effect Button              # what did Button's last change cause?
+effect Button:true         # what would happen if Button became true?
+recovers Light             # can Light return to its resting value?
+```
+
+### DataView queries
+
+```text
+dataview Motor             # tags containing "Motor"
+dataview i:                # all input tags
+dataview p:Motor           # pivots containing "Motor"
+dataview upstream:Light    # upstream dependencies of Light
+dataview downstream:Button # downstream effects of Button
+upstream Light             # shorthand for dataview upstream:Light
+downstream Button          # shorthand for dataview downstream:Button
+```
+
+The query language supports role prefixes (`i:` inputs, `p:` pivots, `t:` terminals, `x:` isolated) and slice prefixes (`upstream:`, `downstream:`). Multiple tokens are applied left to right.
+
+### Monitors
+
+```text
+monitor Button             # watch Button for value changes
+unmonitor Button           # stop watching
+```
+
+Monitors also appear in the Variables panel under `PLC Monitors` and can be promoted to data breakpoints.
 
 ## DAP to runner mapping
 
@@ -119,6 +165,7 @@ Use `Watch` for predicate evaluation.
 | Monitor values | `runner.monitor(tag, callback)` |
 | Snapshot labels | `runner.history.find_labeled(label)` |
 | Data breakpoints | Monitor-backed change listeners |
+| Debug Console commands | `console.dispatch()` registry |
 
 See [Architecture — Debug stepping APIs](architecture.md#debug-stepping-apis) for details on `scan_steps_debug()` and rung inspection.
 
