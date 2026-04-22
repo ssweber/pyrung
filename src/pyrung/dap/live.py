@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -137,17 +138,44 @@ def send_command(session_name: str, command: str) -> tuple[bool, str]:
         conn.close()
 
 
+def _is_port_alive(port: int) -> bool:
+    """Return True if something is listening on localhost:*port*."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(0.1)
+    try:
+        sock.connect(("localhost", port))
+        return True
+    except (ConnectionRefusedError, OSError):
+        return False
+    finally:
+        sock.close()
+
+
 def list_sessions() -> list[str]:
-    """Return names of sessions that have port files."""
+    """Return names of sessions whose servers are still reachable.
+
+    Stale port files (left by crashed or exited processes) are removed
+    automatically.
+    """
     if not _SESSION_DIR.is_dir():
         return []
     prefix = "pyrung-"
     suffix = ".port"
-    return sorted(
-        p.name[len(prefix) : -len(suffix)]
-        for p in _SESSION_DIR.glob(f"{prefix}*{suffix}")
-        if p.is_file()
-    )
+    alive: list[str] = []
+    for p in _SESSION_DIR.glob(f"{prefix}*{suffix}"):
+        if not p.is_file():
+            continue
+        name = p.name[len(prefix) : -len(suffix)]
+        try:
+            port = int(p.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            p.unlink(missing_ok=True)
+            continue
+        if _is_port_alive(port):
+            alive.append(name)
+        else:
+            p.unlink(missing_ok=True)
+    return sorted(alive)
 
 
 # ---------------------------------------------------------------------------
