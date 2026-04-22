@@ -330,3 +330,128 @@ class TestRecordInHelp:
         adapter, out = _setup(tmp_path)
         resp, _ = _repl(adapter, out, "help")
         assert "record" in resp["body"]["result"]
+
+    def test_help_lists_replay(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "help")
+        assert "replay" in resp["body"]["result"]
+
+
+# ---------------------------------------------------------------------------
+# Replay verb
+# ---------------------------------------------------------------------------
+
+
+def _write_transcript(tmp_path: Path, name: str, content: str) -> Path:
+    p = tmp_path / name
+    p.write_text(content, encoding="utf-8")
+    return p
+
+
+class TestReplayVerb:
+    def test_replay_executes_commands(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        scan_before = adapter._current_scan_id
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "# action: test\nforce Button true\nstep 3\n",
+        )
+        resp, stopped = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        assert "Replayed 2/2" in resp["body"]["result"]
+        assert adapter._runner.forces["Button"] is True
+        assert adapter._current_scan_id is not None
+        assert scan_before is not None
+        assert adapter._current_scan_id > scan_before
+
+    def test_replay_skips_comments_and_blanks(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "# action: test\n\n# intent: checking\npatch Button true\n\nstep 1\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        assert "Replayed 2/2" in resp["body"]["result"]
+
+    def test_replay_file_not_found(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, f"replay {tmp_path / 'nonexistent.txt'}")
+        assert resp["success"] is False
+        assert "File not found" in resp["message"]
+
+    def test_replay_missing_filepath(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "replay")
+        assert resp["success"] is False
+        assert "Usage:" in resp["message"]
+
+    def test_replay_halts_on_error(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nbadcommand xyz\nstep 1\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert resp["success"] is True
+        assert "Replay error at line 2" in resp["body"]["result"]
+        assert "Executed 1/3" in resp["body"]["result"]
+
+    def test_replay_excluded_from_capture(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep 1\n",
+        )
+        _repl(adapter, out, "record my_action", seq=10)
+        _repl(adapter, out, f"replay {transcript}", seq=11)
+        commands = [e.command for e in adapter._capture.entries]
+        assert "patch Button true" in commands
+        assert "step 1" in commands
+        assert not any("replay" in c for c in commands)
+
+    def test_replay_inner_commands_captured(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "patch Button true\nstep 2\n",
+        )
+        _repl(adapter, out, "record my_action", seq=10)
+        _repl(adapter, out, f"replay {transcript}", seq=11)
+        assert len(adapter._capture.entries) == 2
+
+    def test_replay_reports_scan_id(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "session.txt",
+            "step 3\n",
+        )
+        resp, _ = _repl(adapter, out, f"replay {transcript}")
+        assert "scan" in resp["body"]["result"].lower()
+
+
+class TestReplayRoundTrip:
+    def test_record_then_replay_matches(self, tmp_path: Path):
+        """Record a session, replay it on a fresh adapter, verify same final state."""
+        adapter1, out1 = _setup(tmp_path)
+        _repl(adapter1, out1, "record my_action", seq=10)
+        _repl(adapter1, out1, "patch Button true", seq=11)
+        _repl(adapter1, out1, "step 3", seq=12)
+        resp, _ = _repl(adapter1, out1, "record stop", seq=13)
+        transcript_text = resp["body"]["result"].split("\n", 1)[1]
+        transcript_file = _write_transcript(tmp_path, "recorded.txt", transcript_text)
+
+        adapter2, out2 = _setup(tmp_path)
+        resp2, _ = _repl(adapter2, out2, f"replay {transcript_file}")
+        assert resp2["success"] is True
+
+        state1 = adapter1._runner.current_state
+        state2 = adapter2._runner.current_state
+        assert state2.tags["Light"] == state1.tags["Light"]
+        assert state2.tags["Button"] == state1.tags["Button"]
