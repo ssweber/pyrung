@@ -206,11 +206,13 @@ When the DAP adapter launches, it starts a TCP server on localhost and writes th
 
 ```text
 pyrung-live list                           # show active sessions
-pyrung-live -s my_session help             # send a command
-pyrung-live -s my_session step 5           # step 5 scans
+pyrung-live step 5                         # works when only one session is active
+pyrung-live -s my_session step 5           # explicit session when multiple are running
 pyrung-live -s my_session force Button true
 pyrung-live -s my_session cause Light
 ```
+
+When only one session is active, `--session` can be omitted. With multiple sessions, the CLI lists them and asks you to pick one.
 
 Every console command works over the live connection — forces, patches, stepping, queries, record/replay. The response is printed to stdout. Exit code is 0 on success, 1 on error.
 

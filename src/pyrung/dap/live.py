@@ -175,7 +175,15 @@ def main() -> None:
         return
 
     if not args.session:
-        parser.error("--session is required (or use 'pyrung-live list')")
+        sessions = list_sessions()
+        if len(sessions) == 1:
+            args.session = sessions[0]
+        elif not sessions:
+            parser.error("no active sessions")
+        else:
+            parser.error(
+                f"multiple sessions active ({', '.join(sessions)}), use --session to pick one"
+            )
 
     if not args.command:
         parser.error("No command given")
