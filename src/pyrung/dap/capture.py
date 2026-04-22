@@ -79,7 +79,7 @@ class CaptureBuffer:
 # Console verb
 # ---------------------------------------------------------------------------
 
-_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help"})
+_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue"})
 
 
 def capture_hook(adapter: Any, verb: str, expression: str) -> None:
@@ -93,7 +93,7 @@ def capture_hook(adapter: Any, verb: str, expression: str) -> None:
     capture.append(expression.strip(), scan_id, timestamp)
 
 
-@register("record", usage="record <action> | record stop")
+@register("record", usage="record <action> | record stop", group="capture")
 def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -148,7 +148,7 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("replay", usage="replay <filepath> [--harness current|recorded|off]")
+@register("replay", usage="replay <filepath> [--harness current|recorded|off]", group="capture")
 def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 1)
     if len(parts) < 2:

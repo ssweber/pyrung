@@ -183,21 +183,35 @@ def list_sessions() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _build_command_epilog() -> str:
+    import pyrung.dap.capture  # noqa: F401
+    import pyrung.dap.harness_console  # noqa: F401
+    from pyrung.dap.console import _format_grouped_help
+
+    return _format_grouped_help()
+
+
 def main() -> None:
     """``pyrung-live`` command-line entry point."""
     parser = argparse.ArgumentParser(
         prog="pyrung-live",
         description="Attach to a running pyrung DAP session",
+        epilog=_build_command_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--session", "-s", help="Session name to connect to")
     parser.add_argument("command", nargs="*", help="Console command to send")
     args = parser.parse_args()
 
-    if not args.session and args.command and args.command[0] == "list":
+    show_list = (not args.session and args.command and args.command[0] == "list") or (
+        not args.session and not args.command
+    )
+    if show_list:
         sessions = list_sessions()
         if sessions:
+            print("Live sessions:")
             for name in sessions:
-                print(name)
+                print(f"  {name}")
         else:
             print("No active sessions")
         return

@@ -141,7 +141,7 @@ class TestClientServer:
         _adapter, _out, session_name = live_session
         ok, text = send_command(session_name, "help")
         assert ok is True
-        assert "Available commands" in text
+        assert "execution:" in text
 
     def test_send_step_command(self, live_session: Any):
         _adapter, _out, session_name = live_session

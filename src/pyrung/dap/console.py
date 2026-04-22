@@ -23,15 +23,59 @@ class ConsoleResult:
     events: list[tuple[str, dict[str, Any] | None]] = field(default_factory=list)
 
 
-_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str]] = {}
+_REGISTRY: dict[str, tuple[Callable[..., ConsoleResult], str, str]] = {}
 
 
-def register(verb: str, *, usage: str = "") -> Callable[..., Any]:
+def register(verb: str, *, usage: str = "", group: str = "") -> Callable[..., Any]:
     def decorator(fn: Callable[..., ConsoleResult]) -> Callable[..., ConsoleResult]:
-        _REGISTRY[verb] = (fn, usage)
+        _REGISTRY[verb] = (fn, usage, group)
         return fn
 
     return decorator
+
+
+_GROUP_ORDER = ["execution", "data", "analysis", "capture", ""]
+
+_GROUP_LAYOUT: dict[str, list[str | None]] = {
+    "analysis": [
+        "dataview",
+        "downstream",
+        "upstream",
+        None,
+        "cause",
+        "effect",
+        "recovers",
+        None,
+        "simplified",
+    ],
+}
+
+
+def _format_grouped_help() -> str:
+    groups: dict[str, list[str]] = {g: [] for g in _GROUP_ORDER}
+    for verb in sorted(_REGISTRY):
+        _fn, usage, group = _REGISTRY[verb]
+        groups.setdefault(group, []).append(usage or verb)
+    usage_by_verb = {v: (u or v) for v, (_f, u, _g) in _REGISTRY.items()}
+    lines: list[str] = []
+    for group in _GROUP_ORDER:
+        entries = groups.get(group)
+        if not entries:
+            continue
+        if lines:
+            lines.append("")
+        lines.append(f"{group}:" if group else "other:")
+        layout = _GROUP_LAYOUT.get(group)
+        if layout:
+            for item in layout:
+                if item is None:
+                    lines.append("")
+                else:
+                    lines.append(f"  {usage_by_verb[item]}")
+        else:
+            for entry in entries:
+                lines.append(f"  {entry}")
+    return "\n".join(lines)
 
 
 def dispatch(adapter: Any, expression: str) -> ConsoleResult:
@@ -45,7 +89,7 @@ def dispatch(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
-    handler, _usage = entry
+    handler, _usage, _group = entry
     result = handler(adapter, expression)
 
     from pyrung.dap.capture import capture_hook
@@ -59,7 +103,7 @@ def dispatch(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("force", usage="force <tag> <value>")
+@register("force", usage="force <tag> <value>", group="data")
 def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 2)
     if len(parts) < 3:
@@ -72,7 +116,7 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(f"Forced {tag}={value!r}")
 
 
-@register("unforce", usage="unforce <tag>")
+@register("unforce", usage="unforce <tag>", group="data")
 def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) != 2:
@@ -83,7 +127,7 @@ def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(f"Removed force {tag}")
 
 
-@register("clear_forces", usage="clear_forces")
+@register("clear_forces", usage="clear_forces", group="data")
 def _cmd_clear_forces(adapter: Any, _expression: str) -> ConsoleResult:
     runner = adapter._require_runner_locked()
     runner.clear_forces()
@@ -95,7 +139,7 @@ def _cmd_clear_forces(adapter: Any, _expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("patch", usage="patch <tag> <value>")
+@register("patch", usage="patch <tag> <value>", group="data")
 def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 2)
     if len(parts) < 3:
@@ -108,7 +152,33 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(f"Patched {tag}={value!r}")
 
 
-@register("step", usage="step [N]")
+@register("continue", usage="continue", group="execution")
+def _cmd_continue(adapter: Any, _expression: str) -> ConsoleResult:
+    import threading
+
+    adapter._require_runner_locked()
+    if adapter._thread_running_locked():
+        raise adapter.DAPAdapterError("Already running")
+    adapter._pause_event.clear()
+    thread = threading.Thread(
+        target=adapter._continue_worker,
+        daemon=True,
+        name="pyrung-dap-continue",
+    )
+    adapter._continue_thread = thread
+    thread.start()
+    return ConsoleResult("Continuing")
+
+
+@register("pause", usage="pause", group="execution")
+def _cmd_pause(adapter: Any, _expression: str) -> ConsoleResult:
+    if not adapter._thread_running_locked():
+        raise adapter.DAPAdapterError("Not running")
+    adapter._pause_event.set()
+    return ConsoleResult("Pausing after current scan")
+
+
+@register("step", usage="step [N]", group="execution")
 def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     n = 1
@@ -140,7 +210,7 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     )
 
 
-@register("run", usage="run <cycles|duration>")
+@register("run", usage="run <cycles|duration>", group="execution")
 def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -238,7 +308,7 @@ def _advance_one_full_scan(adapter: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-@register("cause", usage="cause <tag>[@scan|:value]")
+@register("cause", usage="cause <tag>[@scan|:value]", group="analysis")
 def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -254,7 +324,7 @@ def _cmd_cause(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("effect", usage="effect <tag>[@scan|:value]")
+@register("effect", usage="effect <tag>[@scan|:value]", group="analysis")
 def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -270,7 +340,7 @@ def _cmd_effect(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
-@register("recovers", usage="recovers <tag>")
+@register("recovers", usage="recovers <tag>", group="analysis")
 def _cmd_recovers(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -326,7 +396,7 @@ def _parse_value(raw: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@register("dataview", usage="dataview <query>")
+@register("dataview", usage="dataview <query>", group="analysis")
 def _cmd_dataview(adapter: Any, expression: str) -> ConsoleResult:
     rest = expression.strip().split(None, 1)
     if len(rest) < 2:
@@ -343,7 +413,7 @@ def _cmd_dataview(adapter: Any, expression: str) -> ConsoleResult:
     return _format_dataview(result)
 
 
-@register("upstream", usage="upstream <tag>")
+@register("upstream", usage="upstream <tag>", group="analysis")
 def _cmd_upstream(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -354,7 +424,7 @@ def _cmd_upstream(adapter: Any, expression: str) -> ConsoleResult:
     return _format_dataview(view)
 
 
-@register("downstream", usage="downstream <tag>")
+@register("downstream", usage="downstream <tag>", group="analysis")
 def _cmd_downstream(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -380,7 +450,7 @@ def _format_dataview(view: Any) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("simplified", usage="simplified [tag]")
+@register("simplified", usage="simplified [tag]", group="analysis")
 def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     runner = adapter._require_runner_locked()
@@ -409,7 +479,7 @@ def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("monitor", usage="monitor <tag>")
+@register("monitor", usage="monitor <tag>", group="data")
 def _cmd_monitor(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -431,7 +501,7 @@ def _cmd_monitor(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(f"Monitor added: {tag_name} (id={handle.id})")
 
 
-@register("unmonitor", usage="unmonitor <tag>")
+@register("unmonitor", usage="unmonitor <tag>", group="data")
 def _cmd_unmonitor(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -459,8 +529,4 @@ def _cmd_unmonitor(adapter: Any, expression: str) -> ConsoleResult:
 
 @register("help", usage="help")
 def _cmd_help(adapter: Any, _expression: str) -> ConsoleResult:
-    lines = ["Available commands:"]
-    for verb in sorted(_REGISTRY):
-        _fn, usage = _REGISTRY[verb]
-        lines.append(f"  {usage}" if usage else f"  {verb}")
-    return ConsoleResult("\n".join(lines))
+    return ConsoleResult(_format_grouped_help())
