@@ -147,6 +147,15 @@ class TestCaptureBuffer:
         assert len(entries) == 4
         assert buf.recording is False
 
+    def test_stop_formats_provenance_as_command_lines(self):
+        buf = CaptureBuffer()
+        buf.start("with_harness", scan_id=0, timestamp=0.0)
+        buf.append("patch Fb True", scan_id=2, timestamp=0.02, provenance="harness:nominal")
+        transcript, _entries = buf.stop()
+
+        assert "harness:nominal: patch Fb True" in transcript
+        assert "# harness:nominal" not in transcript
+
     def test_stop_clears_state(self):
         buf = CaptureBuffer()
         buf.start("act", scan_id=0, timestamp=0.0)
@@ -190,7 +199,7 @@ class TestRecordVerb:
         assert "Recording stopped." in result
         assert "# action: start_machine" in result
         assert "patch Button true" in result
-        assert "step 1" in result
+        assert "step 1" not in result
         assert adapter._capture.recording is False
 
     def test_record_stop_without_active(self, tmp_path: Path):
@@ -316,7 +325,7 @@ class TestTranscriptFormat:
         assert "step 1" not in t1
 
         assert "# action: second" in t2
-        assert "step 1" in t2
+        assert "step 1" not in t2
         assert "patch Button true" not in t2
 
 
@@ -455,3 +464,63 @@ class TestReplayRoundTrip:
         state2 = adapter2._runner.current_state
         assert state2.tags["Light"] == state1.tags["Light"]
         assert state2.tags["Button"] == state1.tags["Button"]
+
+
+class TestReplayHarnessModes:
+    def test_replay_current_skips_embedded_harness_and_uses_live_harness(self, tmp_path: Path):
+        from tests.dap.test_harness_console import _setup_with_harness
+
+        adapter, out = _setup_with_harness(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "current.txt",
+            (
+                "# action: harness_current\n"
+                "patch Cmd true\n"
+                "harness:nominal: patch Device_Fb True\n"
+                "run 50ms\n"
+            ),
+        )
+
+        resp, _ = _repl(adapter, out, f"replay {transcript} --harness current")
+
+        assert resp["success"] is True
+        assert "harness=current" in resp["body"]["result"]
+        assert adapter._harness is not None
+        assert adapter._runner.current_state.tags.get("Device_Fb") is True
+
+    def test_replay_recorded_applies_embedded_harness_and_disables_live_harness(
+        self, tmp_path: Path
+    ):
+        from tests.dap.test_harness_console import _setup_with_harness
+
+        adapter, out = _setup_with_harness(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "recorded.txt",
+            "# action: harness_recorded\nharness:nominal: patch Device_Fb True\nstep 2\n",
+        )
+
+        resp, _ = _repl(adapter, out, f"replay {transcript} --harness recorded")
+
+        assert resp["success"] is True
+        assert "harness=recorded" in resp["body"]["result"]
+        assert adapter._harness is None
+        assert adapter._runner.current_state.tags.get("Device_Fb") is True
+
+    def test_replay_off_skips_embedded_harness_and_disables_live_harness(self, tmp_path: Path):
+        from tests.dap.test_harness_console import _setup_with_harness
+
+        adapter, out = _setup_with_harness(tmp_path)
+        transcript = _write_transcript(
+            tmp_path,
+            "off.txt",
+            "# action: harness_off\nharness:nominal: patch Device_Fb True\nstep 2\n",
+        )
+
+        resp, _ = _repl(adapter, out, f"replay {transcript} --harness off")
+
+        assert resp["success"] is True
+        assert "harness=off" in resp["body"]["result"]
+        assert adapter._harness is None
+        assert adapter._runner.current_state.tags.get("Device_Fb", False) is False

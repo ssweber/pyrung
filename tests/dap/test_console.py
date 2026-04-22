@@ -210,6 +210,15 @@ class TestRun:
         assert ts_after - ts_before >= 0.099
         assert len(stopped) >= 1
 
+    def test_run_duration_with_split_unit(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        ts_before = adapter._runner.current_state.timestamp
+        resp, stopped = _repl(adapter, out, "run 100 ms")
+        assert resp["success"] is True
+        ts_after = adapter._runner.current_state.timestamp
+        assert ts_after - ts_before >= 0.099
+        assert len(stopped) >= 1
+
     def test_run_duration_seconds(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
         ts_before = adapter._runner.current_state.timestamp

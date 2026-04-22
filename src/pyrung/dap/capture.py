@@ -62,7 +62,7 @@ class CaptureBuffer:
             if entry.provenance == "console":
                 lines.append(entry.command)
             else:
-                lines.append(f"# {entry.provenance}: {entry.command}")
+                lines.append(f"{entry.provenance}: {entry.command}")
         raw = list(self.entries)
         self.action = None
         self.entries = []
@@ -89,7 +89,7 @@ def capture_hook(adapter: Any, verb: str, expression: str) -> None:
         return
     runner = getattr(adapter, "_runner", None)
     timestamp = runner.current_state.timestamp if runner else 0.0
-    scan_id = getattr(adapter, "_current_scan_id", None)
+    scan_id = runner.current_state.scan_id if runner else getattr(adapter, "_current_scan_id", None)
     capture.append(expression.strip(), scan_id, timestamp)
 
 
@@ -105,8 +105,20 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
     if sub.lower() == "stop":
         if not capture.recording:
             raise adapter.DAPAdapterError("No active recording")
-        transcript, _entries = capture.stop()
-        return ConsoleResult(f"Recording stopped.\n{transcript}")
+        action = capture.action or "capture"
+        start_scan_id = capture.start_scan_id
+        _raw_transcript, entries = capture.stop()
+
+        from pyrung.dap.condenser import condense_capture
+
+        runner = adapter._require_runner_locked()
+        condensed = condense_capture(
+            action,
+            entries,
+            runner,
+            start_scan_id=start_scan_id,
+        )
+        return ConsoleResult(f"Recording stopped.\n{condensed.transcript}")
 
     if capture.recording:
         raise adapter.DAPAdapterError(
@@ -115,7 +127,7 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 
     action_name = sub
     runner = adapter._require_runner_locked()
-    scan_id = adapter._current_scan_id
+    scan_id = runner.current_state.scan_id
     timestamp = runner.current_state.timestamp
 
     warnings: list[str] = []
@@ -136,22 +148,21 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
 # ---------------------------------------------------------------------------
 
 
-@register("replay", usage="replay <filepath>")
+@register("replay", usage="replay <filepath> [--harness current|recorded|off]")
 def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split(None, 1)
     if len(parts) < 2:
-        raise adapter.DAPAdapterError("Usage: replay <filepath>")
+        raise adapter.DAPAdapterError("Usage: replay <filepath> [--harness current|recorded|off]")
 
-    filepath = Path(parts[1].strip()).expanduser().resolve()
+    filepath_text, harness_mode = _parse_replay_args(parts[1].strip())
+    filepath = Path(filepath_text).expanduser().resolve()
     if not filepath.is_file():
         raise adapter.DAPAdapterError(f"File not found: {filepath}")
 
     lines = filepath.read_text(encoding="utf-8").splitlines()
-    commands = [
-        (i + 1, line)
-        for i, line in enumerate(lines)
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    commands = _replay_commands(lines, harness_mode=harness_mode)
+
+    _configure_replay_harness(adapter, harness_mode)
 
     from pyrung.dap.console import dispatch
 
@@ -180,6 +191,51 @@ def _cmd_replay(adapter: Any, expression: str) -> ConsoleResult:
         suffix = f" (breakpoint, {remaining} command(s) remaining)"
     events = [("stopped", adapter._stopped_body("step"))] if hit_bp else []
     return ConsoleResult(
-        f"Replayed {executed}/{len(commands)} command(s), now at scan {scan_id}{suffix}",
+        f"Replayed {executed}/{len(commands)} command(s), now at scan {scan_id}"
+        f" [harness={harness_mode}]{suffix}",
         events=events,
     )
+
+
+def _parse_replay_args(rest: str) -> tuple[str, str]:
+    modes = {"current", "recorded", "off"}
+    tokens = rest.split()
+    mode = "current"
+    if len(tokens) >= 2 and tokens[-2] == "--harness" and tokens[-1] in modes:
+        mode = tokens[-1]
+        return " ".join(tokens[:-2]), mode
+    if len(tokens) >= 2 and tokens[-1] in modes:
+        mode = tokens[-1]
+        return " ".join(tokens[:-1]), mode
+    return rest, mode
+
+
+def _replay_commands(lines: list[str], *, harness_mode: str) -> list[tuple[int, str]]:
+    from pyrung.dap.condenser import parse_provenance_line
+
+    commands: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parsed = parse_provenance_line(stripped)
+        if parsed.source is not None and parsed.source.startswith("harness:"):
+            if harness_mode in {"current", "off"}:
+                continue
+            commands.append((i + 1, parsed.command))
+            continue
+        commands.append((i + 1, parsed.command))
+    return commands
+
+
+def _configure_replay_harness(adapter: Any, harness_mode: str) -> None:
+    if harness_mode == "current":
+        if adapter._harness is None:
+            from pyrung.dap.harness_console import try_auto_install
+
+            try_auto_install(adapter)
+        return
+
+    from pyrung.dap.harness_console import uninstall_harness
+
+    uninstall_harness(adapter)

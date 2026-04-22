@@ -267,7 +267,7 @@ class TestHarnessPatches:
         transcript = resp["body"]["result"]
         assert "harness:nominal" in transcript
 
-    def test_harness_patches_as_comments_in_transcript(self, tmp_path: Path):
+    def test_harness_patches_as_provenance_commands_in_transcript(self, tmp_path: Path):
         adapter, out = _setup_with_harness(tmp_path)
         _repl(adapter, out, "record test_harness", seq=10)
         _repl(adapter, out, "patch Cmd true", seq=11)
@@ -276,7 +276,7 @@ class TestHarnessPatches:
         transcript = resp["body"]["result"]
         for line in transcript.splitlines():
             if "harness:" in line:
-                assert line.startswith("# harness:")
+                assert line.startswith("harness:")
 
     def test_uninstall_on_disconnect(self, tmp_path: Path):
         adapter, out = _setup_with_harness(tmp_path)

@@ -84,8 +84,7 @@ class Heater:
 Install a `Harness` on a PLC and it synthesizes all feedback patches automatically:
 
 ```python
-from pyrung import PLC
-from pyrung.core import Harness
+from pyrung import Harness, PLC
 
 with PLC(logic, dt=0.010) as plc:
     harness = Harness(plc)
@@ -117,7 +116,7 @@ Multiple `Fb` fields linked to the same `En` schedule independently, each with i
 Analog feedback delegates to a registered profile function. Register one with the `@profile` decorator:
 
 ```python
-from pyrung.core import profile
+from pyrung import profile
 
 @profile("generic_thermal")
 def generic_thermal(cur, en, dt):

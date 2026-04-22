@@ -50,6 +50,7 @@ nav:
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
       - Testing: guides/testing.md
+      - Physical Harness: guides/physical-harness.md
       - Analysis: guides/analysis.md
       - Forces: guides/forces-debug.md
       - Architecture: guides/architecture.md

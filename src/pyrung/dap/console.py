@@ -147,7 +147,7 @@ def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
         raise adapter.DAPAdapterError(
             "Usage: run <cycles> or run <duration> (e.g. run 10, run 500ms)"
         )
-    spec = parts[1]
+    spec = _run_spec(parts)
     adapter._assert_can_step_locked()
     runner = adapter._require_runner_locked()
 
@@ -184,6 +184,20 @@ def _run_cycles(adapter: Any, runner: Any, cycles: int) -> ConsoleResult:
         f"Ran {scans} cycle(s), now at scan {scan_id}{suffix}",
         events=[("stopped", adapter._stopped_body("step"))],
     )
+
+
+def _run_spec(parts: list[str]) -> str:
+    if len(parts) >= 3 and _looks_like_split_duration(parts[1], parts[2]):
+        return f"{parts[1]}{parts[2]}"
+    return parts[1]
+
+
+def _looks_like_split_duration(value: str, unit: str) -> bool:
+    try:
+        float(value)
+    except ValueError:
+        return False
+    return unit.lower() in {"ms", "s", "m", "min", "h", "d"}
 
 
 def _run_duration(adapter: Any, runner: Any, seconds: float) -> ConsoleResult:

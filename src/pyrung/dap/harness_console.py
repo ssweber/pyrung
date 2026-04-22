@@ -69,7 +69,11 @@ def _make_patch_listener(adapter: Any) -> Any:
         if capture is not None and capture.recording:
             runner = adapter._runner
             timestamp = runner.current_state.timestamp if runner else 0.0
-            scan_id = getattr(adapter, "_current_scan_id", None)
+            scan_id = (
+                runner.current_state.scan_id
+                if runner
+                else getattr(adapter, "_current_scan_id", None)
+            )
             for tag, value, provenance in notifications:
                 capture.append(
                     f"patch {tag} {value!r}",
