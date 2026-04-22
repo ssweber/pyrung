@@ -35,3 +35,4 @@ class DebugSession:
     pending_predicate_pause: bool = False
     configuration_done: bool = False
     scan_frame_buffer: ScanFrameBuffer | None = None
+    session_name: str | None = None

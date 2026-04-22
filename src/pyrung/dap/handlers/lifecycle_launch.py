@@ -87,6 +87,10 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         adapter._pending_predicate_pause = False
         adapter._rebuild_breakpoint_index_locked()
 
+    session_name = parsed.session or program_path.stem
+    adapter._session.session_name = session_name
+    _start_live_server(adapter, session_name)
+
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
 
@@ -110,6 +114,7 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 
 
 def shutdown(adapter: Any) -> HandlerResult:
+    _stop_live_server(adapter)
     with adapter._state_lock:
         adapter._clear_debug_registrations_locked()
         adapter._runner = None
@@ -125,6 +130,27 @@ def shutdown(adapter: Any) -> HandlerResult:
     return {}, [("terminated", {})]
 
 
+def _start_live_server(adapter: Any, session_name: str) -> None:
+    if adapter._live_server is not None:
+        adapter._live_server.stop()
+    from pyrung.dap.live import LiveServer
+
+    server = LiveServer(adapter, session_name)
+    try:
+        server.start()
+    except OSError:
+        adapter._live_server = None
+        return
+    adapter._live_server = server
+
+
+def _stop_live_server(adapter: Any) -> None:
+    if adapter._live_server is not None:
+        adapter._live_server.stop()
+        adapter._live_server = None
+
+
 @dataclass(frozen=True)
 class _LaunchRequestArgs:
     program: Any = None
+    session: Any = None

@@ -87,6 +87,7 @@ class DAPAdapter:
         from pyrung.dap.capture import CaptureBuffer
 
         self._capture = CaptureBuffer()
+        self._live_server: Any = None
 
     @property
     def _runner(self) -> PLC | None:
