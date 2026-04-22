@@ -46,7 +46,12 @@ def dispatch(adapter: Any, expression: str) -> ConsoleResult:
             f"Unknown command '{verb}'. Available: {known}. Use Watch for predicate expressions."
         )
     handler, _usage = entry
-    return handler(adapter, expression)
+    result = handler(adapter, expression)
+
+    from pyrung.dap.capture import capture_hook
+
+    capture_hook(adapter, verb, expression)
+    return result
 
 
 # ---------------------------------------------------------------------------

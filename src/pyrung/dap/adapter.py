@@ -84,6 +84,10 @@ class DAPAdapter:
         self._data_bp_meta: dict[str, monitor_data_breakpoints.DataBreakpointMeta] = {}
         self._pending_snapshot_labels_by_scan: dict[int, set[str]] = {}
 
+        from pyrung.dap.capture import CaptureBuffer
+
+        self._capture = CaptureBuffer()
+
     @property
     def _runner(self) -> PLC | None:
         return self._session.runner
