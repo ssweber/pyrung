@@ -185,7 +185,7 @@ class Tag:
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
-        cond = CompareEq(self, other)
+        cond = CompareEq(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -193,7 +193,7 @@ class Tag:
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
-        cond = CompareNe(self, other)
+        cond = CompareNe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -201,7 +201,7 @@ class Tag:
         """Create less-than comparison condition."""
         from pyrung.core.condition import CompareLt
 
-        cond = CompareLt(self, other)
+        cond = CompareLt(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -209,7 +209,7 @@ class Tag:
         """Create less-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareLe
 
-        cond = CompareLe(self, other)
+        cond = CompareLe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -217,7 +217,7 @@ class Tag:
         """Create greater-than comparison condition."""
         from pyrung.core.condition import CompareGt
 
-        cond = CompareGt(self, other)
+        cond = CompareGt(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -225,7 +225,7 @@ class Tag:
         """Create greater-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareGe
 
-        cond = CompareGe(self, other)
+        cond = CompareGe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -493,7 +493,7 @@ class Tag:
         if self.type == TagType.BOOL:
             from pyrung.core.condition import NormallyClosedCondition
 
-            cond = NormallyClosedCondition(self)
+            cond = NormallyClosedCondition(cast(Any, self))
             cond.source_file, cond.source_line = _capture_source(depth=2)
             return cond
 
@@ -554,7 +554,7 @@ class ImmediateRef:
         """Create a normally-closed immediate contact condition."""
         from pyrung.core.condition import NormallyClosedCondition
 
-        cond = NormallyClosedCondition(self)
+        cond = NormallyClosedCondition(cast(Any, self))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
