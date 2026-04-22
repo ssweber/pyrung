@@ -9,6 +9,59 @@ from dataclasses import dataclass
 from pyrung.core.analysis.pdg import ProgramGraph, TagRole
 
 
+@dataclass(frozen=True)
+class TagDetail:
+    """Rich metadata for a single tag in a DataView."""
+
+    name: str
+    type: str
+    role: str
+    retentive: bool = False
+    readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
+    physical: str | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
+    choices: int | None = None
+    structure_kind: str | None = None
+    structure_name: str | None = None
+    structure_field: str | None = None
+
+
+@dataclass(frozen=True)
+class StructureInfo:
+    """Summary of a UDT or named_array definition."""
+
+    name: str
+    kind: str
+    count: int
+    fields: tuple[StructureFieldInfo, ...] = ()
+    stride: int | None = None
+    base_type: str | None = None
+
+
+@dataclass(frozen=True)
+class StructureFieldInfo:
+    """Per-field metadata within a structure."""
+
+    name: str
+    type: str
+    readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
+    physical: str | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
+    choices: int | None = None
+
+
 class TagNameMatcher:
     """Abbreviation-aware tag name matching.
 
@@ -277,6 +330,116 @@ class DataView:
         """Return ``{tag: role}`` for tags in the current view."""
         tr = self._graph.tag_roles
         return {t: tr[t] for t in self._tags if t in tr}
+
+    def details(self) -> dict[str, TagDetail]:
+        """Return ``{tag: TagDetail}`` with full metadata for tags in the view."""
+        tr = self._graph.tag_roles
+        tags_dict = self._graph.tags
+        result: dict[str, TagDetail] = {}
+        for name in self._tags:
+            if name not in tr:
+                continue
+            tag = tags_dict.get(name)
+            if tag is None:
+                result[name] = TagDetail(name=name, type="bool", role=tr[name].value)
+                continue
+
+            physical_name = tag.physical.name if tag.physical is not None else None
+            choices_count = len(tag.choices) if tag.choices else None
+
+            struct_kind = getattr(tag, "_pyrung_structure_kind", None)
+            struct_name = getattr(tag, "_pyrung_structure_name", None)
+            struct_field = getattr(tag, "_pyrung_structure_field", None)
+
+            result[name] = TagDetail(
+                name=name,
+                type=tag.type.value,
+                role=tr[name].value,
+                retentive=tag.retentive,
+                readonly=tag.readonly,
+                external=tag.external,
+                final=tag.final,
+                public=tag.public,
+                physical=physical_name,
+                link=tag.link,
+                min=tag.min,
+                max=tag.max,
+                uom=tag.uom,
+                choices=choices_count,
+                structure_kind=struct_kind,
+                structure_name=struct_name,
+                structure_field=struct_field,
+            )
+        return result
+
+    def structures(self) -> list[StructureInfo]:
+        """Return definitions for all UDTs and named_arrays found in the view."""
+        seen_ids: set[int] = set()
+        runtimes: list[object] = []
+        for name in self._tags:
+            tag = self._graph.tags.get(name)
+            if tag is None:
+                continue
+            rt = getattr(tag, "_pyrung_structure_runtime", None)
+            if rt is None:
+                continue
+            rt_id = id(rt)
+            if rt_id in seen_ids:
+                continue
+            seen_ids.add(rt_id)
+            runtimes.append(rt)
+
+        result: list[StructureInfo] = []
+        for rt in runtimes:
+            kind = getattr(rt, "_structure_kind", "udt")
+            name = getattr(rt, "name", "?")
+            count = getattr(rt, "count", 1)
+            field_order: tuple[str, ...] = getattr(rt, "_field_order", ())
+            blocks: dict[str, object] = getattr(rt, "_blocks", {})
+
+            fields: list[StructureFieldInfo] = []
+            for fname in field_order:
+                block = blocks.get(fname)
+                if block is None:
+                    continue
+                ftype = getattr(block, "type", None)
+                ftype_str = ftype.value if ftype is not None else "?"
+                phys = getattr(block, "_pyrung_field_physical", None)
+                ch = getattr(block, "_pyrung_field_choices", None)
+                fields.append(
+                    StructureFieldInfo(
+                        name=fname,
+                        type=ftype_str,
+                        readonly=getattr(block, "_pyrung_field_readonly", False),
+                        external=getattr(block, "_pyrung_field_external", False),
+                        final=getattr(block, "_pyrung_field_final", False),
+                        public=getattr(block, "_pyrung_field_public", False),
+                        physical=phys.name if phys is not None else None,
+                        link=getattr(block, "_pyrung_field_link", None),
+                        min=getattr(block, "_pyrung_field_min", None),
+                        max=getattr(block, "_pyrung_field_max", None),
+                        uom=getattr(block, "_pyrung_field_uom", None),
+                        choices=len(ch) if ch else None,
+                    )
+                )
+
+            stride = getattr(rt, "stride", None)
+            base_type_attr = getattr(rt, "type", None)
+            base_type = base_type_attr.value if base_type_attr is not None else None
+
+            result.append(
+                StructureInfo(
+                    name=name,
+                    kind=kind,
+                    count=count,
+                    fields=tuple(fields),
+                    stride=stride if kind == "named_array" else None,
+                    base_type=base_type if kind == "named_array" else None,
+                )
+            )
+
+        result.sort(key=lambda s: (s.kind, s.name))
+        return result
 
     # ------------------------------------------------------------------
     # Private helpers

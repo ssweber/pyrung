@@ -197,7 +197,9 @@ def condense_capture(
 
         if info.kind == "note":
             reduced, coalesced = coalesce_fumbles(
-                pending_mutations, runner, segment_start_scan,
+                pending_mutations,
+                runner,
+                segment_start_scan,
             )
             output.extend(_format_entry(e) for e in reduced)
             stats.coalesced_fumbles += coalesced

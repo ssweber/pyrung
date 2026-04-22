@@ -9,17 +9,24 @@ import pytest
 
 from pyrung.core import (
     Bool,
+    Field,
     InputBlock,
+    Int,
     OutputBlock,
+    Physical,
     Program,
+    Real,
     Rung,
     TagType,
+    auto,
     build_program_graph,
     latch,
+    named_array,
     out,
+    udt,
 )
 from pyrung.core.analysis import TagRole
-from pyrung.core.analysis.dataview import DataView, TagNameMatcher
+from pyrung.core.analysis.dataview import DataView, TagDetail, TagNameMatcher
 
 # ------------------------------------------------------------------
 # TagNameMatcher unit tests
@@ -435,3 +442,194 @@ def test_conveyor_smoke(dv) -> None:
     assert len(dv.terminals()) > 0
     # Every tag has a role
     assert len(dv.roles()) == len(dv)
+
+
+# ------------------------------------------------------------------
+# Details tests
+# ------------------------------------------------------------------
+
+
+class TestDetails:
+    def test_details_returns_tag_detail_instances(self, dv) -> None:
+        details = dv.details()
+        assert len(details) == len(dv)
+        for name, d in details.items():
+            assert isinstance(d, TagDetail)
+            assert d.name == name
+
+    def test_details_role_matches_roles(self, dv) -> None:
+        details = dv.details()
+        roles = dv.roles()
+        for name, d in details.items():
+            assert d.role == roles[name].value
+
+    def test_details_narrowed_view(self, dv) -> None:
+        inputs_details = dv.inputs().details()
+        for d in inputs_details.values():
+            assert d.role == "input"
+
+    def test_details_with_metadata(self) -> None:
+        sensor = Real(
+            "Temp",
+            min=0,
+            max=150,
+            uom="degC",
+            external=True,
+            physical=Physical("TempFb", profile="first_order"),
+            link="Enable",
+        )
+        enable = Bool("Enable")
+
+        with Program() as prog:
+            with Rung(enable):
+                out(sensor)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        details = dv.details()
+        d = details["Temp"]
+        assert d.type == "real"
+        assert d.min == 0
+        assert d.max == 150
+        assert d.uom == "degC"
+        assert d.external is True
+        assert d.physical == "TempFb"
+        assert d.link == "Enable"
+
+    def test_details_bool_defaults_clean(self, dv) -> None:
+        details = dv.details()
+        d = details["StartBtn"]
+        assert d.type == "bool"
+        assert d.retentive is False
+        assert d.min is None
+        assert d.max is None
+        assert d.uom is None
+        assert d.physical is None
+        assert d.structure_kind is None
+
+
+class TestDetailsStructures:
+    def test_udt_tags_have_structure_info(self) -> None:
+        @udt()
+        class Motor:
+            Running: Bool
+            Speed: Int
+
+        enable = Bool("Enable")
+
+        with Program() as prog:
+            with Rung(enable):
+                out(Motor.Running)
+                out(Motor.Speed)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        details = dv.details()
+        d = details["Motor_Running"]
+        assert d.structure_kind == "udt"
+        assert d.structure_name == "Motor"
+        assert d.structure_field == "Running"
+
+    def test_named_array_tags_have_structure_info(self) -> None:
+        @named_array(Int, count=2, stride=2)
+        class Zones:
+            enabled = auto()
+            value = 0
+
+        trigger = Bool("Trigger")
+
+        with Program() as prog:
+            with Rung(trigger):
+                out(Zones[1].enabled)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        details = dv.details()
+        d = details["Zones1_enabled"]
+        assert d.structure_kind == "named_array"
+        assert d.structure_name == "Zones"
+        assert d.structure_field == "enabled"
+
+
+# ------------------------------------------------------------------
+# Structures listing tests
+# ------------------------------------------------------------------
+
+
+class TestStructures:
+    def test_no_structures_returns_empty(self, dv) -> None:
+        structs = dv.structures()
+        # click_conveyor uses standalone tags, not structures
+        # (it does use Timer which is a udt, so check accordingly)
+        for s in structs:
+            assert s.kind in ("udt", "named_array")
+
+    def test_udt_listed(self) -> None:
+        @udt()
+        class Pump:
+            Running: Bool
+            Speed: Int = Field(min=0, max=100, uom="rpm")
+
+        enable = Bool("Enable")
+
+        with Program() as prog:
+            with Rung(enable):
+                out(Pump.Running)
+                out(Pump.Speed)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        structs = dv.structures()
+        pump_info = next((s for s in structs if s.name == "Pump"), None)
+        assert pump_info is not None
+        assert pump_info.kind == "udt"
+        assert pump_info.count == 1
+        assert len(pump_info.fields) == 2
+        running_f = pump_info.fields[0]
+        assert running_f.name == "Running"
+        assert running_f.type == "bool"
+        speed_f = pump_info.fields[1]
+        assert speed_f.name == "Speed"
+        assert speed_f.type == "int"
+        assert speed_f.min == 0
+        assert speed_f.max == 100
+        assert speed_f.uom == "rpm"
+
+    def test_named_array_listed(self) -> None:
+        @named_array(Int, count=3, stride=2)
+        class Slots:
+            active = auto()
+            value = 0
+
+        trigger = Bool("Trigger")
+
+        with Program() as prog:
+            with Rung(trigger):
+                out(Slots[1].active)
+                out(Slots[2].active)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        structs = dv.structures()
+        slots_info = next((s for s in structs if s.name == "Slots"), None)
+        assert slots_info is not None
+        assert slots_info.kind == "named_array"
+        assert slots_info.count == 3
+        assert slots_info.stride is not None
+        assert len(slots_info.fields) == 2
+
+    def test_structures_sorted_by_kind_then_name(self) -> None:
+        @named_array(Int, count=2, stride=1)
+        class Bbb:
+            x = auto()
+
+        @udt()
+        class Aaa:
+            x: Bool
+
+        trigger = Bool("Trigger")
+
+        with Program() as prog:
+            with Rung(trigger):
+                out(Aaa.x)
+                out(Bbb[1].x)
+
+        dv = DataView.from_graph(build_program_graph(prog))
+        structs = dv.structures()
+        kinds = [(s.kind, s.name) for s in structs]
+        assert kinds == sorted(kinds)

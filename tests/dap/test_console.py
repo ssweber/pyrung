@@ -434,3 +434,105 @@ class TestHelpAndErrors:
         resp, _ = _repl(adapter, out, "Button == true")
         assert resp["success"] is False
         assert "Watch" in resp["message"]
+
+
+# ---------------------------------------------------------------------------
+# Enriched dataview output
+# ---------------------------------------------------------------------------
+
+
+def _udt_script() -> str:
+    return (
+        "from pyrung.core import Bool, Int, Real, Field, Physical, PLC, Program, Rung, out, udt\n"
+        "\n"
+        "@udt()\n"
+        "class Pump:\n"
+        "    Running: Bool\n"
+        "    Speed: Int = Field(min=0, max=100, uom='rpm')\n"
+        "\n"
+        "enable = Bool('Enable', external=True)\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(enable):\n"
+        "        out(Pump.Running)\n"
+        "        out(Pump.Speed)\n"
+        "\n"
+        "runner = PLC(prog, dt=0.010)\n"
+    )
+
+
+def _setup_udt(tmp_path: Path) -> tuple[DAPAdapter, io.BytesIO]:
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic_udt.py", _udt_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+class TestEnrichedDataview:
+    def test_dataview_shows_type(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "dataview Speed")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Int" in result
+
+    def test_dataview_shows_external_flag(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "dataview Enable")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "external" in result
+
+    def test_dataview_shows_min_max_uom(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "dataview Speed")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "min:0" in result
+        assert "max:100" in result
+        assert "uom:rpm" in result
+
+    def test_dataview_shows_structure_info(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "dataview Running")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "udt:Pump.Running" in result
+
+
+class TestStructuresVerb:
+    def test_structures_lists_udt(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "structures")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "UDTs:" in result
+        assert "Pump" in result
+        assert "Running" in result
+        assert "Speed" in result
+
+    def test_structures_shows_field_metadata(self, tmp_path: Path):
+        adapter, out = _setup_udt(tmp_path)
+        resp, _ = _repl(adapter, out, "structures")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "min:0" in result
+        assert "max:100" in result
+        assert "uom:rpm" in result
+
+    def test_structures_no_structures(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "structures")
+        assert resp["success"] is True
+        assert "No structures found" in resp["body"]["result"]
+
+    def test_help_includes_structures(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "help")
+        assert resp["success"] is True
+        assert "structures" in resp["body"]["result"]

@@ -43,6 +43,7 @@ _GROUP_LAYOUT: dict[str, list[str | None]] = {
         "dataview",
         "downstream",
         "upstream",
+        "structures",
         None,
         "cause",
         "effect",
@@ -444,14 +445,138 @@ def _cmd_downstream(adapter: Any, expression: str) -> ConsoleResult:
     return _format_dataview(view)
 
 
+def _tag_annotations(detail: Any) -> str:
+    parts: list[str] = []
+    if detail.type != "bool":
+        parts.append(detail.type.capitalize())
+    flags = []
+    if detail.retentive:
+        flags.append("retentive")
+    if detail.readonly:
+        flags.append("readonly")
+    if detail.external:
+        flags.append("external")
+    if detail.final:
+        flags.append("final")
+    if detail.public:
+        flags.append("public")
+    if flags:
+        parts.append(", ".join(flags))
+    range_parts = []
+    if detail.min is not None:
+        range_parts.append(f"min:{detail.min}")
+    if detail.max is not None:
+        range_parts.append(f"max:{detail.max}")
+    if detail.uom:
+        range_parts.append(f"uom:{detail.uom}")
+    if range_parts:
+        parts.append(" ".join(range_parts))
+    if detail.physical:
+        parts.append(f"physical:{detail.physical}")
+    if detail.link:
+        parts.append(f"link:{detail.link}")
+    if detail.choices:
+        parts.append(f"choices:{detail.choices}")
+    if detail.structure_kind and detail.structure_name:
+        struct = f"{detail.structure_kind}:{detail.structure_name}"
+        if detail.structure_field:
+            struct += f".{detail.structure_field}"
+        parts.append(struct)
+    return "  ".join(parts)
+
+
 def _format_dataview(view: Any) -> ConsoleResult:
-    roles = view.roles()
-    if not roles:
+    details = view.details()
+    if not details:
         return ConsoleResult("No matching tags")
+    sorted_names = sorted(details)
+    max_name = max(len(n) for n in sorted_names)
     lines = []
-    for tag in sorted(roles):
-        lines.append(f"  {tag}  ({roles[tag].value})")
-    return ConsoleResult(f"{len(roles)} tag(s):\n" + "\n".join(lines))
+    for name in sorted_names:
+        d = details[name]
+        pad = " " * (max_name - len(name))
+        ann = _tag_annotations(d)
+        suffix = f"  {ann}" if ann else ""
+        lines.append(f"  {name}{pad}  ({d.role}){suffix}")
+    return ConsoleResult(f"{len(details)} tag(s):\n" + "\n".join(lines))
+
+
+def _field_annotations(f: Any) -> str:
+    parts: list[str] = []
+    flags = []
+    if f.readonly:
+        flags.append("readonly")
+    if f.external:
+        flags.append("external")
+    if f.final:
+        flags.append("final")
+    if f.public:
+        flags.append("public")
+    if flags:
+        parts.append(", ".join(flags))
+    range_parts = []
+    if f.min is not None:
+        range_parts.append(f"min:{f.min}")
+    if f.max is not None:
+        range_parts.append(f"max:{f.max}")
+    if f.uom:
+        range_parts.append(f"uom:{f.uom}")
+    if range_parts:
+        parts.append(" ".join(range_parts))
+    if f.physical:
+        parts.append(f"physical:{f.physical}")
+    if f.link:
+        parts.append(f"link:{f.link}")
+    if f.choices:
+        parts.append(f"choices:{f.choices}")
+    return "  ".join(parts)
+
+
+@register("structures", usage="structures", group="analysis")
+def _cmd_structures(adapter: Any, expression: str) -> ConsoleResult:
+    runner = adapter._require_runner_locked()
+    view = runner.program.dataview()
+    structs = view.structures()
+    if not structs:
+        return ConsoleResult("No structures found")
+
+    sections: list[str] = []
+    udts = [s for s in structs if s.kind == "udt"]
+    named_arrays = [s for s in structs if s.kind == "named_array"]
+
+    if udts:
+        lines = ["UDTs:"]
+        for s in udts:
+            lines.append(f"  {s.name} (count={s.count})")
+            if s.fields:
+                max_fname = max(len(f.name) for f in s.fields)
+                for f in s.fields:
+                    pad = " " * (max_fname - len(f.name))
+                    ann = _field_annotations(f)
+                    suffix = f"  {ann}" if ann else ""
+                    lines.append(f"    {f.name}{pad}  {f.type.capitalize()}{suffix}")
+        sections.append("\n".join(lines))
+
+    if named_arrays:
+        lines = ["Named Arrays:"]
+        for s in named_arrays:
+            header = f"  {s.name} (count={s.count}"
+            if s.stride is not None:
+                header += f", stride={s.stride}"
+            if s.base_type is not None:
+                header += f", type={s.base_type.capitalize()}"
+            header += ")"
+            lines.append(header)
+            if s.fields:
+                max_fname = max(len(f.name) for f in s.fields)
+                for f in s.fields:
+                    pad = " " * (max_fname - len(f.name))
+                    ann = _field_annotations(f)
+                    suffix = f"  {ann}" if ann else ""
+                    lines.append(f"    {f.name}{pad}  {f.type.capitalize()}{suffix}")
+        sections.append("\n".join(lines))
+
+    return ConsoleResult("\n\n".join(sections))
 
 
 # ---------------------------------------------------------------------------
