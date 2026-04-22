@@ -193,8 +193,8 @@ def _build_command_epilog() -> str:
 
 def main() -> None:
     """``pyrung-live`` command-line entry point."""
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
     parser = argparse.ArgumentParser(
         prog="pyrung-live",
         description="Attach to a running pyrung DAP session",
@@ -235,7 +235,7 @@ def main() -> None:
     raw = " ".join(args.command)
     commands = [c.strip() for c in raw.split(";") if c.strip()]
     all_ok = True
-    for i, command in enumerate(commands):
+    for _i, command in enumerate(commands):
         try:
             ok, text = send_command(args.session, command)
         except ConnectionRefusedError:
