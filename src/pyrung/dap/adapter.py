@@ -88,6 +88,9 @@ class DAPAdapter:
 
         self._capture = CaptureBuffer()
         self._live_server: Any = None
+        self._harness: Any = None
+
+        import pyrung.dap.harness_console  # noqa: F401
 
     @property
     def _runner(self) -> PLC | None:

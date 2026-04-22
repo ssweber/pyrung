@@ -90,6 +90,7 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
     session_name = parsed.session or program_path.stem
     adapter._session.session_name = session_name
     _start_live_server(adapter, session_name)
+    _try_auto_install_harness(adapter)
 
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
@@ -115,6 +116,7 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 
 def shutdown(adapter: Any) -> HandlerResult:
     _stop_live_server(adapter)
+    _uninstall_harness(adapter)
     with adapter._state_lock:
         adapter._clear_debug_registrations_locked()
         adapter._runner = None
@@ -148,6 +150,20 @@ def _stop_live_server(adapter: Any) -> None:
     if adapter._live_server is not None:
         adapter._live_server.stop()
         adapter._live_server = None
+
+
+def _try_auto_install_harness(adapter: Any) -> None:
+    from pyrung.dap.harness_console import try_auto_install
+
+    banner = try_auto_install(adapter)
+    if banner is not None:
+        adapter._enqueue_internal_event("output", {"category": "console", "output": f"{banner}\n"})
+
+
+def _uninstall_harness(adapter: Any) -> None:
+    from pyrung.dap.harness_console import uninstall_harness
+
+    uninstall_harness(adapter)
 
 
 @dataclass(frozen=True)

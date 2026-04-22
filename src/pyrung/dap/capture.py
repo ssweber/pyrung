@@ -45,15 +45,24 @@ class CaptureBuffer:
         self.start_scan_id = scan_id
         self.start_timestamp = timestamp
 
-    def append(self, command: str, scan_id: int | None, timestamp: float) -> None:
+    def append(
+        self,
+        command: str,
+        scan_id: int | None,
+        timestamp: float,
+        provenance: str = "console",
+    ) -> None:
         if self.recording:
-            self.entries.append(CaptureEntry(command, scan_id, timestamp))
+            self.entries.append(CaptureEntry(command, scan_id, timestamp, provenance=provenance))
 
     def stop(self) -> tuple[str, list[CaptureEntry]]:
         """Stop recording and return ``(transcript, raw_entries)``."""
         lines = [f"# action: {self.action}"]
         for entry in self.entries:
-            lines.append(entry.command)
+            if entry.provenance == "console":
+                lines.append(entry.command)
+            else:
+                lines.append(f"# {entry.provenance}: {entry.command}")
         raw = list(self.entries)
         self.action = None
         self.entries = []

@@ -1,6 +1,6 @@
 # Physical Annotations and Autoharness
 
-Once you have a working program with UDTs, you can annotate the physical behavior of feedback signals. Two fields on a `Field` declaration — `physical=` and `link=` — tell pyrung how a real device responds. The autoharness reads those annotations and synthesizes feedback patches in tests automatically, so you stop writing boilerplate that toggles inputs by hand.
+Once you have a working program with UDTs, you can annotate the physical behavior of feedback signals. On a feedback field, `physical=` describes the feedback response and `link=` names the command/enable field that drives it. The autoharness reads those annotations and synthesizes feedback patches in tests automatically, so you stop writing boilerplate that toggles inputs by hand.
 
 ## The problem
 
@@ -8,7 +8,7 @@ A typical device-heavy test file is 80% feedback toggling:
 
 ```python
 def test_gripper_cycle():
-    with PLC(logic, dt=0.010) as plc:
+    with PLC(logic, dt=0.001) as plc:
         Cmd.value = True
         plc.step()                   # En rises
         plc.run_for(0.005)
@@ -31,7 +31,7 @@ Twenty devices, twenty feedback loops, twenty blocks of this — maintained by h
 from pyrung import Physical
 
 LIMIT_SWITCH = Physical("LimitSwitch", on_delay="5ms", off_delay="5ms")
-SLOW_VALVE   = Physical("SlowValve", on_delay="20ms", off_delay="80ms")
+VACUUM_SENSOR = Physical("VacuumSensor", on_delay="80ms", off_delay="50ms")
 ```
 
 **Analog feedback** — a signal that follows a continuous response curve (thermocouples, pressure transmitters, flow meters):
@@ -53,14 +53,16 @@ from pyrung import udt, Bool, Real, Field
 class Gripper:
     Cmd: Bool = Field(public=True)
     Sts: Bool = Field(public=True, final=True)
-    En: Bool = Field(physical=SLOW_VALVE)
+    En: Bool
     Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")
-    Fb_Vacuum: Bool = Field(physical=LIMIT_SWITCH, link="En")
+    Fb_Vacuum: Bool = Field(physical=VACUUM_SENSOR, link="En")
 ```
 
 `Fb_Contact` and `Fb_Vacuum` both link to `En`. When `En` rises, both feedback signals will respond — each with the timing declared by their `Physical`. The link must refer to a field in the same structure.
 
-Analog feedback works the same way, with `profile=` on the `Physical` or overridden on the `Field`:
+Do not put `physical=` on `En` just because `En` represents a real output. The harness discovers couplings from linked feedback fields (`Fb_*` with `link="En"`). An unlinked bool `physical=` annotation is metadata only and does not create a harness loop.
+
+Analog feedback works the same way, with `profile=` on the `Physical`:
 
 ```python
 THERMOCOUPLE = Physical("Thermocouple", profile="generic_thermal")
@@ -69,7 +71,7 @@ THERMOCOUPLE = Physical("Thermocouple", profile="generic_thermal")
 class Heater:
     Cmd: Bool = Field(public=True)
     Sts: Bool = Field(public=True, final=True)
-    En: Bool = Field(physical=SLOW_VALVE)
+    En: Bool
     Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")
     Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
                           min=0, max=250, uom="degC")
@@ -82,7 +84,8 @@ class Heater:
 Install a `Harness` on a PLC and it synthesizes all feedback patches automatically:
 
 ```python
-from pyrung import Harness, PLC
+from pyrung import PLC
+from pyrung.core import Harness
 
 with PLC(logic, dt=0.010) as plc:
     harness = Harness(plc)
@@ -97,13 +100,13 @@ No manual feedback toggling. The harness discovered the `En → Fb_Contact` and 
 
 ### How bool feedback works
 
-When the harness sees `En` rise, it schedules `Fb=True` at `now + on_delay`. When `En` falls, it schedules `Fb=False` at `now + off_delay`. Delays are converted to scan ticks based on the PLC's `dt`:
+When the harness sees `En` rise, it schedules `Fb=True` at `now + on_delay`. When `En` falls, it schedules `Fb=False` at `now + off_delay`. Delays are rounded up to scan ticks based on the PLC's `dt`:
 
 | `on_delay` | `dt` | Ticks |
 |-----------|------|-------|
 | `20ms` | `0.010` | 2 |
 | `20ms` | `0.001` | 20 |
-| `20ms` | `0.100` | 1 (floor) |
+| `20ms` | `0.100` | 1 (minimum) |
 
 A scheduled patch always arrives at least 1 tick later — you can't schedule in the past.
 
@@ -114,7 +117,7 @@ Multiple `Fb` fields linked to the same `En` schedule independently, each with i
 Analog feedback delegates to a registered profile function. Register one with the `@profile` decorator:
 
 ```python
-from pyrung import profile
+from pyrung.core import profile
 
 @profile("generic_thermal")
 def generic_thermal(cur, en, dt):
@@ -131,7 +134,7 @@ The function is called once per scan tick while the coupling is active. It recei
 
 Write rate-per-second math; `dt` makes the result stable across scan rates. A profile running at `dt=0.001` and `dt=0.100` should converge to the same value over the same wall-clock duration.
 
-The program's own logic controls when `En` drops. A heater program turns off `En` when `Fb_Temp` hits the setpoint — the profile was ramping toward max, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
+The program's own logic controls when `En` drops. A heater program turns off `En` when `Fb_Temp` hits the setpoint — the profile was ramping upward, but the program cut it off at 180°C. The harness doesn't need to know the settling point; the program does.
 
 ```python
 @profile("120BTU_burner")
@@ -149,13 +152,13 @@ def generic_pressure(cur, en, dt):
 
 ## Validation
 
-pyrung validates physical annotations at construction time:
+pyrung validates UDT and named-array field annotations at construction time:
 
-- **Bool Fb + `link=` but no `physical=`** — rejected. A linked bool feedback must declare its response timing.
-- **`profile=` without `link=`** — rejected. A profile defines a response to a linked command; without a link there's nothing to respond to.
-- **Bool Fb with `profile=`** — rejected. Bool feedback uses `on_delay`/`off_delay`; profiles are for analog only.
+- **Bool Fb field + `link=` but no physical timing** — rejected. A linked bool feedback field must declare `physical=Physical(..., on_delay=..., off_delay=...)` or at least one of the two delays.
+- **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command; without a link there's nothing to respond to.
+- **Bool Fb with a physical profile** — rejected. Bool feedback uses `on_delay`/`off_delay`; profiles are for analog only.
 
-`Program.validate()` also checks physical annotations across the full program and reports findings.
+`Program.validate()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`.
 
 ## Forces override the harness
 
@@ -183,10 +186,11 @@ Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
                       min=0, max=250, uom="degC")
 ```
 
-These are descriptive — they don't clamp values at runtime. The validator uses them (out-of-range findings), the debugger's Data View shows them as range hints, and profile functions can reference them if needed.
+These are descriptive — they don't clamp values at runtime. The validator uses them for out-of-range findings, and the debugger's Data View shows declared ranges as hints. Profile functions receive only `(cur, en, dt)`, so pass constants explicitly if a profile needs bounds.
 
 ## Next steps
 
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
 - [Analysis](analysis.md) — validation findings, dataview, cause/effect
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging
+- [Harness in the debugger](dap-vscode.md#autoharness-in-the-debug-session) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance

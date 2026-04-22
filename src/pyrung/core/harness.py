@@ -91,10 +91,11 @@ class Harness:
         self._plc = plc
         self._heap: list[_ScheduledPatch] = []
         self._seq = 0
-        self._bool_couplings = []
-        self._analog_couplings = []
-        self._monitors = []
+        self._bool_couplings: list[_BoolCoupling] = []
+        self._analog_couplings: list[_AnalogCoupling] = []
+        self._monitors: list[Any] = []
         self._installed = False
+        self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
 
     def install(self) -> None:
         if self._installed:
@@ -137,15 +138,25 @@ class Harness:
         return patches
 
     def _on_pre_scan(self) -> None:
-        patches = self._drain_due()
-        analog_patches = self._tick_analog_profiles()
-        if analog_patches:
-            patches.update(analog_patches)
-        if patches:
-            self._plc.patch(patches)
+        bool_patches = self._drain_due()
+        analog_details = self._tick_analog_with_provenance()
 
-    def _tick_analog_profiles(self) -> dict[str, Any]:
-        patches: dict[str, Any] = {}
+        all_patches = dict(bool_patches)
+        for tag_name, value, _profile in analog_details:
+            all_patches[tag_name] = value
+
+        if all_patches:
+            self._plc.patch(all_patches)
+
+        if self.on_patches_applied is not None and all_patches:
+            notifications: list[tuple[str, Any, str]] = [
+                (n, v, "harness:nominal") for n, v in bool_patches.items()
+            ]
+            notifications.extend((n, v, f"harness:analog:{p}") for n, v, p in analog_details)
+            self.on_patches_applied(notifications)
+
+    def _tick_analog_with_provenance(self) -> list[tuple[str, Any, str]]:
+        results: list[tuple[str, Any, str]] = []
         for coupling in self._analog_couplings:
             if not coupling.active:
                 continue
@@ -156,8 +167,8 @@ class Harness:
             cur = state.tags.get(coupling.fb_name, 0.0)
             en = bool(state.tags.get(coupling.en_name, False))
             dt = state.memory.get("_dt", self._plc._dt)
-            patches[coupling.fb_name] = fn(cur, en, dt)
-        return patches
+            results.append((coupling.fb_name, fn(cur, en, dt), coupling.profile_name))
+        return results
 
     def _discover_couplings(self) -> None:
         seen_runtimes: set[int] = set()
@@ -258,3 +269,27 @@ class Harness:
     def _delay_scans(self, delay_ms: int) -> int:
         dt_ms = self._plc._dt * 1000
         return max(1, ceil(delay_ms / dt_ms))
+
+    def coupling_summary(self) -> dict[str, Any]:
+        return {
+            "installed": self._installed,
+            "bool_couplings": [
+                {
+                    "en": c.en_name,
+                    "fb": c.fb_name,
+                    "on_delay_ms": c.on_delay_ms,
+                    "off_delay_ms": c.off_delay_ms,
+                }
+                for c in self._bool_couplings
+            ],
+            "analog_couplings": [
+                {
+                    "en": c.en_name,
+                    "fb": c.fb_name,
+                    "profile": c.profile_name,
+                    "active": c.active,
+                }
+                for c in self._analog_couplings
+            ],
+            "pending_patches": len(self._heap),
+        }

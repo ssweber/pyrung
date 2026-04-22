@@ -187,6 +187,52 @@ Replay reads the file, skips `#` comment lines and blank lines, and executes eac
 
 Commands executed during replay are captured normally — if a recording is active, they appear in the transcript. The `record`, `replay`, and `help` verbs themselves are never captured.
 
+### Autoharness in the debug session
+
+If your program uses [Physical annotations](physical-harness.md) with `physical=` and `link=` declarations, the adapter installs the autoharness automatically at launch. A banner appears in the Debug Console:
+
+```text
+Harness: 3 feedback loop(s) (2 bool, 1 analog) — `harness status` for details
+```
+
+No configuration needed — if you annotated your UDTs, the harness activates. Feedback patches land at the same pre-scan phase as manual patches and forces. Forces still win: force a feedback tag to hold it regardless of what the harness schedules.
+
+```text
+harness status             # show couplings, pending patches, active state
+harness remove             # disable the harness for this session
+harness install            # re-install after removal
+```
+
+`harness status` lists each coupling with its timing or profile:
+
+```text
+Harness: active
+  bool  Gripper_En -> Gripper_Fb_Contact  (on=5ms, off=5ms)
+  bool  Gripper_En -> Gripper_Fb_Vacuum   (on=20ms, off=80ms)
+  analog  Heater_En -> Heater_Fb_Temp  profile=generic_thermal [active]
+```
+
+When the harness applies patches, they appear in the Debug Console output prefixed with `[harness]`:
+
+```text
+[harness] Gripper_Fb_Contact=True
+[harness] Heater_Fb_Temp=25.3
+```
+
+If a session recording is active, harness patches are captured with provenance tags (`harness:nominal` for bool feedback, `harness:analog:<profile>` for analog). In the transcript they appear as comment lines — visible for review, skipped on replay:
+
+```text
+# action: test_gripper_cycle
+patch Cmd true
+run 100ms
+# harness:nominal: patch Gripper_Fb_Contact True
+# harness:nominal: patch Gripper_Fb_Vacuum True
+# harness:analog:generic_thermal: patch Heater_Fb_Temp 25.3
+step 5
+```
+
+On replay, the harness re-synthesizes its own patches from the program state — the comment lines are documentation, not inputs.
+
 ## pyrung-live
 
 Attach to a running debug session from another terminal or process.
