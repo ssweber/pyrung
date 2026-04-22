@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
@@ -41,6 +42,7 @@ class RungNode:
     condition_reads: frozenset[str]
     data_reads: frozenset[str]
     writes: frozenset[str]
+    ote_writes: frozenset[str]
     calls: tuple[str, ...]
     source_file: str | None
     source_line: int | None
@@ -495,6 +497,7 @@ def _extract_rung_node(
     condition_reads: set[str] = set()
     data_reads: set[str] = set()
     writes: set[str] = set()
+    ote_writes: set[str] = set()
     calls: list[str] = []
 
     for condition in rung._conditions:
@@ -521,6 +524,8 @@ def _extract_rung_node(
             )
             writes.update(target_writes)
             data_reads.update(target_reads)
+            if isinstance(instr, OutInstruction):
+                ote_writes.update(target_writes)
 
         for field_name in getattr(cls, "_conditions", ()):
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
@@ -540,6 +545,7 @@ def _extract_rung_node(
         condition_reads=frozenset(condition_reads),
         data_reads=frozenset(data_reads),
         writes=frozenset(writes),
+        ote_writes=frozenset(ote_writes),
         calls=tuple(calls),
         source_file=getattr(rung, "source_file", None),
         source_line=getattr(rung, "source_line", None),

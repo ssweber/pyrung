@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, branch, out
+from pyrung.core import Bool, Int, Program, Rung, branch, latch, out, reset
 from pyrung.core.analysis.simplified import (
     And,
     Atom,
@@ -309,6 +309,26 @@ def test_simplify_absorption() -> None:
 # ---------------------------------------------------------------------------
 # Multiple writers (last rung wins)
 # ---------------------------------------------------------------------------
+
+
+def test_latch_reset_pivot_not_resolved() -> None:
+    """Pivots written by latch/reset are stateful — left as atoms."""
+    Start = Bool("Start")
+    Stop = Bool("Stop")
+    Running = Bool("Running")
+    T = Bool("T")
+    with Program() as prog:
+        with Rung(Start):
+            latch(Running)
+        with Rung(Stop):
+            reset(Running)
+        with Rung(Running):
+            out(T)
+
+    forms = simplified_forms(prog)
+    result = render(forms["T"].expr)
+    assert result == "Running"
+    assert forms["T"].pivot_count == 0
 
 
 def test_last_writer_wins() -> None:

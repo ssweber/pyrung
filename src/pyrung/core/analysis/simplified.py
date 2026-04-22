@@ -324,17 +324,40 @@ def _expr_for_writers(
 _MAX_DEPTH = 50
 
 
+def _ote_resolvable(graph: ProgramGraph) -> frozenset[str]:
+    """Return pivot tags where every writer rung uses OutInstruction (OTE).
+
+    Only OTE writes have combinational semantics (tag = rung condition).
+    Latch/reset, timers, counters, and copy are stateful — their tags
+    cannot be reduced to a Boolean expression of the rung condition.
+    """
+    resolvable: set[str] = set()
+    for tag_name, role in graph.tag_roles.items():
+        if role != TagRole.PIVOT:
+            continue
+        writer_indices = graph.writers_of.get(tag_name, frozenset())
+        if not writer_indices:
+            continue
+        if all(tag_name in graph.rung_nodes[ni].ote_writes for ni in writer_indices):
+            resolvable.add(tag_name)
+    return frozenset(resolvable)
+
+
 def _resolve_pivots(
     expr: Expr,
     graph: ProgramGraph,
     rung_map: dict[int, Rung],
     *,
+    resolvable: frozenset[str],
     reader_node_index: int | None = None,
     visited: frozenset[str] = frozenset(),
     depth: int = 0,
     _stats: dict[str, int] | None = None,
 ) -> Expr:
-    """Recursively substitute pivot atoms with their writing rung's expression."""
+    """Recursively substitute pivot atoms with their writing rung's expression.
+
+    Only pivots in *resolvable* (all writers are OTE) are substituted.
+    """
     if depth >= _MAX_DEPTH:
         return expr
 
@@ -347,6 +370,7 @@ def _resolve_pivots(
                 t,
                 graph,
                 rung_map,
+                resolvable=resolvable,
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
@@ -362,6 +386,7 @@ def _resolve_pivots(
                 t,
                 graph,
                 rung_map,
+                resolvable=resolvable,
                 reader_node_index=reader_node_index,
                 visited=visited,
                 depth=depth,
@@ -373,9 +398,8 @@ def _resolve_pivots(
 
     assert isinstance(expr, Atom)
     tag_name = expr.tag
-    role = graph.tag_roles.get(tag_name)
 
-    if role != TagRole.PIVOT:
+    if tag_name not in resolvable:
         return expr
 
     if tag_name in visited:
@@ -407,6 +431,7 @@ def _resolve_pivots(
         pivot_expr,
         graph,
         rung_map,
+        resolvable=resolvable,
         reader_node_index=max(effective),
         visited=visited | {tag_name},
         depth=depth + 1,
@@ -621,6 +646,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
     """Compute the simplified Boolean form for every terminal tag."""
     graph = build_program_graph(program)
     rung_map = _build_rung_map(program)
+    resolvable = _ote_resolvable(graph)
 
     results: dict[str, TerminalForm] = {}
 
@@ -643,6 +669,7 @@ def simplified_forms(program: Program) -> dict[str, TerminalForm]:
             raw_expr,
             graph,
             rung_map,
+            resolvable=resolvable,
             reader_node_index=max(effective),
             _stats=stats,
         )
