@@ -357,6 +357,35 @@ def _format_dataview(view: Any) -> ConsoleResult:
 
 
 # ---------------------------------------------------------------------------
+# Simplified form
+# ---------------------------------------------------------------------------
+
+
+@register("simplified", usage="simplified [tag]")
+def _cmd_simplified(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    runner = adapter._require_runner_locked()
+    forms = runner.program.simplified()
+
+    if len(parts) >= 2:
+        tag_name = parts[1]
+        form = forms.get(tag_name)
+        if form is None:
+            if tag_name not in {n for n in runner.program.dataview().tags}:
+                raise adapter.DAPAdapterError(f"Unknown tag '{tag_name}'")
+            raise adapter.DAPAdapterError(
+                f"'{tag_name}' is not a terminal tag. Only terminals have simplified forms."
+            )
+        stats = f"  ({form.writer_count} writer(s), {form.pivot_count} pivot(s) resolved, depth {form.depth})"
+        return ConsoleResult(f"{form}\n{stats}")
+
+    if not forms:
+        return ConsoleResult("No terminal tags found")
+    lines = [str(f) for f in forms.values()]
+    return ConsoleResult(f"{len(forms)} terminal(s):\n" + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Monitor verbs
 # ---------------------------------------------------------------------------
 

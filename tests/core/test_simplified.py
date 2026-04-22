@@ -330,6 +330,17 @@ def test_last_writer_wins() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_terminal_form_str() -> None:
+    A = Bool("A")
+    T = Bool("T")
+    with Program() as prog:
+        with Rung(A):
+            out(T)
+
+    forms = simplified_forms(prog)
+    assert str(forms["T"]) == "T = A"
+
+
 def test_program_simplified_method() -> None:
     A = Bool("A")
     T = Bool("T")

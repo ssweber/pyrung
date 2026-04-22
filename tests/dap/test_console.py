@@ -354,6 +354,41 @@ class TestMonitorVerbs:
 
 
 # ---------------------------------------------------------------------------
+# Simplified
+# ---------------------------------------------------------------------------
+
+
+class TestSimplifiedVerb:
+    def test_simplified_single_tag(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "simplified Light")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "Light = Button" in result
+        assert "writer(s)" in result
+
+    def test_simplified_all(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "simplified")
+        assert resp["success"] is True
+        result = resp["body"]["result"]
+        assert "terminal(s)" in result
+        assert "Light" in result
+
+    def test_simplified_non_terminal(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "simplified Button")
+        assert resp["success"] is False
+        assert "not a terminal" in resp["message"]
+
+    def test_simplified_unknown_tag(self, tmp_path: Path):
+        adapter, out = _setup(tmp_path)
+        resp, _ = _repl(adapter, out, "simplified ZZZnonexistent")
+        assert resp["success"] is False
+        assert "Unknown tag" in resp["message"]
+
+
+# ---------------------------------------------------------------------------
 # Help and error handling
 # ---------------------------------------------------------------------------
 
@@ -373,6 +408,7 @@ class TestHelpAndErrors:
             "cause",
             "effect",
             "monitor",
+            "simplified",
             "help",
         ]:
             assert verb in result

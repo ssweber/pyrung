@@ -146,6 +146,13 @@ downstream Button          # shorthand for dataview downstream:Button
 
 The query language supports role prefixes (`i:` inputs, `p:` pivots, `t:` terminals, `x:` isolated) and slice prefixes (`upstream:`, `downstream:`). Multiple tokens are applied left to right.
 
+### Simplified form
+
+```text
+simplified                 # show all terminals' simplified Boolean forms
+simplified MotorOut        # show one terminal, resolved to inputs
+```
+
 ### Monitors
 
 ```text

@@ -70,6 +70,9 @@ class TerminalForm:
     pivot_count: int
     depth: int
 
+    def __str__(self) -> str:
+        return f"{self.tag} = {render(self.expr)}"
+
 
 # ---------------------------------------------------------------------------
 # Condition → Expr conversion
