@@ -193,6 +193,8 @@ def _build_command_epilog() -> str:
 
 def main() -> None:
     """``pyrung-live`` command-line entry point."""
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     parser = argparse.ArgumentParser(
         prog="pyrung-live",
         description="Attach to a running pyrung DAP session",
@@ -200,7 +202,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--session", "-s", help="Session name to connect to")
-    parser.add_argument("command", nargs="*", help="Console command to send")
+    parser.add_argument("command", nargs="*", help="Console command (use ; to chain)")
     args = parser.parse_args()
 
     show_list = (not args.session and args.command and args.command[0] == "list") or (
@@ -230,15 +232,20 @@ def main() -> None:
     if not args.command:
         parser.error("No command given")
 
-    command = " ".join(args.command)
-    try:
-        ok, text = send_command(args.session, command)
-    except ConnectionRefusedError:
-        print(f"Cannot connect to session '{args.session}'", file=sys.stderr)
-        sys.exit(1)
-    except FileNotFoundError:
-        print(f"Session '{args.session}' not found", file=sys.stderr)
-        sys.exit(1)
-
-    print(text)
-    sys.exit(0 if ok else 1)
+    raw = " ".join(args.command)
+    commands = [c.strip() for c in raw.split(";") if c.strip()]
+    all_ok = True
+    for i, command in enumerate(commands):
+        try:
+            ok, text = send_command(args.session, command)
+        except ConnectionRefusedError:
+            print(f"Cannot connect to session '{args.session}'", file=sys.stderr)
+            sys.exit(1)
+        except FileNotFoundError:
+            print(f"Session '{args.session}' not found", file=sys.stderr)
+            sys.exit(1)
+        print(text)
+        if not ok:
+            all_ok = False
+            break
+    sys.exit(0 if all_ok else 1)
