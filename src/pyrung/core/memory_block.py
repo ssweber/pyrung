@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Never, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Never, cast, overload
 
 from pyrung.core.physical import Physical
 from pyrung.core.tag import (
@@ -313,6 +313,23 @@ class Block:
     _slot_min_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
     _slot_max_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
     _slot_uom_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
+    _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
+    _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
+        default=None, init=False, repr=False
+    )
+    _pyrung_structure_name: str | None = field(default=None, init=False, repr=False)
+    _pyrung_structure_field: str | None = field(default=None, init=False, repr=False)
+    _pyrung_field_choices: ChoiceMap | None = field(default=None, init=False, repr=False)
+    _pyrung_field_readonly: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_external: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_final: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_public: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_physical: Physical | None = field(default=None, init=False, repr=False)
+    _pyrung_field_link: str | None = field(default=None, init=False, repr=False)
+    _pyrung_field_min: int | float | None = field(default=None, init=False, repr=False)
+    _pyrung_field_max: int | float | None = field(default=None, init=False, repr=False)
+    _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
+    _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -438,14 +455,14 @@ class Block:
         return self._annotate_tag(tag, addr)
 
     def _annotate_tag(self, tag: LiveTag, addr: int) -> LiveTag:
-        runtime = getattr(self, "_pyrung_structure_runtime", None)
+        runtime = self._pyrung_structure_runtime
         if runtime is None:
             return tag
 
         object.__setattr__(tag, "_pyrung_structure_runtime", runtime)
-        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)  # ty: ignore[unresolved-attribute]
-        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)  # ty: ignore[unresolved-attribute]
-        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)
+        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)
+        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)
         object.__setattr__(tag, "_pyrung_structure_index", addr)
         return tag
 
@@ -477,52 +494,52 @@ class Block:
         if addr in self._slot_choices_overrides:
             choices = self._slot_choices_overrides[addr]
         else:
-            choices = cast(ChoiceMap | None, getattr(self, "_pyrung_field_choices", None))
+            choices = self._pyrung_field_choices
 
         if addr in self._slot_readonly_overrides:
             readonly = self._slot_readonly_overrides[addr]
         else:
-            readonly = bool(getattr(self, "_pyrung_field_readonly", False))
+            readonly = self._pyrung_field_readonly
 
         if addr in self._slot_external_overrides:
             external = self._slot_external_overrides[addr]
         else:
-            external = bool(getattr(self, "_pyrung_field_external", False))
+            external = self._pyrung_field_external
 
         if addr in self._slot_final_overrides:
             final = self._slot_final_overrides[addr]
         else:
-            final = bool(getattr(self, "_pyrung_field_final", False))
+            final = self._pyrung_field_final
 
         if addr in self._slot_public_overrides:
             public = self._slot_public_overrides[addr]
         else:
-            public = bool(getattr(self, "_pyrung_field_public", False))
+            public = self._pyrung_field_public
 
         if addr in self._slot_physical_overrides:
             physical = self._slot_physical_overrides[addr]
         else:
-            physical = getattr(self, "_pyrung_field_physical", None)
+            physical = self._pyrung_field_physical
 
         if addr in self._slot_link_overrides:
             link = self._slot_link_overrides[addr]
         else:
-            link = getattr(self, "_pyrung_field_link", None)
+            link = self._pyrung_field_link
 
         if addr in self._slot_min_overrides:
             min_val = self._slot_min_overrides[addr]
         else:
-            min_val = getattr(self, "_pyrung_field_min", None)
+            min_val = self._pyrung_field_min
 
         if addr in self._slot_max_overrides:
             max_val = self._slot_max_overrides[addr]
         else:
-            max_val = getattr(self, "_pyrung_field_max", None)
+            max_val = self._pyrung_field_max
 
         if addr in self._slot_uom_overrides:
             uom = self._slot_uom_overrides[addr]
         else:
-            uom = getattr(self, "_pyrung_field_uom", None)
+            uom = self._pyrung_field_uom
 
         return _SlotHints(
             choices, readonly, external, final, public, physical, link, min_val, max_val, uom

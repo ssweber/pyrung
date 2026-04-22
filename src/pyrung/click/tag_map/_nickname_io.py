@@ -243,7 +243,7 @@ def tag_map_from_nickname_file(
         seen_names[name] = (memory_type, address)
 
     def apply_block_rows(logical_block: Block, spec: _BlockImportSpec) -> None:
-        logical_block._pyrung_click_bg_color = spec.bg_color  # ty: ignore[unresolved-attribute]
+        logical_block._pyrung_click_bg_color = spec.bg_color
         logical_addresses = tuple(
             logical_block.select(logical_block.start, logical_block.end).addresses
         )
@@ -588,8 +588,8 @@ def tag_map_from_nickname_file(
                 stride=stride,
                 always_number=inferred_always_number,
             )(runtime_type)
-            runtime._pyrung_click_bg_color = spec.bg_color  # ty: ignore[unresolved-attribute]
-            runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
+            runtime._pyrung_click_bg_color = spec.bg_color
+            runtime_blocks = runtime._blocks
 
             for field, _ in ordered_fields_with_offsets:
                 block = runtime_blocks[field]
@@ -727,7 +727,7 @@ def tag_map_from_nickname_file(
                 )
                 count = next(iter(logical_counts))
                 runtime = udt(count=count)(runtime_type)
-                runtime_blocks = cast(dict[str, Block], cast(Any, runtime)._blocks)
+                runtime_blocks = runtime._blocks
 
                 for spec, field_name in grouped_specs:
                     logical_block = runtime_blocks[field_name]
@@ -825,7 +825,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             if kind == "named_array":
                 return None
             if kind == "udt":
-                field = cast(str, entry.logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+                field = cast(str, entry.logical._pyrung_structure_field)
                 return f"{name}.{field}:udt"
 
         default_start = _default_logical_block_start(entry.hardware_addresses)

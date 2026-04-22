@@ -14,6 +14,7 @@ This is the completed version of the conveyor built across the
 """
 
 import os
+from typing import Any, cast
 
 from pyrung import (
     PLC,
@@ -73,6 +74,8 @@ class SortState:
     SORTING = 2
     RESETTING = 3
 
+SortState = cast(Any, SortState)
+
 State = Int("State", choices=SortState, public=True)  # DS005 — sort sequence state
 
 SizeReading = Int("SizeReading")  # DS006 — analog size sensor value
@@ -110,10 +113,7 @@ mapping = TagMap(
         IsLarge.map_to(c[2]),
         CountReset.map_to(c[3]),
         # State constants
-        SortState.IDLE.map_to(ds[1]),
-        SortState.DETECTING.map_to(ds[2]),
-        SortState.SORTING.map_to(ds[3]),
-        SortState.RESETTING.map_to(ds[4]),
+        *SortState.map_to(ds.select(1, 4)),
         # Data
         State.map_to(ds[5]),
         SizeReading.map_to(ds[6]),

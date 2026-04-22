@@ -10,7 +10,7 @@ import builtins
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, ClassVar, Protocol, get_origin
+from typing import Any, ClassVar, Literal, Protocol, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.physical import Physical
@@ -40,7 +40,7 @@ _RESERVED_FIELD_NAMES = frozenset(
         "type",
     }
 )
-_PRIMITIVE_TYPE_MAP = {
+_PRIMITIVE_TYPE_MAP: dict[object, TagType] = {
     bool: TagType.BOOL,
     int: TagType.INT,
     float: TagType.REAL,
@@ -175,8 +175,11 @@ class DoneAccUDT(Protocol):
     ``Counter.clone("Name")``, and any ``@udt()`` with matching fields.
     """
 
-    Done: Tag
-    Acc: Tag
+    @property
+    def Done(self) -> Tag: ...
+
+    @property
+    def Acc(self) -> Tag: ...
 
 
 class InstanceView:
@@ -278,7 +281,7 @@ class _StructRuntime:
         external: bool = False,
         final: bool = False,
         public: bool = False,
-        kind: str = "udt",
+        kind: Literal["udt", "named_array"] = "udt",
     ):
         _validate_name(name)
         _validate_count(count)
@@ -292,6 +295,7 @@ class _StructRuntime:
         self.final = bool(final)
         self.public = bool(public)
         self._structure_kind = kind
+        self._pyrung_click_bg_color: str | None = None
         self._original_field_specs = field_specs
         self._field_specs: dict[str, _FieldSpec] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
@@ -314,20 +318,20 @@ class _StructRuntime:
                 ),
                 default_factory=_make_default_factory(field_spec.default),
             )
-            block._pyrung_structure_runtime = self  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_kind = self._structure_kind  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_name = name  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_choices = field_spec.choices  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_readonly = field_spec.readonly  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_external = field_spec.external  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_final = field_spec.final  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_public = field_spec.public  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_physical = field_spec.physical  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_link = field_spec.link  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_min = field_spec.min  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_max = field_spec.max  # ty: ignore[unresolved-attribute]
-            block._pyrung_field_uom = field_spec.uom  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_runtime = self
+            block._pyrung_structure_kind = self._structure_kind
+            block._pyrung_structure_name = name
+            block._pyrung_structure_field = field_spec.name
+            block._pyrung_field_choices = field_spec.choices
+            block._pyrung_field_readonly = field_spec.readonly
+            block._pyrung_field_external = field_spec.external
+            block._pyrung_field_final = field_spec.final
+            block._pyrung_field_public = field_spec.public
+            block._pyrung_field_physical = field_spec.physical
+            block._pyrung_field_link = field_spec.link
+            block._pyrung_field_min = field_spec.min
+            block._pyrung_field_max = field_spec.max
+            block._pyrung_field_uom = field_spec.uom
             self._blocks[field_spec.name] = block
 
     def clone(
@@ -397,6 +401,35 @@ class _StructRuntime:
         return (
             f"{type(self).__name__}({self.name!r}, count={self.count}, "
             f"fields={self._field_order!r})"
+        )
+
+
+class _DoneAccRuntime(_StructRuntime):
+    """Typed structure runtime for built-in Timer/Counter instances."""
+
+    Done: LiveTag
+    Acc: LiveTag
+
+    def clone(
+        self,
+        name: str,
+        *,
+        count: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
+    ) -> _DoneAccRuntime:
+        return _DoneAccRuntime(
+            name=name,
+            count=self.count if count is None else count,
+            field_specs=self._original_field_specs,
+            always_number=self.always_number,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
+            kind=self._structure_kind,
         )
 
 
@@ -812,7 +845,7 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
     if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
         return annotation._tag_type
 
-    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)  # ty: ignore[invalid-argument-type]
+    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)
     if primitive is not None:
         return primitive
 
@@ -916,7 +949,7 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
 # explicit count: ``Timer.clone("T", count=500)``.
 
 
-Timer = _StructRuntime(
+Timer = _DoneAccRuntime(
     name="Timer",
     count=1,
     field_specs=(
@@ -925,7 +958,7 @@ Timer = _StructRuntime(
     ),
 )
 
-Counter = _StructRuntime(
+Counter = _DoneAccRuntime(
     name="Counter",
     count=1,
     field_specs=(

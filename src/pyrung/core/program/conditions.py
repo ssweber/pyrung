@@ -28,8 +28,8 @@ def _make_condition(
     source_file, source_line = _capture_source(depth=source_depth)
     condition.source_file, condition.source_line = source_file, source_line
 
-    if propagate_children and hasattr(condition, "conditions"):
-        for child in condition.conditions:  # ty: ignore[not-iterable]
+    if propagate_children and isinstance(condition, AllCondition | AnyCondition):
+        for child in condition.conditions:
             if child.source_file is None:
                 child.source_file = source_file
             if child.source_line is None:
