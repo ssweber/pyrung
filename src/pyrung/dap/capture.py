@@ -110,6 +110,7 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
         _raw_transcript, entries = capture.stop()
 
         from pyrung.dap.condenser import condense_capture
+        from pyrung.dap.miner import mine_candidates
 
         runner = adapter._require_runner_locked()
         condensed = condense_capture(
@@ -118,7 +119,21 @@ def _cmd_record(adapter: Any, expression: str) -> ConsoleResult:
             runner,
             start_scan_id=start_scan_id,
         )
-        return ConsoleResult(f"Recording stopped.\n{condensed.transcript}")
+
+        suppressed = frozenset(getattr(adapter, "_miner_suppressed", set()))
+        candidates = mine_candidates(
+            action,
+            entries,
+            runner,
+            start_scan_id=start_scan_id,
+            suppressed=suppressed,
+        )
+        adapter._miner_candidates = candidates
+
+        suffix = ""
+        if candidates:
+            suffix = f"\n{len(candidates)} candidate invariant(s) — use `candidates` to review"
+        return ConsoleResult(f"Recording stopped.\n{condensed.transcript}{suffix}")
 
     if capture.recording:
         raise adapter.DAPAdapterError(

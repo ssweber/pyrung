@@ -34,7 +34,7 @@ def register(verb: str, *, usage: str = "", group: str = "") -> Callable[..., An
     return decorator
 
 
-_GROUP_ORDER = ["execution", "data", "analysis", "capture", ""]
+_GROUP_ORDER = ["execution", "data", "analysis", "capture", "review", ""]
 
 _GROUP_LAYOUT: dict[str, list[str | None]] = {
     "analysis": [
@@ -559,13 +559,17 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
             try:
                 n = int(parts[i + 1])
             except ValueError as exc:
-                raise adapter.DAPAdapterError(f"log count must be integer, got '{parts[i + 1]}'") from exc
+                raise adapter.DAPAdapterError(
+                    f"log count must be integer, got '{parts[i + 1]}'"
+                ) from exc
             i += 2
         else:
             try:
                 n = int(parts[i])
             except ValueError as exc:
-                raise adapter.DAPAdapterError(f"log count must be integer, got '{parts[i]}'") from exc
+                raise adapter.DAPAdapterError(
+                    f"log count must be integer, got '{parts[i]}'"
+                ) from exc
             i += 1
     if n < 1:
         raise adapter.DAPAdapterError("log count must be >= 1")
@@ -599,7 +603,9 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
         force_snap = log._force_changes_by_scan.get(scan_id)
         if force_snap is not None:
             prev_scan = scan_id - 1
-            prev_forces = log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
+            prev_forces = (
+                log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
+            )
             for tag in sorted(set(force_snap) | set(prev_forces)):
                 old = prev_forces.get(tag)
                 new = force_snap.get(tag)

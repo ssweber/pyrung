@@ -92,7 +92,12 @@ class DAPAdapter:
         self._notes: dict[int, list[str]] = {}
         self._action_log: list[tuple[int | None, str, str]] = []
 
+        self._miner_candidates: list[Any] = []
+        self._miner_accepted: list[Any] = []
+        self._miner_suppressed: set[str] = set()
+
         import pyrung.dap.harness_console  # noqa: F401
+        import pyrung.dap.miner_console  # noqa: F401
 
     @property
     def _runner(self) -> PLC | None:
