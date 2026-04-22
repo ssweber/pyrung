@@ -162,6 +162,74 @@ unmonitor Button           # stop watching
 
 Monitors also appear in the Variables panel under `PLC Monitors` and can be promoted to data breakpoints.
 
+### Session capture
+
+Record a sequence of console commands as a replayable transcript.
+
+```text
+record start_machine       # begin recording action "start_machine"
+patch State 1
+run 500ms
+patch State 2
+step 1
+record stop                # stop recording, print transcript
+```
+
+On stop, the transcript is printed as plain text — one command per line with a `# action:` comment header. The transcript is the session file format: paste it back into the console or save it to a file for replay.
+
+If forces are active when recording starts, a warning is printed.
+
+```text
+replay session.txt         # feed a transcript file back through the console
+```
+
+Replay reads the file, skips `#` comment lines and blank lines, and executes each command in order. If a breakpoint fires or a command fails, replay halts and reports the line.
+
+Commands executed during replay are captured normally — if a recording is active, they appear in the transcript. The `record`, `replay`, and `help` verbs themselves are never captured.
+
+## pyrung-live
+
+Attach to a running debug session from another terminal or process.
+
+When the DAP adapter launches, it starts a TCP server on localhost and writes the port to a session file. The session name defaults to the program filename stem (`logic.py` → `logic`) or can be set explicitly in the launch configuration:
+
+```json
+{
+  "type": "pyrung",
+  "request": "launch",
+  "program": "${file}",
+  "session": "my_session"
+}
+```
+
+### CLI usage
+
+```text
+pyrung-live list                           # show active sessions
+pyrung-live -s my_session help             # send a command
+pyrung-live -s my_session step 5           # step 5 scans
+pyrung-live -s my_session force Button true
+pyrung-live -s my_session cause Light
+```
+
+Every console command works over the live connection — forces, patches, stepping, queries, record/replay. The response is printed to stdout. Exit code is 0 on success, 1 on error.
+
+### Python library
+
+```python
+from pyrung.dap.live import send_command, list_sessions
+
+sessions = list_sessions()          # ["logic", "pump_test"]
+ok, text = send_command("logic", "step 5")
+print(text)                         # "Stepped 5 scan(s), now at scan 10"
+```
+
+### How it works
+
+The server is a single-threaded TCP listener that dispatches commands through the same `console.dispatch()` path as the Debug Console. Commands are serialized by the adapter's state lock — a live client waits if a scan is in progress.
+
+Session discovery uses port files in the system temp directory (`<tempdir>/pyrung/pyrung-<name>.port`). The file is created on launch and removed on disconnect.
+
 ## DAP to runner mapping
 
 | VS Code action | Runner API |
