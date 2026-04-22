@@ -116,10 +116,14 @@ step                       # advance one scan
 step 5                     # advance 5 scans
 run 100                    # run 100 scans
 run 500ms                  # run for 500ms of sim time
-run 2s                     # run for 2 seconds of sim time
+run 2 s                    # run for 2 seconds (split unit ok)
+continue                   # run continuously (background)
+pause                      # stop a running continue
 ```
 
 `step` and `run` process breakpoints and logpoints during execution. If a breakpoint fires, the command stops early and reports it. Duration parsing accepts `ms`, `s`, `min`, `h` — same format as Physical delay declarations.
+
+`continue` starts a background scan loop (same as the VS Code Continue button). `pause` signals it to stop after the current scan.
 
 ### Causal queries
 
@@ -161,6 +165,30 @@ unmonitor Button           # stop watching
 ```
 
 Monitors also appear in the Variables panel under `PLC Monitors` and can be promoted to data breakpoints.
+
+### Notes and log
+
+Annotate the timeline with free-text notes and review recent activity.
+
+```text
+note testing startup sequence   # attach a note to the current scan
+note momentary start press      # another note before the next action
+log                             # show last 20 scans of activity
+log 50                          # show last 50 scans
+```
+
+`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window. When commands come from `pyrung-live`, the scan header is tagged with `(live)` so you can tell who did what in a pair-programming session.
+
+```text
+scan 12  forces: EstopOK=True
+
+scan 10:
+  # testing startup sequence
+scan 11:  (live)
+  patch StartBtn True
+  ConveyorMotor: False → True
+  Running: False → True
+```
 
 ### Session capture
 
@@ -251,16 +279,16 @@ When the DAP adapter launches, it starts a TCP server on localhost and writes th
 ### CLI usage
 
 ```text
-pyrung-live list                           # show active sessions
+pyrung-live                                # list active sessions
 pyrung-live step 5                         # works when only one session is active
 pyrung-live -s my_session step 5           # explicit session when multiple are running
-pyrung-live -s my_session force Button true
-pyrung-live -s my_session cause Light
+pyrung-live "force Button true; step 5; cause Light"  # chain commands with ;
+pyrung-live -h                             # show all available commands
 ```
 
-When only one session is active, `--session` can be omitted. With multiple sessions, the CLI lists them and asks you to pick one.
+When only one session is active, `--session` can be omitted. With multiple sessions, the CLI lists them and asks you to pick one. Running with no arguments lists active sessions.
 
-Every console command works over the live connection — forces, patches, stepping, queries, record/replay. The response is printed to stdout. Exit code is 0 on success, 1 on error.
+Commands can be chained with `;` in a single invocation — they run sequentially over one connection, halting on first error. Every console command works over the live connection — forces, patches, stepping, queries, record/replay. The response is printed to stdout. Exit code is 0 on success, 1 on error.
 
 ### Python library
 
@@ -276,7 +304,7 @@ print(text)                         # "Stepped 5 scan(s), now at scan 10"
 
 The server is a single-threaded TCP listener that dispatches commands through the same `console.dispatch()` path as the Debug Console. Commands are serialized by the adapter's state lock — a live client waits if a scan is in progress.
 
-Session discovery uses port files in the system temp directory (`<tempdir>/pyrung/pyrung-<name>.port`). The file is created on launch and removed on disconnect.
+Session discovery uses port files in the system temp directory (`<tempdir>/pyrung/pyrung-<name>.port`). The file is created on launch and removed on disconnect. Stale port files from crashed processes are pruned automatically when listing sessions.
 
 ## DAP to runner mapping
 

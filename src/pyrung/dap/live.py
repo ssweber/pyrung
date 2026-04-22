@@ -103,7 +103,7 @@ class LiveServer:
 
         try:
             with self._adapter._state_lock:
-                result = dispatch(self._adapter, command)
+                result = dispatch(self._adapter, command, provenance="live")
             conn.send_bytes(result.text.encode("utf-8"))
         except Exception as exc:
             conn.send_bytes(f"ERROR: {exc}".encode())

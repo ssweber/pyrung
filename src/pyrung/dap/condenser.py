@@ -14,7 +14,7 @@ from typing import Any, Literal
 from pyrung.core.physical import parse_duration
 from pyrung.dap.capture import CaptureEntry
 
-CommandKind = Literal["mutation", "span", "query", "unknown"]
+CommandKind = Literal["mutation", "span", "query", "note", "unknown"]
 SpanKind = Literal["run", "step"]
 
 
@@ -80,6 +80,7 @@ _QUERY_VERBS = frozenset(
         "downstream",
         "effect",
         "help",
+        "log",
         "monitor",
         "recovers",
         "simplified",
@@ -154,6 +155,9 @@ def classify_command(command: str) -> CommandInfo:
             )
         return CommandInfo(kind="span", verb=verb, span_kind="run", span_scans=scans)
 
+    if verb == "note":
+        return CommandInfo(kind="note", verb=verb)
+
     if verb == "harness" and len(parts) >= 2 and parts[1].lower() == "status":
         return CommandInfo(kind="query", verb=verb)
     if verb in _QUERY_VERBS:
@@ -189,6 +193,16 @@ def condense_capture(
 
         if info.kind == "query":
             stats.dropped_queries += 1
+            continue
+
+        if info.kind == "note":
+            reduced, coalesced = coalesce_fumbles(
+                pending_mutations, runner, segment_start_scan,
+            )
+            output.extend(_format_entry(e) for e in reduced)
+            stats.coalesced_fumbles += coalesced
+            pending_mutations = []
+            output.append(_format_note(entry.command))
             continue
 
         if info.kind == "span":
@@ -366,6 +380,13 @@ def _format_entry(entry: CaptureEntry) -> str:
     if entry.provenance == "console":
         return entry.command
     return f"{entry.provenance}: {entry.command}"
+
+
+def _format_note(command: str) -> str:
+    rest = command.strip()
+    idx = rest.find(" ")
+    text = rest[idx:].strip() if idx >= 0 else ""
+    return f"# note: {text}"
 
 
 def _dt_seconds(runner: Any) -> float:

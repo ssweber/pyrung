@@ -82,7 +82,7 @@ class CaptureBuffer:
 _CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue"})
 
 
-def capture_hook(adapter: Any, verb: str, expression: str) -> None:
+def capture_hook(adapter: Any, verb: str, expression: str, *, provenance: str = "console") -> None:
     """Called by ``dispatch()`` after every successful command."""
     capture: CaptureBuffer | None = getattr(adapter, "_capture", None)
     if capture is None or not capture.recording or verb in _CAPTURE_EXCLUDED:
@@ -90,7 +90,7 @@ def capture_hook(adapter: Any, verb: str, expression: str) -> None:
     runner = getattr(adapter, "_runner", None)
     timestamp = runner.current_state.timestamp if runner else 0.0
     scan_id = runner.current_state.scan_id if runner else getattr(adapter, "_current_scan_id", None)
-    capture.append(expression.strip(), scan_id, timestamp)
+    capture.append(expression.strip(), scan_id, timestamp, provenance=provenance)
 
 
 @register("record", usage="record <action> | record stop", group="capture")

@@ -89,6 +89,8 @@ class DAPAdapter:
         self._capture = CaptureBuffer()
         self._live_server: Any = None
         self._harness: Any = None
+        self._notes: dict[int, list[str]] = {}
+        self._action_log: list[tuple[int | None, str, str]] = []
 
         import pyrung.dap.harness_console  # noqa: F401
 

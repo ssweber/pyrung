@@ -38,6 +38,8 @@ _GROUP_ORDER = ["execution", "data", "analysis", "capture", ""]
 
 _GROUP_LAYOUT: dict[str, list[str | None]] = {
     "analysis": [
+        "log",
+        None,
         "dataview",
         "downstream",
         "upstream",
@@ -78,7 +80,7 @@ def _format_grouped_help() -> str:
     return "\n".join(lines)
 
 
-def dispatch(adapter: Any, expression: str) -> ConsoleResult:
+def dispatch(adapter: Any, expression: str, *, provenance: str = "console") -> ConsoleResult:
     parts = expression.strip().split()
     if not parts:
         raise adapter.DAPAdapterError("Empty command")
@@ -94,7 +96,14 @@ def dispatch(adapter: Any, expression: str) -> ConsoleResult:
 
     from pyrung.dap.capture import capture_hook
 
-    capture_hook(adapter, verb, expression)
+    capture_hook(adapter, verb, expression, provenance=provenance)
+
+    action_log: list[tuple[int | None, str, str]] | None = getattr(adapter, "_action_log", None)
+    if action_log is not None:
+        runner = getattr(adapter, "_runner", None)
+        scan_id = runner.current_state.scan_id if runner else None
+        action_log.append((scan_id, expression.strip(), provenance))
+
     return result
 
 
@@ -210,7 +219,7 @@ def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     )
 
 
-@register("run", usage="run <cycles|duration>", group="execution")
+@register("run", usage="run <N | duration>  (e.g. 10, 500ms, 2 s)", group="execution")
 def _cmd_run(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
     if len(parts) < 2:
@@ -396,7 +405,7 @@ def _parse_value(raw: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-@register("dataview", usage="dataview <query>", group="analysis")
+@register("dataview", usage="dataview <text | i: | p: | t: | upstream:tag>", group="analysis")
 def _cmd_dataview(adapter: Any, expression: str) -> ConsoleResult:
     rest = expression.strip().split(None, 1)
     if len(rest) < 2:
@@ -520,6 +529,113 @@ def _cmd_unmonitor(adapter: Any, expression: str) -> ConsoleResult:
     adapter._monitor_meta.pop(target_id, None)
     adapter._monitor_values.pop(target_id, None)
     return ConsoleResult(f"Monitor removed: {tag_name}")
+
+
+# ---------------------------------------------------------------------------
+# Note / Log
+# ---------------------------------------------------------------------------
+
+
+@register("note", usage="note <text>", group="data")
+def _cmd_note(adapter: Any, expression: str) -> ConsoleResult:
+    rest = expression.strip()
+    idx = rest.find(" ")
+    if idx < 0 or not rest[idx:].strip():
+        raise adapter.DAPAdapterError("Usage: note <text>")
+    text = rest[idx:].strip()
+    runner = adapter._require_runner_locked()
+    scan_id = runner.current_state.scan_id
+    adapter._notes.setdefault(scan_id, []).append(text)
+    return ConsoleResult(f"Note at scan {scan_id}: {text}")
+
+
+@register("log", usage="log [N]", group="analysis")
+def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
+    parts = expression.strip().split()
+    n = 20
+    i = 1
+    while i < len(parts):
+        if parts[i] == "-n" and i + 1 < len(parts):
+            try:
+                n = int(parts[i + 1])
+            except ValueError as exc:
+                raise adapter.DAPAdapterError(f"log count must be integer, got '{parts[i + 1]}'") from exc
+            i += 2
+        else:
+            try:
+                n = int(parts[i])
+            except ValueError as exc:
+                raise adapter.DAPAdapterError(f"log count must be integer, got '{parts[i]}'") from exc
+            i += 1
+    if n < 1:
+        raise adapter.DAPAdapterError("log count must be >= 1")
+
+    runner = adapter._require_runner_locked()
+    log = runner._scan_log
+    tip = runner._state.scan_id
+    forces = dict(runner.forces)
+
+    start = max(log.base_scan, tip - n + 1)
+    lines: list[str] = []
+    lines.append(f"scan {tip}  forces: {_format_forces(forces)}")
+    lines.append("")
+
+    notes: dict[int, list[str]] = getattr(adapter, "_notes", {})
+    action_log: list[tuple[int | None, str, str]] = getattr(adapter, "_action_log", [])
+    scan_sources: dict[int, set[str]] = {}
+    for a_scan, _cmd, prov in action_log:
+        if a_scan is not None and prov != "console":
+            scan_sources.setdefault(a_scan, set()).add(prov)
+
+    prev_state = None
+    for scan_id in range(start, tip + 1):
+        entries: list[str] = []
+        for note_text in notes.get(scan_id, []):
+            entries.append(f"  # {note_text}")
+        patches = log._patches_by_scan.get(scan_id)
+        if patches:
+            for tag, val in sorted(patches.items()):
+                entries.append(f"  patch {tag} {val!r}")
+        force_snap = log._force_changes_by_scan.get(scan_id)
+        if force_snap is not None:
+            prev_scan = scan_id - 1
+            prev_forces = log._force_changes_by_scan.get(prev_scan, {}) if prev_scan >= log.base_scan else {}
+            for tag in sorted(set(force_snap) | set(prev_forces)):
+                old = prev_forces.get(tag)
+                new = force_snap.get(tag)
+                if old != new:
+                    if new is not None and old is None:
+                        entries.append(f"  force {tag} {new!r}")
+                    elif new is None and old is not None:
+                        entries.append(f"  unforce {tag}")
+                    else:
+                        entries.append(f"  force {tag} {old!r} → {new!r}")
+
+        cur_state = runner.history.at(scan_id)
+        if prev_state is not None:
+            for key in sorted(set(cur_state.tags.keys()) | set(prev_state.tags.keys())):
+                old_v = prev_state.tags.get(key)
+                new_v = cur_state.tags.get(key)
+                if old_v != new_v:
+                    entries.append(f"  {key}: {old_v!r} → {new_v!r}")
+        prev_state = cur_state
+
+        if entries:
+            sources = scan_sources.get(scan_id)
+            tag = f"  ({', '.join(sorted(sources))})" if sources else ""
+            lines.append(f"scan {scan_id}:{tag}")
+            lines.extend(entries)
+
+    if len(lines) == 2:
+        lines.append("(no changes)")
+
+    return ConsoleResult("\n".join(lines))
+
+
+def _format_forces(forces: dict[str, Any]) -> str:
+    if not forces:
+        return "none"
+    return ", ".join(f"{k}={v!r}" for k, v in sorted(forces.items()))
 
 
 # ---------------------------------------------------------------------------
