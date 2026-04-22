@@ -9,6 +9,7 @@ from pyrung.core.analysis.pdg import (
     build_program_graph,
     classify_tags,
 )
+from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
 
 __all__ = [
     "DataView",
@@ -17,6 +18,8 @@ __all__ = [
     "TagNameMatcher",
     "TagRole",
     "TagVersion",
+    "TerminalForm",
     "build_program_graph",
     "classify_tags",
+    "simplified_forms",
 ]

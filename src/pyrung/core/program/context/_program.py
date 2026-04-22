@@ -13,6 +13,7 @@ from ..validation import _check_with_body_from_frame
 if TYPE_CHECKING:
     from pyrung.core.analysis.dataview import DataView
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.simplified import TerminalForm
     from pyrung.core.context import ScanContext
 
     from ..validation import DialectValidator
@@ -179,6 +180,12 @@ class Program:
         from pyrung.core.analysis.dataview import DataView
 
         return DataView.from_graph(self._cached_graph)
+
+    def simplified(self) -> dict[str, TerminalForm]:
+        """Compute the simplified Boolean form for every terminal tag."""
+        from pyrung.core.analysis.simplified import simplified_forms
+
+        return simplified_forms(self)
 
     def _evaluate(self, ctx: ScanContext) -> None:
         """Evaluate all main rungs in order (not subroutines) within a ScanContext."""

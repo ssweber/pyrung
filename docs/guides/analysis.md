@@ -96,6 +96,76 @@ dv = logic.dataview()   # works directly on the Program
 
 Useful in test utilities or static analysis scripts that don't need to run scans.
 
+## Simplified form: what does this output actually depend on?
+
+`program.simplified()` resolves each terminal tag's condition chain back to inputs, eliminating intermediate pivots. A 14-rung interlock chain through 10 intermediate tags becomes a two-term Boolean expression over the 8 inputs that actually matter.
+
+```python
+from pyrung import Bool, Program, Rung, branch, out
+
+EStop          = Bool("EStop")
+RunPermit      = Bool("RunPermit")
+PlantMode      = Bool("PlantMode")
+StartBtn       = Bool("StartBtn")
+MaintOverride  = Bool("MaintOverride")
+SafetyOK       = Bool("SafetyOK")
+Permitted      = Bool("Permitted")
+Running        = Bool("Running")
+SealIn         = Bool("SealIn")
+MotorOut       = Bool("MotorOut")
+
+with Program() as logic:
+    with Rung(~EStop):
+        out(SafetyOK)
+    with Rung(RunPermit, SafetyOK):
+        out(Permitted)
+    with Rung(Permitted):
+        with branch(StartBtn):
+            out(Running)
+        with branch(SealIn):
+            out(Running)
+    with Rung(Running):
+        out(SealIn)
+    with Rung():
+        with branch(Running, ~EStop):
+            out(MotorOut)
+        with branch(MaintOverride):
+            out(MotorOut)
+
+forms = logic.simplified()
+```
+
+Each entry is a `TerminalForm` with the resolved expression and resolution stats:
+
+```python
+form = forms["MotorOut"]
+form.expr          # the simplified Boolean expression tree
+form.writer_count  # how many rungs write this tag
+form.pivot_count   # how many intermediate tags were resolved away
+form.depth         # deepest resolution chain traversed
+```
+
+Use `render()` for a human-readable string:
+
+```python
+from pyrung.core.analysis.simplified import render
+
+render(forms["MotorOut"].expr)
+# 'Or(And(RunPermit, ~EStop, Or(StartBtn, Running), ~Fault), MaintOverride)'
+```
+
+### What it tells you
+
+The simplified form strips away organizational structure — the intermediate tags that exist to break logic into reviewable chunks — and shows the actual dependency. A 14-rung → 2-term reduction tells you: 8 inputs matter, there are 2 independent paths, and `MaintOverride` bypasses everything.
+
+### Branch topology is preserved
+
+Sibling branches produce `And(parent, Or(local₁, local₂))`, not the flat DNF form `Or(And(parent, local₁), And(parent, local₂))`. The series/parallel structure of the original program carries through resolution — shared preconditions appear once, with the distinguishing triggers nested inside.
+
+### Cycles (seal-in)
+
+Feedback loops like seal-in latches are detected and left as-is. When resolution encounters a tag it has already visited in the current chain, it stops substituting. The seal-in tag appears in the output as a leaf — indicating the latch rather than infinitely expanding.
+
 ## Cause and effect: why did this happen?
 
 After running some scans, `plc.cause()` and `plc.effect()` explain what happened and why.
