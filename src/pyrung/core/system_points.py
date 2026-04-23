@@ -245,6 +245,13 @@ _DERIVED_TAG_NAMES = frozenset(
     }
 )
 
+_DERIVED_EDGE_TAGS: dict[str, Callable[[int], tuple[bool, bool]]] = {
+    system.sys.scan_clock_toggle.name: lambda scan_id: (
+        scan_id % 2 == 1,
+        scan_id > 0 and scan_id % 2 == 0,
+    ),
+}
+
 _CLOCK_HALF_PERIODS = {
     system.sys.clock_10ms.name: 0.005,
     system.sys.clock_100ms.name: 0.050,
@@ -369,7 +376,7 @@ class SystemPointRuntime:
         if name == system.sys.first_scan.name:
             return True, ctx_or_state.scan_id == 0
         if name == system.sys.scan_counter.name:
-            return True, ctx_or_state.scan_id
+            return True, ctx_or_state.scan_id % 32768
         if name == system.sys.scan_clock_toggle.name:
             return True, (ctx_or_state.scan_id % 2) == 1
 

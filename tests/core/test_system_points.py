@@ -17,7 +17,10 @@ from pyrung.core import (
     TimeMode,
     calc,
     copy,
+    fall,
+    latch,
     out,
+    rise,
     system,
     to_binary,
     to_value,
@@ -125,8 +128,76 @@ def test_scan_counter_is_derived_from_scan_id():
 
     for _ in range(50):
         runner.step()
-        assert _resolved(runner, system.sys.scan_counter.name) == runner.current_state.scan_id
+        assert _resolved(runner, system.sys.scan_counter.name) == runner.current_state.scan_id % 32768
     assert "sys.scan_counter" not in runner.current_state.tags
+
+
+def test_scan_counter_wraps_at_32768():
+    runner = PLC(logic=[], dt=0.001)
+
+    for _ in range(32767):
+        runner.step()
+    assert _resolved(runner, system.sys.scan_counter.name) == 32767
+
+    runner.step()
+    assert _resolved(runner, system.sys.scan_counter.name) == 0
+
+    runner.step()
+    assert _resolved(runner, system.sys.scan_counter.name) == 1
+
+
+def test_scan_clock_toggle_derived_edge_rise():
+    flag = Bool("Flag")
+
+    with Program() as program:
+        with Rung(rise(system.sys.scan_clock_toggle)):
+            latch(flag)
+
+    runner = PLC(logic=program)
+
+    runner.step()  # scan 1: toggle=False, no rise
+    assert runner.current_state.tags.get("Flag") is not True
+
+    runner.step()  # scan 2: toggle=True, rise
+    assert runner.current_state.tags["Flag"] is True
+
+
+def test_scan_clock_toggle_derived_edge_fall():
+    flag = Bool("Flag")
+
+    with Program() as program:
+        with Rung(fall(system.sys.scan_clock_toggle)):
+            latch(flag)
+
+    runner = PLC(logic=program)
+
+    runner.step()  # scan 1: toggle=False, no fall
+    assert runner.current_state.tags.get("Flag") is not True
+
+    runner.step()  # scan 2: toggle=True, no fall
+    assert runner.current_state.tags.get("Flag") is not True
+
+    runner.step()  # scan 3: toggle=False, fall
+    assert runner.current_state.tags["Flag"] is True
+
+
+def test_scan_clock_toggle_derived_edge_alternates():
+    rise_count = Int("RiseCount")
+    fall_count = Int("FallCount")
+
+    with Program() as program:
+        with Rung(rise(system.sys.scan_clock_toggle)):
+            calc(rise_count + 1, rise_count)
+        with Rung(fall(system.sys.scan_clock_toggle)):
+            calc(fall_count + 1, fall_count)
+
+    runner = PLC(logic=program)
+
+    for _ in range(10):
+        runner.step()
+
+    assert runner.current_state.tags["RiseCount"] == 5
+    assert runner.current_state.tags["FallCount"] == 4
 
 
 def test_rtc_fields_derive_from_set_rtc_anchor():
