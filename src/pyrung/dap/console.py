@@ -317,6 +317,9 @@ def _advance_one_full_scan(adapter: Any) -> None:
     while adapter._current_ctx is origin_ctx:
         if not adapter._advance_with_step_logpoints_locked():
             return
+    from pyrung.dap.bounds_console import emit_bounds_violations
+
+    emit_bounds_violations(adapter)
 
 
 # ---------------------------------------------------------------------------

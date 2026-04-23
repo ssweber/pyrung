@@ -89,6 +89,7 @@ class DAPAdapter:
         self._capture = CaptureBuffer()
         self._live_server: Any = None
         self._harness: Any = None
+        self._bounds_accumulator: dict[str, Any] = {}
         self._notes: dict[int, list[str]] = {}
         self._action_log: list[tuple[int | None, str, str]] = []
 
@@ -96,6 +97,7 @@ class DAPAdapter:
         self._miner_accepted: list[Any] = []
         self._miner_suppressed: set[str] = set()
 
+        import pyrung.dap.bounds_console  # noqa: F401
         import pyrung.dap.harness_console  # noqa: F401
         import pyrung.dap.miner_console  # noqa: F401
         import pyrung.dap.spec_console  # noqa: F401

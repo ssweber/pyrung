@@ -69,6 +69,10 @@ def on_pyrung_step_scan(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
             if not adapter._advance_with_step_logpoints_locked():
                 break
 
+        from pyrung.dap.bounds_console import emit_bounds_violations
+
+        emit_bounds_violations(adapter)
+
     return {}, [("stopped", adapter._stopped_body("step"))]
 
 
@@ -179,6 +183,9 @@ def continue_worker(adapter: Any) -> None:
 
             if scan_completed:
                 _emit_scan_frame()
+                from pyrung.dap.bounds_console import emit_bounds_violations
+
+                emit_bounds_violations(adapter)
 
             if hit_breakpoint:
                 _emit_scan_frame(force=True)
