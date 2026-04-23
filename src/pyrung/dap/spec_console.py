@@ -10,6 +10,8 @@ from pyrung.dap.console import ConsoleResult, register
 from pyrung.dap.spec import SpecEntry, generate_test_file, parse_formula
 
 _RUNNER_LINE_RE = re.compile(r"^\s*(runner\s*=\s*PLC\(|with\s+PLC\()")
+_PROGRAM_DECORATOR_RE = re.compile(r"^@program\b")
+_DEF_RE = re.compile(r"^def\s+(\w+)\s*\(")
 
 
 def _accepted_as_specs(adapter: Any) -> list[SpecEntry]:
@@ -43,16 +45,39 @@ def _cmd_spec_test(adapter: Any, expression: str) -> ConsoleResult:
     specs = _accepted_as_specs(adapter)
     if not specs:
         raise adapter.DAPAdapterError("No accepted specs to generate tests for.")
-    program_source = _extract_program_source(adapter)
-    content = generate_test_file(specs, program_source)
+    program_source, prog_var = _extract_program_source(adapter)
+    content = generate_test_file(specs, program_source, program_var=prog_var)
     filepath.write_text(content, encoding="utf-8")
     return ConsoleResult(f"Generated {len(specs)} test(s) to {filepath}")
 
 
-def _extract_program_source(adapter: Any) -> str:
+def _extract_program_source(adapter: Any) -> tuple[str, str]:
+    """Extract program source and detect the program variable name.
+
+    Returns (source, program_var_name).  Truncates at the ``runner = PLC(...)``
+    line so the simulation block is excluded from the generated test file.
+    """
     program_path = getattr(adapter, "_program_path", None)
     if not program_path:
         raise adapter.DAPAdapterError("No program loaded — cannot extract source.")
     source = Path(program_path).read_text(encoding="utf-8")
-    lines = [line for line in source.splitlines() if not _RUNNER_LINE_RE.match(line)]
-    return "\n".join(lines)
+
+    prog_var = "logic"
+    kept: list[str] = []
+    in_decorator = False
+    for line in source.splitlines():
+        if _RUNNER_LINE_RE.match(line):
+            break
+        if _PROGRAM_DECORATOR_RE.match(line):
+            in_decorator = True
+        if in_decorator:
+            m = _DEF_RE.match(line)
+            if m:
+                prog_var = m.group(1)
+                in_decorator = False
+        kept.append(line)
+
+    while kept and not kept[-1].strip():
+        kept.pop()
+
+    return "\n".join(kept), prog_var

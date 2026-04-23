@@ -109,7 +109,9 @@ def _parse_value(raw: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def generate_test_file(specs: list[SpecEntry], program_source: str) -> str:
+def generate_test_file(
+    specs: list[SpecEntry], program_source: str, *, program_var: str = "logic"
+) -> str:
     """Generate a self-contained pytest file from accepted specs."""
     lines: list[str] = []
 
@@ -126,17 +128,17 @@ def generate_test_file(specs: list[SpecEntry], program_source: str) -> str:
         name = base if count == 0 else f"{base}_{count + 1}"
         lines.append(f"def {name}():")
         lines.append(f"    # {spec.formula}")
-        lines.extend(_generate_test_body(spec))
+        lines.extend(_generate_test_body(spec, program_var=program_var))
         lines.append("")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _generate_test_body(spec: SpecEntry) -> list[str]:
+def _generate_test_body(spec: SpecEntry, *, program_var: str = "logic") -> list[str]:
     """Generate the body lines of a test function for one spec."""
     lines: list[str] = []
-    lines.append(f"    plc = PLC(prog, dt={spec.dt_seconds})")
+    lines.append(f"    plc = PLC({program_var}, dt={spec.dt_seconds})")
     lines.append("    plc.step()")
 
     if spec.kind == "edge_correlation":
