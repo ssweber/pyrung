@@ -202,6 +202,23 @@ def continue_worker(adapter: Any) -> None:
         adapter._pause_event.clear()
 
 
+def invalidate_mid_scan(adapter: Any) -> None:
+    """Discard a partially-advanced scan so the next advance starts fresh.
+
+    Called when force/patch/unforce/clear_forces modify overrides while
+    the scan generator is paused mid-scan (e.g. after a DAP ``next``).
+    Without this, the override misses the current scan's ``prepare_scan``
+    and only takes effect on the *following* scan — a 1-scan lag that
+    diverges from pure ``PLC.force()`` + ``step()`` behaviour.
+    """
+    if adapter._scan_gen is not None:
+        adapter._scan_gen = None
+        adapter._current_step = None
+        adapter._current_rung_index = None
+        adapter._current_rung = None
+        adapter._current_ctx = None
+
+
 def advance_one_step_locked(adapter: Any) -> bool:
     runner = adapter._require_runner_locked()
     if not adapter._top_level_rungs(runner):

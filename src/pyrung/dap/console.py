@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pyrung.dap import execution_flow
+
 HandlerResult = tuple[dict[str, Any], list[tuple[str, dict[str, Any] | None]]]
 
 
@@ -123,6 +125,7 @@ def _cmd_force(adapter: Any, expression: str) -> ConsoleResult:
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
     runner.force(tag, value)
+    execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Forced {tag}={value!r}")
 
 
@@ -134,6 +137,7 @@ def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
     tag = parts[1]
     runner = adapter._require_runner_locked()
     runner.unforce(tag)
+    execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Removed force {tag}")
 
 
@@ -141,6 +145,7 @@ def _cmd_unforce(adapter: Any, expression: str) -> ConsoleResult:
 def _cmd_clear_forces(adapter: Any, _expression: str) -> ConsoleResult:
     runner = adapter._require_runner_locked()
     runner.clear_forces()
+    execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult("Cleared all forces")
 
 
@@ -159,6 +164,7 @@ def _cmd_patch(adapter: Any, expression: str) -> ConsoleResult:
     value = adapter._parse_literal(raw_value)
     runner = adapter._require_runner_locked()
     runner.patch({tag: value})
+    execution_flow.invalidate_mid_scan(adapter)
     return ConsoleResult(f"Patched {tag}={value!r}")
 
 

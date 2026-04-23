@@ -199,7 +199,7 @@ class TestRecordVerb:
         assert "Recording stopped." in result
         assert "# action: start_machine" in result
         assert "patch Button true" in result
-        assert "step 1" not in result
+        assert "step 1" in result
         assert adapter._capture.recording is False
 
     def test_record_stop_without_active(self, tmp_path: Path):
@@ -298,7 +298,7 @@ class TestTranscriptFormat:
         transcript = resp["body"]["result"].split("\n", 1)[1]  # skip "Recording stopped."
 
         lines = [line for line in transcript.strip().splitlines() if not line.startswith("#")]
-        assert lines == ["patch Button true", "step 2"]
+        assert lines == ["patch Button true", "step 1"]
 
     def test_transcript_starts_with_action_comment(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)

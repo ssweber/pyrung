@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pyrung.core import PLC, Program
-
 from pyrung.twin._case import Case, CaseResult
 from pyrung.twin._slot import make_slot
 

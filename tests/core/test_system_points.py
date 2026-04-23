@@ -128,7 +128,9 @@ def test_scan_counter_is_derived_from_scan_id():
 
     for _ in range(50):
         runner.step()
-        assert _resolved(runner, system.sys.scan_counter.name) == runner.current_state.scan_id % 32768
+        assert (
+            _resolved(runner, system.sys.scan_counter.name) == runner.current_state.scan_id % 32768
+        )
     assert "sys.scan_counter" not in runner.current_state.tags
 
 
