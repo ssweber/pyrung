@@ -11,6 +11,7 @@ reducing object allocation from O(instructions) to O(1) per scan.
 from __future__ import annotations
 
 import time
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrsistent import PMap
 
+from pyrung.core.bounds import BoundsViolation, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, ScanContext
@@ -556,6 +558,8 @@ class PLC:
         self._pre_scan_callbacks: list[Any] = []
         self._known_tags_by_name: dict[str, Tag] = {}
         self._refresh_known_tags_from_logic()
+        self._constrained_tags = build_constraint_index(self._known_tags_by_name)
+        self._bounds_violations: dict[str, BoundsViolation] = {}
         # Seed initial state with tag defaults (skip tags already in state).
         seed = {
             t.name: t.default
@@ -576,6 +580,11 @@ class PLC:
     def current_state(self) -> SystemState:
         """Current state snapshot."""
         return self._state
+
+    @property
+    def bounds_violations(self) -> dict[str, BoundsViolation]:
+        """Constraint violations from the most recent scan, if any."""
+        return self._bounds_violations
 
     @property
     def history(self) -> History:
@@ -2070,6 +2079,12 @@ class PLC:
 
         self._capture_previous_states(ctx)
         self._system_runtime.on_scan_end(ctx)
+        if self._constrained_tags:
+            self._bounds_violations = check_bounds(ctx._tags_pending, self._constrained_tags)
+            for v in self._bounds_violations.values():
+                warnings.warn(str(v), stacklevel=2)
+        else:
+            self._bounds_violations = {}
         self._state = ctx.commit(dt=dt)
         # Replay recorder: capture nondeterminism for this scan.
         new_scan_id = self._state.scan_id

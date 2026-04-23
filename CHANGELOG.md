@@ -29,6 +29,7 @@
 - **Read-only write validator** — `validate_readonly_write(program)` flags any write instruction targeting a `readonly=True` tag as `CORE_READONLY_WRITE`.
 - **Choices violation validator** — `validate_choices_violation(program)` checks literal-value writes against a tag's `choices` key set. Flags mismatches as `CORE_CHOICES_VIOLATION`.
 - **Final multiple writers validator** — `validate_final_writers(program)` counts write sites for `final=True` tags. Flags as `CORE_FINAL_MULTIPLE_WRITERS` when more than one instruction writes the tag, regardless of mutual exclusivity.
+- **Runtime bounds checking** — tags with `min`/`max` or `choices` are now checked at the end of every scan. Dynamic writes (`copy()` from another tag, `calc()` results, timer/counter outputs) that land outside declared bounds trigger a `warnings.warn()` and populate `plc.bounds_violations` — a dict keyed by tag name with `BoundsViolation` entries describing the violation kind (`"range"` or `"choices"`) and value. Values are never clamped; the write goes through so the program sees its real output. The check uses a precomputed constraint index (built once at PLC init) and only inspects tags that were both written this scan and have constraints — zero overhead for unconstrained tags.
 
 ### Bug fixes
 

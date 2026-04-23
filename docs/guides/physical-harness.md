@@ -185,7 +185,7 @@ Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
                       min=0, max=250, uom="degC")
 ```
 
-These are descriptive — they don't clamp values at runtime. The validator uses them for out-of-range findings, and the debugger's Data View shows declared ranges as hints. Profile functions receive only `(cur, en, dt)`, so pass constants explicitly if a profile needs bounds.
+The static validator catches literal writes outside these bounds (`CORE_RANGE_VIOLATION`), and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan — see [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped; the check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints. Profile functions receive only `(cur, en, dt)`, so pass constants explicitly if a profile needs bounds.
 
 ## Next steps
 

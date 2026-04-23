@@ -248,6 +248,58 @@ def test_inspect_changes():
         # {"Motor": (True, False), "Stop": (False, True), ...}
 ```
 
+## Checking bounds
+
+Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped — the write goes through, but a warning fires and the violation lands in `plc.bounds_violations`:
+
+```python
+from pyrung import Bool, Int, Real, PLC, Program, Rung, calc, copy
+
+Pressure = Real("Pressure", min=0, max=100)
+Mode     = Int("Mode", choices={0: "Off", 1: "On", 2: "Auto"})
+
+Enable = Bool("Enable")
+Src    = Int("Src")
+
+with Program() as logic:
+    with Rung(Enable):
+        calc(Pressure + 60, Pressure)
+        copy(Src, Mode)
+
+def test_pressure_stays_in_range():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Pressure: 50.0, Src: 1})
+        plc.step()
+
+        # 50 + 60 = 110, exceeds max=100
+        assert "Pressure" in plc.bounds_violations
+        assert plc.bounds_violations["Pressure"].kind == "range"
+        # Value goes through unclamped — the program sees its real output
+        assert Pressure.value == 110.0
+
+def test_mode_rejects_unknown_choice():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Src: 5})
+        plc.step()
+
+        assert "Mode" in plc.bounds_violations
+        assert plc.bounds_violations["Mode"].kind == "choices"
+
+def test_clean_scan_clears_violations():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Pressure: 50.0, Src: 1})
+        plc.step()
+        assert plc.bounds_violations  # violation from Pressure
+
+        plc.patch({Enable: False})
+        plc.step()
+        assert plc.bounds_violations == {}
+```
+
+Violations also emit `warnings.warn()`, so `pytest -W error::UserWarning` will fail any test that triggers one — useful as a catch-all without explicit assertions.
+
+The check runs after all instructions, forces, and system runtime writes — it sees the final committed values. Tags without `min`/`max`/`choices` are never checked (zero overhead). `copy()` still clamps to type limits (INT ±32768, etc.) before the bounds check runs, so a `copy(40000, IntTag)` where `IntTag` has `max=500` will show a violation for 32767 (type-clamped), not 40000.
+
 ## Pytest fixtures
 
 For a shared program across multiple tests:
