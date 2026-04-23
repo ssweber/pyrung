@@ -184,6 +184,7 @@ def list_sessions() -> list[str]:
 
 
 def _build_command_epilog() -> str:
+    import pyrung.dap.bounds_console  # noqa: F401
     import pyrung.dap.capture  # noqa: F401
     import pyrung.dap.harness_console  # noqa: F401
     from pyrung.dap.console import _format_grouped_help
