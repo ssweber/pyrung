@@ -378,10 +378,12 @@ History stores immutable `SystemState` snapshots (including initial state).
 
 ### Capacity
 
-- Configurable `history_cache` (byte budget, default 100 MB, minimum 1 MB).
+- `history` — time-based retention window for the scan log, checkpoints, and firing timelines (e.g. `"1h"`, `"30m"`). `None` (default) keeps everything.
+- `cache` — instant-lookup window for full `SystemState` snapshots (e.g. `"5m"`). `None` (default) uses byte-budget-only eviction.
+- `history_budget` — byte ceiling for the recent-state cache (default 100 MB, minimum 1 MB).
 - Recent scans served from the byte-bounded state cache; older scans
   reconstructed on demand via `replay_to` from the nearest checkpoint.
-- Every scan from initial to tip is addressable regardless of cache pressure.
+- Every scan within the `history` window is addressable; scans beyond the window are trimmed.
 - Labels survive state-cache eviction (overlay, not tied to state storage).
 
 ### Time travel

@@ -19,7 +19,9 @@ The constructor accepts:
 Optional keyword arguments:
 
 - `initial_state` — a `SystemState` to start from instead of the default
-- `history_cache` — byte budget for the recent-state cache (default: `100 * 1024 * 1024` = 100 MB; minimum 1 MB)
+- `history` — retention window for the scan log and checkpoints. Duration string (`"1h"`, `"30m"`), scan count (int), or `None` (unlimited, default). Prevents unbounded memory growth on long runs.
+- `cache` — instant-lookup window for full `SystemState` snapshots. Same formats as `history`. `None` (default) uses byte-budget-only eviction.
+- `history_budget` — byte ceiling for the recent-state cache (default: 100 MB; minimum 1 MB). Acts as a safety net when duration-based policies aren't enough.
 
 ## Time modes
 
@@ -202,13 +204,15 @@ Every scan from 0 to the current tip is addressable.  Recent scans are served
 from an in-memory state cache (byte-bounded, default 100 MB); older scans are
 reconstructed on demand from the scan log and checkpoints.
 
-To tighten the cache budget:
+To bound memory on long runs, set a retention window:
 
 ```python
-runner = PLC(logic, history_cache=20 * 1024 * 1024)  # 20 MB cache
+runner = PLC(logic, history="1h")                   # keep 1 hour of replayable history
+runner = PLC(logic, history="1h", cache="5m")       # last 5 minutes instant, rest via replay
+runner = PLC(logic, history_budget=20 * 1024 * 1024)  # 20 MB byte ceiling
 ```
 
-`history_cache` must be at least 1 MB (raises `ValueError` below that).
+`history_budget` must be at least 1 MB (raises `ValueError` below that).
 
 ## Time-travel playhead
 

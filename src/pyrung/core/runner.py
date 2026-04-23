@@ -57,16 +57,31 @@ _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
 
-# Byte budget for the recent-state cache.  Replaces the fixed-count
-# ``deque(maxlen=20)`` with a byte-bounded ``OrderedDict`` that evicts
-# oldest entries when the budget is exceeded.  States are structurally
-# shared PMaps, so the per-entry estimator is a conservative ceiling.
-_RECENT_STATE_CACHE_BUDGET_BYTES = 100 * 1024 * 1024  # 100 MB
+# Byte budget for the recent-state cache (default for ``history_budget``).
+_HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
 
 # Floor: never evict below this many entries regardless of byte budget.
 # Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
 # present; the recent-state cache floor must not regress under budget pressure.
 _RECENT_STATE_CACHE_MIN_ENTRIES = 20
+
+
+def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
+    """Convert a retention parameter to a scan count.
+
+    Accepts ``None`` (unlimited), ``int`` (literal scan count), or a
+    duration string parseable by ``parse_duration`` (e.g. ``"1h"``).
+    """
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    from pyrung.core.physical import parse_duration
+
+    ms = parse_duration(value)
+    dt_ms = dt_seconds * 1000.0
+    return max(1, int(ms / dt_ms))
+
 
 # Conservative per-entry byte estimate for PMap HAMT nodes.
 _PER_PMAP_ENTRY_BYTES = 200
@@ -375,7 +390,9 @@ class PLC:
         *,
         dt: float | None = None,
         realtime: bool = False,
-        history_cache: int | None = None,
+        history: str | int | None = None,
+        cache: str | int | None = None,
+        history_budget: int | None = None,
         checkpoint_interval: int | None = None,
         record_all_tags: bool = False,
     ) -> None:
@@ -388,9 +405,14 @@ class PLC:
                 Only used in fixed-step mode.
             realtime: Use wall-clock timing instead of fixed step.
                 Mutually exclusive with dt.
-            history_cache: Byte budget for the recent-state cache.
-                Defaults to ``_RECENT_STATE_CACHE_BUDGET_BYTES``
-                (100 MB).  Raises ``ValueError`` below 1 MB.
+            history: Retention window for the scan log, checkpoints,
+                and firing timelines.  Duration string (``"1h"``,
+                ``"30m"``), scan count (int), or ``None`` (unlimited).
+            cache: Instant-lookup window for full ``SystemState``
+                snapshots.  Same formats as *history*.  ``None`` uses
+                byte-budget-only eviction.
+            history_budget: Byte ceiling for the recent-state cache.
+                Defaults to 100 MB.  Raises ``ValueError`` below 1 MB.
             checkpoint_interval: Number of scans between replay checkpoints.
                 Defaults to ``_CHECKPOINT_INTERVAL_DEFAULT``.
             record_all_tags: Bypass the PDG-based rung-firing capture
@@ -408,10 +430,22 @@ class PLC:
             checkpoint_interval = _CHECKPOINT_INTERVAL_DEFAULT
         if checkpoint_interval < 1:
             raise ValueError("checkpoint_interval must be >= 1")
-        if history_cache is None:
-            history_cache = _RECENT_STATE_CACHE_BUDGET_BYTES
-        if history_cache < 1_048_576:
-            raise ValueError("history_cache must be >= 1 MB (1048576)")
+        if history_budget is None:
+            history_budget = _HISTORY_BUDGET_BYTES_DEFAULT
+        if history_budget < 1_048_576:
+            raise ValueError("history_budget must be >= 1 MB (1048576)")
+
+        history_scans = _parse_retention(history, dt)
+        cache_scans = _parse_retention(cache, dt)
+        history_floor = checkpoint_interval * 2
+        if history_scans is not None:
+            history_scans = max(history_scans, history_floor)
+        if cache_scans is not None:
+            cache_scans = max(cache_scans, _RECENT_STATE_CACHE_MIN_ENTRIES)
+            if history_scans is not None:
+                cache_scans = min(cache_scans, history_scans)
+        self._history_retention_scans: int | None = history_scans
+        self._cache_retention_scans: int | None = cache_scans
 
         self._logic: list[Rung]
         self._program: Any = None
@@ -440,7 +474,7 @@ class PLC:
         # Byte-bounded recent-state cache feeding ``History.at()`` on
         # the hot path.  ``History`` itself is a stateless facade.
         # Keyed by scan_id → (SystemState, estimated_bytes).
-        self._recent_state_cache_budget = history_cache
+        self._recent_state_cache_budget = history_budget
         self._recent_state_cache: OrderedDict[int, tuple[SystemState, int]] = OrderedDict()
         self._recent_state_cache_bytes = 0
         self._cache_state(self._state)
@@ -940,9 +974,11 @@ class PLC:
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=historical_state,
+            history=self._history_retention_scans,
+            cache=self._cache_retention_scans,
+            history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
-            history_cache=self._recent_state_cache_budget,
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
         parent_rtc_at_fork_point = self._system_runtime._rtc_now(historical_state)
@@ -982,10 +1018,17 @@ class PLC:
         est = _estimate_state_bytes(state)
         self._recent_state_cache[state.scan_id] = (state, est)
         self._recent_state_cache_bytes += est
-        while (
-            self._recent_state_cache_bytes > self._recent_state_cache_budget
-            and len(self._recent_state_cache) > _RECENT_STATE_CACHE_MIN_ENTRIES
-        ):
+        min_scan = (
+            state.scan_id - self._cache_retention_scans
+            if self._cache_retention_scans is not None
+            else -1
+        )
+        while len(self._recent_state_cache) > _RECENT_STATE_CACHE_MIN_ENTRIES:
+            oldest_sid = next(iter(self._recent_state_cache))
+            over_budget = self._recent_state_cache_bytes > self._recent_state_cache_budget
+            over_time = oldest_sid < min_scan
+            if not (over_budget or over_time):
+                break
             _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
             self._recent_state_cache_bytes -= evicted_est
 
@@ -1009,21 +1052,32 @@ class PLC:
         """Largest retained checkpoint scan_id <= ``scan_id``, or None."""
         return max((c for c in self._checkpoints if c <= scan_id), default=None)
 
+    def _nearest_checkpoint_at_or_after(self, scan_id: int) -> int | None:
+        """Smallest retained checkpoint scan_id >= ``scan_id``, or None."""
+        return min((c for c in self._checkpoints if c >= scan_id), default=None)
+
     def _trim_history_before(self, scan_id: int) -> None:
-        """Advance the replay horizon to scan_id.
+        """Advance the replay horizon to *scan_id*.
 
         Trims the scan log, rung-firing timelines, and checkpoints in
-        lockstep.  After this call, ``history.at(k)`` for k < scan_id
-        raises (no log data, no checkpoint to anchor from).
-
-        No default caller — a retention policy decides when to call
-        this.  Callers must ensure at least one checkpoint at or after
-        scan_id survives to anchor future replays.
+        lockstep and advances ``_initial_scan_id`` so that
+        ``History.oldest_scan_id`` / ``contains()`` / ``scan_ids()``
+        reflect the narrowed range.
         """
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
+        if scan_id > self._initial_scan_id:
+            self._initial_scan_id = scan_id
+            if scan_id in self._checkpoints:
+                self._initial_state = self._checkpoints[scan_id]
+            while self._recent_state_cache:
+                oldest_sid = next(iter(self._recent_state_cache))
+                if oldest_sid >= scan_id:
+                    break
+                _, (_, evicted_est) = self._recent_state_cache.popitem(last=False)
+                self._recent_state_cache_bytes -= evicted_est
 
     def _compiled_replay_supported_kernel(self) -> CompiledKernel | None:
         from pyrung.circuitpy.codegen import compile_kernel
@@ -1060,9 +1114,11 @@ class PLC:
         fork = PLC(
             logic=self._program if self._program is not None else list(self._logic),
             initial_state=state,
+            history=self._history_retention_scans,
+            cache=self._cache_retention_scans,
+            history_budget=self._recent_state_cache_budget,
             checkpoint_interval=self._checkpoint_interval,
             record_all_tags=self._record_all_tags,
-            history_cache=self._recent_state_cache_budget,
         )
         fork._state = state
         fork._reset_cache(state)
@@ -2054,6 +2110,27 @@ class PLC:
             self._current_rung_traces_scan_id = None
             self._latest_committed_trace_event = None
         self._cache_state(self._state)
+
+        # Retention-policy auto-trim, piggybacked on checkpoint cadence.
+        if (
+            self._history_retention_scans is not None
+            and is_checkpoint
+            and new_scan_id > self._history_retention_scans
+        ):
+            horizon = new_scan_id - self._history_retention_scans
+            surviving_cp = self._nearest_checkpoint_at_or_after(horizon)
+            if surviving_cp is not None:
+                self._trim_history_before(surviving_cp)
+            total = (
+                self._recent_state_cache_bytes
+                + sum(_estimate_state_bytes(s) for s in self._checkpoints.values())
+                + self._scan_log.bytes_estimate()
+            )
+            if total > self._recent_state_cache_budget:
+                extra_horizon = horizon + self._checkpoint_interval
+                extra_cp = self._nearest_checkpoint_at_or_after(extra_horizon)
+                if extra_cp is not None:
+                    self._trim_history_before(extra_cp)
 
         # Keep playhead following newest state unless manually moved.
         if self._playhead == previous_tip_scan_id:

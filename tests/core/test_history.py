@@ -77,12 +77,12 @@ def test_unbounded_history_retains_all_scans() -> None:
     assert _scan_ids(runner) == [0, 1, 2, 3, 4, 5, 6]
 
 
-def test_history_cache_validation_rejects_below_1mb() -> None:
-    with pytest.raises(ValueError, match="history_cache must be >= 1 MB"):
-        PLC(logic=[], history_cache=0)
+def test_history_budget_validation_rejects_below_1mb() -> None:
+    with pytest.raises(ValueError, match="history_budget must be >= 1 MB"):
+        PLC(logic=[], history_budget=0)
 
-    with pytest.raises(ValueError, match="history_cache must be >= 1 MB"):
-        PLC(logic=[], history_cache=500_000)
+    with pytest.raises(ValueError, match="history_budget must be >= 1 MB"):
+        PLC(logic=[], history_budget=500_000)
 
 
 def test_playhead_starts_at_tip_and_tracks_new_scans() -> None:
@@ -321,10 +321,10 @@ def test_fork_from_starts_with_same_rtc_as_parent_at_selected_scan() -> None:
     assert fork.debug.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
-def test_fork_from_inherits_history_cache_budget() -> None:
-    """``history_cache`` is propagated across fork."""
+def test_fork_from_inherits_history_budget() -> None:
+    """``history_budget`` is propagated across fork."""
     budget = 2 * 1024 * 1024  # 2 MB
-    runner = PLC(logic=[], history_cache=budget)
+    runner = PLC(logic=[], history_budget=budget)
     runner.run(cycles=5)
 
     fork = runner.fork_from(4)
@@ -442,3 +442,98 @@ def test_history_labels_survive_window_rotation() -> None:
     labeled = runner.history.find_labeled("boot")
     assert labeled is not None and labeled.scan_id == 0
     assert labeled.rtc_iso == "2026-02-24T12:00:00"
+
+
+# ------------------------------------------------------------------
+# Time-based retention API
+# ------------------------------------------------------------------
+
+
+def test_history_retention_trims_old_scans() -> None:
+    """history= sets a rolling trim window; old scans become unreachable."""
+    # "100ms" at dt=0.01 → 10 scans retention, checkpoint_interval=5
+    plc = PLC(logic=[], dt=0.01, history="100ms", checkpoint_interval=5)
+    for _ in range(50):
+        plc.step()
+
+    assert plc.history.oldest_scan_id > 0
+    assert plc.history.newest_scan_id == 50
+    assert not plc.history.contains(0)
+
+    with pytest.raises((KeyError, ValueError)):
+        plc.history.at(0)
+
+
+def test_cache_retention_evicts_by_time() -> None:
+    """cache= limits the instant-lookup window; older scans require replay."""
+    # 500ms at dt=0.01 → 50 scans (above the 20-entry floor)
+    plc = PLC(logic=[], dt=0.01, cache="500ms", checkpoint_interval=5)
+    for _ in range(100):
+        plc.step()
+
+    assert plc._state_in_cache(100)
+    assert plc._state_in_cache(55)
+    assert not plc._state_in_cache(40)
+    # Still addressable via replay (no history= set)
+    assert plc.history.at(40).scan_id == 40
+
+
+def test_history_floor_at_2x_checkpoint_interval() -> None:
+    """history=0 clamps to checkpoint_interval * 2."""
+    plc = PLC(logic=[], dt=0.01, history=0, checkpoint_interval=10)
+    assert plc._history_retention_scans == 20
+
+
+def test_cache_clamped_to_history() -> None:
+    """cache is silently clamped down when it exceeds history."""
+    plc = PLC(logic=[], dt=0.01, history="50ms", cache="500ms", checkpoint_interval=5)
+    assert plc._cache_retention_scans is not None
+    assert plc._history_retention_scans is not None
+    assert plc._cache_retention_scans <= plc._history_retention_scans
+
+
+def test_fork_inherits_retention_params() -> None:
+    plc = PLC(logic=[], dt=0.01, history="1s", cache="200ms")
+    plc.run(cycles=5)
+    fork = plc.fork_from(4)
+
+    assert fork._history_retention_scans == plc._history_retention_scans
+    assert fork._cache_retention_scans == plc._cache_retention_scans
+    assert fork._recent_state_cache_budget == plc._recent_state_cache_budget
+
+
+def test_parse_retention_with_duration_string() -> None:
+    """Duration strings are converted to scan counts via dt."""
+    plc = PLC(logic=[], dt=0.01, history="1h")
+    assert plc._history_retention_scans == 360_000
+
+
+def test_parse_retention_with_int() -> None:
+    """Integer values pass through as scan counts (with floor)."""
+    plc = PLC(logic=[], dt=0.01, history=500, checkpoint_interval=10)
+    assert plc._history_retention_scans == 500
+
+
+def test_trim_advances_oldest_scan_id() -> None:
+    """_trim_history_before advances history.oldest_scan_id."""
+    plc = PLC(logic=[], dt=0.01, checkpoint_interval=5)
+    for _ in range(20):
+        plc.step()
+
+    assert plc.history.oldest_scan_id == 0
+    plc._trim_history_before(10)
+    assert plc.history.oldest_scan_id == 10
+    assert not plc.history.contains(9)
+    assert plc.history.contains(10)
+
+
+def test_history_scan_ids_reflects_trim() -> None:
+    """scan_ids() range narrows after auto-trim."""
+    plc = PLC(logic=[], dt=0.01, history="200ms", checkpoint_interval=5)
+    for _ in range(50):
+        plc.step()
+
+    ids = plc.history.scan_ids()
+    assert ids[0] == plc.history.oldest_scan_id
+    assert ids[-1] == 50
+    assert 0 not in ids

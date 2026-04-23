@@ -567,8 +567,8 @@ def test_trim_history_before_rejects_replay_below_horizon() -> None:
 
     plc._trim_history_before(5)
 
-    # scan 4 is below the horizon
-    with pytest.raises(ValueError, match="trimmed"):
+    # scan 4 is below the horizon — initial_scan_id advanced to 5
+    with pytest.raises(ValueError, match="must be >= 5"):
         plc.replay_to(4)
 
 
