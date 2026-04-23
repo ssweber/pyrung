@@ -48,6 +48,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Core Concepts](getting-started/concepts.md) — how the scan cycle and state model work
 - [Instruction Reference](instructions/index.md) — the full DSL reference
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
+- [Testing and Commissioning](guides/commissioning.md) — declare, analyze, commission: the full testing story
 - [Physical Annotations and Autoharness](guides/physical-harness.md) — annotate devices, eliminate feedback boilerplate in tests
 - [Analysis](guides/analysis.md) — dataview, cause/effect, coverage queries
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging

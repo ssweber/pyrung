@@ -203,6 +203,8 @@ step.enabling_conditions    # [EnablingCondition(Fault, value=False, held_since=
 !!! note "How attribution works"
     The engine converts each rung's condition into a series-parallel (SP) tree, then applies a four-rule post-order walk to identify which contacts mattered for the evaluation. Intersecting "mattered" with the transition log produces the proximate/enabling split.
 
+Each step has a `fidelity` field: `"full"` when full SP-tree attribution was possible (the scan's state was in the cache), or `"timeline"` when only structural and firing-timeline data was available (cache miss). In timeline mode, `proximate_causes` becomes a superset of the true set and `enabling_conditions` is empty. A single chain can mix fidelities — recent steps full, deeper steps timeline-only. Raise `history_budget` or widen the `cache` window to get full fidelity across more of the chain.
+
 ### Recorded effect — what did this cause?
 
 ```python

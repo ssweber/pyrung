@@ -346,6 +346,49 @@ Badges appear next to the tag name when flags are set:
 
 A **Public** checkbox sits above the tag table. It starts disabled and greyed out ("Start debugger to enable"). Once the debugger sends tag metadata, it enables. When checked, only tags declared `public=True` are shown — plumbing tags are hidden. Group headers hide when none of their members are public. Unchecking restores all rows. The filter resets when the debug session ends.
 
+## History
+
+The History panel (in the debug sidebar) has two tabs: **Tags** and **Chain**.
+
+### Tags tab
+
+Shows tag values at each retained scan. The slider scrubs through the scan cache; tag values update live as you drag. Values update automatically during `continue` runs. Right-click a tag to add it from the Data View or Graph View.
+
+### Chain tab
+
+Run causal queries interactively. Type a query in the input field using the same syntax as the `cause`/`effect`/`recovers` console commands:
+
+```
+cause:MotorOut
+effect:StartBtn@1
+recovers:FaultLatch
+cause:Running:True
+```
+
+The result renders inline — chain steps with proximate causes, enabling conditions, and fidelity indicators. The query dispatches to the `pyrungCausal` DAP handler, which calls the same `plc.cause()`/`plc.effect()`/`plc.recovers()` methods available in tests.
+
+## Graph View
+
+**pyrung: Open Graph View** opens an interactive tag dependency graph in the editor area. The graph shows tags as nodes and rungs as edges connecting them, laid out left-to-right with dagre.
+
+### Node roles
+
+Tags are colored by role: blue for inputs (nothing writes them), amber for pivots (read and written), green for terminals (written, nothing reads them), grey for isolated (no connections). Rung nodes show the rung index and source location.
+
+### Interactions
+
+- **Click** a tag to highlight its direct neighbors.
+- **Double-click** a tag to slice the graph to its upstream and downstream dependencies.
+- **Right-click** a tag for a context menu: slice upstream, slice downstream, add to Data View, add to History, copy name, hide.
+- **Right-click** a rung to go to source or copy rung info.
+- **Drag** a node to pin its position (persisted in workspace state).
+- **Search** filters tags by name with abbreviation matching (typing `btn` finds `StartButton`).
+- **Role toggles** (I/P/T/X buttons) show or hide nodes by role.
+- **Rung Order** sorts the layout vertically by execution order for a ladder-like top-down view.
+- **Reset** clears all pins, hidden nodes, filters, and slices.
+
+During debugging, live value badges appear on tag nodes. The graph rescopes automatically when you switch editor tabs, showing only the rungs and tags from the active file.
+
 ## Trace event
 
 The adapter emits `pyrungTrace` after each stop with the current step and region evaluation details used by decorations.
