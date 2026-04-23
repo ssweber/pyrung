@@ -168,15 +168,6 @@ class Tag:
                 f"Tag {self.name!r}: physical profile requires link "
                 "(profile defines response to a linked command)."
             )
-        if (
-            self.type == TagType.BOOL
-            and self.physical is not None
-            and self.physical.profile is not None
-        ):
-            raise ValueError(
-                f"Tag {self.name!r}: Bool feedback cannot use physical profile "
-                "(use on_delay/off_delay for Bool timing)."
-            )
 
     def __hash__(self) -> int:
         return hash(self.name)

@@ -232,7 +232,7 @@ class TestTagFields:
                     physical=motor_fb, link="Missing"
                 )
 
-    def test_linked_bool_requires_physical_timing(self):
+    def test_linked_bool_requires_physical_timing_or_profile(self):
         with pytest.raises(ValueError, match="linked BOOL feedback"):
 
             @udt()
@@ -251,17 +251,19 @@ class TestTagFields:
             class BadProfile:
                 Temp: Real = Field(physical=temp_sensor)  # ty: ignore[invalid-assignment]
 
-    def test_bool_with_profile_rejects_tag(self):
-        with pytest.raises(ValueError, match="Bool feedback cannot use physical profile"):
-            Bool("Fb", physical=temp_sensor, link="En")
+    def test_bool_with_profile_allowed_tag(self):
+        tag = Bool("Fb", physical=temp_sensor, link="En")
+        assert tag.physical is not None
+        assert tag.physical.profile == "first_order"
 
-    def test_bool_with_profile_rejects_field(self):
-        with pytest.raises(ValueError, match="Bool feedback cannot use physical profile"):
+    def test_bool_with_profile_allowed_field(self):
+        @udt()
+        class ProfileBool:
+            En: Bool
+            Fb: Bool = Field(physical=temp_sensor, link="En")  # ty: ignore[invalid-assignment]
 
-            @udt()
-            class BadBool:
-                En: Bool
-                Fb: Bool = Field(physical=temp_sensor, link="En")  # ty: ignore[invalid-assignment]
+        assert ProfileBool.Fb.physical is not None
+        assert ProfileBool.Fb.physical.profile == "first_order"
 
     def test_linked_analog_without_profile_allowed_at_construction(self):
         @udt()

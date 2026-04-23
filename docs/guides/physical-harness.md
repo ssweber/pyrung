@@ -34,13 +34,14 @@ LIMIT_SWITCH = Physical("LimitSwitch", on_delay="5ms", off_delay="5ms")
 VACUUM_SENSOR = Physical("VacuumSensor", on_delay="80ms", off_delay="50ms")
 ```
 
-**Analog feedback** — a signal that follows a continuous response curve (thermocouples, pressure transmitters, flow meters):
+**Profile-driven feedback** — a signal driven by a custom response function (thermocouples, pressure transmitters, flow meters, shaft encoders):
 
 ```python
 THERMOCOUPLE = Physical("Thermocouple", profile="generic_thermal")
+ENCODER = Physical("Encoder", profile="shaft_encoder")
 ```
 
-A `Physical` is either bool (has timing) or analog (has a profile name), never both. Delays accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
+A `Physical` has either timing (on_delay/off_delay) or a profile name, never both. Bool fields accept either form — use timing for simple delayed transitions (contactors, limit switches) and profiles for signals that need custom state like pulse trains. Delays accept duration strings: `"5ms"`, `"2s"`, `"1s500ms"`.
 
 ## Linking feedback to commands
 
@@ -111,9 +112,9 @@ A scheduled patch always arrives at least 1 tick later — you can't schedule in
 
 Multiple `Fb` fields linked to the same `En` schedule independently, each with its own `Physical` timing. A vacuum gripper's `Fb_Contact` (5ms) and `Fb_Vacuum` (80ms) arrive at different times from the same `En` edge.
 
-### How analog feedback works
+### How profile-driven feedback works
 
-Analog feedback delegates to a registered profile function. Register one with the `@profile` decorator:
+Profile-driven feedback delegates to a registered profile function. Register one with the `@profile` decorator:
 
 ```python
 from pyrung import profile
@@ -149,13 +150,45 @@ def generic_pressure(cur, en, dt):
     return cur - 5.0 * dt        # bleed down
 ```
 
+### Bool fields with profiles
+
+Profiles aren't limited to analog tags. A Bool field can use `profile=` instead of `on_delay`/`off_delay` when the feedback needs custom state — the most common case is a discrete pulse sensor like a shaft encoder or flow meter pulse output.
+
+Since `cur` is a Bool (`True`/`False`), it can't carry phase state. Use a closure:
+
+```python
+ENCODER = Physical("Encoder", profile="shaft_encoder")
+
+def make_encoder_profile(rpm=60):
+    phase = [0.0]
+    period = 60.0 / rpm
+
+    @profile("shaft_encoder")
+    def shaft_encoder(cur, en, dt):
+        if not en:
+            phase[0] = 0.0
+            return False
+        phase[0] += dt
+        return (phase[0] % period) < (period / 2)
+
+    return shaft_encoder
+
+@udt()
+class Conveyor:
+    En: Bool
+    Fb_Encoder: Bool = Field(physical=ENCODER, link="En")
+```
+
+The closure holds the accumulated phase; the profile toggles the Bool at the right frequency. A counter instruction in the logic counts the rising edges — the harness produces the pulse train, the program counts it.
+
+One profile registration per name, so two encoders at different RPMs need two profile names.
+
 ## Validation
 
 pyrung validates UDT and named-array field annotations at construction time:
 
-- **Bool Fb field + `link=` but no physical timing** — rejected. A linked bool feedback field must declare `physical=Physical(..., on_delay=..., off_delay=...)` or at least one of the two delays.
+- **Bool Fb field + `link=` but no physical** — rejected. A linked bool feedback field must declare either `physical=Physical(..., on_delay=..., off_delay=...)` or `physical=Physical(..., profile=...)`.
 - **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command; without a link there's nothing to respond to.
-- **Bool Fb with a physical profile** — rejected. Bool feedback uses `on_delay`/`off_delay`; profiles are for analog only.
 
 `Program.validate()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`.
 

@@ -25,6 +25,7 @@ LIMIT_SWITCH = Physical("LimitSwitch", on_delay="20ms", off_delay="10ms")
 SLOW_VALVE = Physical("SlowValve", on_delay="100ms", off_delay="200ms")
 FAST_SENSOR = Physical("FastSensor", on_delay="5ms", off_delay="5ms")
 TEMP_SENSOR = Physical("TempSensor", profile="test_thermal")
+ENCODER = Physical("Encoder", profile="test_encoder")
 
 
 # --- Fixtures: UDTs ---
@@ -54,6 +55,12 @@ class MixedDevice:
     En: Bool
     Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")  # ty: ignore[invalid-assignment]
     Fb_Temp: Real = Field(physical=TEMP_SENSOR, link="En", min=0, max=250, uom="degC")  # ty: ignore[invalid-assignment]
+
+
+@udt()
+class EncoderDevice:
+    En: Bool
+    Fb_Pulse: Bool = Field(physical=ENCODER, link="En")  # ty: ignore[invalid-assignment]
 
 
 # --- Helpers ---
@@ -355,3 +362,47 @@ class TestAnalogAutoharness:
         plc.run_for(0.100)
         decayed = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
         assert decayed < peak
+
+
+class TestBoolProfileAutoharness:
+    def setup_method(self):
+        _profile_registry.clear()
+
+    def test_bool_profile_toggles_feedback(self):
+        phase = [0.0]
+
+        @profile("test_encoder")
+        def encoder(cur, en, dt):
+            if not en:
+                phase[0] = 0.0
+                return False
+            phase[0] += dt
+            period = 0.050
+            return (phase[0] % period) < (period / 2)
+
+        plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.005)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({Cmd: True})
+        values = []
+        for _ in range(20):
+            plc.step()
+            values.append(_fb(plc, dev[1].Fb_Pulse))
+
+        assert True in values
+        assert False in values
+
+    def test_bool_profile_inactive_when_en_false(self):
+        @profile("test_encoder")
+        def encoder(cur, en, dt):
+            if not en:
+                return False
+            return True
+
+        plc, Cmd, dev = _make_plc(EncoderDevice, dt=0.010)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb_Pulse) is False

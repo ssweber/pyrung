@@ -919,11 +919,6 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
                 f"Field {spec.name!r}: physical profile requires link "
                 "(profile defines response to a linked command)."
             )
-        if has_profile and spec.type == TagType.BOOL:
-            raise ValueError(
-                f"Field {spec.name!r}: Bool feedback cannot use physical profile "
-                "(use on_delay/off_delay for Bool timing)."
-            )
         if spec.link is None:
             continue
         if spec.link not in field_by_name:
@@ -934,10 +929,14 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
         if spec.type != TagType.BOOL:
             continue
         physical = spec.physical
-        if physical is None or (physical.on_delay is None and physical.off_delay is None):
+        has_timing = physical is not None and (
+            physical.on_delay is not None or physical.off_delay is not None
+        )
+        has_prof = physical is not None and physical.profile is not None
+        if not has_timing and not has_prof:
             raise ValueError(
                 f"Field {spec.name!r} is a linked BOOL feedback and requires physical "
-                "timing via on_delay and/or off_delay."
+                "timing via on_delay/off_delay or a profile."
             )
 
 
