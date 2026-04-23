@@ -300,6 +300,21 @@ ok, text = send_command("logic", "step 5")
 print(text)                         # "Stepped 5 scan(s), now at scan 10"
 ```
 
+### Pair commissioning
+
+One person drives VS Code (breakpoints, Data View, Graph View), another runs `pyrung-live` from a terminal. Both hit the same PLC state. Commands from the live client show `(live)` in the `log` output so you can tell who did what:
+
+```text
+scan 10:
+  patch StartBtn True
+  Running: False → True
+scan 11:  (live)
+  force EntrySensor True
+  State: 0 → 1
+```
+
+The live client can do everything the Debug Console can — forces, patches, causal queries, recording. Stepping from either side advances the same scan counter.
+
 ### How it works
 
 The server is a single-threaded TCP listener that dispatches commands through the same `console.dispatch()` path as the Debug Console. Commands are serialized by the adapter's state lock — a live client waits if a scan is in progress.

@@ -63,6 +63,26 @@ class Gripper:
 
 Do not put `physical=` on `En` just because `En` represents a real output. The harness discovers couplings from linked feedback fields (`Fb_*` with `link="En"`). An unlinked bool `physical=` annotation is metadata only and does not create a harness loop.
 
+### Standalone tags — linking across the program
+
+`link=` also works on standalone tags, not just UDT fields. This is useful for modeling process physics — responses that happen in the real world but aren't electrical feedback on the same device.
+
+A conveyor sorts large boxes by extending a diverter. After the diverter fires, a box arrives at the bin sensor — that's a physical consequence with a real delay:
+
+```python
+from pyrung import Bool, Physical
+
+DiverterCmd = Bool("DiverterCmd")
+BinSensor = Bool("BinSensor",
+    physical=Physical("BinSensor", on_delay="2s", off_delay="500ms"),
+    link="DiverterCmd",
+)
+```
+
+When `DiverterCmd` goes True, the harness schedules `BinSensor=True` 2 seconds later. When it drops, `BinSensor` clears after 500ms. No UDT needed — the link names any tag in the program.
+
+The distinction: UDT links model device-level feedback (motor command → motor contactor feedback). Standalone links model process-level physics (diverter fires → box arrives at bin). Both use the same `Physical` timing and the same harness machinery.
+
 Analog feedback works the same way, with `profile=` on the `Physical`:
 
 ```python
