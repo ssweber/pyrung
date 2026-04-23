@@ -57,8 +57,8 @@ def test_udt_literal_and_auto_defaults_resolve_per_instance():
 def test_udt_retentive_policy_inherited_by_generated_tags():
     @udt(count=2)
     class Alarm:
-        id: Int = Field(retentive=True)  # ty: ignore[invalid-assignment]
-        On: Bool = Field(retentive=False)  # ty: ignore[invalid-assignment]
+        id: Int = Field(retentive=True)
+        On: Bool = Field(retentive=False)
 
     alarms = cast(Any, Alarm)
     assert alarms[1].id.retentive is True
@@ -85,8 +85,8 @@ def test_udt_retentive_explicit_overrides_type_default():
 
     @udt(count=1)
     class Sensor:
-        active: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
-        reading: Int = Field(retentive=False)  # ty: ignore[invalid-assignment]
+        active: Bool = Field(retentive=True)
+        reading: Int = Field(retentive=False)
 
     sensor = cast(Any, Sensor)
     assert sensor.active.retentive is True  # overridden from Bool default False
@@ -100,7 +100,7 @@ def test_udt_field_choices_and_readonly_thread_through_blocks_and_fields():
 
     @udt(count=2)
     class Device:
-        mode: Int = Field(choices=Mode, readonly=True)  # ty: ignore[invalid-assignment]
+        mode: Int = Field(choices=Mode, readonly=True)
 
     device = cast(Any, Device)
     assert device.fields["mode"].choices == {0: "IDLE", 1: "RUN"}
@@ -115,7 +115,7 @@ def test_udt_decorator_readonly_defaults_and_field_override():
     @udt(count=2, readonly=True)
     class Device:
         mode: Int
-        editable: Int = Field(readonly=False)  # ty: ignore[invalid-assignment]
+        editable: Int = Field(readonly=False)
 
     device = cast(Any, Device)
     assert device.fields["mode"].readonly is True
@@ -283,7 +283,7 @@ def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:
         id: Int = 1  # ty: ignore[invalid-assignment]
-        On: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=True)
 
     alarm = cast(Any, Alarm)
     assert alarm.field_names == ("id", "On")

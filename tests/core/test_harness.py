@@ -34,33 +34,33 @@ ENCODER = Physical("Encoder", profile="test_encoder")
 @udt()
 class SimplePair:
     En: Bool
-    Fb: Bool = Field(physical=LIMIT_SWITCH, link="En")  # ty: ignore[invalid-assignment]
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="En")
 
 
 @udt()
 class AsymmetricValve:
     En: Bool
-    Fb: Bool = Field(physical=SLOW_VALVE, link="En")  # ty: ignore[invalid-assignment]
+    Fb: Bool = Field(physical=SLOW_VALVE, link="En")
 
 
 @udt()
 class MultiFeedback:
     En: Bool
-    Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")  # ty: ignore[invalid-assignment]
-    Fb_Vacuum: Bool = Field(physical=FAST_SENSOR, link="En")  # ty: ignore[invalid-assignment]
+    Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")
+    Fb_Vacuum: Bool = Field(physical=FAST_SENSOR, link="En")
 
 
 @udt()
 class MixedDevice:
     En: Bool
-    Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")  # ty: ignore[invalid-assignment]
-    Fb_Temp: Real = Field(physical=TEMP_SENSOR, link="En", min=0, max=250, uom="degC")  # ty: ignore[invalid-assignment]
+    Fb_Contact: Bool = Field(physical=LIMIT_SWITCH, link="En")
+    Fb_Temp: Real = Field(physical=TEMP_SENSOR, link="En", min=0, max=250, uom="degC")
 
 
 @udt()
 class EncoderDevice:
     En: Bool
-    Fb_Pulse: Bool = Field(physical=ENCODER, link="En")  # ty: ignore[invalid-assignment]
+    Fb_Pulse: Bool = Field(physical=ENCODER, link="En")
 
 
 # --- Helpers ---

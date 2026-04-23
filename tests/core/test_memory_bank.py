@@ -235,7 +235,7 @@ class TestBlock:
 
         @udt(count=3)
         class Device:
-            mode: Int = Field(choices=Mode, readonly=True)  # ty: ignore[invalid-assignment]
+            mode: Int = Field(choices=Mode, readonly=True)
 
         devices = cast(Any, Device)
         mode_block = devices.mode

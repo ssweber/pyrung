@@ -173,10 +173,8 @@ class TestTagFields:
         @udt()
         class Pump:
             Enable: Bool
-            Running_Fb: Bool = Field(physical=motor_fb, link="Enable")  # ty: ignore[invalid-assignment]
-            Temp: Real = Field(  # ty: ignore[invalid-assignment]
-                physical=temp_sensor, link="Enable", min=0, max=150, uom="degC"
-            )
+            Running_Fb: Bool = Field(physical=motor_fb, link="Enable")
+            Temp: Real = Field(physical=temp_sensor, link="Enable", min=0, max=150, uom="degC")
 
         p = Pump[1]
         assert p.Running_Fb.physical is motor_fb
@@ -198,7 +196,7 @@ class TestTagFields:
         @udt(count=3)
         class Motor:
             Enable: Bool
-            Fb: Bool = Field(physical=motor_fb, link="Enable")  # ty: ignore[invalid-assignment]
+            Fb: Bool = Field(physical=motor_fb, link="Enable")
 
         assert Motor[1].Fb.physical is motor_fb
         assert Motor[2].Fb.physical is motor_fb
@@ -228,9 +226,7 @@ class TestTagFields:
             @udt()
             class BadLink:
                 Enable: Bool
-                Running_Fb: Bool = Field(  # ty: ignore[invalid-assignment]
-                    physical=motor_fb, link="Missing"
-                )
+                Running_Fb: Bool = Field(physical=motor_fb, link="Missing")
 
     def test_linked_bool_requires_physical_timing_or_profile(self):
         with pytest.raises(ValueError, match="linked BOOL feedback"):
@@ -238,7 +234,7 @@ class TestTagFields:
             @udt()
             class BadFeedback:
                 Enable: Bool
-                Running_Fb: Bool = Field(link="Enable")  # ty: ignore[invalid-assignment]
+                Running_Fb: Bool = Field(link="Enable")
 
     def test_profile_without_link_rejects_tag(self):
         with pytest.raises(ValueError, match="profile requires link"):
@@ -249,7 +245,7 @@ class TestTagFields:
 
             @udt()
             class BadProfile:
-                Temp: Real = Field(physical=temp_sensor)  # ty: ignore[invalid-assignment]
+                Temp: Real = Field(physical=temp_sensor)
 
     def test_bool_with_profile_allowed_tag(self):
         tag = Bool("Fb", physical=temp_sensor, link="En")
@@ -260,7 +256,7 @@ class TestTagFields:
         @udt()
         class ProfileBool:
             En: Bool
-            Fb: Bool = Field(physical=temp_sensor, link="En")  # ty: ignore[invalid-assignment]
+            Fb: Bool = Field(physical=temp_sensor, link="En")
 
         assert ProfileBool.Fb.physical is not None
         assert ProfileBool.Fb.physical.profile == "first_order"
@@ -269,6 +265,6 @@ class TestTagFields:
         @udt()
         class AnalogLoop:
             Cmd: Real
-            Pv: Real = Field(link="Cmd")  # ty: ignore[invalid-assignment]
+            Pv: Real = Field(link="Cmd")
 
         assert AnalogLoop.Pv.link == "Cmd"

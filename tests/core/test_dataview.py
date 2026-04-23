@@ -565,7 +565,7 @@ class TestStructures:
         @udt()
         class Pump:
             Running: Bool
-            Speed: Int = Field(min=0, max=100, uom="rpm")  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+            Speed: Int = Field(min=0, max=100, uom="rpm")  # type: ignore[assignment]
 
         enable = Bool("Enable")
 

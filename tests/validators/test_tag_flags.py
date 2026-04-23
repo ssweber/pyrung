@@ -137,8 +137,8 @@ class TestStructureFlags:
 
         @udt()
         class Status:
-            Value: Int = Field(final=True)  # ty: ignore[invalid-assignment]
-            Mode: Int = Field(external=True)  # ty: ignore[invalid-assignment]
+            Value: Int = Field(final=True)
+            Mode: Int = Field(external=True)
 
         status = cast(Any, Status)
         assert status.fields["Value"].final is True
