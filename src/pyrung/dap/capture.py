@@ -79,7 +79,7 @@ class CaptureBuffer:
 # Console verb
 # ---------------------------------------------------------------------------
 
-_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue"})
+_CAPTURE_EXCLUDED = frozenset({"record", "replay", "help", "pause", "continue", "spec"})
 
 
 def capture_hook(adapter: Any, verb: str, expression: str, *, provenance: str = "console") -> None:

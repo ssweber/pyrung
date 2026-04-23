@@ -98,6 +98,7 @@ class DAPAdapter:
 
         import pyrung.dap.harness_console  # noqa: F401
         import pyrung.dap.miner_console  # noqa: F401
+        import pyrung.dap.spec_console  # noqa: F401
 
     @property
     def _runner(self) -> PLC | None:
