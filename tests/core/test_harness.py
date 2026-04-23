@@ -7,8 +7,10 @@ import pytest
 from pyrung.core import (
     PLC,
     Bool,
+    Char,
     Field,
     Harness,
+    Int,
     Program,
     Real,
     Rung,
@@ -406,3 +408,339 @@ class TestBoolProfileAutoharness:
 
         plc.run_for(0.050)
         assert _fb(plc, dev[1].Fb_Pulse) is False
+
+
+# --- Value-Trigger Fixtures ---
+
+STATE_CHOICES = {0: "IDLE", 1: "RUNNING", 2: "SORTING"}
+
+
+@udt()
+class IntTriggerPair:
+    State: Int = Field(choices=STATE_CHOICES)
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="State:SORTING")
+
+
+@udt()
+class IntTriggerLiteral:
+    State: Int
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="State:2")
+
+
+@udt()
+class MultiTrigger:
+    State: Int = Field(choices=STATE_CHOICES)
+    RunFb: Bool = Field(physical=FAST_SENSOR, link="State:RUNNING")
+    SortFb: Bool = Field(physical=LIMIT_SWITCH, link="State:SORTING")
+
+
+@udt()
+class CharTriggerPair:
+    Status: Char
+    Fb: Bool = Field(physical=LIMIT_SWITCH, link="Status:Y")
+
+
+@udt()
+class IntTriggerAnalog:
+    State: Int = Field(choices=STATE_CHOICES)
+    Fb_Temp: Real = Field(physical=TEMP_SENSOR, link="State:SORTING", min=0, max=250, uom="degC")
+
+
+def _make_trigger_plc(device_udt, en_field="State", dt=0.010):
+    with Program() as logic:
+        pass
+    plc = PLC(logic, dt=dt)
+    plc._register_known_tag(getattr(device_udt[1], en_field))
+    return plc, device_udt
+
+
+# --- Value-Trigger Bool Tests ---
+
+
+class TestTriggerValueAutoharness:
+    def test_fb_rises_on_trigger_match(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.step()  # scan 1: State becomes SORTING, edge detected
+        assert _fb(plc, dev[1].Fb) is False
+
+        plc.step()  # scan 2: not yet (on_delay=20ms, dt=10ms → 2 scans)
+        assert _fb(plc, dev[1].Fb) is False
+
+        plc.step()  # scan 3: Fb arrives
+        assert _fb(plc, dev[1].Fb) is True
+
+    def test_fb_falls_on_trigger_leave(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].State: 0})
+        plc.step()  # off-edge detected (off_delay=10ms, dt=10ms → 1 scan)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.step()  # Fb falls
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_non_matching_transition_no_effect(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 1})  # RUNNING, not SORTING
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_truthy_to_truthy_on_edge(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 1})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+    def test_truthy_to_truthy_off_edge(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].State: 1})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_literal_int_without_choices(self):
+        plc, dev = _make_trigger_plc(IntTriggerLiteral)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].State: 0})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+    def test_multiple_triggers_same_enable(self):
+        plc, dev = _make_trigger_plc(MultiTrigger)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 1})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].RunFb) is True
+        assert _fb(plc, dev[1].SortFb) is False
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].RunFb) is False
+        assert _fb(plc, dev[1].SortFb) is True
+
+    def test_coexists_with_plain_bool_coupling(self):
+        @udt()
+        class Mixed:
+            En: Bool
+            State: Int = Field(choices=STATE_CHOICES)
+            BoolFb: Bool = Field(physical=FAST_SENSOR, link="En")
+            TrigFb: Bool = Field(physical=LIMIT_SWITCH, link="State:SORTING")
+
+        plc, dev = _make_trigger_plc(Mixed)
+        plc._register_known_tag(dev[1].En)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].En: True})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].BoolFb) is True
+        assert _fb(plc, dev[1].TrigFb) is False
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].BoolFb) is True
+        assert _fb(plc, dev[1].TrigFb) is True
+
+    def test_flat_tag_int_trigger(self):
+        State = Int("FlatState", choices={0: "IDLE", 2: "SORTING"})
+        Fb = Bool("FlatFb", physical=LIMIT_SWITCH, link="FlatState:SORTING")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(State)
+        plc._register_known_tag(Fb)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({State: 2})
+        plc.run_for(0.050)
+        assert _fb(plc, Fb) is True
+
+        plc.patch({State: 0})
+        plc.run_for(0.050)
+        assert _fb(plc, Fb) is False
+
+
+# --- Value-Trigger Char Tests ---
+
+
+class TestCharTriggerAutoharness:
+    def test_char_trigger_fires(self):
+        plc, dev = _make_trigger_plc(CharTriggerPair, en_field="Status")
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].Status: "Y"})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+    def test_char_trigger_clears(self):
+        plc, dev = _make_trigger_plc(CharTriggerPair, en_field="Status")
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].Status: "Y"})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is True
+
+        plc.patch({dev[1].Status: "N"})
+        plc.run_for(0.050)
+        assert _fb(plc, dev[1].Fb) is False
+
+
+# --- Value-Trigger Analog Tests ---
+
+
+class TestTriggerValueAnalogAutoharness:
+    def setup_method(self):
+        _profile_registry.clear()
+
+    def test_analog_activates_on_trigger_match(self):
+        @profile("test_thermal")
+        def thermal(cur, en, dt):
+            if en:
+                return cur + 10.0 * dt
+            return cur
+
+        plc, dev = _make_trigger_plc(IntTriggerAnalog)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.100)
+        fb_temp = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
+        assert fb_temp > 0.5
+
+    def test_analog_en_false_on_mismatch(self):
+        calls: list[tuple[float, bool, float]] = []
+
+        @profile("test_thermal")
+        def capture(cur, en, dt):
+            calls.append((cur, en, dt))
+            return cur + (10.0 if en else -5.0) * dt
+
+        plc, dev = _make_trigger_plc(IntTriggerAnalog)
+        harness = Harness(plc)
+        harness.install()
+
+        plc.patch({dev[1].State: 2})
+        plc.run_for(0.050)
+        peak = plc.current_state.tags.get(dev[1].Fb_Temp.name, 0.0)
+        assert peak > 0
+
+        en_while_match = [en for _, en, _ in calls]
+        assert all(en_while_match)
+
+        calls.clear()
+        plc.patch({dev[1].State: 0})
+        plc.step()  # pre_scan ticks with old State=2 still, then patch applied
+        plc.step()  # now State=0, profile sees en=False
+        assert calls[-1][1] is False
+
+
+# --- Value-Trigger Validation Tests ---
+
+
+class TestTriggerValidation:
+    def test_invalid_choice_label_raises(self):
+        with pytest.raises(ValueError, match="not found in choices"):
+
+            @udt()
+            class Bad:
+                State: Int = Field(choices=STATE_CHOICES)
+                Fb: Bool = Field(physical=LIMIT_SWITCH, link="State:MISSING")
+
+    def test_non_numeric_without_choices_raises(self):
+        with pytest.raises(ValueError, match="has no choices map"):
+
+            @udt()
+            class Bad:
+                State: Int
+                Fb: Bool = Field(physical=LIMIT_SWITCH, link="State:SORTING")
+
+    def test_trigger_on_bool_enable_raises(self):
+        with pytest.raises(ValueError, match="not valid for BOOL"):
+
+            @udt()
+            class Bad:
+                En: Bool
+                Fb: Bool = Field(physical=LIMIT_SWITCH, link="En:1")
+
+    def test_int_literal_without_choices_is_valid(self):
+        @udt()
+        class Valid:
+            State: Int
+            Fb: Bool = Field(physical=LIMIT_SWITCH, link="State:2")
+
+        assert Valid is not None
+
+    def test_flat_tag_invalid_trigger_raises(self):
+        State = Int("BadState")
+        Bool("BadFb", physical=LIMIT_SWITCH, link="BadState:SORTING")
+
+        with Program() as logic:
+            pass
+        plc = PLC(logic, dt=0.010)
+        plc._register_known_tag(State)
+        plc._register_known_tag(Bool("BadFb", physical=LIMIT_SWITCH, link="BadState:SORTING"))
+        harness = Harness(plc)
+        with pytest.raises(ValueError, match="has no choices map"):
+            harness.install()
+
+
+# --- Coupling Summary Display ---
+
+
+class TestTriggerCoupingSummary:
+    def test_summary_includes_trigger_value(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        summary = harness.coupling_summary()
+        bc = summary["bool_couplings"][0]
+        assert bc["trigger_value"] == 2
+
+    def test_summary_plain_coupling_trigger_is_none(self):
+        plc, Cmd, dev = _make_plc(SimplePair)
+        harness = Harness(plc)
+        harness.install()
+
+        summary = harness.coupling_summary()
+        bc = summary["bool_couplings"][0]
+        assert bc["trigger_value"] is None

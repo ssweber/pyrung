@@ -145,12 +145,13 @@ def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
     link = feedback.link
     if link is None:
         return None
+    link_field = link.partition(":")[0]
 
     runtime = getattr(feedback, "_pyrung_structure_runtime", None)
     index = getattr(feedback, "_pyrung_structure_index", None)
     blocks = getattr(runtime, "_blocks", None)
     if isinstance(blocks, dict) and isinstance(index, int):
-        block = blocks.get(link)
+        block = blocks.get(link_field)
         if block is None:
             return None
         try:
@@ -158,9 +159,9 @@ def _linked_command_name(feedback: Tag, tag_map: dict[str, Tag]) -> str | None:
         except Exception:
             return None
 
-    if link in tag_map:
-        return link
-    return link
+    if link_field in tag_map:
+        return link_field
+    return link_field
 
 
 def _linked_feedback_by_command(tag_map: dict[str, Tag]) -> dict[str, list[Tag]]:

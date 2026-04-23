@@ -921,11 +921,38 @@ def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
             )
         if spec.link is None:
             continue
-        if spec.link not in field_by_name:
+        link_field, _, trigger_part = spec.link.partition(":")
+        if link_field not in field_by_name:
             raise ValueError(
-                f"Field {spec.name!r} links to unknown field {spec.link!r}; "
+                f"Field {spec.name!r} links to unknown field {link_field!r}; "
                 "links must refer to a field in the same structure."
             )
+        if trigger_part:
+            en_spec = field_by_name[link_field]
+            if en_spec.type == TagType.BOOL:
+                raise ValueError(
+                    f"Field {spec.name!r}: trigger value {trigger_part!r} is not valid "
+                    f"for BOOL enable field {link_field!r}. "
+                    "Use plain link='fieldname' for BOOL enables."
+                )
+            try:
+                int(trigger_part)
+            except ValueError:
+                if en_spec.type == TagType.CHAR:
+                    pass
+                elif en_spec.choices is None:
+                    raise ValueError(
+                        f"Field {spec.name!r}: trigger {trigger_part!r} is not an int "
+                        f"literal and enable field {link_field!r} has no choices map."
+                    ) from None
+                else:
+                    reverse = {v: k for k, v in en_spec.choices.items()}
+                    if trigger_part not in reverse:
+                        raise ValueError(
+                            f"Field {spec.name!r}: trigger label {trigger_part!r} not "
+                            f"found in choices for {link_field!r}. "
+                            f"Available: {list(en_spec.choices.values())}."
+                        ) from None
         if spec.type != TagType.BOOL:
             continue
         physical = spec.physical

@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.tag import TagType
+
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
@@ -53,6 +55,7 @@ class _BoolCoupling:
     fb_name: str
     on_delay_ms: int
     off_delay_ms: int
+    trigger_value: int | str | None = None
 
 
 @dataclass
@@ -61,6 +64,35 @@ class _AnalogCoupling:
     fb_name: str
     profile_name: str
     active: bool = False
+    trigger_value: int | str | None = None
+
+
+def _parse_link_spec(link: str) -> tuple[str, str | None]:
+    name, _, trigger = link.partition(":")
+    return (name, trigger or None)
+
+
+def _resolve_trigger_value(trigger_raw: str, en_tag: Any) -> int | str:
+    try:
+        return int(trigger_raw)
+    except ValueError:
+        pass
+    choices = getattr(en_tag, "choices", None)
+    if choices is not None:
+        for key, label in choices.items():
+            if label == trigger_raw:
+                return int(key) if isinstance(key, (int, float)) else key
+    if getattr(en_tag, "type", None) == TagType.CHAR:
+        return trigger_raw
+    if choices is None:
+        raise ValueError(
+            f"Trigger value {trigger_raw!r} is not an int literal and "
+            f"enable tag {en_tag.name!r} has no choices map."
+        )
+    raise ValueError(
+        f"Trigger label {trigger_raw!r} not found in choices for "
+        f"{en_tag.name!r}. Available: {list(choices.values())}."
+    )
 
 
 @dataclass
@@ -165,7 +197,11 @@ class Harness:
                 continue
             state = self._plc.current_state
             cur = state.tags.get(coupling.fb_name, 0.0)
-            en = bool(state.tags.get(coupling.en_name, False))
+            en_raw = state.tags.get(coupling.en_name, False)
+            if coupling.trigger_value is not None:
+                en = en_raw == coupling.trigger_value
+            else:
+                en = bool(en_raw)
             dt = state.memory.get("_dt", self._plc._dt)
             results.append((coupling.fb_name, fn(cur, en, dt), coupling.profile_name))
         return results
@@ -186,10 +222,14 @@ class Harness:
     def _try_add_flat_coupling(self, tag: Any) -> None:
         if tag.link is None or tag.physical is None:
             return
-        en_name = tag.link
+        en_name, trigger_raw = _parse_link_spec(tag.link)
         if en_name not in self._plc._known_tags_by_name:
             return
-        self._add_coupling(en_name, tag.name, tag.physical)
+        trigger_value = None
+        if trigger_raw is not None:
+            en_tag = self._plc._known_tags_by_name[en_name]
+            trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
+        self._add_coupling(en_name, tag.name, tag.physical, trigger_value=trigger_value)
 
     def _discover_structure_couplings(self, runtime: Any) -> None:
         field_specs = runtime._field_specs
@@ -198,7 +238,8 @@ class Harness:
         for spec in field_specs.values():
             if spec.link is None or spec.physical is None:
                 continue
-            en_block = blocks.get(spec.link)
+            en_field_name, trigger_raw = _parse_link_spec(spec.link)
+            en_block = blocks.get(en_field_name)
             fb_block = blocks.get(spec.name)
             if en_block is None or fb_block is None:
                 continue
@@ -210,15 +251,31 @@ class Harness:
                     continue
                 self._plc._register_known_tag(en_tag)
                 self._plc._register_known_tag(fb_tag)
-                self._add_coupling(en_tag.name, fb_tag.name, spec.physical)
+                trigger_value = None
+                if trigger_raw is not None:
+                    trigger_value = _resolve_trigger_value(trigger_raw, en_tag)
+                self._add_coupling(
+                    en_tag.name, fb_tag.name, spec.physical, trigger_value=trigger_value
+                )
 
-    def _add_coupling(self, en_name: str, fb_name: str, physical: Any) -> None:
+    def _add_coupling(
+        self,
+        en_name: str,
+        fb_name: str,
+        physical: Any,
+        *,
+        trigger_value: int | str | None = None,
+    ) -> None:
         if physical.feedback_type == "bool":
             on_ms = physical.on_delay_ms or 0
             off_ms = physical.off_delay_ms or 0
-            self._bool_couplings.append(_BoolCoupling(en_name, fb_name, on_ms, off_ms))
+            self._bool_couplings.append(
+                _BoolCoupling(en_name, fb_name, on_ms, off_ms, trigger_value=trigger_value)
+            )
         elif physical.feedback_type == "analog" and physical.profile is not None:
-            self._analog_couplings.append(_AnalogCoupling(en_name, fb_name, physical.profile))
+            self._analog_couplings.append(
+                _AnalogCoupling(en_name, fb_name, physical.profile, trigger_value=trigger_value)
+            )
 
     def _install_monitors(self) -> None:
         en_to_bool: dict[str, list[_BoolCoupling]] = {}
@@ -245,23 +302,42 @@ class Harness:
         analog_couplings: list[_AnalogCoupling],
     ) -> Callable[[Any, Any], None]:
         dt_ms = self._plc._dt * 1000
+        plain_bool = [c for c in bool_couplings if c.trigger_value is None]
+        trigger_bool = [c for c in bool_couplings if c.trigger_value is not None]
+        plain_analog = [c for c in analog_couplings if c.trigger_value is None]
+        trigger_analog = [c for c in analog_couplings if c.trigger_value is not None]
 
         def on_en_change(current: Any, previous: Any) -> None:
-            cur_bool = bool(current)
-            prev_bool = bool(previous)
-            if cur_bool == prev_bool:
-                return
-            rising = cur_bool and not prev_bool
             scan_id = self._plc.current_state.scan_id
 
-            for coupling in bool_couplings:
-                delay_ms = coupling.on_delay_ms if rising else coupling.off_delay_ms
+            cur_bool = bool(current)
+            prev_bool = bool(previous)
+            if cur_bool != prev_bool:
+                rising = cur_bool and not prev_bool
+                for coupling in plain_bool:
+                    delay_ms = coupling.on_delay_ms if rising else coupling.off_delay_ms
+                    delay_scans = max(1, ceil(delay_ms / dt_ms))
+                    target = scan_id + delay_scans
+                    self._schedule(target, coupling.fb_name, rising)
+                for coupling in plain_analog:
+                    coupling.active = True
+
+            for coupling in trigger_bool:
+                was_match = previous == coupling.trigger_value
+                is_match = current == coupling.trigger_value
+                if was_match == is_match:
+                    continue
+                on_edge = is_match
+                delay_ms = coupling.on_delay_ms if on_edge else coupling.off_delay_ms
                 delay_scans = max(1, ceil(delay_ms / dt_ms))
                 target = scan_id + delay_scans
-                value = rising
-                self._schedule(target, coupling.fb_name, value)
+                self._schedule(target, coupling.fb_name, on_edge)
 
-            for coupling in analog_couplings:
+            for coupling in trigger_analog:
+                was_match = previous == coupling.trigger_value
+                is_match = current == coupling.trigger_value
+                if was_match == is_match:
+                    continue
                 coupling.active = True
 
         return on_en_change
@@ -279,6 +355,7 @@ class Harness:
                     "fb": c.fb_name,
                     "on_delay_ms": c.on_delay_ms,
                     "off_delay_ms": c.off_delay_ms,
+                    "trigger_value": c.trigger_value,
                 }
                 for c in self._bool_couplings
             ],
@@ -288,6 +365,7 @@ class Harness:
                     "fb": c.fb_name,
                     "profile": c.profile_name,
                     "active": c.active,
+                    "trigger_value": c.trigger_value,
                 }
                 for c in self._analog_couplings
             ],

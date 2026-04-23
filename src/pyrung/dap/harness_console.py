@@ -119,13 +119,17 @@ def _harness_status(adapter: Any) -> ConsoleResult:
     lines: list[str] = [f"Harness: {'active' if summary['installed'] else 'inactive'}"]
 
     for bc in summary["bool_couplings"]:
+        tv = bc.get("trigger_value")
+        en_label = f"{bc['en']}=={tv}" if tv is not None else bc["en"]
         lines.append(
-            f"  bool  {bc['en']} -> {bc['fb']}  "
+            f"  bool  {en_label} -> {bc['fb']}  "
             f"(on={bc['on_delay_ms']}ms, off={bc['off_delay_ms']}ms)"
         )
     for ac in summary["analog_couplings"]:
         active = " [active]" if ac["active"] else ""
-        lines.append(f"  analog  {ac['en']} -> {ac['fb']}  profile={ac['profile']}{active}")
+        tv = ac.get("trigger_value")
+        en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]
+        lines.append(f"  analog  {en_label} -> {ac['fb']}  profile={ac['profile']}{active}")
 
     pending = summary["pending_patches"]
     if pending:

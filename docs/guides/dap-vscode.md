@@ -231,13 +231,15 @@ harness remove             # disable the harness for this session
 harness install            # re-install after removal
 ```
 
-`harness status` lists each coupling with its timing or profile:
+`harness status` lists each coupling with its timing or profile. Value-triggered couplings show the trigger with `==`:
 
 ```text
 Harness: active
   bool  Gripper_En -> Gripper_Fb_Contact  (on=5ms, off=5ms)
   bool  Gripper_En -> Gripper_Fb_Vacuum   (on=20ms, off=80ms)
+  bool  Sorter_State==2 -> Sorter_BinSensor  (on=2000ms, off=500ms)
   analog  Heater_En -> Heater_Fb_Temp  profile=generic_thermal [active]
+  analog  Oven_Mode==2 -> Oven_Temp  profile=zone_thermal [active]
 ```
 
 When the harness applies patches, they appear in the Debug Console output prefixed with `[harness]`:

@@ -83,6 +83,75 @@ When `DiverterCmd` goes True, the harness schedules `BinSensor=True` 2 seconds l
 
 The distinction: UDT links model device-level feedback (motor command → motor contactor feedback). Standalone links model process-level physics (diverter fires → box arrives at bin). Both use the same `Physical` timing and the same harness machinery.
 
+### Value triggers — linking to specific states
+
+Plain `link=` watches for bool edges (truthy ↔ falsy). When the enable tag is an Int with a choices map — a state machine, a mode selector — you often want feedback to fire when the tag enters a *specific* value, not just any nonzero value.
+
+The `link="Tag:value"` syntax triggers on a specific value. The part after the colon is either a choices label or a literal integer:
+
+```python
+from pyrung import Int, Bool, Field, Physical, udt, named_array
+
+@named_array(Int, count=1)
+class SortState:
+    IDLE = 0
+    RUNNING = 1
+    SORTING = 2
+
+@udt()
+class Sorter:
+    State: Int = Field(choices=SortState)
+    BinSensor: Bool = Field(
+        physical=Physical("BinSensor", on_delay="2s", off_delay="500ms"),
+        link="State:SORTING",
+    )
+```
+
+When `State` transitions to the value matching `SORTING` (2), the harness schedules `BinSensor=True` after 2 seconds. When `State` transitions away from that value — to anything else — the harness schedules `BinSensor=False` after 500ms.
+
+Both forms are valid:
+
+- `link="State:SORTING"` — resolves `SORTING` through the tag's choices map
+- `link="State:2"` — uses the literal integer directly, no choices map needed
+
+If the part after the colon is a valid integer literal, it's used directly. Otherwise it's looked up in the enable tag's choices map. A missing choices map is only an error when the value isn't a numeric literal.
+
+Value triggers also work on Char tags for string matching:
+
+```python
+Status = Char("Status")
+Ready = Bool("Ready",
+    physical=Physical("Ready", on_delay="100ms", off_delay="50ms"),
+    link="Status:Y",
+)
+```
+
+Value triggers work with profile-driven feedback too. The profile function receives `en=True` when the enable tag matches the trigger value, `en=False` otherwise — the same interface as a plain bool link:
+
+```python
+THERMOCOUPLE = Physical("Thermocouple", profile="zone_thermal")
+
+@udt()
+class Oven:
+    Mode: Int = Field(choices={0: "OFF", 1: "PREHEAT", 2: "BAKE"})
+    Temp: Real = Field(physical=THERMOCOUPLE, link="Mode:BAKE",
+                       min=0, max=300, uom="degC")
+```
+
+When `Mode` enters `BAKE`, the profile sees `en=True` and ramps up. When `Mode` leaves `BAKE`, it sees `en=False` and can model ambient decay.
+
+Multiple feedback fields can watch the same enable tag with different trigger values:
+
+```python
+@udt()
+class Station:
+    State: Int = Field(choices={0: "IDLE", 1: "RUNNING", 2: "SORTING"})
+    RunFb: Bool = Field(physical=FAST_SENSOR, link="State:RUNNING")
+    SortFb: Bool = Field(physical=LIMIT_SWITCH, link="State:SORTING")
+```
+
+A transition from `RUNNING` to `SORTING` fires `RunFb` off-edge and `SortFb` on-edge simultaneously.
+
 Analog feedback works the same way, with `profile=` on the `Physical`:
 
 ```python
@@ -209,6 +278,9 @@ pyrung validates UDT and named-array field annotations at construction time:
 
 - **Bool Fb field + `link=` but no physical** — rejected. A linked bool feedback field must declare either `physical=Physical(..., on_delay=..., off_delay=...)` or `physical=Physical(..., profile=...)`.
 - **Physical profile without `link=`** — rejected on tags and fields. A profile defines a response to a linked command; without a link there's nothing to respond to.
+- **Trigger value on Bool enable** — rejected. `link="En:1"` where `En` is a Bool field is invalid; use plain `link="En"` for Bool enables.
+- **Unknown choices label** — `link="State:MISSING"` raises `ValueError` when `MISSING` is not in the enable field's choices map.
+- **Non-numeric trigger without choices** — `link="State:SORTING"` on an Int field with no choices map raises `ValueError`. Use `link="State:2"` for literal values.
 
 `Program.validate()` also checks the full program. In addition to range violations and feedback timing hazards, it reports linked analog feedback that does not declare `physical=Physical(..., profile=...)`.
 
