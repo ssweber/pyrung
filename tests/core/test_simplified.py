@@ -8,7 +8,9 @@ from pyrung.core.analysis.simplified import (
     Atom,
     Const,
     TerminalForm,
+    expr_requires,
     render,
+    reset_dominance,
     simplified_forms,
     simplify,
 )
@@ -412,3 +414,145 @@ def test_realistic_motor_circuit() -> None:
     assert "~Fault" in result
     assert "~EStop" in result
     assert "RunPermit" in result
+
+
+# ---------------------------------------------------------------------------
+# expr_requires
+# ---------------------------------------------------------------------------
+
+
+class TestExprRequires:
+    def test_atom_xic_matches(self) -> None:
+        assert expr_requires(Atom("A", "xic"), "A") is True
+
+    def test_atom_xic_wrong_tag(self) -> None:
+        assert expr_requires(Atom("A", "xic"), "B") is False
+
+    def test_atom_xio_not_matched_without_negated(self) -> None:
+        assert expr_requires(Atom("A", "xio"), "A") is False
+
+    def test_atom_xio_matched_with_negated(self) -> None:
+        assert expr_requires(Atom("A", "xio"), "A", negated=True) is True
+
+    def test_and_any_term_requires(self) -> None:
+        expr = And((Atom("A", "xic"), Atom("B", "xic")))
+        assert expr_requires(expr, "A") is True
+        assert expr_requires(expr, "B") is True
+
+    def test_and_no_term_requires(self) -> None:
+        expr = And((Atom("A", "xic"), Atom("B", "xic")))
+        assert expr_requires(expr, "C") is False
+
+    def test_or_all_branches_require(self) -> None:
+        expr = ExprOr(
+            (
+                And((Atom("A", "xic"), Atom("B", "xic"))),
+                And((Atom("A", "xic"), Atom("C", "xic"))),
+            )
+        )
+        assert expr_requires(expr, "A") is True
+
+    def test_or_some_branches_require(self) -> None:
+        expr = ExprOr(
+            (
+                And((Atom("A", "xic"), Atom("B", "xic"))),
+                And((Atom("C", "xic"), Atom("D", "xic"))),
+            )
+        )
+        assert expr_requires(expr, "A") is False
+
+    def test_const_never_requires(self) -> None:
+        assert expr_requires(Const(True), "A") is False
+        assert expr_requires(Const(False), "A") is False
+
+    def test_nested_and_or(self) -> None:
+        # (A AND B) OR (A AND C) — A required in both branches
+        expr = ExprOr(
+            (
+                And((Atom("A", "xic"), Atom("B", "xic"))),
+                And((Atom("A", "xic"), Atom("C", "xic"))),
+            )
+        )
+        assert expr_requires(expr, "A") is True
+        assert expr_requires(expr, "B") is False
+
+    def test_with_real_program(self) -> None:
+        A = Bool("A")
+        B = Bool("B")
+        C = Bool("C")
+        with Program(strict=False) as prog:
+            with Rung(A, B):
+                out(C)
+        forms = simplified_forms(prog)
+        assert expr_requires(forms["C"].expr, "A") is True
+        assert expr_requires(forms["C"].expr, "B") is True
+
+
+# ---------------------------------------------------------------------------
+# reset_dominance
+# ---------------------------------------------------------------------------
+
+
+class TestResetDominance:
+    def test_basic_reset_dominance(self) -> None:
+        Guard = Bool("Guard")
+        Latched = Bool("Latched")
+        Trigger = Bool("Trigger")
+        with Program(strict=False) as prog:
+            with Rung(Trigger):
+                latch(Latched)
+            with Rung(~Guard):
+                reset(Latched)
+        assert reset_dominance(prog, "Latched", "Guard") is True
+
+    def test_no_reset_fails(self) -> None:
+        Trigger = Bool("Trigger")
+        Latched = Bool("Latched")
+        with Program(strict=False) as prog:
+            with Rung(Trigger):
+                latch(Latched)
+        assert reset_dominance(prog, "Latched", "Trigger") is False
+
+    def test_no_matching_guard_in_reset(self) -> None:
+        Other = Bool("Other")
+        Latched = Bool("Latched")
+        Trigger = Bool("Trigger")
+        with Program(strict=False) as prog:
+            with Rung(Trigger):
+                latch(Latched)
+            with Rung(~Other):
+                reset(Latched)
+        assert reset_dominance(prog, "Latched", "Guard") is False
+
+    def test_latch_after_reset_independent_condition_fails(self) -> None:
+        Guard = Bool("Guard")
+        Latched = Bool("Latched")
+        Override = Bool("Override")
+        with Program(strict=False) as prog:
+            with Rung(~Guard):
+                reset(Latched)
+            with Rung(Override):
+                latch(Latched)
+        assert reset_dominance(prog, "Latched", "Guard") is False
+
+    def test_latch_after_reset_guarded_condition_passes(self) -> None:
+        Guard = Bool("Guard")
+        Latched = Bool("Latched")
+        Override = Bool("Override")
+        with Program(strict=False) as prog:
+            with Rung(~Guard):
+                reset(Latched)
+            with Rung(Override, Guard):
+                latch(Latched)
+        assert reset_dominance(prog, "Latched", "Guard") is True
+
+    def test_negated_implication(self) -> None:
+        Trigger = Bool("Trigger")
+        Latched = Bool("Latched")
+        Killer = Bool("Killer")
+        with Program(strict=False) as prog:
+            with Rung(Trigger):
+                latch(Latched)
+            with Rung(Killer):
+                reset(Latched)
+        assert reset_dominance(prog, "Latched", "Killer", negated=True) is True

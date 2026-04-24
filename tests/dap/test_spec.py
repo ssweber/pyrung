@@ -193,20 +193,52 @@ class TestGenerateTest:
         assert 'plc.patch({"Switch": False})' in output
         assert 'assert not plc.current_state.tags["Valve"]' in output
 
-    def test_implication_negated(self):
+    def test_implication_structural_tier1(self):
+        from pyrung.core import Bool, Program, Rung, out
+
+        A = Bool("A")
+        B = Bool("B")
+        with Program(strict=False) as prog:
+            with Rung(A):
+                out(B)
+
+        spec = parse_formula("B => A [dt=0.01]")
+        output = generate_test_file([spec], _PROGRAM_SOURCE, program=prog)
+        assert "def test_b_implies_a():" in output
+        assert "expr_requires" in output
+        assert "plc.force" not in output
+
+    def test_implication_structural_tier2(self):
+        from pyrung.core import Bool, Program, Rung, latch, reset
+
+        Guard = Bool("Guard")
+        Latched = Bool("Latched")
+        Trigger = Bool("Trigger")
+        with Program(strict=False) as prog:
+            with Rung(Trigger):
+                latch(Latched)
+            with Rung(~Guard):
+                reset(Latched)
+
+        spec = parse_formula("Latched => Guard [dt=0.01]")
+        output = generate_test_file([spec], _PROGRAM_SOURCE, program=prog)
+        assert "def test_latched_implies_guard():" in output
+        assert "reset_dominance" in output
+        assert "plc.force" not in output
+
+    def test_implication_unverifiable_skipped(self):
         spec = parse_formula("Running => ~Fault [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "def test_running_implies_not_fault():" in output
-        assert 'plc.force("Running", True)' in output
-        assert 'assert not plc.current_state.tags["Fault"]' in output
+        assert "pytest.mark.skip" in output
+        assert "plc.force" not in output
 
-    def test_implication_positive(self):
+    def test_implication_no_program_skipped(self):
         spec = parse_formula("A => B [dt=0.02]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "def test_a_implies_b():" in output
-        assert 'plc.force("A", True)' in output
-        assert 'assert plc.current_state.tags["B"]' in output
-        assert "dt=0.02" in output
+        assert "pytest.mark.skip" in output
+        assert "    pass" in output
 
     def test_value_temporal(self):
         spec = parse_formula("State=2 => MotorOut=true within 0 scans [dt=0.01]")

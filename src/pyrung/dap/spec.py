@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from pyrung.core.program import Program
 
 SpecKind = Literal["edge_correlation", "steady_implication", "value_temporal"]
 
@@ -110,7 +113,11 @@ def _parse_value(raw: str) -> Any:
 
 
 def generate_test_file(
-    specs: list[SpecEntry], program_source: str, *, program_var: str = "logic"
+    specs: list[SpecEntry],
+    program_source: str,
+    *,
+    program_var: str = "logic",
+    program: Program | None = None,
 ) -> str:
     """Generate a self-contained pytest file from accepted specs."""
     lines: list[str] = []
@@ -118,7 +125,18 @@ def generate_test_file(
     for src_line in program_source.splitlines():
         lines.append(src_line)
     lines.append("")
+
+    has_implication = any(s.kind == "steady_implication" for s in specs)
+    if has_implication:
+        lines.append("")
+        lines.append("import pytest")
+        lines.append("")
+        lines.append("from pyrung.core.analysis.simplified import expr_requires, reset_dominance")
     lines.append("")
+
+    simplified_forms: dict[str, Any] | None = None
+    if program is not None and has_implication:
+        simplified_forms = program.simplified()
 
     used_names: dict[str, int] = {}
     for spec in specs:
@@ -126,25 +144,49 @@ def generate_test_file(
         count = used_names.get(base, 0)
         used_names[base] = count + 1
         name = base if count == 0 else f"{base}_{count + 1}"
-        lines.append(f"def {name}():")
-        lines.append(f"    # {spec.formula}")
-        lines.extend(_generate_test_body(spec, program_var=program_var))
+
+        body = _generate_test_body(
+            spec, program_var=program_var, program=program, simplified_forms=simplified_forms
+        )
+
+        if body is None:
+            lines.append('@pytest.mark.skip(reason="observed in trace, not structurally provable")')
+            lines.append(f"def {name}():")
+            lines.append(f"    # {spec.formula}")
+            lines.append("    pass")
+        else:
+            lines.append(f"def {name}():")
+            lines.append(f"    # {spec.formula}")
+            lines.extend(body)
         lines.append("")
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _generate_test_body(spec: SpecEntry, *, program_var: str = "logic") -> list[str]:
-    """Generate the body lines of a test function for one spec."""
+def _generate_test_body(
+    spec: SpecEntry,
+    *,
+    program_var: str = "logic",
+    program: Program | None = None,
+    simplified_forms: dict[str, Any] | None = None,
+) -> list[str] | None:
+    """Generate the body lines of a test function for one spec.
+
+    Returns ``None`` for steady implications that cannot be verified
+    structurally (caller emits a ``pytest.mark.skip`` wrapper).
+    """
+    if spec.kind == "steady_implication":
+        return _implication_body(
+            spec, program_var=program_var, program=program, simplified_forms=simplified_forms
+        )
+
     lines: list[str] = []
     lines.append(f"    plc = PLC({program_var}, dt={spec.dt_seconds})")
     lines.append("    plc.step()")
 
     if spec.kind == "edge_correlation":
         lines.extend(_edge_body(spec))
-    elif spec.kind == "steady_implication":
-        lines.extend(_implication_body(spec))
     elif spec.kind == "value_temporal":
         lines.extend(_value_temporal_body(spec))
 
@@ -173,15 +215,39 @@ def _edge_body(spec: SpecEntry) -> list[str]:
     return lines
 
 
-def _implication_body(spec: SpecEntry) -> list[str]:
-    lines: list[str] = []
-    lines.append(f'    plc.force("{spec.antecedent_tag}", True)')
-    lines.append("    plc.step()")
-    if spec.negated:
-        lines.append(f'    assert not plc.current_state.tags["{spec.consequent_tag}"]')
-    else:
-        lines.append(f'    assert plc.current_state.tags["{spec.consequent_tag}"]')
-    return lines
+def _implication_body(
+    spec: SpecEntry,
+    *,
+    program_var: str = "logic",
+    program: Program | None = None,
+    simplified_forms: dict[str, Any] | None = None,
+) -> list[str] | None:
+    from pyrung.core.analysis.simplified import expr_requires, reset_dominance
+
+    ant = spec.antecedent_tag
+    cons = spec.consequent_tag
+
+    # Tier 1: structural requirement in simplified expression
+    if simplified_forms is not None and ant in simplified_forms:
+        if expr_requires(simplified_forms[ant].expr, cons, negated=spec.negated):
+            neg = ", negated=True" if spec.negated else ""
+            lines: list[str] = []
+            lines.append(f"    plc = PLC({program_var}, dt={spec.dt_seconds})")
+            lines.append("    forms = plc.program.simplified()")
+            lines.append(f'    assert "{ant}" in forms')
+            lines.append(f'    assert expr_requires(forms["{ant}"].expr, "{cons}"{neg})')
+            return lines
+
+    # Tier 2: reset dominance for latched tags
+    if program is not None and reset_dominance(program, ant, cons, negated=spec.negated):
+        neg = ", negated=True" if spec.negated else ""
+        lines = []
+        lines.append(f"    plc = PLC({program_var}, dt={spec.dt_seconds})")
+        lines.append(f'    assert reset_dominance(plc.program, "{ant}", "{cons}"{neg})')
+        return lines
+
+    # Neither tier can verify
+    return None
 
 
 def _value_temporal_body(spec: SpecEntry) -> list[str]:

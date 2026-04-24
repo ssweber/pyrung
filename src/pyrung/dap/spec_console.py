@@ -46,7 +46,9 @@ def _cmd_spec_test(adapter: Any, expression: str) -> ConsoleResult:
     if not specs:
         raise adapter.DAPAdapterError("No accepted specs to generate tests for.")
     program_source, prog_var = _extract_program_source(adapter)
-    content = generate_test_file(specs, program_source, program_var=prog_var)
+    runner = getattr(adapter, "_runner", None)
+    prog_obj = getattr(runner, "program", None) if runner is not None else None
+    content = generate_test_file(specs, program_source, program_var=prog_var, program=prog_obj)
     filepath.write_text(content, encoding="utf-8")
     return ConsoleResult(f"Generated {len(specs)} test(s) to {filepath}")
 

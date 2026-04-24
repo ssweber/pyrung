@@ -298,6 +298,52 @@ def _mine_edge_correlations(
 # ---------------------------------------------------------------------------
 
 
+def _tags_forced_entire_window(runner: Any, scan_start: int, scan_end: int) -> frozenset[str]:
+    """Return tags forced True for every scan in [scan_start, scan_end]."""
+    scan_log = getattr(runner, "_scan_log", None)
+    if scan_log is None:
+        return frozenset()
+
+    force_changes = scan_log._force_changes_by_scan
+    sorted_scans = sorted(force_changes.keys())
+
+    current_forces: dict[str, Any] = {}
+    for sid in sorted_scans:
+        if sid > scan_start:
+            break
+        current_forces = dict(force_changes[sid])
+
+    forced_true = {tag for tag, val in current_forces.items() if val is True}
+    if not forced_true:
+        return frozenset()
+
+    candidates = set(forced_true)
+    for sid in sorted_scans:
+        if sid <= scan_start:
+            continue
+        if sid > scan_end:
+            break
+        snapshot = force_changes[sid]
+        candidates = {tag for tag in candidates if snapshot.get(tag) is True}
+        if not candidates:
+            return frozenset()
+
+    return frozenset(candidates)
+
+
+def _tags_constant_entire_window(
+    scans: list[dict[str, Any]], bool_tags: set[str]
+) -> frozenset[str]:
+    """Return bool tags that were True in every scan (never toggled off)."""
+    if not scans:
+        return frozenset()
+    constant = set()
+    for tag in bool_tags:
+        if all(s.get(tag) is True for s in scans):
+            constant.add(tag)
+    return frozenset(constant)
+
+
 def _mine_steady_implications(
     relevant: set[str],
     graph: Any,
@@ -328,9 +374,14 @@ def _mine_steady_implications(
     if len(scans) < _MIN_IMPLICATION_SCANS:
         return []
 
+    noisy = _tags_forced_entire_window(runner, scan_start, scan_end)
+
     candidates: list[Candidate] = []
 
     for a_tag in sorted(bool_tags):
+        if a_tag in noisy:
+            continue
+
         a_true_scans = [s for s in scans if s.get(a_tag) is True]
         if len(a_true_scans) < _MIN_IMPLICATION_SCANS:
             continue
@@ -347,6 +398,9 @@ def _mine_steady_implications(
             continue
 
         for b_tag in sorted(connected):
+            if b_tag in noisy:
+                continue
+
             b_in_a_true = [s.get(b_tag) for s in a_true_scans]
             if all(v is True for v in b_in_a_true):
                 desc = f"{a_tag} ⟹ {b_tag}"

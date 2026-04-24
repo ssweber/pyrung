@@ -334,6 +334,92 @@ class TestSteadyImplication:
         assert len(bad) == 0
 
 
+class TestForcedTagFiltering:
+    def test_forced_antecedent_excluded(self):
+        running = Bool("Running")
+        light = Bool("Light")
+        trigger = Bool("Trigger")
+
+        with Program(strict=False) as prog:
+            with Rung(trigger):
+                out(running)
+            with Rung(running):
+                out(light)
+
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        scan_base = plc.current_state.scan_id
+
+        plc.force("Running", True)
+        entries: list[CaptureEntry] = []
+        for _ in range(5):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+
+        candidates = mine_candidates("test", entries, plc, start_scan_id=scan_base)
+        impl_cands = [c for c in candidates if c.kind == "steady_implication"]
+        antecedents = {c.antecedent_tag for c in impl_cands}
+        assert "Running" not in antecedents
+
+    def test_forced_consequent_excluded(self):
+        running = Bool("Running")
+        light = Bool("Light")
+        trigger = Bool("Trigger")
+
+        with Program(strict=False) as prog:
+            with Rung(trigger):
+                out(running)
+            with Rung(running):
+                out(light)
+
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        scan_base = plc.current_state.scan_id
+
+        plc.force("Light", True)
+        plc.patch({"Trigger": True})
+        entries: list[CaptureEntry] = []
+        for _ in range(5):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+
+        candidates = mine_candidates("test", entries, plc, start_scan_id=scan_base)
+        impl_cands = [c for c in candidates if c.kind == "steady_implication"]
+        consequents = {c.consequent_tag for c in impl_cands}
+        assert "Light" not in consequents
+
+    def test_partial_force_not_excluded(self):
+        running = Bool("Running")
+        fault = Bool("Fault")
+
+        with Program(strict=False) as prog:
+            with Rung(running):
+                out(running)
+            with Rung(running):
+                out(fault)
+
+        plc = PLC(prog, dt=0.010)
+        plc.step()
+        scan_base = plc.current_state.scan_id
+
+        entries: list[CaptureEntry] = []
+        plc.patch({"Running": True})
+        entries.append(CaptureEntry("patch Running true", plc.current_state.scan_id, 0.0))
+        for _ in range(3):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+        # Force Running partway through — not entire window
+        plc.force("Running", True)
+        for _ in range(3):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+
+        candidates = mine_candidates("test", entries, plc, start_scan_id=scan_base)
+        impl_cands = [c for c in candidates if c.kind == "steady_implication"]
+        antecedents = {c.antecedent_tag for c in impl_cands}
+        assert "Running" in antecedents
+
+
 class TestValueTemporal:
     def test_basic_value_temporal(self):
         state = Int("State")
