@@ -122,7 +122,7 @@ Generate a self-contained scan loop for the P1AM-200 with 35 supported I/O modul
 
 ### [Analysis and verification](https://ssweber.github.io/pyrung/guides/analysis/)
 
-`prove()` exhaustively verifies safety properties across every reachable state. `plc.cause()` and `plc.effect()` trace causal chains through scan history. A pytest coverage plugin gates CI on cold rungs and stranded bits. Lock files catch behavioral regressions in PRs.
+`prove()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. `plc.cause()` and `plc.effect()` trace causal chains through scan history. A pytest coverage plugin gates CI on cold rungs and stranded bits. Lock files catch behavioral regressions in PRs.
 
 ### [VS Code debugger](https://ssweber.github.io/pyrung/guides/dap-vscode/)
 

@@ -41,7 +41,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
-**Prove it before you ship it.** `prove()` exhaustively verifies safety properties across every reachable state — no test cases to write, no scenarios to miss. Lock files catch behavioral regressions in PRs. Causal chain analysis traces why a tag changed and what it would take to recover.
+**Prove it before you ship it.** `prove()` exhaustively checks a property over all reachable states — no test cases to write, no scenarios to miss. Lock files catch behavioral regressions in PRs. Causal chain analysis traces why a tag changed and what it would take to recover.
 
 ## Quick links
 
