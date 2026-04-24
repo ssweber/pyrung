@@ -421,7 +421,7 @@ class TestReachableStates:
     def test_combinational_projection_collapses_duplicate_input_outcomes(self):
         """Irrelevant extra inputs do not create duplicate projected states."""
         a = Bool("A", external=True)
-        b = Bool("B", external=True)
+        _b = Bool("B", external=True)
         light = Bool("Light")
 
         with Program(strict=False) as logic:
