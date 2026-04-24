@@ -12,9 +12,9 @@ import pytest
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, board, generate_circuitpy
 from pyrung.circuitpy.codegen import (
     CodegenContext,
-    compile_kernel,
     compile_condition,
     compile_expression,
+    compile_kernel,
     compile_rung,
 )
 from pyrung.click import TagMap, c
@@ -43,6 +43,7 @@ from pyrung.core import (
     fill,
     forloop,
     lro,
+    named_array,
     off_delay,
     on_delay,
     out,
@@ -63,7 +64,6 @@ from pyrung.core import (
     to_value,
     unpack_to_bits,
     unpack_to_words,
-    named_array,
 )
 from pyrung.core.condition import (
     AllCondition,

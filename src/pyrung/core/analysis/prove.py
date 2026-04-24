@@ -906,9 +906,7 @@ class _EdgeCompressor:
         self._context = context
         always_live = _precompute_always_live_edges(context.edge_tag_exprs)
         self._compressible = {
-            name: exprs
-            for name, exprs in context.edge_tag_exprs.items()
-            if name not in always_live
+            name: exprs for name, exprs in context.edge_tag_exprs.items() if name not in always_live
         }
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
 
@@ -922,7 +920,9 @@ class _EdgeCompressor:
         if cached is not None:
             return cached
         result = _live_edge_prevs(
-            kernel.tags, ctx.nondeterministic_dims, self._compressible,
+            kernel.tags,
+            ctx.nondeterministic_dims,
+            self._compressible,
         )
         self._cache[stateful_prefix] = result
         return result
@@ -930,8 +930,11 @@ class _EdgeCompressor:
     def state_key(self, kernel: ReplayKernel) -> tuple[Any, ...]:
         ctx = self._context
         return _extract_state_key(
-            kernel, ctx.stateful_names, ctx.edge_tag_names,
-            ctx.state_key_done_specs, self.live_edges(kernel),
+            kernel,
+            ctx.stateful_names,
+            ctx.edge_tag_names,
+            ctx.state_key_done_specs,
+            self.live_edges(kernel),
         )
 
 
@@ -1032,10 +1035,7 @@ def _projected_states(
     projected_rows: set[tuple[Any, ...]],
 ) -> frozenset[frozenset[tuple[str, Any]]]:
     """Convert ordered projection rows to the public frozenset shape."""
-    return frozenset(
-        frozenset(zip(project_names, row, strict=True))
-        for row in projected_rows
-    )
+    return frozenset(frozenset(zip(project_names, row, strict=True)) for row in projected_rows)
 
 
 # ---------------------------------------------------------------------------
@@ -1084,7 +1084,9 @@ def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | Non
                 return None
 
             value = state[tag]
-            resolved_operand = state[operand] if isinstance(operand, str) and operand in state else operand
+            resolved_operand = (
+                state[operand] if isinstance(operand, str) and operand in state else operand
+            )
 
             if form == "xic":
                 return bool(value)
@@ -1341,7 +1343,9 @@ def _bfs_explore(
 
             new_key = edge_comp.state_key(kernel)
 
-            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key, edge_comp)
+            new_key, jumped = _maybe_jump_hidden_event(
+                context, kernel, snap, visited, new_key, edge_comp
+            )
             if jumped and predicate is not None and not predicate(kernel.tags):
                 assert parent_map is not None
                 trace = _build_trace(parent_map, parent_key, input_dict)
@@ -1446,7 +1450,9 @@ def _bfs_explore_many(
             _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
             new_key = edge_comp.state_key(kernel)
 
-            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key, edge_comp)
+            new_key, jumped = _maybe_jump_hidden_event(
+                context, kernel, snap, visited, new_key, edge_comp
+            )
             if jumped:
                 _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
 
@@ -1458,10 +1464,7 @@ def _bfs_explore_many(
                         dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
                         estimated_space=len(visited),
                     )
-                    return [
-                        result if result is not None else intractable
-                        for result in results
-                    ]
+                    return [result if result is not None else intractable for result in results]
                 parent_map[new_key] = (parent_key, input_dict)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
@@ -1469,8 +1472,7 @@ def _bfs_explore_many(
                 return [result for result in results if result is not None]
 
     return [
-        result if result is not None else Proven(states_explored=len(visited))
-        for result in results
+        result if result is not None else Proven(states_explored=len(visited)) for result in results
     ]
 
 
@@ -1624,7 +1626,11 @@ def reachable_states(
     if isinstance(context, Intractable):
         return context
 
-    project_names = tuple(project) if project is not None else tuple(_default_projection(program, context.graph))
+    project_names = (
+        tuple(project)
+        if project is not None
+        else tuple(_default_projection(program, context.graph))
+    )
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         project=project_names,

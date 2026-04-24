@@ -15,13 +15,13 @@ from pyrung.core import (
     Timer,
     count_up,
     latch,
+    named_array,
     off_delay,
     on_delay,
     out,
     reset,
     rise,
     run_function,
-    named_array,
 )
 from pyrung.core.analysis.prove import (
     PENDING,
