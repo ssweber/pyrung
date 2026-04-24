@@ -50,41 +50,49 @@ class CopyInstruction(OneShotMixin, Instruction):
 
     Args:
         source: Value to copy from.
-        target: Tag or indirect reference to copy into.
+        dest: Tag or indirect reference to copy into.
         convert: Optional :class:`CopyConverter` for text/numeric conversion.
         oneshot: When True, execute only on the rung's rising edge (once per
             False→True transition). Default False.
     """
 
     _reads = ("source",)
-    _writes = ("target",)
+    _writes = ("dest",)
     _conditions = ()
     _structural_fields = ("convert",)
 
     def __init__(
         self,
         source: Tag | IndirectRef | IndirectExprRef | str | Any,
-        target: Tag | IndirectRef | IndirectExprRef,
+        dest: Tag | IndirectRef | IndirectExprRef,
         *,
         convert: CopyConverter | None = None,
         oneshot: bool = False,
     ):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
-        self.target = target
+        self.dest = dest
         self.convert = convert
+
+    @property
+    def target(self):
+        return self.dest
+
+    @target.setter
+    def target(self, value):
+        self.dest = value
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         try:
-            resolved_target = resolve_tag_ctx(self.target, ctx)
+            resolved_target = resolve_tag_ctx(self.dest, ctx)
         except IndexError:
             _set_fault_address_error(ctx)
             return
         except TypeError:
             from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
-            if isinstance(self.target, (IndirectRef, IndirectExprRef)):
+            if isinstance(self.dest, (IndirectRef, IndirectExprRef)):
                 _set_fault_address_error(ctx)
                 return
             raise

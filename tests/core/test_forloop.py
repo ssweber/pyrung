@@ -177,6 +177,6 @@ def test_walker_recurses_into_forloop_children():
     child_target_facts = [
         f
         for f in facts.operands
-        if f.location.arg_path == "instruction.target" and f.metadata.get("tag_name") == "Target"
+        if f.location.arg_path == "instruction.dest" and f.metadata.get("tag_name") == "Target"
     ]
     assert child_target_facts

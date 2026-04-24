@@ -90,9 +90,9 @@ class TestExpressionSource:
 
 
 class TestIndirectRef:
-    """copy(DD[Index], DD[Dst]) produces indirect_ref for both."""
+    """copy(DD[Index], DD[Dst]) produces indirect_ref for source and dest."""
 
-    def test_indirect_ref_source_and_target(self):
+    def test_indirect_ref_source_and_dest(self):
         Index = Dint("Index")
         Dst = Dint("Dst")
 
@@ -107,10 +107,10 @@ class TestIndirectRef:
         assert src.metadata["block_name"] == "DD"
         assert src.metadata["pointer_name"] == "Index"
 
-        tgt = _first(facts, "instruction.target")
-        assert tgt.value_kind == "indirect_ref"
-        assert tgt.metadata["block_name"] == "DD"
-        assert tgt.metadata["pointer_name"] == "Dst"
+        dest = _first(facts, "instruction.dest")
+        assert dest.value_kind == "indirect_ref"
+        assert dest.metadata["block_name"] == "DD"
+        assert dest.metadata["pointer_name"] == "Dst"
 
 
 # ---------------------------------------------------------------------------
