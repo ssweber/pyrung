@@ -14,8 +14,6 @@ Hardware-verified behaviors (Click PLC):
 - First scan includes current scan's dt (not 0 on first enable)
 """
 
-from typing import Any, cast
-
 import pytest
 
 from pyrung.core import (
@@ -312,7 +310,7 @@ class TestOnDelayRTON:
         @udt(count=1)
         class NRTimer:
             Done: Bool  # noqa: F821
-            Acc: Int = cast(Any, Field(retentive=False, default=10))  # noqa: F821
+            Acc: Int = Field(retentive=False, default=10)  # noqa: F821
 
         with Program() as logic:
             with Rung(Enable):

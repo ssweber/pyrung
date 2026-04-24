@@ -8,6 +8,39 @@ from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.physical import Physical
 from pyrung.core.tag import ChoiceMap, LiveTag, MappingEntry, Tag, TagType
 
+class _FieldSpec:
+    name: str
+    type: TagType
+    default: object
+    retentive: bool
+    choices: ChoiceMap | None
+    readonly: bool
+    external: bool
+    final: bool
+    public: bool
+    physical: Physical | None
+    link: str | None
+    min: int | float | None
+    max: int | float | None
+    uom: str | None
+    def __init__(
+        self,
+        name: str,
+        type: TagType,
+        default: object,
+        retentive: bool,
+        choices: ChoiceMap | None = None,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
+    ) -> None: ...
+
 class _FieldInfo:
     type: TagType | None
     default: Any
@@ -64,6 +97,22 @@ class _StructRuntime:
     final: bool
     public: bool
     _structure_kind: Literal["udt", "named_array"]
+    _field_specs: dict[str, _FieldSpec]
+    _blocks: dict[str, Block]
+    _pyrung_click_bg_color: str | None
+    def __init__(
+        self,
+        name: str,
+        count: int,
+        field_specs: tuple[_FieldSpec, ...],
+        *,
+        always_number: bool = False,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        kind: Literal["udt", "named_array"] = "udt",
+    ) -> None: ...
     def clone(
         self,
         name: str,
@@ -98,6 +147,20 @@ class _DoneAccRuntime(_StructRuntime):
 class _NamedArrayRuntime(_StructRuntime):
     type: TagType
     stride: int
+    def __init__(
+        self,
+        name: str,
+        type: TagType,
+        *,
+        count: int,
+        stride: int,
+        field_specs: tuple[_FieldSpec, ...],
+        always_number: bool = False,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+    ) -> None: ...
     def clone(
         self,
         name: str,
