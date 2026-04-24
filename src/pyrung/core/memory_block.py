@@ -9,14 +9,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Never, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Never, cast, overload
 
+from pyrung.core.physical import Physical
 from pyrung.core.tag import (
+    ChoiceMap,
     LiveInputTag,
     LiveOutputTag,
     LiveTag,
     Tag,
     TagType,
+    _normalize_choices,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +37,19 @@ if TYPE_CHECKING:
 
 
 UNSET: Final = object()
+
+
+class _SlotHints(NamedTuple):
+    choices: ChoiceMap | None
+    readonly: bool
+    external: bool
+    final: bool
+    public: bool
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 class SlotView:
@@ -67,6 +83,46 @@ class SlotView:
         return self._block._effective_slot_comment(self._addr)
 
     @property
+    def choices(self) -> ChoiceMap | None:
+        return self._block._effective_slot_hints(self._addr).choices
+
+    @property
+    def readonly(self) -> bool:
+        return self._block._effective_slot_hints(self._addr).readonly
+
+    @property
+    def external(self) -> bool:
+        return self._block._effective_slot_hints(self._addr).external
+
+    @property
+    def final(self) -> bool:
+        return self._block._effective_slot_hints(self._addr).final
+
+    @property
+    def public(self) -> bool:
+        return self._block._effective_slot_hints(self._addr).public
+
+    @property
+    def physical(self) -> Physical | None:
+        return self._block._effective_slot_hints(self._addr).physical
+
+    @property
+    def link(self) -> str | None:
+        return self._block._effective_slot_hints(self._addr).link
+
+    @property
+    def min(self) -> int | float | None:
+        return self._block._effective_slot_hints(self._addr).min
+
+    @property
+    def max(self) -> int | float | None:
+        return self._block._effective_slot_hints(self._addr).max
+
+    @property
+    def uom(self) -> str | None:
+        return self._block._effective_slot_hints(self._addr).uom
+
+    @property
     def name_overridden(self) -> bool:
         return self._addr in self._block._slot_name_overrides
 
@@ -82,6 +138,46 @@ class SlotView:
     def comment_overridden(self) -> bool:
         return self._addr in self._block._slot_comment_overrides
 
+    @property
+    def choices_overridden(self) -> bool:
+        return self._addr in self._block._slot_choices_overrides
+
+    @property
+    def readonly_overridden(self) -> bool:
+        return self._addr in self._block._slot_readonly_overrides
+
+    @property
+    def external_overridden(self) -> bool:
+        return self._addr in self._block._slot_external_overrides
+
+    @property
+    def final_overridden(self) -> bool:
+        return self._addr in self._block._slot_final_overrides
+
+    @property
+    def public_overridden(self) -> bool:
+        return self._addr in self._block._slot_public_overrides
+
+    @property
+    def physical_overridden(self) -> bool:
+        return self._addr in self._block._slot_physical_overrides
+
+    @property
+    def link_overridden(self) -> bool:
+        return self._addr in self._block._slot_link_overrides
+
+    @property
+    def min_overridden(self) -> bool:
+        return self._addr in self._block._slot_min_overrides
+
+    @property
+    def max_overridden(self) -> bool:
+        return self._addr in self._block._slot_max_overrides
+
+    @property
+    def uom_overridden(self) -> bool:
+        return self._addr in self._block._slot_uom_overrides
+
     def reset(self) -> None:
         """Clear all overrides, restoring inherited defaults."""
         self._block._assert_not_materialized(self._addr, action="reset slot")
@@ -89,6 +185,16 @@ class SlotView:
         self._block._slot_retentive_overrides.pop(self._addr, None)
         self._block._slot_default_overrides.pop(self._addr, None)
         self._block._slot_comment_overrides.pop(self._addr, None)
+        self._block._slot_choices_overrides.pop(self._addr, None)
+        self._block._slot_readonly_overrides.pop(self._addr, None)
+        self._block._slot_external_overrides.pop(self._addr, None)
+        self._block._slot_final_overrides.pop(self._addr, None)
+        self._block._slot_public_overrides.pop(self._addr, None)
+        self._block._slot_physical_overrides.pop(self._addr, None)
+        self._block._slot_link_overrides.pop(self._addr, None)
+        self._block._slot_min_overrides.pop(self._addr, None)
+        self._block._slot_max_overrides.pop(self._addr, None)
+        self._block._slot_uom_overrides.pop(self._addr, None)
 
     def __repr__(self) -> str:
         return (
@@ -121,6 +227,16 @@ class RangeSlotView:
             self._block._slot_retentive_overrides.pop(addr, None)
             self._block._slot_default_overrides.pop(addr, None)
             self._block._slot_comment_overrides.pop(addr, None)
+            self._block._slot_choices_overrides.pop(addr, None)
+            self._block._slot_readonly_overrides.pop(addr, None)
+            self._block._slot_external_overrides.pop(addr, None)
+            self._block._slot_final_overrides.pop(addr, None)
+            self._block._slot_public_overrides.pop(addr, None)
+            self._block._slot_physical_overrides.pop(addr, None)
+            self._block._slot_link_overrides.pop(addr, None)
+            self._block._slot_min_overrides.pop(addr, None)
+            self._block._slot_max_overrides.pop(addr, None)
+            self._block._slot_uom_overrides.pop(addr, None)
 
     def __repr__(self) -> str:
         return f"RangeSlotView({self._block.name}[{self._start}:{self._end}])"
@@ -187,6 +303,33 @@ class Block:
     _slot_retentive_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_default_overrides: dict[int, Any] = field(default_factory=dict, repr=False)
     _slot_comment_overrides: dict[int, str] = field(default_factory=dict, repr=False)
+    _slot_choices_overrides: dict[int, ChoiceMap | None] = field(default_factory=dict, repr=False)
+    _slot_readonly_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_external_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_final_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_public_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_physical_overrides: dict[int, Physical | None] = field(default_factory=dict, repr=False)
+    _slot_link_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
+    _slot_min_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
+    _slot_max_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
+    _slot_uom_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
+    _pyrung_structure_runtime: Any | None = field(default=None, init=False, repr=False)
+    _pyrung_structure_kind: Literal["udt", "named_array"] | None = field(
+        default=None, init=False, repr=False
+    )
+    _pyrung_structure_name: str | None = field(default=None, init=False, repr=False)
+    _pyrung_structure_field: str | None = field(default=None, init=False, repr=False)
+    _pyrung_field_choices: ChoiceMap | None = field(default=None, init=False, repr=False)
+    _pyrung_field_readonly: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_external: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_final: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_public: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_physical: Physical | None = field(default=None, init=False, repr=False)
+    _pyrung_field_link: str | None = field(default=None, init=False, repr=False)
+    _pyrung_field_min: int | float | None = field(default=None, init=False, repr=False)
+    _pyrung_field_max: int | float | None = field(default=None, init=False, repr=False)
+    _pyrung_field_uom: str | None = field(default=None, init=False, repr=False)
+    _pyrung_click_bg_color: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self):
         if self.start < 0:
@@ -255,16 +398,42 @@ class Block:
         if addr not in self._tag_cache:
             retentive, default = self._effective_slot_policy(addr)
             comment = self._effective_slot_comment(addr)
+            hints = self._effective_slot_hints(addr)
             self._tag_cache[addr] = self._new_tag_for_slot(
                 addr,
                 retentive=retentive,
                 default=default,
                 comment=comment,
+                choices=hints.choices,
+                readonly=hints.readonly,
+                external=hints.external,
+                final=hints.final,
+                public=hints.public,
+                physical=hints.physical,
+                link=hints.link,
+                min=hints.min,
+                max=hints.max,
+                uom=hints.uom,
             )
         return cast(LiveTag, self._tag_cache[addr])
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
+        external: bool,
+        final: bool,
+        public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveTag:
         tag = LiveTag(
             name=self._effective_slot_name(addr),
@@ -272,18 +441,28 @@ class Block:
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return self._annotate_tag(tag, addr)
 
     def _annotate_tag(self, tag: LiveTag, addr: int) -> LiveTag:
-        runtime = getattr(self, "_pyrung_structure_runtime", None)
+        runtime = self._pyrung_structure_runtime
         if runtime is None:
             return tag
 
         object.__setattr__(tag, "_pyrung_structure_runtime", runtime)
-        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)  # ty: ignore[unresolved-attribute]
-        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)  # ty: ignore[unresolved-attribute]
-        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+        object.__setattr__(tag, "_pyrung_structure_kind", self._pyrung_structure_kind)
+        object.__setattr__(tag, "_pyrung_structure_name", self._pyrung_structure_name)
+        object.__setattr__(tag, "_pyrung_structure_field", self._pyrung_structure_field)
         object.__setattr__(tag, "_pyrung_structure_index", addr)
         return tag
 
@@ -311,6 +490,61 @@ class Block:
     def _effective_slot_comment(self, addr: int) -> str:
         return self._slot_comment_overrides.get(addr, "")
 
+    def _effective_slot_hints(self, addr: int) -> _SlotHints:
+        if addr in self._slot_choices_overrides:
+            choices = self._slot_choices_overrides[addr]
+        else:
+            choices = self._pyrung_field_choices
+
+        if addr in self._slot_readonly_overrides:
+            readonly = self._slot_readonly_overrides[addr]
+        else:
+            readonly = self._pyrung_field_readonly
+
+        if addr in self._slot_external_overrides:
+            external = self._slot_external_overrides[addr]
+        else:
+            external = self._pyrung_field_external
+
+        if addr in self._slot_final_overrides:
+            final = self._slot_final_overrides[addr]
+        else:
+            final = self._pyrung_field_final
+
+        if addr in self._slot_public_overrides:
+            public = self._slot_public_overrides[addr]
+        else:
+            public = self._pyrung_field_public
+
+        if addr in self._slot_physical_overrides:
+            physical = self._slot_physical_overrides[addr]
+        else:
+            physical = self._pyrung_field_physical
+
+        if addr in self._slot_link_overrides:
+            link = self._slot_link_overrides[addr]
+        else:
+            link = self._pyrung_field_link
+
+        if addr in self._slot_min_overrides:
+            min_val = self._slot_min_overrides[addr]
+        else:
+            min_val = self._pyrung_field_min
+
+        if addr in self._slot_max_overrides:
+            max_val = self._slot_max_overrides[addr]
+        else:
+            max_val = self._pyrung_field_max
+
+        if addr in self._slot_uom_overrides:
+            uom = self._slot_uom_overrides[addr]
+        else:
+            uom = self._pyrung_field_uom
+
+        return _SlotHints(
+            choices, readonly, external, final, public, physical, link, min_val, max_val, uom
+        )
+
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
         if addr in self._tag_cache:
             raise ValueError(
@@ -330,6 +564,16 @@ class Block:
         retentive: bool = ...,
         default: Any = ...,
         comment: str = ...,
+        choices: ChoiceMap | None = ...,
+        readonly: bool = ...,
+        external: bool = ...,
+        final: bool = ...,
+        public: bool = ...,
+        physical: Physical | None = ...,
+        link: str | None = ...,
+        min: int | float | None = ...,
+        max: int | float | None = ...,
+        uom: str | None = ...,
     ) -> SlotView: ...
 
     @overload
@@ -354,6 +598,16 @@ class Block:
         retentive: bool | None = None,
         default: object = UNSET,
         comment: object = UNSET,
+        choices: object = UNSET,
+        readonly: object = UNSET,
+        external: object = UNSET,
+        final: object = UNSET,
+        public: object = UNSET,
+        physical: object = UNSET,
+        link: object = UNSET,
+        min: object = UNSET,
+        max: object = UNSET,
+        uom: object = UNSET,
     ) -> SlotView | RangeSlotView:
         """Inspect, configure, or reset one or more block slots.
 
@@ -389,6 +643,16 @@ class Block:
             or retentive is not None
             or default is not UNSET
             or comment is not UNSET
+            or choices is not UNSET
+            or readonly is not UNSET
+            or external is not UNSET
+            or final is not UNSET
+            or public is not UNSET
+            or physical is not UNSET
+            or link is not UNSET
+            or min is not UNSET
+            or max is not UNSET
+            or uom is not UNSET
         )
         if has_config:
             self._assert_not_materialized(addr, action="configure slot")
@@ -407,6 +671,38 @@ class Block:
                     self._slot_comment_overrides.pop(addr, None)
                 else:
                     self._slot_comment_overrides[addr] = comment
+            if choices is not UNSET:
+                self._slot_choices_overrides[addr] = _normalize_choices(
+                    choices,
+                    tag_type=self.type,
+                    owner=f"{self.name}.slot({addr}) choices",
+                )
+            if readonly is not UNSET:
+                self._slot_readonly_overrides[addr] = bool(readonly)
+            if external is not UNSET:
+                self._slot_external_overrides[addr] = bool(external)
+            if final is not UNSET:
+                self._slot_final_overrides[addr] = bool(final)
+            if public is not UNSET:
+                self._slot_public_overrides[addr] = bool(public)
+            if physical is not UNSET:
+                self._slot_physical_overrides[addr] = cast(Physical | None, physical)
+            if link is not UNSET:
+                if link is not None and not isinstance(link, str):
+                    raise TypeError(f"link must be a string or None, got {type(link).__name__}.")
+                self._slot_link_overrides[addr] = link
+            if min is not UNSET:
+                if min is not None and not isinstance(min, (int, float)):
+                    raise TypeError(f"min must be numeric or None, got {type(min).__name__}.")
+                self._slot_min_overrides[addr] = min
+            if max is not UNSET:
+                if max is not None and not isinstance(max, (int, float)):
+                    raise TypeError(f"max must be numeric or None, got {type(max).__name__}.")
+                self._slot_max_overrides[addr] = max
+            if uom is not UNSET:
+                if uom is not None and not isinstance(uom, str):
+                    raise TypeError(f"uom must be a string or None, got {type(uom).__name__}.")
+                self._slot_uom_overrides[addr] = uom
 
         return SlotView(self, addr)
 
@@ -624,7 +920,22 @@ class InputBlock(Block):
         return cast(LiveInputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
+        external: bool,
+        final: bool,
+        public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveInputTag:
         tag = LiveInputTag(
             name=self._effective_slot_name(addr),
@@ -632,6 +943,16 @@ class InputBlock(Block):
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return cast(LiveInputTag, self._annotate_tag(tag, addr))
 
@@ -703,7 +1024,22 @@ class OutputBlock(Block):
         return cast(LiveOutputTag | IndirectRef | IndirectExprRef, super().__getitem__(key))
 
     def _new_tag_for_slot(
-        self, addr: int, *, retentive: bool, default: Any, comment: str
+        self,
+        addr: int,
+        *,
+        retentive: bool,
+        default: Any,
+        comment: str,
+        choices: ChoiceMap | None,
+        readonly: bool,
+        external: bool,
+        final: bool,
+        public: bool,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveOutputTag:
         tag = LiveOutputTag(
             name=self._effective_slot_name(addr),
@@ -711,6 +1047,16 @@ class OutputBlock(Block):
             retentive=retentive,
             default=default,
             comment=comment,
+            choices=choices,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
+            physical=physical,
+            link=link,
+            min=min,
+            max=max,
+            uom=uom,
         )
         return cast(LiveOutputTag, self._annotate_tag(tag, addr))
 

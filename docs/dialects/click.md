@@ -460,6 +460,8 @@ server = ClickServer(provider, port=502)
 
 Reads return the current committed state. Writes queue a `runner.patch()` for the next scan.
 
+If another device on the LAN can't reach the soft PLC, check the Windows Firewall: both the TCP port (default 502) and the Python interpreter need to be allowed through.
+
 ### Word-image (XD / YD) addressing
 
 - `XD*` reads compute bit-image words from current X bit state.

@@ -15,8 +15,10 @@ from hypothesis import strategies as st
 from pyrung.click import (
     TagMap,
     c,
+    df,
     ds,
     ladder_to_pyrung,
+    ladder_to_pyrung_project,
     pyrung_to_ladder,
     sc,
     sd,
@@ -34,6 +36,7 @@ from pyrung.core import (
     Int,
     Or,
     Program,
+    Real,
     Rung,
     TagType,
     Timer,
@@ -48,7 +51,12 @@ from pyrung.core.program import (
     out,
     reset,
 )
-from tests.click.helpers import build_program, normalize_pyrung, strip_pyrung_boilerplate
+from tests.click.helpers import (
+    build_program,
+    exec_with_source,
+    normalize_pyrung,
+    strip_pyrung_boilerplate,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -87,7 +95,7 @@ def _round_trip(
 
     # Execute the generated code
     ns: dict = {}
-    exec(code, ns)
+    exec_with_source(code, ns)
 
     # Re-export
     logic2 = ns["logic"]
@@ -1357,7 +1365,21 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                on_delay(T1, preset=100, unit="Tms").reset(X002)
+                on_delay(T1, 100).reset(X002)
+            """,
+        )
+
+    def test_timer_non_default_unit_uses_friendly_positional_args(self):
+        """Non-default timer units emit friendly positional syntax."""
+        _assert_codegen_body(
+            """
+            with Program() as p:
+                with Rung(X1):
+                    on_delay(Timer[1], preset=5, unit="Ts")
+            """,
+            """
+            with Rung(X001):
+                on_delay(T1, 5, "sec")
             """,
         )
 
@@ -1371,7 +1393,7 @@ class TestRoundTrip:
             """,
             """
             with Rung(X001):
-                count_up(CT1, preset=10).down(X002).reset(X003)
+                count_up(CT1, 10).down(X002).reset(X003)
             """,
         )
 
@@ -1714,7 +1736,7 @@ class TestRoundTrip:
 
         # Generated code must be valid Python
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_click_hex_literal_in_calc(self, tmp_path: Path):
         """Click hex literal in a calc expression becomes ``0x`` in Python."""
@@ -1747,7 +1769,7 @@ class TestRoundTrip:
         )
 
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_pointer_indirect_addressing(self, tmp_path: Path):
         """Click pointer syntax DH[DS134] renders as dh[tag_var] with correct import."""
@@ -1779,7 +1801,7 @@ class TestRoundTrip:
             DH051 = Word("DH051")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung():
                     copy(dh[DS134], DH051)
 
@@ -1792,7 +1814,7 @@ class TestRoundTrip:
         )
         # Must be valid Python
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
     def test_calc_sum_codegen(self):
         """Calc with SUM(range) round-trips through colon-range syntax."""
@@ -2133,7 +2155,7 @@ class TestRoundTrip:
                 out(Y001)
                 call("init")
 
-            with subroutine("init", strict=False):
+            with subroutine("init"):
                 with Rung():
                     out(Y002)
             """,
@@ -2156,7 +2178,7 @@ class TestRoundTrip:
             with Rung(X001):
                 call("worker")
 
-            with subroutine("worker", strict=False):
+            with subroutine("worker"):
                 with Rung(X002):
                     out(Y001)
 
@@ -2184,7 +2206,7 @@ class TestRoundTrip:
                 copy(C2, C4)
                 call("SubName")
 
-            with subroutine("SubName", strict=False):
+            with subroutine("SubName"):
                 with Rung():
                     out(C4)
             """,
@@ -2211,7 +2233,7 @@ class TestInMemoryRoundTrip:
         code = ladder_to_pyrung(bundle)
 
         ns: dict = {}
-        exec(code, ns)
+        exec_with_source(code, ns)
 
         logic2 = ns["logic"]
         mapping2 = ns["mapping"]
@@ -2338,7 +2360,7 @@ class TestNicknameMerge:
             motor_out = Bool("motor_out")  # Y001
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(start_button):
                     out(motor_out)
 
@@ -2369,7 +2391,7 @@ class TestNicknameMerge:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     copy(_True, _False)
 
@@ -2410,7 +2432,7 @@ class TestNicknameMerge:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     copy(_True, _True_2)
 
@@ -2441,7 +2463,7 @@ class TestNicknameMerge:
             motor_out = Bool("motor_out")  # Y001
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(start_button):
                     out(motor_out)
 
@@ -2479,7 +2501,7 @@ class TestNicknameMerge:
             Y001 = Bool("Y001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     out(Y001)
 
@@ -2519,9 +2541,9 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2555,9 +2577,9 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2592,9 +2614,9 @@ class TestNicknameMerge:
             PartCounter = Counter.clone("PartCounter")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
-                    count_up(PartCounter, preset=10).reset(X002)
+                    count_up(PartCounter, 10).reset(X002)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2629,9 +2651,9 @@ class TestNicknameMerge:
             T1 = Timer.clone("T1")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
-                    on_delay(T1, preset=100, unit="Tms")
+                    on_delay(T1, 100)
 
             # --- Tag Map ---
             mapping = TagMap([
@@ -2667,9 +2689,9 @@ class TestNicknameMerge:
             OvenTimer = Timer.clone("OvenTimer")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
-                    on_delay(OvenTimer, preset=100, unit="Tms")
+                    on_delay(OvenTimer, 100)
 
                 with Rung(OvenTimer.Done):
                     out(Y001)
@@ -2852,7 +2874,7 @@ class TestContinuedRoundTrip:
         """Nested shared prefixes should come back as nested branch() blocks."""
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2):
                         with branch(X3):
@@ -2885,7 +2907,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3, X5):
                         out(Y1)
@@ -2915,7 +2937,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -2945,7 +2967,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -2974,7 +2996,7 @@ class TestContinuedRoundTrip:
         """
         _assert_codegen_body(
             """
-            with Program(strict=False) as p:
+            with Program() as p:
                 with Rung(X1):
                     with branch(X2, X3):
                         out(Y1)
@@ -3009,6 +3031,155 @@ class TestStructuredCodegen:
         path = tmp_path / "nicknames.csv"
         pyclickplc.write_csv(path, records)
         return path
+
+    def test_flat_tag_codegen_emits_physical_range_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Pressure = Real("Pressure")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Pressure, Pressure)
+
+        mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DF", 101): AddressRecord(
+                    memory_type="DF",
+                    address=101,
+                    nickname="Pressure",
+                    comment="[link=Enable, profile=first_order, min=0, max=100, uom=psi]",
+                    initial_value="0.0",
+                    retentive=True,
+                    data_type=DataType.FLOAT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in code
+        assert (
+            'Pressure = Real("Pressure", physical=Pressure_physical,'
+            " link='Enable', min=0, max=100, uom='psi')"
+        ) in code
+
+    def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Motor_running = Bool("Motor1_running")
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Motor_running)
+
+        mapping = TagMap({Enable: x[1], Motor_running: c[102]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("C", 101): AddressRecord(
+                    memory_type="C",
+                    address=101,
+                    nickname="Motor1_cmd",
+                    comment="<Motor.cmd:udt />",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 102): AddressRecord(
+                    memory_type="C",
+                    address=102,
+                    nickname="Motor1_running",
+                    comment=(
+                        "<Motor.running:udt /> "
+                        "[link=cmd, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]"
+                    ),
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "MotorFb_physical = Physical('MotorFb', on_delay='T#2ms', off_delay='T#1ms')" in code
+        assert "running: Bool = Field(physical=MotorFb_physical, link='cmd')" in code
+
+    def test_project_tags_file_imports_physical_for_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        Pressure = Real("Pressure")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Pressure, Pressure)
+
+        mapping = TagMap({Enable: x[1], Pressure: df[101]}, include_system=False)
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("DF", 101): AddressRecord(
+                    memory_type="DF",
+                    address=101,
+                    nickname="Pressure",
+                    comment="[link=Enable, profile=first_order]",
+                    initial_value="0.0",
+                    retentive=True,
+                    data_type=DataType.FLOAT,
+                ),
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+            },
+        )
+
+        files = ladder_to_pyrung_project(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert "from pyrung import Physical" in files["tags.py"]
+        assert "Pressure_physical = Physical('Pressure', profile='first_order')" in files["tags.py"]
 
     def test_named_array_codegen(self, tmp_path: Path):
         """Named array: codegen emits @named_array decorator and .map_to()."""
@@ -3346,7 +3517,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=1004,
                     nickname="Cmd_Mode_Production",
-                    comment="",
+                    comment="[on_delay=T#2ms]",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -3375,7 +3546,13 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert 'CmdTagBits = Block("CmdTagBits", TagType.BOOL, 1, 19)' in code
-        assert "CmdTagBits.slot(4, name='Cmd_Mode_Production')" in code
+        assert (
+            "Cmd_Mode_Production_physical = Physical('Cmd_Mode_Production', on_delay='T#2ms')"
+            in code
+        )
+        assert (
+            "CmdTagBits.slot(4, name='Cmd_Mode_Production', physical=Cmd_Mode_Production_physical)"
+        ) in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" in code
         assert "out(Cmd_Mode_Production)" in code
         assert "reset(CmdTagBits.select(4, 6))" in code
@@ -3460,7 +3637,7 @@ class TestStructuredCodegen:
             X001 = Bool("X001")
 
             # --- Program ---
-            with Program(strict=False) as logic:
+            with Program() as logic:
                 with Rung(X001):
                     reset(c.select(1004, 1006))
 

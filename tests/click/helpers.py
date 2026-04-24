@@ -5,8 +5,10 @@ These live next to the test files, not in production code.
 
 from __future__ import annotations
 
+import linecache
 import re
 import textwrap
+from itertools import count
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol
 
@@ -104,6 +106,7 @@ _TYPE_NAME_TO_TAG_TYPE: dict[str, TagType] = {
 }
 
 _RAW_RANGE_RE = re.compile(r"\b([A-Z]+)(\d+)\.\.([A-Z]+)(\d+)\b")
+_EXEC_SOURCE_COUNTER = count()
 
 
 class _AddressableBlock(Protocol):
@@ -346,13 +349,10 @@ def build_program(source: str) -> tuple[Program, TagMap]:
             f"TagType.{tag_type}, {spec.start}, {spec.end})"
         )
 
-    # Ensure strict=False so exec'd snippets don't warn about missing AST
-    cleaned = cleaned.replace("Program()", "Program(strict=False)")
-
     # Exec in a fresh namespace with all imports pre-loaded
     ns = dict(_EXEC_NAMESPACE)
     exec("\n".join(decl_lines), ns)  # noqa: S102
-    exec(cleaned, ns)  # noqa: S102
+    exec_with_source(cleaned, ns, filename="tests_click_build_program.py")
 
     # Extract the program
     logic = ns.get("p") or ns.get("logic")
@@ -382,6 +382,28 @@ def build_program(source: str) -> tuple[Program, TagMap]:
     mapping_entries.append(Counter._blocks["Acc"].map_to(ctd.select(1, 1)))
 
     return logic, TagMap(mapping_entries, include_system=False)
+
+
+def exec_with_source(
+    source: str,
+    ns: dict[str, object] | None = None,
+    *,
+    filename: str | None = None,
+) -> dict[str, object]:
+    """Exec source with linecache primed so strict DSL checks can inspect it."""
+    namespace = {} if ns is None else ns
+    exec_filename = filename or f"<tests-click-source-{next(_EXEC_SOURCE_COUNTER)}>"
+    linecache.cache[exec_filename] = (
+        len(source),
+        None,
+        source.splitlines(keepends=True),
+        exec_filename,
+    )
+    try:
+        exec(compile(source, exec_filename, "exec"), namespace)  # noqa: S102
+    finally:
+        linecache.cache.pop(exec_filename, None)
+    return namespace
 
 
 # ---------------------------------------------------------------------------

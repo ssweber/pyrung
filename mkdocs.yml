@@ -49,10 +49,13 @@ nav:
       - CircuitPython Quickstart: guides/circuitpy-quickstart.md
       - Tag Structures: guides/tag-structures.md
       - Runner: guides/runner.md
+      - Testing and Commissioning: guides/commissioning.md
+      - Physical Harness: guides/physical-harness.md
       - Testing: guides/testing.md
+      - Analysis: guides/analysis.md
       - Forces: guides/forces-debug.md
-      - Architecture: guides/architecture.md
       - DAP Debugger in VS Code: guides/dap-vscode.md
+      - Architecture: guides/architecture.md
   - Dialects:
       - Click PLC: dialects/click.md
       - Click Python Codegen: dialects/click-codegen.md

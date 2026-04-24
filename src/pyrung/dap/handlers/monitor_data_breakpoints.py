@@ -319,17 +319,19 @@ def build_monitor_callback(
             if runner is None:
                 return
             state = runner.current_state
-            adapter._enqueue_internal_event(
-                "pyrungMonitor",
-                {
-                    "id": monitor_id,
-                    "tag": tag_name,
-                    "current": adapter._format_value(current),
-                    "previous": adapter._format_value(previous),
-                    "scanId": state.scan_id,
-                    "timestamp": state.timestamp,
-                },
-            )
+            payload = {
+                "id": monitor_id,
+                "tag": tag_name,
+                "current": adapter._format_value(current),
+                "previous": adapter._format_value(previous),
+                "scanId": state.scan_id,
+                "timestamp": state.timestamp,
+            }
+            buffer = adapter._session.scan_frame_buffer
+            if buffer is not None:
+                buffer.monitors.append(payload)
+            else:
+                adapter._enqueue_internal_event("pyrungMonitor", payload)
         except Exception:
             return
 
@@ -381,7 +383,9 @@ def tag_from_data_id(adapter: Any, data_id: str) -> str | None:
     return tag_name or None
 
 
-def clear_debug_registrations_locked(adapter: Any) -> None:
+def clear_debug_registrations_locked(
+    adapter: Any, *, clear_source_breakpoints: bool = True
+) -> None:
     for handle in adapter._monitor_handles.values():
         try:
             handle.remove()
@@ -397,6 +401,7 @@ def clear_debug_registrations_locked(adapter: Any) -> None:
     adapter._monitor_values.clear()
     adapter._data_bp_handles.clear()
     adapter._data_bp_meta.clear()
-    adapter._breakpoints.clear_source_breakpoints()
+    if clear_source_breakpoints:
+        adapter._breakpoints.clear_source_breakpoints()
     adapter._pending_snapshot_labels_by_scan.clear()
     adapter._pending_predicate_pause = False

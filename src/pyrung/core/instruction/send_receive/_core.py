@@ -22,6 +22,7 @@ from pyclickplc.addresses import parse_address
 from pyrung.core._source import _capture_source
 from pyrung.core.memory_block import BlockRange
 from pyrung.core.program.context import _require_rung_context
+from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
 from pyrung.core.tag import Tag
 
 from ..base import Instruction
@@ -34,7 +35,6 @@ from .helpers import (
     _normalize_operand_tags,
     _pack_values_to_registers,
     _preview_operand_tag_types,
-    _status_clear_tags,
     _unpack_registers_to_values,
     _validate_status_tags,
 )
@@ -54,7 +54,6 @@ ClickClient = _backends.ClickClient
 _PendingRequest = _backends._PendingRequest
 _RequestResult = _backends._RequestResult
 _create_raw_client = _backends._create_raw_client
-_discard_pending_request = _backends._discard_pending_request
 _extract_exception_code = _backends._extract_exception_code
 _run_raw_receive_request = _backends._run_raw_receive_request
 _run_raw_send_request = _backends._run_raw_send_request
@@ -186,6 +185,11 @@ class ModbusSendInstruction(Instruction):
     instruction is a simulation-inert placeholder for code generation.
     """
 
+    _reads = ("source",)
+    _writes = ("sending", "success", "error", "exception_response")
+    _conditions = ()
+    _structural_fields = ("target_name", "bank", "start", "addresses")
+
     target_name: str
     bank: str | None
     start: int
@@ -216,8 +220,9 @@ class ModbusSendInstruction(Instruction):
 
     def _submit(self, source_tags: list[Tag], values: list[Any]) -> Future[_RequestResult]:
         if self.bank is not None:
+            assert self.host is not None
             return _submit_click_send_request(
-                host=self.host,  # ty: ignore[invalid-argument-type]
+                host=self.host,
                 port=self.port,
                 device_id=self.device_id,
                 bank=self.bank,
@@ -238,59 +243,89 @@ class ModbusSendInstruction(Instruction):
             device_id=self.device_id,
         )
 
+    @property
+    def _io_key(self) -> str:
+        return f"send:{self.target_name}:{self.sending.name}"
+
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not enabled:
-            if self._is_live():
-                _discard_pending_request(self._pending)
-                self._pending = None
-            ctx.set_tags(
-                _status_clear_tags(self.sending, self.success, self.error, self.exception_response)
+        if ctx.is_replay_io:
+            return self._execute_replay(ctx, enabled)
+        if not self._is_live():
+            return
+        return self._execute_live(ctx, enabled)
+
+    def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+
+        if self._pending is not None:
+            if not self._pending.future.done():
+                ctx.set_tag(self.sending.name, True)
+                return
+
+            try:
+                result = self._pending.future.result()
+            except Exception:
+                result = _RequestResult(ok=False, exception_code=0)
+
+            self._pending = None
+            if result.ok:
+                drain_writes: dict[str, Any] = {
+                    self.sending.name: False,
+                    self.success.name: True,
+                    self.error.name: False,
+                    self.exception_response.name: 0,
+                }
+            else:
+                drain_writes = {
+                    self.sending.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
+                }
+            ctx.set_tags(drain_writes)
+            ctx.record_io_drain(
+                key,
+                IoResultRecord(
+                    ok=result.ok,
+                    exception_code=result.exception_code,
+                    values=(),
+                    tag_writes=tuple(drain_writes.items()),
+                ),
             )
             return
 
-        if not self._is_live():
+        if not enabled:
             return
 
-        if self._pending is None:
-            source_tags = _normalize_operand_tags(self.source, ctx)
-            values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
-            self._pending = _PendingRequest(future=self._submit(source_tags, values))
+        source_tags = _normalize_operand_tags(self.source, ctx)
+        values = [ctx.get_tag(tag.name, tag.default) for tag in source_tags]
+        self._pending = _PendingRequest(future=self._submit(source_tags, values))
+        submit_writes: dict[str, Any] = {
+            self.sending.name: True,
+            self.success.name: False,
+            self.error.name: False,
+            self.exception_response.name: 0,
+        }
+        ctx.set_tags(submit_writes)
+        ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
+
+    def _execute_replay(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+        drain = ctx.get_replay_io_drain(key)
+        if drain is not None:
+            ctx.set_tags(dict(drain.tag_writes))
+            return
+        if ctx.get_tag(self.sending.name) is True:
+            return
+        if not enabled:
+            return
+        if ctx.has_replay_io_submit(key):
             ctx.set_tags(
                 {
                     self.sending.name: True,
                     self.success.name: False,
                     self.error.name: False,
                     self.exception_response.name: 0,
-                }
-            )
-            return
-
-        ctx.set_tag(self.sending.name, True)
-        if not self._pending.future.done():
-            return
-
-        try:
-            result = self._pending.future.result()
-        except Exception:
-            result = _RequestResult(ok=False, exception_code=0)
-
-        self._pending = None
-        if result.ok:
-            ctx.set_tags(
-                {
-                    self.sending.name: False,
-                    self.success.name: True,
-                    self.error.name: False,
-                    self.exception_response.name: 0,
-                }
-            )
-        else:
-            ctx.set_tags(
-                {
-                    self.sending.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
                 }
             )
 
@@ -303,6 +338,11 @@ class ModbusReceiveInstruction(Instruction):
     Click TCP, ``raw_target`` for raw Modbus).  When neither is set the
     instruction is a simulation-inert placeholder for code generation.
     """
+
+    _reads = ()
+    _writes = ("dest", "receiving", "success", "error", "exception_response")
+    _conditions = ()
+    _structural_fields = ("target_name", "bank", "start", "addresses")
 
     target_name: str
     bank: str | None
@@ -334,8 +374,9 @@ class ModbusReceiveInstruction(Instruction):
 
     def _submit(self, dest_tags: list[Tag]) -> Future[_RequestResult]:
         if self.bank is not None:
+            assert self.host is not None
             return _submit_click_receive_request(
-                host=self.host,  # ty: ignore[invalid-argument-type]
+                host=self.host,
                 port=self.port,
                 device_id=self.device_id,
                 bank=self.bank,
@@ -361,27 +402,123 @@ class ModbusReceiveInstruction(Instruction):
             list(result.values), target_tags, word_order, self.remote_address.register_type
         )
 
-    def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        if not enabled:
-            if self._is_live():
-                _discard_pending_request(self._pending)
-                self._pending = None
-            ctx.set_tags(
-                _status_clear_tags(
-                    self.receiving, self.success, self.error, self.exception_response
-                )
-            )
-            return
+    @property
+    def _io_key(self) -> str:
+        return f"recv:{self.target_name}:{self.receiving.name}"
 
+    def execute(self, ctx: ScanContext, enabled: bool) -> None:
+        if ctx.is_replay_io:
+            return self._execute_replay(ctx, enabled)
         if not self._is_live():
             return
+        return self._execute_live(ctx, enabled)
 
-        if self._pending is None:
-            dest_tags = _normalize_operand_tags(self.dest, ctx)
-            self._pending = _PendingRequest(
-                future=self._submit(dest_tags),
-                target_tags=dest_tags,
+    def _execute_live(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+
+        if self._pending is not None:
+            if not self._pending.future.done():
+                ctx.set_tag(self.receiving.name, True)
+                return
+
+            target_tags = self._pending.target_tags or []
+            try:
+                result = self._pending.future.result()
+            except Exception:
+                result = _RequestResult(ok=False, exception_code=0)
+
+            self._pending = None
+            if not result.ok:
+                drain_writes: dict[str, Any] = {
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: int(result.exception_code),
+                }
+                ctx.set_tags(drain_writes)
+                ctx.record_io_drain(
+                    key,
+                    IoResultRecord(
+                        ok=False,
+                        exception_code=result.exception_code,
+                        values=(),
+                        tag_writes=tuple(drain_writes.items()),
+                    ),
+                )
+                return
+
+            unpacked = self._unpack_result(result, target_tags)
+            if len(unpacked) != len(target_tags):
+                drain_writes = {
+                    self.receiving.name: False,
+                    self.success.name: False,
+                    self.error.name: True,
+                    self.exception_response.name: 0,
+                }
+                ctx.set_tags(drain_writes)
+                ctx.record_io_drain(
+                    key,
+                    IoResultRecord(
+                        ok=False,
+                        exception_code=0,
+                        values=(),
+                        tag_writes=tuple(drain_writes.items()),
+                    ),
+                )
+                return
+
+            typed_values = tuple(
+                _store_copy_value_to_tag_type(value, tag)
+                for tag, value in zip(target_tags, unpacked, strict=True)
             )
+            drain_writes = {
+                tag.name: typed_val
+                for tag, typed_val in zip(target_tags, typed_values, strict=True)
+            }
+            drain_writes[self.receiving.name] = False
+            drain_writes[self.success.name] = True
+            drain_writes[self.error.name] = False
+            drain_writes[self.exception_response.name] = 0
+            ctx.set_tags(drain_writes)
+            ctx.record_io_drain(
+                key,
+                IoResultRecord(
+                    ok=True,
+                    exception_code=0,
+                    values=typed_values,
+                    tag_writes=tuple(drain_writes.items()),
+                ),
+            )
+            return
+
+        if not enabled:
+            return
+
+        dest_tags = _normalize_operand_tags(self.dest, ctx)
+        self._pending = _PendingRequest(
+            future=self._submit(dest_tags),
+            target_tags=dest_tags,
+        )
+        submit_writes: dict[str, Any] = {
+            self.receiving.name: True,
+            self.success.name: False,
+            self.error.name: False,
+            self.exception_response.name: 0,
+        }
+        ctx.set_tags(submit_writes)
+        ctx.record_io_submit(key, IoSubmitRecord(tag_writes=tuple(submit_writes.items())))
+
+    def _execute_replay(self, ctx: ScanContext, enabled: bool) -> None:
+        key = self._io_key
+        drain = ctx.get_replay_io_drain(key)
+        if drain is not None:
+            ctx.set_tags(dict(drain.tag_writes))
+            return
+        if ctx.get_tag(self.receiving.name) is True:
+            return
+        if not enabled:
+            return
+        if ctx.has_replay_io_submit(key):
             ctx.set_tags(
                 {
                     self.receiving.name: True,
@@ -390,51 +527,6 @@ class ModbusReceiveInstruction(Instruction):
                     self.exception_response.name: 0,
                 }
             )
-            return
-
-        ctx.set_tag(self.receiving.name, True)
-        if not self._pending.future.done():
-            return
-
-        target_tags = self._pending.target_tags or []
-        try:
-            result = self._pending.future.result()
-        except Exception:
-            result = _RequestResult(ok=False, exception_code=0)
-
-        self._pending = None
-        if not result.ok:
-            ctx.set_tags(
-                {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: int(result.exception_code),
-                }
-            )
-            return
-
-        unpacked = self._unpack_result(result, target_tags)
-        if len(unpacked) != len(target_tags):
-            ctx.set_tags(
-                {
-                    self.receiving.name: False,
-                    self.success.name: False,
-                    self.error.name: True,
-                    self.exception_response.name: 0,
-                }
-            )
-            return
-
-        updates = {
-            tag.name: _store_copy_value_to_tag_type(value, tag)
-            for tag, value in zip(target_tags, unpacked, strict=True)
-        }
-        updates[self.receiving.name] = False
-        updates[self.success.name] = True
-        updates[self.error.name] = False
-        updates[self.exception_response.name] = 0
-        ctx.set_tags(updates)
 
 
 # ---------------------------------------------------------------------------

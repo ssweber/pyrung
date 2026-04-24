@@ -4,7 +4,7 @@
 
 pyrung is a Python DSL for writing ladder logic. `with Rung()` maps to a ladder rung — condition on the rail, instructions in the body. It targets AutomationDirect CLICK PLCs and ProductivityOpen P1AM-200 controllers.
 
-Core engine (~26k lines, 1,600+ tests) with three dialects: core, Click PLC, and CircuitPython. Includes a VS Code DAP debugger.
+Core engine (~59k lines, 3,000+ tests) with three dialects: core, Click PLC, and CircuitPython. Includes a VS Code DAP debugger, exhaustive state-space verification, causal analysis, and a unified CLI.
 
 ## The pitch
 
@@ -23,15 +23,15 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 ## API design decisions (implemented)
 
 ### Tag-first APIs
-All runner methods accept Tag objects as the primary interface. String keys are supported but secondary — mentioned once as a footnote, not used in examples.
+All PLC methods accept Tag objects as the primary interface. String keys are supported but secondary — mentioned once as a footnote, not used in examples.
 
-- `runner.add_force(Enable, True)` — Tag object, not `"Enable"`
-- `runner.remove_force(Enable)`
-- `runner.force({Enable: True, Fault: False})` — Tag-keyed dict
-- `runner.patch({Button: True})`
-- `runner.monitor(Motor, callback)` — Tag object
+- `plc.force(Enable, True)` — Tag object, not `"Enable"`
+- `plc.unforce(Enable)`
+- `plc.force({Enable: True, Fault: False})` — Tag-keyed dict
+- `plc.patch({Button: True})`
+- `plc.monitor(Motor, callback)` — Tag object
 
-**Exception: `runner.diff()` returns string-keyed dicts.** This is a diagnostic tool — string keys are more readable when printing or inspecting. No need for tag objects here.
+**Exception: `plc.diff()` returns string-keyed dicts.** This is a diagnostic tool — string keys are more readable when printing or inspecting. No need for tag objects here.
 
 ## Key technical details
 

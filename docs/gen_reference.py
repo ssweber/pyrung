@@ -76,9 +76,12 @@ PAGES: tuple[ReferencePage, ...] = (
         slug="runtime",
         title="Runtime API",
         tier="Stable Core",
-        summary="Runner lifecycle, system points, and timebase helpers.",
+        summary="Runner lifecycle, system points, timebase helpers, and feedback harness support.",
         symbols=(
             "pyrung.PLC",
+            "pyrung.Physical",
+            "pyrung.Harness",
+            "pyrung.profile",
             "pyrung.system",
         ),
     ),

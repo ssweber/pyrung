@@ -35,11 +35,26 @@ class Instruction(ABC):
     debug_substeps: tuple[DebugInstructionSubStep, ...] | None = None
     ALWAYS_EXECUTES: bool = False
     INERT_WHEN_DISABLED: bool = True
+    _reads: tuple[str, ...] = ()
+    _writes: tuple[str, ...] = ()
+    _conditions: tuple[str, ...] = ()
+    _structural_fields: tuple[str, ...] = ()
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         """Execute this instruction within the given context (internal)."""
         pass
+
+    @classmethod
+    def walker_fields(cls) -> tuple[str, ...]:
+        """Return deterministic field order for generic walkers.
+
+        Field roles are declared on each concrete instruction class.
+        Walkers see reads, writes, hidden conditions, and any structural
+        fields that should still be surfaced for validation/codegen.
+        """
+        fields = cls._reads + cls._writes + cls._conditions + cls._structural_fields
+        return tuple(dict.fromkeys(fields))
 
     def always_execute(self) -> bool:
         """Whether this instruction should execute even when rung is false.

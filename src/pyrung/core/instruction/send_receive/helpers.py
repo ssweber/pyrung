@@ -100,17 +100,6 @@ def _normalize_operand_count(operand: Tag | BlockRange, count: int | None) -> in
     return expected
 
 
-def _status_clear_tags(
-    busy: Tag, success: Tag, error: Tag, exception_response: Tag
-) -> dict[str, Any]:
-    return {
-        busy.name: False,
-        success.name: False,
-        error.name: False,
-        exception_response.name: 0,
-    }
-
-
 def _validate_status_tags(
     *,
     busy: Tag,

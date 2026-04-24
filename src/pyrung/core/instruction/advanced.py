@@ -15,6 +15,7 @@ from .resolvers import (
 )
 from .utils import (
     guard_oneshot_execution,
+    instruction_condition_view,
     to_condition,
 )
 
@@ -58,6 +59,14 @@ class SearchInstruction(OneShotMixin, Instruction):
         continuous: Resume from previous result position. Default False.
         oneshot: Execute only on rung rising edge. Default False.
     """
+
+    _reads = ("value", "search_range")
+    _writes = ("result", "found")
+    _conditions = ()
+    _structural_fields = (
+        "condition",
+        "continuous",
+    )  # condition is RangeComparison, not a Condition tree
 
     def __init__(
         self,
@@ -256,6 +265,10 @@ class ShiftInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("bit_range",)
+    _writes = ("bit_range",)
+    _conditions = ("data_condition", "clock_condition", "reset_condition")
+    _structural_fields = ()
 
     def __init__(
         self,
@@ -299,9 +312,10 @@ class ShiftInstruction(Instruction):
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         tags = self._resolve_tags(ctx)
+        condition_view = instruction_condition_view(ctx)
 
         data_bit = enabled
-        clock_curr = bool(self.clock_condition.evaluate(ctx))
+        clock_curr = bool(self.clock_condition.evaluate(condition_view))
         clock_prev = bool(ctx.get_memory(self._prev_clock_key, False))
         rising_edge = clock_curr and not clock_prev
 
@@ -312,7 +326,7 @@ class ShiftInstruction(Instruction):
                 updates[tag.name] = prev_values[idx - 1]
             ctx.set_tags(updates)
 
-        reset_active = bool(self.reset_condition.evaluate(ctx))
+        reset_active = bool(self.reset_condition.evaluate(condition_view))
         if reset_active:
             ctx.set_tags({tag.name: False for tag in tags})
 

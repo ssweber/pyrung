@@ -144,10 +144,12 @@ def on_evaluate(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         adapter._require_runner_locked()
         if evaluate_context == "watch":
             result = adapter._evaluate_watch_expression_locked(expression)
+            return {"result": adapter._format_value(result), "variablesReference": 0}, []
         else:
-            result = adapter._evaluate_repl_command_locked(expression)
+            from pyrung.dap.console import dispatch
 
-    return {"result": adapter._format_value(result), "variablesReference": 0}, []
+            console_result = dispatch(adapter, expression)
+            return {"result": console_result.text, "variablesReference": 0}, console_result.events
 
 
 def evaluate_repl_command_locked(adapter: Any, expression: str) -> str:

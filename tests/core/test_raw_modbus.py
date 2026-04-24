@@ -713,11 +713,18 @@ class TestRawExecuteStateMachine:
         assert runner.current_state.tags["Error"] is True
         assert runner.current_state.tags["ExCode"] == 6
 
-    def test_disabled_rung_clears_status(self, monkeypatch: pytest.MonkeyPatch):
+    def test_disabled_rung_keeps_pending_alive(self, monkeypatch: pytest.MonkeyPatch):
+        """Click semantics: dropping Enable mid-transaction does not cancel
+        the in-flight request; busy stays True until completion, then
+        success/error latch across the disabled state."""
         from pyrung.core.instruction.send_receive import _core as mod
 
+        futures: list[Future[_RequestResult]] = []
+
         def fake_submit(**kwargs: object) -> Future[_RequestResult]:
-            return Future()
+            fut: Future[_RequestResult] = Future()
+            futures.append(fut)
+            return fut
 
         monkeypatch.setattr(mod, "_submit_raw_send_request", fake_submit)
 
@@ -747,10 +754,14 @@ class TestRawExecuteStateMachine:
 
         runner.patch({"Enable": False})
         runner.step()
+        assert runner.current_state.tags["Sending"] is True
+
+        futures[0].set_result(_RequestResult(ok=True, exception_code=0))
+        runner.patch({"Enable": False})
+        runner.step()
         assert runner.current_state.tags["Sending"] is False
-        assert runner.current_state.tags["Success"] is False
+        assert runner.current_state.tags["Success"] is True
         assert runner.current_state.tags["Error"] is False
-        assert runner.current_state.tags["ExCode"] == 0
 
     def test_rtu_send_uses_raw_backend(self, monkeypatch: pytest.MonkeyPatch):
         from pyrung.core.instruction.send_receive import _core as mod

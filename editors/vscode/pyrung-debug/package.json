@@ -2,7 +2,7 @@
   "name": "pyrung-debug",
   "displayName": "pyrung Debugger",
   "description": "Debug pyrung ladder logic through the Debug Adapter Protocol.",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "publisher": "ssweber",
   "license": "MPL-2.0",
   "icon": "icon.png",
@@ -13,6 +13,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "scripts": {
+    "test": "node --test --test-isolation=none"
+  },
   "categories": [
     "Debuggers"
   ],
@@ -22,8 +25,8 @@
     "onCommand:pyrung.removeMonitor",
     "onCommand:pyrung.findLabel",
     "onCommand:pyrung.monitorMenu",
-    "onCommand:pyrung.toggleRapidStep",
-    "onCommand:pyrung.configureRapidStep"
+    "onCommand:pyrung.openGraph",
+    "onCommand:pyrung.addToDataView"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -45,12 +48,13 @@
         "title": "pyrung: Monitor Menu"
       },
       {
-        "command": "pyrung.toggleRapidStep",
-        "title": "pyrung: Toggle Rapid Step"
+        "command": "pyrung.openGraph",
+        "title": "pyrung: Open Graph View",
+        "icon": "$(type-hierarchy)"
       },
       {
-        "command": "pyrung.configureRapidStep",
-        "title": "pyrung: Configure Rapid Step"
+        "command": "pyrung.addToDataView",
+        "title": "pyrung: Add to Data View"
       }
     ],
     "views": {
@@ -60,6 +64,28 @@
           "id": "pyrung.historySlider",
           "name": "History",
           "when": "debugType == 'pyrung'"
+        },
+        {
+          "type": "webview",
+          "id": "pyrung.dataView",
+          "name": "Data View",
+          "when": "debugType == 'pyrung'"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "pyrung.addToDataView",
+          "when": "debugType == 'pyrung'",
+          "group": "pyrung"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "pyrung.openGraph",
+          "when": "view == pyrung.historySlider || view == pyrung.dataView",
+          "group": "navigation"
         }
       ]
     },

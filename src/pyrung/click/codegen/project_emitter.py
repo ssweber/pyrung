@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from pyrung.click.codegen.collector import _scan_file_refs
 from pyrung.click.codegen.emitter import (
+    _emit_physical_declarations,
     _emit_plain_block_declarations,
     _emit_rung_sequence,
     _emit_structure_declarations,
@@ -248,6 +249,11 @@ def _generate_tags_file(collection: _OperandCollection) -> str:
     _emit_tags_imports(lines, collection)
     lines.append("")
 
+    if collection.physical_decls:
+        lines.append("# --- Physical ---")
+        _emit_physical_declarations(lines, collection)
+        lines.append("")
+
     # Tag declarations
     has_flat_tags = any(
         op not in collection.semantic_operands and op not in collection.timer_counter_operands
@@ -295,11 +301,16 @@ def _emit_tags_imports(lines: list[str], collection: _OperandCollection) -> None
     has_named_array = any(s.structure_type == "named_array" for s in collection.structures)
     has_udt = any(s.structure_type == "udt" for s in collection.structures)
     has_retentive = any(any(v for v in s.field_retentive.values()) for s in collection.structures)
+    has_field_metadata = any(
+        s.field_metadata or s.field_slot_metadata for s in collection.structures
+    )
+    if collection.physical_decls:
+        core.append("Physical")
     if has_named_array:
         core.append("named_array")
     if has_udt:
         core.append("udt")
-    if has_retentive:
+    if has_retentive or has_field_metadata:
         core.append("Field")
 
     # Built-in Timer/Counter UDTs
@@ -366,7 +377,7 @@ def _generate_subroutine_file(
     lines.append("")
 
     # @subroutine("name") decorator + function
-    lines.append(f'@subroutine("{sub.name}", strict=False)')
+    lines.append(f'@subroutine("{sub.name}")')
     lines.append(f"def {func_name}():")
     if sub_rungs:
         _emit_rung_sequence(
@@ -427,7 +438,7 @@ def _generate_main_file(
     lines.append("")
 
     # Program body (main rungs only, no subroutine definitions)
-    lines.append("with Program(strict=False) as logic:")
+    lines.append("with Program() as logic:")
     if rungs:
         _emit_rung_sequence(
             lines,

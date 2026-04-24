@@ -6,12 +6,23 @@
 
 from __future__ import annotations
 
+import builtins
 from collections.abc import Callable, Iterable, Sized
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol, get_origin
+from enum import IntEnum
+from typing import Any, ClassVar, Literal, Protocol, get_origin
 
 from pyrung.core.memory_block import Block, BlockRange
-from pyrung.core.tag import LiveTag, MappingEntry, Tag, TagType, _TagTypeBase
+from pyrung.core.physical import Physical
+from pyrung.core.tag import (
+    ChoiceMap,
+    LiveTag,
+    MappingEntry,
+    Tag,
+    TagType,
+    _normalize_choices,
+    _TagTypeBase,
+)
 
 UNSET = object()
 _NUMERIC_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.WORD})
@@ -29,7 +40,7 @@ _RESERVED_FIELD_NAMES = frozenset(
         "type",
     }
 )
-_PRIMITIVE_TYPE_MAP = {
+_PRIMITIVE_TYPE_MAP: dict[object, TagType] = {
     bool: TagType.BOOL,
     int: TagType.INT,
     float: TagType.REAL,
@@ -72,14 +83,48 @@ class Field:
     type: TagType | None = None
     default: Any = UNSET
     retentive: bool | None = None
+    choices: ChoiceMap | None = None
+    readonly: bool | None = None
+    external: bool | None = None
+    final: bool | None = None
+    public: bool | None = None
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
     def __new__(
         cls,
         type: TagType | None = None,
         default: Any = UNSET,
         retentive: bool | None = None,
+        choices: builtins.type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> Any:
-        _ = (type, default, retentive)
+        _ = (
+            type,
+            default,
+            retentive,
+            choices,
+            readonly,
+            external,
+            final,
+            public,
+            physical,
+            link,
+            min,
+            max,
+            uom,
+        )
         return super().__new__(cls)
 
 
@@ -97,6 +142,16 @@ class _FieldSpec:
     type: TagType
     default: object
     retentive: bool
+    choices: ChoiceMap | None = None
+    readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 def auto(*, start: int = 1, step: int = 1) -> Any:
@@ -120,8 +175,11 @@ class DoneAccUDT(Protocol):
     ``Counter.clone("Name")``, and any ``@udt()`` with matching fields.
     """
 
-    Done: Tag
-    Acc: Tag
+    @property
+    def Done(self) -> Tag: ...
+
+    @property
+    def Acc(self) -> Tag: ...
 
 
 class InstanceView:
@@ -219,7 +277,11 @@ class _StructRuntime:
         field_specs: tuple[_FieldSpec, ...],
         *,
         always_number: bool = False,
-        kind: str = "udt",
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        kind: Literal["udt", "named_array"] = "udt",
     ):
         _validate_name(name)
         _validate_count(count)
@@ -228,11 +290,18 @@ class _StructRuntime:
         self.name = name
         self.count = count
         self.always_number = always_number
+        self.readonly = bool(readonly)
+        self.external = bool(external)
+        self.final = bool(final)
+        self.public = bool(public)
         self._structure_kind = kind
+        self._pyrung_click_bg_color: str | None = None
         self._original_field_specs = field_specs
         self._field_specs: dict[str, _FieldSpec] = {}
         self._field_order: tuple[str, ...] = tuple(spec.name for spec in field_specs)
         self._blocks: dict[str, Block] = {}
+
+        _validate_field_links(field_specs)
 
         for field_spec in field_specs:
             self._field_specs[field_spec.name] = field_spec
@@ -249,26 +318,63 @@ class _StructRuntime:
                 ),
                 default_factory=_make_default_factory(field_spec.default),
             )
-            block._pyrung_structure_runtime = self  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_kind = self._structure_kind  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_name = name  # ty: ignore[unresolved-attribute]
-            block._pyrung_structure_field = field_spec.name  # ty: ignore[unresolved-attribute]
+            block._pyrung_structure_runtime = self
+            block._pyrung_structure_kind = self._structure_kind
+            block._pyrung_structure_name = name
+            block._pyrung_structure_field = field_spec.name
+            block._pyrung_field_choices = field_spec.choices
+            block._pyrung_field_readonly = field_spec.readonly
+            block._pyrung_field_external = field_spec.external
+            block._pyrung_field_final = field_spec.final
+            block._pyrung_field_public = field_spec.public
+            block._pyrung_field_physical = field_spec.physical
+            block._pyrung_field_link = field_spec.link
+            block._pyrung_field_min = field_spec.min
+            block._pyrung_field_max = field_spec.max
+            block._pyrung_field_uom = field_spec.uom
             self._blocks[field_spec.name] = block
 
-    def clone(self, name: str, *, count: int | None = None) -> _StructRuntime:
+    def clone(
+        self,
+        name: str,
+        *,
+        count: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
+    ) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
         return _StructRuntime(
             name=name,
             count=self.count if count is None else count,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
             kind=self._structure_kind,
         )
 
     @property
     def fields(self) -> dict[str, Field]:
         return {
-            name: Field(type=spec.type, default=spec.default, retentive=spec.retentive)
+            name: Field(
+                type=spec.type,
+                default=spec.default,
+                retentive=spec.retentive,
+                choices=spec.choices,
+                readonly=spec.readonly,
+                external=spec.external,
+                final=spec.final,
+                public=spec.public,
+                physical=spec.physical,
+                link=spec.link,
+                min=spec.min,
+                max=spec.max,
+                uom=spec.uom,
+            )
             for name, spec in self._field_specs.items()
         }
 
@@ -298,6 +404,35 @@ class _StructRuntime:
         )
 
 
+class _DoneAccRuntime(_StructRuntime):
+    """Typed structure runtime for built-in Timer/Counter instances."""
+
+    Done: LiveTag
+    Acc: LiveTag
+
+    def clone(
+        self,
+        name: str,
+        *,
+        count: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
+    ) -> _DoneAccRuntime:
+        return _DoneAccRuntime(
+            name=name,
+            count=self.count if count is None else count,
+            field_specs=self._original_field_specs,
+            always_number=self.always_number,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
+            kind=self._structure_kind,
+        )
+
+
 class _NamedArrayRuntime(_StructRuntime):
     """Runtime object returned by `@named_array`."""
 
@@ -310,6 +445,10 @@ class _NamedArrayRuntime(_StructRuntime):
         stride: int,
         field_specs: tuple[_FieldSpec, ...],
         always_number: bool = False,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -325,6 +464,10 @@ class _NamedArrayRuntime(_StructRuntime):
             count=count,
             field_specs=field_specs,
             always_number=always_number,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
             kind="named_array",
         )
 
@@ -334,6 +477,10 @@ class _NamedArrayRuntime(_StructRuntime):
         *,
         count: int | None = None,
         stride: int | None = None,
+        readonly: bool | None = None,
+        external: bool | None = None,
+        final: bool | None = None,
+        public: bool | None = None,
     ) -> _NamedArrayRuntime:
         """Create a copy of this named array with a different base name."""
         return _NamedArrayRuntime(
@@ -343,6 +490,10 @@ class _NamedArrayRuntime(_StructRuntime):
             stride=self.stride if stride is None else stride,
             field_specs=self._original_field_specs,
             always_number=self.always_number,
+            readonly=self.readonly if readonly is None else readonly,
+            external=self.external if external is None else external,
+            final=self.final if final is None else final,
+            public=self.public if public is None else public,
         )
 
     def hardware_span(self, hw_start: int) -> tuple[int, int]:
@@ -415,23 +566,48 @@ class _NamedArrayRuntime(_StructRuntime):
         )
 
 
-def udt(*, count: int = 1, always_number: bool = False) -> Callable[[type[Any]], _StructRuntime]:
+def udt(
+    *,
+    count: int = 1,
+    always_number: bool = False,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
+) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
 
     def _decorator(cls: type[Any]) -> _StructRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_udt_fields(cls)
+        field_specs = _parse_udt_fields(
+            cls, readonly=readonly, external=external, final=final, public=public
+        )
         return _StructRuntime(
-            name=name, count=count, field_specs=field_specs, always_number=always_number
+            name=name,
+            count=count,
+            field_specs=field_specs,
+            always_number=always_number,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
         )
 
     return _decorator
 
 
 def named_array(
-    base_type: object, *, count: int = 1, stride: int = 1, always_number: bool = False
+    base_type: object,
+    *,
+    count: int = 1,
+    stride: int = 1,
+    always_number: bool = False,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -441,7 +617,9 @@ def named_array(
     def _decorator(cls: type[Any]) -> _NamedArrayRuntime:
         name = cls.__name__
         _validate_name(name)
-        field_specs = _parse_named_array_fields(cls, resolved_type)
+        field_specs = _parse_named_array_fields(
+            cls, resolved_type, readonly=readonly, external=external, final=final, public=public
+        )
         return _NamedArrayRuntime(
             name=name,
             type=resolved_type,
@@ -449,12 +627,23 @@ def named_array(
             stride=stride,
             field_specs=field_specs,
             always_number=always_number,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
         )
 
     return _decorator
 
 
-def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
+def _parse_udt_fields(
+    cls: type[Any],
+    *,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
+) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     if not isinstance(annotations, dict):
         raise TypeError("UDT annotations must be a dict.")
@@ -477,11 +666,30 @@ def _parse_udt_fields(cls: type[Any]) -> tuple[_FieldSpec, ...]:
     for field_name, annotation in field_annotations.items():
         field_type = _resolve_annotation(annotation, field_name)
         raw_default = cls.__dict__.get(field_name, UNSET)
-        parsed.append(_build_field_spec(field_name, field_type, raw_default, source="udt"))
+        parsed.append(
+            _build_field_spec(
+                field_name,
+                field_type,
+                raw_default,
+                source="udt",
+                readonly=readonly,
+                external=external,
+                final=final,
+                public=public,
+            )
+        )
     return tuple(parsed)
 
 
-def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_FieldSpec, ...]:
+def _parse_named_array_fields(
+    cls: type[Any],
+    base_type: TagType,
+    *,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
+) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     classvar_names: set[str] = set()
     if isinstance(annotations, dict):
@@ -495,7 +703,18 @@ def _parse_named_array_fields(cls: type[Any], base_type: TagType) -> tuple[_Fiel
     for field_name, value in cls.__dict__.items():
         if _should_skip_named_array_attr(field_name, value, classvar_names=classvar_names):
             continue
-        parsed.append(_build_field_spec(field_name, base_type, value, source="named_array"))
+        parsed.append(
+            _build_field_spec(
+                field_name,
+                base_type,
+                value,
+                source="named_array",
+                readonly=readonly,
+                external=external,
+                final=final,
+                public=public,
+            )
+        )
 
     _validate_fields_present(parsed)
     _validate_field_names(spec.name for spec in parsed)
@@ -530,10 +749,29 @@ def _should_skip_named_array_attr(name: str, value: object, *, classvar_names: s
 
 
 def _build_field_spec(
-    field_name: str, type: TagType, raw_default: object, *, source: str
+    field_name: str,
+    type: TagType,
+    raw_default: object,
+    *,
+    source: str,
+    readonly: bool = False,
+    external: bool = False,
+    final: bool = False,
+    public: bool = False,
 ) -> _FieldSpec:
     retentive: bool | None = None
     default_spec = raw_default
+    choices: ChoiceMap | None = None
+    field_readonly = bool(readonly)
+    field_external = bool(external)
+    field_final = bool(final)
+    field_public = bool(public)
+
+    field_physical: Physical | None = None
+    field_link: str | None = None
+    field_min: int | float | None = None
+    field_max: int | float | None = None
+    field_uom: str | None = None
 
     if isinstance(raw_default, Field):
         if raw_default.type is not None and raw_default.type != type:
@@ -548,12 +786,45 @@ def _build_field_spec(
             )
         retentive = raw_default.retentive
         default_spec = raw_default.default
+        choices = _normalize_choices(
+            raw_default.choices,
+            tag_type=type,
+            owner=f"Field({field_name!r}) choices",
+        )
+        if raw_default.readonly is not None:
+            field_readonly = bool(raw_default.readonly)
+        if raw_default.external is not None:
+            field_external = bool(raw_default.external)
+        if raw_default.final is not None:
+            field_final = bool(raw_default.final)
+        if raw_default.public is not None:
+            field_public = bool(raw_default.public)
+        field_physical = raw_default.physical
+        field_link = raw_default.link
+        field_min = raw_default.min
+        field_max = raw_default.max
+        field_uom = raw_default.uom
 
     if retentive is None:
         retentive = _TYPE_DEFAULT_RETENTIVE[type]
 
     _validate_auto_default_allowed(field_name, default_spec, type)
-    return _FieldSpec(name=field_name, type=type, default=default_spec, retentive=retentive)
+    return _FieldSpec(
+        name=field_name,
+        type=type,
+        default=default_spec,
+        retentive=retentive,
+        choices=choices,
+        readonly=field_readonly,
+        external=field_external,
+        final=field_final,
+        public=field_public,
+        physical=field_physical,
+        link=field_link,
+        min=field_min,
+        max=field_max,
+        uom=field_uom,
+    )
 
 
 def _resolve_annotation(annotation: object, field_name: str) -> TagType:
@@ -574,7 +845,7 @@ def _resolve_annotation(annotation: object, field_name: str) -> TagType:
     if isinstance(annotation, type) and issubclass(annotation, _TagTypeBase):
         return annotation._tag_type
 
-    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)  # ty: ignore[invalid-argument-type]
+    primitive = _PRIMITIVE_TYPE_MAP.get(annotation)
     if primitive is not None:
         return primitive
 
@@ -639,6 +910,63 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
         )
 
 
+def _validate_field_links(field_specs: tuple[_FieldSpec, ...]) -> None:
+    field_by_name = {spec.name: spec for spec in field_specs}
+    for spec in field_specs:
+        has_profile = spec.physical is not None and spec.physical.profile is not None
+        if has_profile and spec.link is None:
+            raise ValueError(
+                f"Field {spec.name!r}: physical profile requires link "
+                "(profile defines response to a linked command)."
+            )
+        if spec.link is None:
+            continue
+        link_field, _, trigger_part = spec.link.partition(":")
+        if link_field not in field_by_name:
+            raise ValueError(
+                f"Field {spec.name!r} links to unknown field {link_field!r}; "
+                "links must refer to a field in the same structure."
+            )
+        if trigger_part:
+            en_spec = field_by_name[link_field]
+            if en_spec.type == TagType.BOOL:
+                raise ValueError(
+                    f"Field {spec.name!r}: trigger value {trigger_part!r} is not valid "
+                    f"for BOOL enable field {link_field!r}. "
+                    "Use plain link='fieldname' for BOOL enables."
+                )
+            try:
+                int(trigger_part)
+            except ValueError:
+                if en_spec.type == TagType.CHAR:
+                    pass
+                elif en_spec.choices is None:
+                    raise ValueError(
+                        f"Field {spec.name!r}: trigger {trigger_part!r} is not an int "
+                        f"literal and enable field {link_field!r} has no choices map."
+                    ) from None
+                else:
+                    reverse = {v: k for k, v in en_spec.choices.items()}
+                    if trigger_part not in reverse:
+                        raise ValueError(
+                            f"Field {spec.name!r}: trigger label {trigger_part!r} not "
+                            f"found in choices for {link_field!r}. "
+                            f"Available: {list(en_spec.choices.values())}."
+                        ) from None
+        if spec.type != TagType.BOOL:
+            continue
+        physical = spec.physical
+        has_timing = physical is not None and (
+            physical.on_delay is not None or physical.off_delay is not None
+        )
+        has_prof = physical is not None and physical.profile is not None
+        if not has_timing and not has_prof:
+            raise ValueError(
+                f"Field {spec.name!r} is a linked BOOL feedback and requires physical "
+                "timing via on_delay/off_delay or a profile."
+            )
+
+
 # ---------------------------------------------------------------------------
 # Built-in Timer / Counter UDTs
 # ---------------------------------------------------------------------------
@@ -647,7 +975,7 @@ def _validate_auto_default_allowed(field_name: str, default: object, type: TagTy
 # explicit count: ``Timer.clone("T", count=500)``.
 
 
-Timer = _StructRuntime(
+Timer = _DoneAccRuntime(
     name="Timer",
     count=1,
     field_specs=(
@@ -656,7 +984,7 @@ Timer = _StructRuntime(
     ),
 )
 
-Counter = _StructRuntime(
+Counter = _DoneAccRuntime(
     name="Counter",
     count=1,
     field_specs=(

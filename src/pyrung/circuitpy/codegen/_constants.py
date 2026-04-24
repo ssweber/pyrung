@@ -69,6 +69,9 @@ _SD_EJECT_CMD_TAG = "storage.sd.eject_cmd"
 _SD_DELETE_ALL_CMD_TAG = "storage.sd.delete_all_cmd"
 
 
+_FAULT_DIVISION_ERROR_TAG = "fault.division_error"
+
+
 _FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
 
 

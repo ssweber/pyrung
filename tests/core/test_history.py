@@ -1,4 +1,11 @@
-"""Tests for PLC history retention and queries."""
+"""Tests for PLC history retention and queries.
+
+``History`` is a stateless facade over the PLC's byte-bounded
+recent-state cache and ``replay_to``.  Every scan from ``0`` to the
+current tip is addressable; recent scans are served from the cache,
+older scans are reconstructed via ``replay_to`` from the nearest
+checkpoint.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +14,6 @@ from datetime import datetime
 import pytest
 
 from pyrung.core import PLC, TimeMode
-from pyrung.core.history import History
 from pyrung.core.state import SystemState
 
 
@@ -65,39 +71,18 @@ def test_history_latest_returns_chronological_window_with_bounds() -> None:
 
 
 def test_unbounded_history_retains_all_scans() -> None:
-    runner = PLC(logic=[], history_limit=None)
+    runner = PLC(logic=[])
     runner.run(cycles=6)
 
     assert _scan_ids(runner) == [0, 1, 2, 3, 4, 5, 6]
 
 
-def test_bounded_history_evicts_oldest_scans() -> None:
-    runner = PLC(logic=[], history_limit=3)
+def test_history_budget_validation_rejects_below_1mb() -> None:
+    with pytest.raises(ValueError, match="history_budget must be >= 1 MB"):
+        PLC(logic=[], history_budget=0)
 
-    runner.step()  # [0, 1]
-    runner.step()  # [0, 1, 2]
-    runner.step()  # [1, 2, 3]
-    runner.step()  # [2, 3, 4]
-
-    assert _scan_ids(runner) == [2, 3, 4]
-    assert runner.history.at(2).scan_id == 2
-    with pytest.raises(KeyError):
-        runner.history.at(1)
-
-
-def test_history_limit_validation_rejects_zero_or_negative() -> None:
-    with pytest.raises(ValueError, match="history_limit must be >= 1 or None"):
-        PLC(logic=[], history_limit=0)
-
-    with pytest.raises(ValueError, match="history_limit must be >= 1 or None"):
-        PLC(logic=[], history_limit=-5)
-
-
-def test_history_enforces_monotonic_scan_order_when_appending() -> None:
-    history = History(SystemState())
-
-    with pytest.raises(ValueError, match="strictly increasing"):
-        history._append(SystemState())
+    with pytest.raises(ValueError, match="history_budget must be >= 1 MB"):
+        PLC(logic=[], history_budget=500_000)
 
 
 def test_playhead_starts_at_tip_and_tracks_new_scans() -> None:
@@ -138,15 +123,16 @@ def test_rewind_selects_latest_scan_not_after_target_time() -> None:
     assert runner.playhead == 3
 
 
-def test_rewind_clamps_to_oldest_retained_scan_for_early_target_time() -> None:
-    runner = PLC(logic=[], dt=1.0, history_limit=3)
-    runner.run(cycles=5)  # retained scans are [3, 4, 5]
+def test_rewind_clamps_to_oldest_addressable_scan_for_early_target_time() -> None:
+    runner = PLC(logic=[], dt=1.0)
+    runner.run(cycles=5)
 
     runner.seek(5)
     state = runner.rewind(100.0)
 
-    assert state.scan_id == 3
-    assert runner.playhead == 3
+    # Facade addresses scan 0 onward, so a far-back rewind lands at 0.
+    assert state.scan_id == 0
+    assert runner.playhead == 0
 
 
 def test_rewind_rejects_negative_seconds() -> None:
@@ -168,15 +154,19 @@ def test_step_appends_at_tip_even_when_playhead_is_in_the_past() -> None:
     assert _scan_ids(runner) == [0, 1, 2, 3, 4]
 
 
-def test_playhead_moves_to_oldest_retained_scan_when_evicted() -> None:
-    runner = PLC(logic=[], history_limit=3)
+def test_playhead_stays_put_when_window_rotates_past_it() -> None:
+    """Playhead is no longer pinned to a retained-state window — every
+    scan ``>= 0`` is addressable, so the playhead survives window
+    rotation untouched."""
+    runner = PLC(logic=[])
 
-    runner.run(cycles=4)  # retained [2, 3, 4]
+    runner.run(cycles=4)
     runner.seek(2)
 
-    runner.step()  # retained [3, 4, 5] -> playhead 2 evicted
+    runner.step()
 
-    assert runner.playhead == 3
+    assert runner.playhead == 2
+    assert runner.history.at(2).scan_id == 2
 
 
 def test_diff_sorts_keys_and_represents_absent_tags_as_none() -> None:
@@ -205,12 +195,12 @@ def test_diff_returns_empty_for_same_scan() -> None:
     assert runner.diff(2, 2) == {}
 
 
-def test_diff_reflects_system_tag_changes_between_scans() -> None:
+def test_diff_is_empty_for_idle_scans() -> None:
     runner = PLC(logic=[])
     runner.step()
     runner.step()
 
-    assert runner.diff(1, 2) == {"sys.scan_counter": (1, 2)}
+    assert runner.diff(1, 2) == {}
 
 
 def test_diff_raises_for_unknown_scan() -> None:
@@ -331,20 +321,23 @@ def test_fork_from_starts_with_same_rtc_as_parent_at_selected_scan() -> None:
     assert fork.debug.system_runtime._rtc_now(fork.current_state) == expected_parent_rtc
 
 
-def test_fork_from_inherits_history_limit_and_evicts_oldest() -> None:
-    runner = PLC(logic=[], history_limit=3)
+def test_fork_from_inherits_history_budget() -> None:
+    """``history_budget`` is propagated across fork."""
+    budget = 2 * 1024 * 1024  # 2 MB
+    runner = PLC(logic=[], history_budget=budget)
     runner.run(cycles=5)
 
     fork = runner.fork_from(4)
+    assert fork._recent_state_cache_budget == budget
     assert _scan_ids(fork) == [4]
 
     fork.step()
     fork.step()
     fork.step()
 
-    assert _scan_ids(fork) == [5, 6, 7]
-    with pytest.raises(KeyError):
-        fork.history.at(4)
+    # Fork starts at scan 4; subsequent scans 5, 6, 7 stay addressable.
+    assert _scan_ids(fork) == [4, 5, 6, 7]
+    assert fork.history.at(4).scan_id == 4
 
 
 def test_fork_from_starts_clean_and_parent_fork_evolve_independently() -> None:
@@ -379,35 +372,33 @@ def test_fork_from_raises_for_unknown_scan() -> None:
 
 
 def test_history_find_apis_return_empty_results_for_unknown_label() -> None:
-    history = History(SystemState())
+    runner = PLC(logic=[])
 
-    assert history.find("missing") is None
-    assert history.find_all("missing") == []
-    assert history.find_labeled("missing") is None
-    assert history.find_all_labeled("missing") == []
+    assert runner.history.find("missing") is None
+    assert runner.history.find_all("missing") == []
+    assert runner.history.find_labeled("missing") is None
+    assert runner.history.find_all_labeled("missing") == []
 
 
 def test_history_label_scan_supports_find_find_all_and_dedup_per_scan() -> None:
-    initial = SystemState()
-    history = History(initial)
-    scan_1 = initial.next_scan(dt=0.1)
-    history._append(scan_1)
-    scan_2 = scan_1.next_scan(dt=0.1)
-    history._append(scan_2)
+    runner = PLC(logic=[], dt=0.1)
+    runner.step()
+    runner.step()
 
+    history = runner.history
     history._label_scan("fault", 1)
     history._label_scan("fault", 1)
     history._label_scan("fault", 2)
 
-    assert history.find("fault") is scan_2
+    assert history.find("fault").scan_id == 2
     assert [state.scan_id for state in history.find_all("fault")] == [1, 2]
 
 
 def test_history_labeled_snapshot_includes_metadata_when_provided() -> None:
-    initial = SystemState()
-    history = History(initial)
-    scan_1 = initial.next_scan(dt=0.1)
-    history._append(scan_1)
+    runner = PLC(logic=[], dt=0.1)
+    runner.step()
+
+    history = runner.history
     history._label_scan(
         "fault",
         1,
@@ -424,27 +415,125 @@ def test_history_labeled_snapshot_includes_metadata_when_provided() -> None:
 
 
 def test_history_label_scan_raises_for_unknown_scan() -> None:
-    history = History(SystemState())
+    runner = PLC(logic=[])
 
     with pytest.raises(KeyError):
-        history._label_scan("fault", 99)
+        runner.history._label_scan("fault", 99)
 
 
-def test_history_label_entries_are_pruned_when_scan_is_evicted() -> None:
-    initial = SystemState()
-    history = History(initial, limit=2)
-    history._label_scan(
+def test_history_labels_survive_window_rotation() -> None:
+    """Labels are decoupled from state storage — labeling an early
+    scan stays valid after the recent-state window has rotated past it."""
+    runner = PLC(logic=[], dt=0.1)
+    runner.step()
+    runner.history._label_scan(
         "boot",
         0,
         metadata={"rtc_iso": "2026-02-24T12:00:00", "rtc_offset_seconds": 0.0},
     )
 
-    scan_1 = initial.next_scan(dt=0.1)
-    history._append(scan_1)
-    scan_2 = scan_1.next_scan(dt=0.1)
-    history._append(scan_2)  # evicts scan 0
+    # Spin past the 20-scan window so scan 0 is replay-only.
+    for _ in range(40):
+        runner.step()
 
-    assert history.find("boot") is None
-    assert history.find_all("boot") == []
-    assert history.find_labeled("boot") is None
-    assert history.find_all_labeled("boot") == []
+    found = runner.history.find("boot")
+    assert found is not None and found.scan_id == 0
+    assert [s.scan_id for s in runner.history.find_all("boot")] == [0]
+    labeled = runner.history.find_labeled("boot")
+    assert labeled is not None and labeled.scan_id == 0
+    assert labeled.rtc_iso == "2026-02-24T12:00:00"
+
+
+# ------------------------------------------------------------------
+# Time-based retention API
+# ------------------------------------------------------------------
+
+
+def test_history_retention_trims_old_scans() -> None:
+    """history= sets a rolling trim window; old scans become unreachable."""
+    # "100ms" at dt=0.01 → 10 scans retention, checkpoint_interval=5
+    plc = PLC(logic=[], dt=0.01, history="100ms", checkpoint_interval=5)
+    for _ in range(50):
+        plc.step()
+
+    assert plc.history.oldest_scan_id > 0
+    assert plc.history.newest_scan_id == 50
+    assert not plc.history.contains(0)
+
+    with pytest.raises((KeyError, ValueError)):
+        plc.history.at(0)
+
+
+def test_cache_retention_evicts_by_time() -> None:
+    """cache= limits the instant-lookup window; older scans require replay."""
+    # 500ms at dt=0.01 → 50 scans (above the 20-entry floor)
+    plc = PLC(logic=[], dt=0.01, cache="500ms", checkpoint_interval=5)
+    for _ in range(100):
+        plc.step()
+
+    assert plc._state_in_cache(100)
+    assert plc._state_in_cache(55)
+    assert not plc._state_in_cache(40)
+    # Still addressable via replay (no history= set)
+    assert plc.history.at(40).scan_id == 40
+
+
+def test_history_floor_at_2x_checkpoint_interval() -> None:
+    """history=0 clamps to checkpoint_interval * 2."""
+    plc = PLC(logic=[], dt=0.01, history=0, checkpoint_interval=10)
+    assert plc._history_retention_scans == 20
+
+
+def test_cache_clamped_to_history() -> None:
+    """cache is silently clamped down when it exceeds history."""
+    plc = PLC(logic=[], dt=0.01, history="50ms", cache="500ms", checkpoint_interval=5)
+    assert plc._cache_retention_scans is not None
+    assert plc._history_retention_scans is not None
+    assert plc._cache_retention_scans <= plc._history_retention_scans
+
+
+def test_fork_inherits_retention_params() -> None:
+    plc = PLC(logic=[], dt=0.01, history="1s", cache="200ms")
+    plc.run(cycles=5)
+    fork = plc.fork_from(4)
+
+    assert fork._history_retention_scans == plc._history_retention_scans
+    assert fork._cache_retention_scans == plc._cache_retention_scans
+    assert fork._recent_state_cache_budget == plc._recent_state_cache_budget
+
+
+def test_parse_retention_with_duration_string() -> None:
+    """Duration strings are converted to scan counts via dt."""
+    plc = PLC(logic=[], dt=0.01, history="1h")
+    assert plc._history_retention_scans == 360_000
+
+
+def test_parse_retention_with_int() -> None:
+    """Integer values pass through as scan counts (with floor)."""
+    plc = PLC(logic=[], dt=0.01, history=500, checkpoint_interval=10)
+    assert plc._history_retention_scans == 500
+
+
+def test_trim_advances_oldest_scan_id() -> None:
+    """_trim_history_before advances history.oldest_scan_id."""
+    plc = PLC(logic=[], dt=0.01, checkpoint_interval=5)
+    for _ in range(20):
+        plc.step()
+
+    assert plc.history.oldest_scan_id == 0
+    plc._trim_history_before(10)
+    assert plc.history.oldest_scan_id == 10
+    assert not plc.history.contains(9)
+    assert plc.history.contains(10)
+
+
+def test_history_scan_ids_reflects_trim() -> None:
+    """scan_ids() range narrows after auto-trim."""
+    plc = PLC(logic=[], dt=0.01, history="200ms", checkpoint_interval=5)
+    for _ in range(50):
+        plc.step()
+
+    ids = plc.history.scan_ids()
+    assert ids[0] == plc.history.oldest_scan_id
+    assert ids[-1] == 50
+    assert 0 not in ids

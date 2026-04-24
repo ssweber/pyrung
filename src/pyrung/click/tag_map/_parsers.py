@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 from pyclickplc.addresses import AddressRecord, format_address_display, parse_address
@@ -11,6 +12,7 @@ from pyclickplc.blocks import BlockRange as ClickBlockRange
 from pyclickplc.blocks import parse_block_tag
 
 from pyrung.core import Block, InputBlock, OutputBlock, TagType
+from pyrung.core.tag import ChoiceMap
 
 from ._types import _BlockImportSpec
 
@@ -40,6 +42,28 @@ _EXPLICIT_BLOCK_RE = re.compile(rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block$")
 _EXPLICIT_BLOCK_START_RE = re.compile(
     rf"^(?P<base>{_IDENTIFIER_TOKEN_RE}):block\((?P<start>start=(?:0|[1-9][0-9]*)|0|[1-9][0-9]*)\)$"
 )
+
+_TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
+_CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
+_CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
+
+
+@dataclass(frozen=True)
+class TagMeta:
+    readonly: bool = False
+    choices: ChoiceMap | None = None
+    external: bool = False
+    final: bool = False
+    public: bool = False
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
 
 def _tag_type_for_memory_type(memory_type: str) -> TagType:
@@ -350,6 +374,7 @@ def _build_block_spec(rows: list[AddressRecord], block_range: ClickBlockRange) -
         end_idx=block_range.end_idx,
         hardware_range=hardware_range,
         hardware_addresses=hardware_addresses,
+        bg_color=block_range.bg_color,
     )
 
 
@@ -359,20 +384,339 @@ def _default_logical_block_start(hardware_addresses: tuple[int, ...]) -> int:
     return 1
 
 
-def _extract_address_comment(comment: str) -> str:
+def _parse_tag_meta_value(token: str) -> int | float | str:
+    text = token.strip()
+    if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
+        raise ValueError(f"Invalid TagMeta choice value {token!r}.")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _parse_tag_meta_scalar(token: str, *, field_name: str) -> int | float | str:
+    text = token.strip()
+    if text == "" or _CHOICE_VALUE_RE.fullmatch(text) is None:
+        raise ValueError(f"Invalid TagMeta {field_name} value {token!r}.")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
+    text = raw.strip()
+    if text == "":
+        raise ValueError("TagMeta choices must not be empty.")
+
+    choices: ChoiceMap = {}
+    for pair in text.split("|"):
+        label_text, sep, value_text = pair.partition(":")
+        label = label_text.strip()
+        if sep != ":" or label == "":
+            raise ValueError(f"Invalid TagMeta choice pair {pair!r}.")
+        if _CHOICE_LABEL_RE.fullmatch(label) is None:
+            raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+        choices[_parse_tag_meta_value(value_text)] = label
+
+    return choices
+
+
+_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
+_VALUE_TOKENS = frozenset(
+    {"link", "physical", "on_delay", "off_delay", "profile", "system", "min", "max", "uom"}
+)
+_PHYSICAL_DETAIL_TOKENS = frozenset({"on_delay", "off_delay", "profile"})
+_STRING_VALUE_TOKENS = frozenset(
+    {"link", "physical", "on_delay", "off_delay", "profile", "system", "uom"}
+)
+
+
+def _parse_tag_meta_group(content: str) -> TagMeta | None:
+    tokens = [token.strip() for token in content.split(",") if token.strip()]
+    if not tokens:
+        return None
+
+    first = tokens[0]
+    if (
+        first not in _BOOL_FLAG_TOKENS
+        and not first.startswith("choices=")
+        and not any(first.startswith(f"{name}=") for name in _VALUE_TOKENS)
+    ):
+        return None
+
+    flags: dict[str, bool] = {}
+    choices: ChoiceMap | None = None
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
+    min_val: int | float | None = None
+    max_val: int | float | None = None
+    uom: str | None = None
+    for token in tokens:
+        if token in _BOOL_FLAG_TOKENS:
+            flags[token] = True
+            continue
+        if token.startswith("choices="):
+            if choices is not None:
+                raise ValueError("TagMeta choices may only be specified once.")
+            choices = _parse_tag_meta_choices(token.split("=", maxsplit=1)[1])
+            continue
+        key, sep, value = token.partition("=")
+        if sep == "=" and key in _VALUE_TOKENS:
+            parsed_value = _parse_tag_meta_scalar(value, field_name=key)
+            if key in _STRING_VALUE_TOKENS:
+                parsed_text = str(parsed_value)
+                if key == "link":
+                    link = parsed_text
+                elif key == "physical":
+                    physical = parsed_text
+                elif key == "on_delay":
+                    on_delay = parsed_text
+                elif key == "off_delay":
+                    off_delay = parsed_text
+                elif key == "profile":
+                    profile = parsed_text
+                elif key == "system":
+                    system = parsed_text or None
+                else:
+                    uom = parsed_text
+            elif key == "min":
+                if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
+                    raise ValueError(f"Invalid TagMeta min value {value!r}.")
+                min_val = parsed_value
+            elif key == "max":
+                if not isinstance(parsed_value, (int, float)) or isinstance(parsed_value, bool):
+                    raise ValueError(f"Invalid TagMeta max value {value!r}.")
+                max_val = parsed_value
+            continue
+        raise ValueError(f"Unsupported TagMeta token {token!r}.")
+
+    has_timing = on_delay is not None or off_delay is not None
+    has_profile = profile is not None
+    if has_timing and has_profile:
+        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
+    if system is not None and not has_timing and not has_profile:
+        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
+
+    return TagMeta(
+        readonly=flags.get("readonly", False),
+        choices=choices,
+        external=flags.get("external", False),
+        final=flags.get("final", False),
+        public=flags.get("public", False),
+        link=link,
+        physical=physical,
+        on_delay=on_delay,
+        off_delay=off_delay,
+        profile=profile,
+        system=system,
+        min=min_val,
+        max=max_val,
+        uom=uom,
+    )
+
+
+def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
+    if comment == "":
+        return None, ""
+
+    remaining_parts: list[str] = []
+    readonly = False
+    choices: ChoiceMap | None = None
+    external = False
+    final = False
+    public = False
+    link: str | None = None
+    physical: str | None = None
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
+    min_val: int | float | None = None
+    max_val: int | float | None = None
+    uom: str | None = None
+    cursor = 0
+
+    for match in _TAG_META_GROUP_RE.finditer(comment):
+        remaining_parts.append(comment[cursor : match.start()])
+        parsed = _parse_tag_meta_group(match.group()[1:-1].strip())
+        if parsed is None:
+            remaining_parts.append(match.group())
+        else:
+            readonly = readonly or parsed.readonly
+            external = external or parsed.external
+            final = final or parsed.final
+            public = public or parsed.public
+            if parsed.link is not None:
+                link = parsed.link
+            if parsed.physical is not None:
+                physical = parsed.physical
+            if parsed.on_delay is not None:
+                on_delay = parsed.on_delay
+            if parsed.off_delay is not None:
+                off_delay = parsed.off_delay
+            if parsed.profile is not None:
+                profile = parsed.profile
+            if parsed.system is not None:
+                system = parsed.system
+            if parsed.min is not None:
+                min_val = parsed.min
+            if parsed.max is not None:
+                max_val = parsed.max
+            if parsed.uom is not None:
+                uom = parsed.uom
+            if parsed.choices is not None:
+                if choices is not None:
+                    raise ValueError("TagMeta choices may only be specified once.")
+                choices = parsed.choices
+        cursor = match.end()
+
+    remaining_parts.append(comment[cursor:])
+    remaining_text = re.sub(r"[ \t]{2,}", " ", "".join(remaining_parts)).strip()
+    has_timing = on_delay is not None or off_delay is not None
+    has_profile = profile is not None
+    if has_timing and has_profile:
+        raise ValueError("TagMeta physical metadata cannot combine timing with profile.")
+    if system is not None and not has_timing and not has_profile:
+        raise ValueError("TagMeta system requires on_delay/off_delay or profile.")
+    if (
+        not readonly
+        and choices is None
+        and not external
+        and not final
+        and not public
+        and link is None
+        and physical is None
+        and on_delay is None
+        and off_delay is None
+        and profile is None
+        and system is None
+        and min_val is None
+        and max_val is None
+        and uom is None
+    ):
+        return None, remaining_text
+    return TagMeta(
+        readonly=readonly,
+        choices=choices,
+        external=external,
+        final=final,
+        public=public,
+        link=link,
+        physical=physical,
+        on_delay=on_delay,
+        off_delay=off_delay,
+        profile=profile,
+        system=system,
+        min=min_val,
+        max=max_val,
+        uom=uom,
+    ), remaining_text
+
+
+def format_tag_meta(meta: TagMeta | None) -> str:
+    if meta is None or (
+        not meta.readonly
+        and meta.choices is None
+        and not meta.external
+        and not meta.final
+        and not meta.public
+        and meta.link is None
+        and meta.physical is None
+        and meta.on_delay is None
+        and meta.off_delay is None
+        and meta.profile is None
+        and meta.system is None
+        and meta.min is None
+        and meta.max is None
+        and meta.uom is None
+    ):
+        return ""
+
+    tokens: list[str] = []
+    if meta.readonly:
+        tokens.append("readonly")
+    if meta.external:
+        tokens.append("external")
+    if meta.final:
+        tokens.append("final")
+    if meta.public:
+        tokens.append("public")
+    if meta.link is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.link) is None:
+            raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")
+        tokens.append(f"link={meta.link}")
+    if meta.physical is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.physical) is None:
+            raise ValueError(f"Invalid TagMeta physical value {meta.physical!r}.")
+        tokens.append(f"physical={meta.physical}")
+    if meta.on_delay is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.on_delay) is None:
+            raise ValueError(f"Invalid TagMeta on_delay value {meta.on_delay!r}.")
+        tokens.append(f"on_delay={meta.on_delay}")
+    if meta.off_delay is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.off_delay) is None:
+            raise ValueError(f"Invalid TagMeta off_delay value {meta.off_delay!r}.")
+        tokens.append(f"off_delay={meta.off_delay}")
+    if meta.profile is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.profile) is None:
+            raise ValueError(f"Invalid TagMeta profile value {meta.profile!r}.")
+        tokens.append(f"profile={meta.profile}")
+    if meta.system is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.system) is None:
+            raise ValueError(f"Invalid TagMeta system value {meta.system!r}.")
+        tokens.append(f"system={meta.system}")
+    if meta.min is not None:
+        tokens.append(f"min={meta.min}")
+    if meta.max is not None:
+        tokens.append(f"max={meta.max}")
+    if meta.uom is not None:
+        if _CHOICE_VALUE_RE.fullmatch(meta.uom) is None:
+            raise ValueError(f"Invalid TagMeta uom value {meta.uom!r}.")
+        tokens.append(f"uom={meta.uom}")
+    if meta.choices is not None:
+        pairs: list[str] = []
+        for value, label in meta.choices.items():
+            if _CHOICE_LABEL_RE.fullmatch(label) is None:
+                raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+            value_text = str(value)
+            if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
+                raise ValueError(f"Invalid TagMeta choice value {value!r}.")
+            pairs.append(f"{label}:{value_text}")
+        tokens.append(f"choices={'|'.join(pairs)}")
+    return f"[{', '.join(tokens)}]"
+
+
+def _extract_address_comment(comment: str) -> tuple[str, TagMeta | None, str | None]:
     parsed = parse_block_tag(comment)
     if parsed.name is None:
-        return comment.strip()
-    return parsed.remaining_text.strip()
+        meta, remaining_text = parse_tag_meta(comment)
+        return remaining_text.strip(), meta, None
+    meta, remaining_text = parse_tag_meta(parsed.remaining_text)
+    return remaining_text.strip(), meta, parsed.bg_color
 
 
-def _compose_address_comment(comment: str, block_tag: str = "") -> str:
+def _compose_address_comment(
+    comment: str,
+    block_tag: str = "",
+    tag_meta: TagMeta | None = None,
+) -> str:
     text = comment.strip()
-    if not block_tag:
-        return text
-    if not text:
-        return block_tag
-    return f"{block_tag} {text}"
+    meta_text = format_tag_meta(tag_meta)
+    parts = [part for part in (block_tag, meta_text, text) if part]
+    return " ".join(parts)
 
 
 def _is_marker_only_boundary_row(row: AddressRecord, *, block_name: str) -> bool:

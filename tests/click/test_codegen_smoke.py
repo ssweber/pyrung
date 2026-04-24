@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+from tests.click.helpers import exec_with_source
+
 
 def _write_simple_main_csv(path: Path) -> None:
     header = [
@@ -30,7 +32,7 @@ def test_ladder_to_pyrung_smoke(tmp_path: Path):
     code = ladder_to_pyrung(csv_path)
 
     ns: dict = {}
-    exec(code, ns)
+    exec_with_source(code, ns)
 
     bundle = pyrung_to_ladder(ns["logic"], ns["mapping"])
     assert list(bundle.main_rows)[1][-1] == "out(Y001)"

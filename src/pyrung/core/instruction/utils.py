@@ -7,7 +7,7 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
-    from pyrung.core.context import ScanContext
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.tag import Tag, TagType
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -18,9 +18,15 @@ def guard_oneshot_execution(func: F) -> F:
 
     @wraps(func)
     def wrapper(self: Any, ctx: ScanContext, enabled: bool, *args: Any, **kwargs: Any) -> Any:
-        should_execute = getattr(self, "should_execute", None)
-        if callable(should_execute) and not should_execute(enabled):
+        if not enabled:
+            if getattr(self, "_oneshot", False):
+                ctx.set_memory(f"_oneshot:{id(self)}", False)
             return None
+        if getattr(self, "_oneshot", False):
+            key = f"_oneshot:{id(self)}"
+            if ctx.get_memory(key, False):
+                return None
+            ctx.set_memory(key, True)
         return func(self, ctx, enabled, *args, **kwargs)
 
     return cast(F, wrapper)
@@ -53,6 +59,22 @@ def to_condition(obj: Any) -> Any:
         empty_error="condition requires at least one condition",
         group_empty_error="condition group cannot be empty",
     )
+
+
+def instruction_condition_view(ctx: ScanContext) -> ConditionView:
+    """Return the frozen condition snapshot visible to instruction helper inputs.
+
+    Helper conditions such as ``.reset(...)`` and ``.jump(...)`` should read from
+    the active rung snapshot when one exists. Direct instruction unit tests may
+    execute outside a rung, so we fall back to a one-off frozen snapshot taken at
+    instruction entry.
+    """
+    from pyrung.core.context import ConditionView
+
+    snapshot = ctx._condition_snapshot
+    if snapshot is not None:
+        return snapshot
+    return ConditionView(ctx)
 
 
 def resolve_preset_ctx(preset: Tag | int, ctx: ScanContext) -> int:

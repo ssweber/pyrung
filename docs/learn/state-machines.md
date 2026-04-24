@@ -76,6 +76,8 @@ Each state has a small group of rungs: one to run its timer or check its conditi
 
 The state values are **tag-constants** — `Int` tags initialized once and never written. Your Python instinct says `Enum`; the ladder answer is "constants are tags." They live in the PLC's tag table, visible to anyone who opens the project — better documentation than a Python comment because they travel with the project file.
 
+Once you've seen `@named_array` in [Lesson 9](structured-tags.md), you can package these as a read-only structure — one declaration, a dropdown in the debugger. Same idea, less repetition.
+
 A few things to notice in the code:
 
 - **`rise(EntrySensor)`** — remember [Lesson 4](assignment.md)? Without it, the IDLE→DETECTING transition fires every scan the sensor sees a box, not just the first.

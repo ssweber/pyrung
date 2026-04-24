@@ -28,10 +28,12 @@ from pyrung.click.codegen.models import (
     _AnalyzedRung,
     _InstructionInfo,
     _OperandCollection,
+    _PhysicalSpec,
     _PinInfo,
     _PlainBlockDecl,
     _StructureDecl,
     _SubroutineInfo,
+    _TagMetadata,
 )
 from pyrung.click.codegen.utils import (
     _CLICK_FUNC_RE,
@@ -91,6 +93,79 @@ def _prescan_expr_funcs(
                         _scan_token(instr.af_token)
 
 
+def _has_metadata(meta: _TagMetadata | None) -> bool:
+    return bool(
+        meta is not None
+        and (
+            meta.physical is not None
+            or meta.link is not None
+            or meta.min is not None
+            or meta.max is not None
+            or meta.uom is not None
+        )
+    )
+
+
+def _format_physical_expr(spec: _PhysicalSpec, collection: _OperandCollection) -> str:
+    decl = collection.physical_decls[spec]
+    return decl.var_name
+
+
+def _append_metadata_kwargs(
+    kwargs: list[str],
+    meta: _TagMetadata,
+    collection: _OperandCollection,
+) -> None:
+    if meta.physical is not None:
+        kwargs.append(f"physical={_format_physical_expr(meta.physical, collection)}")
+    if meta.link is not None:
+        kwargs.append(f"link={meta.link!r}")
+    if meta.min is not None:
+        kwargs.append(f"min={_format_literal(meta.min)}")
+    if meta.max is not None:
+        kwargs.append(f"max={_format_literal(meta.max)}")
+    if meta.uom is not None:
+        kwargs.append(f"uom={meta.uom!r}")
+
+
+def _type_default_value(type_name: str) -> object:
+    if type_name == "Bool":
+        return False
+    if type_name in {"Int", "Dint", "Word"}:
+        return 0
+    if type_name == "Real":
+        return 0.0
+    if type_name == "Char":
+        return ""
+    return 0
+
+
+def _structure_needs_field_import(collection: _OperandCollection) -> bool:
+    for decl in collection.structures:
+        if any(v for v in decl.field_retentive.values()):
+            return True
+        if any(_has_metadata(meta) for meta in decl.field_metadata.values()):
+            return True
+        if any(_has_metadata(meta) for meta in decl.field_slot_metadata.values()):
+            return True
+    return False
+
+
+def _emit_physical_declarations(lines: list[str], collection: _OperandCollection) -> None:
+    """Emit hoisted Physical(...) declarations."""
+    for decl in sorted(collection.physical_decls.values(), key=lambda item: item.var_name):
+        args = [repr(decl.spec.name)]
+        if decl.spec.on_delay is not None:
+            args.append(f"on_delay={decl.spec.on_delay!r}")
+        if decl.spec.off_delay is not None:
+            args.append(f"off_delay={decl.spec.off_delay!r}")
+        if decl.spec.profile is not None:
+            args.append(f"profile={decl.spec.profile!r}")
+        if decl.spec.system is not None:
+            args.append(f"system={decl.spec.system!r}")
+        lines.append(f"{decl.var_name} = Physical({', '.join(args)})")
+
+
 def _generate_code(
     rungs: list[_AnalyzedRung],
     collection: _OperandCollection,
@@ -112,6 +187,11 @@ def _generate_code(
     # Imports
     _emit_imports(lines, collection)
     lines.append("")
+
+    if collection.physical_decls:
+        lines.append("# --- Physical ---")
+        _emit_physical_declarations(lines, collection)
+        lines.append("")
 
     # Tag declarations (skip semantic-owned)
     has_flat_tags = any(op not in collection.semantic_operands for op in collection.tags)
@@ -160,6 +240,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     """Emit import statements."""
     # Core imports
     core_imports: list[str] = ["Program", "Rung"]
+    if collection.physical_decls:
+        core_imports.append("Physical")
 
     # Block/TagType for reconstructed plain named blocks
     if collection.plain_blocks:
@@ -169,9 +251,7 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
     # Structure imports
     has_named_array = any(s.structure_type == "named_array" for s in collection.structures)
     has_udt = any(s.structure_type == "udt" for s in collection.structures)
-    has_retentive_field = any(
-        any(v for v in s.field_retentive.values()) for s in collection.structures
-    )
+    has_retentive_field = _structure_needs_field_import(collection)
     if has_named_array:
         core_imports.append("named_array")
     if has_udt:
@@ -289,7 +369,11 @@ def _emit_tag_declarations(
             continue
         if decl.operand in collection.timer_counter_operands:
             continue
-        line = f'{decl.var_name} = {decl.tag_type}("{decl.tag_name}")'
+        args = [f'"{decl.tag_name}"']
+        kwargs: list[str] = []
+        _append_metadata_kwargs(kwargs, decl.metadata, collection)
+        args.extend(kwargs)
+        line = f"{decl.var_name} = {decl.tag_type}({', '.join(args)})"
         if decl.comment and not suppress_comments:
             line += decl.comment
         lines.append(line)
@@ -307,10 +391,14 @@ def _emit_plain_block_declarations(lines: list[str], collection: _OperandCollect
     for i, decl in enumerate(sorted_blocks):
         if i:
             lines.append("")
-        _emit_plain_block_decl(lines, decl)
+        _emit_plain_block_decl(lines, decl, collection)
 
 
-def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
+def _emit_plain_block_decl(
+    lines: list[str],
+    decl: _PlainBlockDecl,
+    collection: _OperandCollection,
+) -> None:
     """Emit one first-class plain named block."""
     block_args = [f'"{decl.name}"', f"TagType.{decl.tag_type}", str(decl.start), str(decl.end)]
     block_retentive = bool(decl.slots) and all(slot.retentive for slot in decl.slots.values())
@@ -327,6 +415,14 @@ def _emit_plain_block_decl(lines: list[str], decl: _PlainBlockDecl) -> None:
             kwargs.append(f"default={_format_literal(slot.default)}")
         if slot.comment_overridden:
             kwargs.append(f"comment={slot.comment!r}")
+        slot_meta = _TagMetadata(
+            physical=slot.physical if slot.physical_overridden else None,
+            link=slot.link if slot.link_overridden else None,
+            min=slot.min if slot.min_overridden else None,
+            max=slot.max if slot.max_overridden else None,
+            uom=slot.uom if slot.uom_overridden else None,
+        )
+        _append_metadata_kwargs(kwargs, slot_meta, collection)
         if kwargs:
             lines.append(f"{decl.var_name}.slot({slot.index}, {', '.join(kwargs)})")
 
@@ -339,12 +435,16 @@ def _emit_structure_declarations(lines: list[str], collection: _OperandCollectio
     """Emit @named_array / @udt class declarations."""
     for decl in collection.structures:
         if decl.structure_type == "named_array":
-            _emit_named_array_decl(lines, decl)
+            _emit_named_array_decl(lines, decl, collection)
         elif decl.structure_type == "udt":
-            _emit_udt_decl(lines, decl)
+            _emit_udt_decl(lines, decl, collection)
 
 
-def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
+def _emit_named_array_decl(
+    lines: list[str],
+    decl: _StructureDecl,
+    collection: _OperandCollection,
+) -> None:
     """Emit a @named_array decorator + class."""
     stride_part = ""
     if decl.stride is not None and decl.stride > 1:
@@ -361,15 +461,26 @@ def _emit_named_array_decl(lines: list[str], decl: _StructureDecl) -> None:
     type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(decl.base_type or "Int", True)
     for field_name, _type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
-        if retentive != type_default_ret:
-            # Only emit Field() when retentive differs from the type default.
-            lines.append(f"    {field_name} = Field(retentive={retentive})")
+        metadata = decl.field_metadata.get(field_name, _TagMetadata())
+        if retentive != type_default_ret or _has_metadata(metadata):
+            kwargs: list[str] = []
+            if retentive != type_default_ret:
+                kwargs.append(f"retentive={retentive}")
+            if default != _type_default_value(decl.base_type or "Int"):
+                kwargs.append(f"default={_format_literal(default)}")
+            _append_metadata_kwargs(kwargs, metadata, collection)
+            lines.append(f"    {field_name} = Field({', '.join(kwargs)})")
         else:
             default_repr = _format_literal(default)
             lines.append(f"    {field_name} = {default_repr}")
+    _emit_structure_slot_metadata(lines, decl, collection)
 
 
-def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
+def _emit_udt_decl(
+    lines: list[str],
+    decl: _StructureDecl,
+    collection: _OperandCollection,
+) -> None:
     """Emit a @udt decorator + class."""
     parts: list[str] = []
     if decl.count > 1:
@@ -381,11 +492,31 @@ def _emit_udt_decl(lines: list[str], decl: _StructureDecl) -> None:
     for field_name, type_name, default in decl.fields:
         retentive = decl.field_retentive.get(field_name, False)
         type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
-        if retentive != type_default_ret:
-            lines.append(f"    {field_name}: {type_name} = Field(retentive={retentive})")
+        metadata = decl.field_metadata.get(field_name, _TagMetadata())
+        if retentive != type_default_ret or _has_metadata(metadata):
+            kwargs: list[str] = []
+            if retentive != type_default_ret:
+                kwargs.append(f"retentive={retentive}")
+            if default != _type_default_value(type_name):
+                kwargs.append(f"default={_format_literal(default)}")
+            _append_metadata_kwargs(kwargs, metadata, collection)
+            lines.append(f"    {field_name}: {type_name} = Field({', '.join(kwargs)})")
         else:
             default_repr = _format_literal(default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
+    _emit_structure_slot_metadata(lines, decl, collection)
+
+
+def _emit_structure_slot_metadata(
+    lines: list[str],
+    decl: _StructureDecl,
+    collection: _OperandCollection,
+) -> None:
+    for (field_name, index), metadata in sorted(decl.field_slot_metadata.items()):
+        kwargs: list[str] = []
+        _append_metadata_kwargs(kwargs, metadata, collection)
+        if kwargs:
+            lines.append(f"{decl.name}.{field_name}.slot({index}, {', '.join(kwargs)})")
 
 
 def _format_literal(default: object) -> str:
@@ -412,7 +543,7 @@ def _emit_program(
     call_func_map: dict[str, str] | None = None,
 ) -> None:
     """Emit the program body."""
-    lines.append("with Program(strict=False) as logic:")
+    lines.append("with Program() as logic:")
 
     if not rungs and not subroutines:
         lines.append("    pass")
@@ -435,7 +566,7 @@ def _emit_program(
             if sub_rungs and _is_trailing_return(sub_rungs[-1]):
                 sub_rungs = sub_rungs[:-1]
             lines.append("")
-            lines.append(f'    with subroutine("{sub.name}", strict=False):')
+            lines.append(f'    with subroutine("{sub.name}"):')
             if sub_rungs:
                 _emit_rung_sequence(
                     lines,
@@ -849,7 +980,6 @@ def _render_search_token(
 
 
 def _merge_timer_counter_args(
-    func_name: str,
     done_bit_operand: str,
     collection: _OperandCollection,
 ) -> str | None:
@@ -861,6 +991,57 @@ def _merge_timer_counter_args(
         if decl.done_operand == done_bit_operand:
             return decl.var_name
     return None
+
+
+_FRIENDLY_TIMER_UNITS: dict[str, str] = {
+    "Ts": "sec",
+    "Tm": "min",
+    "Th": "hour",
+    "Td": "day",
+}
+
+
+def _render_timer_counter_call(
+    py_func: str,
+    args: list[str],
+    kwargs: list[tuple[str, str]],
+    collection: _OperandCollection,
+    nicknames: dict[str, str] | None,
+    structured_map: TagMap | None,
+) -> str | None:
+    """Render timer/counter calls using pyrung's modern positional syntax."""
+    if len(args) < 2:
+        return None
+
+    udt_ref = _merge_timer_counter_args(args[0], collection)
+    if udt_ref is None:
+        return None
+
+    rendered_parts: list[str] = [udt_ref]
+    remaining_kwargs: list[str] = []
+    preset_arg: str | None = None
+    unit_arg: str | None = None
+
+    for key, value in kwargs:
+        if key in _DROP_KWARGS:
+            continue
+        if key == "preset":
+            preset_arg = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+            continue
+        if key == "unit":
+            if value != "Tms":
+                friendly = _FRIENDLY_TIMER_UNITS.get(value, value)
+                unit_arg = f'"{friendly}"'
+            continue
+        rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
+        remaining_kwargs.append(f"{key}={rendered_v}")
+
+    if preset_arg is not None:
+        rendered_parts.append(preset_arg)
+    if unit_arg is not None:
+        rendered_parts.append(unit_arg)
+    rendered_parts.extend(remaining_kwargs)
+    return f"{py_func}({', '.join(rendered_parts)})"
 
 
 def _render_af_token(
@@ -918,15 +1099,16 @@ def _render_af_token(
 
     # Timer/counter instructions: merge done_bit + accumulator into Timer[n]/Counter[n]
     if func_name in {"on_delay", "off_delay", "count_up", "count_down"} and len(args) >= 2:
-        udt_ref = _merge_timer_counter_args(func_name, args[0], collection)
-        if udt_ref is not None:
-            rendered_parts: list[str] = [udt_ref]
-            for key, value in kwargs:
-                if key in _DROP_KWARGS:
-                    continue
-                rendered_v = _sub_operand_kwarg(key, value, collection, nicknames, structured_map)
-                rendered_parts.append(f"{key}={rendered_v}")
-            return f"{py_func}({', '.join(rendered_parts)})"
+        rendered_timer_counter = _render_timer_counter_call(
+            py_func,
+            args,
+            kwargs,
+            collection,
+            nicknames,
+            structured_map,
+        )
+        if rendered_timer_counter is not None:
+            return rendered_timer_counter
 
     rendered_parts = []
     for arg in args:

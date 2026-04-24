@@ -58,7 +58,7 @@ class GenericInstructionDebugHandler:
                 substep_condition_trace = debugger._instruction_substep_condition_trace(
                     runner=execution.runner,
                     substep=substep,
-                    ctx=execution.ctx,
+                    condition_view=execution.condition_view,
                     enabled=execution.enabled,
                     enabled_state=execution.enabled_state,
                     source_file=substep_span.source_file,
@@ -126,11 +126,13 @@ class CallInstructionDebugHandler:
         )
 
         next_stack = (*execution.call_stack, instruction.subroutine_name)
+        saved_snapshot = execution.ctx._condition_snapshot
+        saved_scope_token = execution.ctx._condition_scope_token
+        execution.ctx._condition_snapshot = None
+        execution.ctx._condition_scope_token = object()
         try:
             for sub_rung in instruction._program.subroutines[instruction.subroutine_name]:
-                from pyrung.core.context import ConditionView
-
-                sub_condition_view = ConditionView(execution.ctx)
+                sub_condition_view = sub_rung._resolve_condition_view(execution.ctx)
                 sub_enabled, sub_condition_traces = debugger._evaluate_conditions_with_trace(
                     execution.runner,
                     sub_rung._conditions,
@@ -159,6 +161,9 @@ class CallInstructionDebugHandler:
                 )
         except SubroutineReturnSignal:
             return
+        finally:
+            execution.ctx._condition_snapshot = saved_snapshot
+            execution.ctx._condition_scope_token = saved_scope_token
 
 
 class ForLoopInstructionDebugHandler:

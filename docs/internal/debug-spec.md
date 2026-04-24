@@ -102,8 +102,8 @@ runner.rewind(seconds)
 runner.playhead
 
 # inspection / diff / fork
-runner.inspect(rung_id, scan_id=None)
-runner.inspect_event()
+runner.debug.rung_trace(rung_id)
+runner.debug.last_event()
 runner.diff(scan_a, scan_b)
 runner.fork_from(scan_id)
 ```
@@ -178,7 +178,7 @@ The extension uses the Debug Adapter Protocol (DAP) to expose PLC debugging in V
 | `add_force()` / `remove_force()` | Debug console commands |
 | `when().pause()` | Breakpoints (gutter) |
 | Scan history | Call stack / timeline |
-| `inspect()` + `inspect_event()` | Inline decorations (unified core source) |
+| `rung_trace()` + `last_event()` | Inline decorations (unified core source) |
 
 Minimum source contract expected by adapter:
 
@@ -213,7 +213,7 @@ Incremental note (Phase 3, 2026-02-21):
   - `traceSource` (`"live"` or `"inspect"`)
   - `scanId`
   - `rungId`
-- Trace emission uses a unified core model through `runner.inspect_event()`:
+- Trace emission uses a unified core model through `runner.debug.last_event()`:
   - `"live"` when the returned event is from in-flight debug scan context
   - `"inspect"` when the returned event is from committed retained debug scan context
 - Coverage remains intentionally debug-path-only (`scan_steps_debug()` and DAP stepping paths).
@@ -315,11 +315,13 @@ runner.monitor(tag, callback)
 ## Rung Inspection
 
 ```python
-runner.inspect(rung_id, scan_id=None) -> RungTrace
-runner.inspect_event() -> tuple[int, int, RungTraceEvent] | None
+runner.debug.rung_trace(rung_id) -> RungTrace
+runner.debug.last_event() -> tuple[int, int, RungTraceEvent] | None
 ```
 
-- If `scan_id` is omitted, inspect uses `runner.playhead`.
+- Only the most recently committed debug scan's traces are retained.
+  Historical-scan trace lookup is not supported — retention per history
+  scan would dominate memory on long debug sessions.
 - `rung_id` is rung order index (0-based) in the compiled program.
 - Inspection is read-only.
 
@@ -339,11 +341,12 @@ Current `RungTrace` v1 shape:
 
 Missing scan/rung trace raises `KeyError`.
 
-`inspect_event()` behavior:
+`last_event()` behavior:
 
 - Returns `(scan_id, rung_id, event)` for the latest debug event.
 - Prefers in-flight debug-path scan events when available.
-- Falls back to latest retained committed debug-path event.
+- Falls back to the last committed debug-path event, iff that event
+  still corresponds to the current retained trace slot.
 - Returns `None` when no debug trace context exists.
 
 Planned future expansion:
@@ -354,12 +357,12 @@ The `RungTrace` schema will continue to evolve during Phase 3 based on editor re
 
 Incremental note (Phase 3, 2026-02-21):
 
-- `inspect()` is currently trace-only and records data for scans executed through
+- `rung_trace()` only records data for scans executed through
   `scan_steps_debug()` (including DAP stepping paths).
-- `inspect_event()` follows the same debug-path-only scope.
-- Scans executed only via `step()`/`run()`/`run_for()`/`run_until()` may have no retained
-  rung trace yet; in those cases `inspect()` raises `KeyError(rung_id)` after scan
-  existence is validated.
+- `last_event()` follows the same debug-path-only scope.
+- Any commit via `step()`/`run()`/`run_for()`/`run_until()` wipes the trace slot —
+  after a non-debug commit, `rung_trace()` raises `KeyError(rung_id)` until the
+  next debug scan commits.
 
 ---
 
@@ -375,10 +378,13 @@ History stores immutable `SystemState` snapshots (including initial state).
 
 ### Capacity
 
-- Configurable `history_limit: int | None` (`None` = unbounded).
-- When limit is exceeded, oldest scans are evicted (ring buffer behavior).
-- Labels and traces for evicted scans are evicted too.
-- If playhead points to an evicted scan, it moves to oldest retained scan.
+- `history` — time-based retention window for the scan log, checkpoints, and firing timelines (e.g. `"1h"`, `"30m"`). `None` (default) keeps everything.
+- `cache` — instant-lookup window for full `SystemState` snapshots (e.g. `"5m"`). `None` (default) uses byte-budget-only eviction.
+- `history_budget` — byte ceiling for the recent-state cache (default 100 MB, minimum 1 MB).
+- Recent scans served from the byte-bounded state cache; older scans
+  reconstructed on demand via `replay_to` from the nearest checkpoint.
+- Every scan within the `history` window is addressable; scans beyond the window are trimmed.
+- Labels survive state-cache eviction (overlay, not tied to state storage).
 
 ### Time travel
 
@@ -423,4 +429,4 @@ Creates an independent runner with:
 
 - on-disk history/session serialization
 - remote debugger protocol
-- GUI-specific rendering schema beyond `inspect()` trace data and VS Code decorations
+- GUI-specific rendering schema beyond `rung_trace()` trace data and VS Code decorations

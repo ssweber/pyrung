@@ -7,6 +7,8 @@ Uses ScanContext for batched updates within a scan cycle,
 reducing object allocation from O(instructions) to O(1) per scan.
 """
 
+from pyrung.core.analysis import DataView, ProgramGraph, TagRole, TagVersion, build_program_graph
+from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.context import ScanContext
 from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent
@@ -29,6 +31,7 @@ from pyrung.core.expression import (
     sqrt,
     tan,
 )
+from pyrung.core.harness import Harness, profile
 from pyrung.core.instruction.send_receive import (
     ModbusAddress,
     ModbusRtuTarget,
@@ -50,6 +53,7 @@ from pyrung.core.memory_block import (
     RangeSlotView,
     SlotView,
 )
+from pyrung.core.physical import Physical, parse_duration
 from pyrung.core.program import (
     And,
     ForbiddenControlFlowError,
@@ -126,13 +130,25 @@ from pyrung.core.time_mode import (  # noqa: F401 (TimeMode importable but not i
 
 __all__ = [
     "PLC",
+    "CompiledPLC",
     "ScanContext",
     "SystemState",
+    "DataView",
+    "ProgramGraph",
     "RungTrace",
     "RungTraceEvent",
+    "TagRole",
     "system",
+    "TagVersion",
     "TimeUnit",
+    "build_program_graph",
     "normalize_unit",
+    # Physical feedback
+    "Physical",
+    "parse_duration",
+    # Autoharness
+    "Harness",
+    "profile",
     # Structured factories
     "DoneAccUDT",
     "Field",

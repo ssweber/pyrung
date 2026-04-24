@@ -99,113 +99,35 @@ class ProgramFacts:
 
 
 # ---------------------------------------------------------------------------
-# Instruction field extraction map (single source of truth)
+# Instruction field extraction
 # ---------------------------------------------------------------------------
 
-_INSTRUCTION_FIELDS: dict[str, tuple[str, ...]] = {
-    "OutInstruction": ("target",),
-    "LatchInstruction": ("target",),
-    "ResetInstruction": ("target",),
-    "CopyInstruction": ("source", "target", "convert"),
-    "BlockCopyInstruction": ("source", "dest", "convert"),
-    "CalcInstruction": ("expression", "dest", "mode"),
-    "FillInstruction": ("value", "dest"),
-    "SearchInstruction": ("value", "search_range", "condition", "result", "found", "continuous"),
-    "ShiftInstruction": (
-        "bit_range",
-        "data_condition",
-        "clock_condition",
-        "reset_condition",
-    ),
-    "PackBitsInstruction": ("bit_block", "dest"),
-    "PackWordsInstruction": ("word_block", "dest"),
-    "PackTextInstruction": ("source_range", "dest", "allow_whitespace"),
-    "UnpackToBitsInstruction": ("source", "bit_block"),
-    "UnpackToWordsInstruction": ("source", "word_block"),
-    "CountUpInstruction": (
-        "done_bit",
-        "accumulator",
-        "preset",
-        "up_condition",
-        "down_condition",
-        "reset_condition",
-    ),
-    "CountDownInstruction": (
-        "done_bit",
-        "accumulator",
-        "preset",
-        "down_condition",
-        "reset_condition",
-    ),
-    "OnDelayInstruction": (
-        "done_bit",
-        "accumulator",
-        "preset",
-        "enable_condition",
-        "reset_condition",
-        "unit",
-    ),
-    "OffDelayInstruction": (
-        "done_bit",
-        "accumulator",
-        "preset",
-        "enable_condition",
-        "unit",
-    ),
-    "EventDrumInstruction": (
-        "outputs",
-        "events",
-        "pattern",
-        "current_step",
-        "completion_flag",
-        "auto_condition",
-        "reset_condition",
-        "jump_condition",
-        "jump_step",
-        "jog_condition",
-    ),
-    "TimeDrumInstruction": (
-        "outputs",
-        "presets",
-        "unit",
-        "pattern",
-        "current_step",
-        "accumulator",
-        "completion_flag",
-        "auto_condition",
-        "reset_condition",
-        "jump_condition",
-        "jump_step",
-        "jog_condition",
-    ),
-    "ForLoopInstruction": ("count", "idx_tag"),
-    "FunctionCallInstruction": ("_fn",),
-    "EnabledFunctionCallInstruction": ("_fn", "_enable_condition"),
-    "CallInstruction": ("subroutine_name",),
-    "ReturnInstruction": (),
-    "ModbusSendInstruction": (
-        "target_name",
-        "bank",
-        "start",
-        "addresses",
-        "source",
-        "sending",
-        "success",
-        "error",
-        "exception_response",
-    ),
-    "ModbusReceiveInstruction": (
-        "target_name",
-        "bank",
-        "start",
-        "addresses",
-        "dest",
-        "receiving",
-        "success",
-        "error",
-        "exception_response",
-    ),
-}
+_ROLE_FIELD_ATTRS = ("_reads", "_writes", "_conditions", "_structural_fields")
+
+
+def _instruction_fields(instr: Any) -> tuple[str, ...] | None:
+    """Return declared walker fields for a known instruction class.
+
+    Concrete pyrung instructions declare field roles on the class itself.
+    Unknown/custom instructions return ``None`` so callers can fall back or
+    emit an explicit unknown fact.
+    """
+    cls = type(instr)
+    if not any(attr in cls.__dict__ for attr in _ROLE_FIELD_ATTRS):
+        return None
+
+    walker_fields = getattr(cls, "walker_fields", None)
+    if callable(walker_fields):
+        return walker_fields()
+
+    fields = (
+        getattr(cls, "_reads", ())
+        + getattr(cls, "_writes", ())
+        + getattr(cls, "_conditions", ())
+        + getattr(cls, "_structural_fields", ())
+    )
+    return tuple(dict.fromkeys(fields))
+
 
 # ---------------------------------------------------------------------------
 # Value classification
@@ -505,7 +427,7 @@ class _Walker:
             )
             return
 
-        fields = _INSTRUCTION_FIELDS.get(class_name)
+        fields = _instruction_fields(instr)
 
         if fields is None:
             # Unknown instruction — emit one unknown fact
@@ -578,7 +500,13 @@ class _Walker:
         class_name: str,
     ) -> None:
         # Function object and optional enable condition are captured via field map.
-        for field_name in _INSTRUCTION_FIELDS[class_name]:
+        fields = _instruction_fields(instr)
+        if fields is None:
+            raise RuntimeError(f"Missing declared fields for {class_name}")
+
+        for field_name in fields:
+            if field_name in {"_ins", "_outs"}:
+                continue
             self._walk_value(
                 getattr(instr, field_name),
                 scope,

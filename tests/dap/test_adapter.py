@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import os
 import queue
+import time
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,10 @@ def _events(messages: list[dict[str, Any]], event_name: str) -> list[dict[str, A
     ]
 
 
+def _scan_frame_events(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return _events(messages, "pyrungScanFrame")
+
+
 def _drain_internal_events_with_wait(adapter: DAPAdapter, *, timeout: float = 0.1) -> int:
     processed = adapter._drain_internal_events()
     if processed:
@@ -101,8 +106,6 @@ def _drain_internal_events_with_wait(adapter: DAPAdapter, *, timeout: float = 0.
         return 0
 
     adapter._send_event(item["event"], item.get("body"))
-    if item.get("event") == "stopped":
-        adapter._emit_trace_event()
     return 1 + adapter._drain_internal_events()
 
 
@@ -209,6 +212,71 @@ def _counter_change_script() -> str:
         "with Program(strict=False) as prog:\n"
         "    with Rung():\n"
         "        copy(Counter + 1, Counter)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _tag_hints_script() -> str:
+    return (
+        "from enum import IntEnum\n"
+        "from pyrung.core import Int, PLC, Program, Rung, copy\n"
+        "\n"
+        "class Mode(IntEnum):\n"
+        "    IDLE = 0\n"
+        "    RUN = 1\n"
+        "\n"
+        "ModeTag = Int('ModeTag', choices=Mode, readonly=True)\n"
+        "Plain = Int('Plain')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(0, ModeTag)\n"
+        "        copy(0, Plain)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _history_changes_script() -> str:
+    return (
+        "from enum import IntEnum\n"
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, copy\n"
+        "\n"
+        "class ConveyorState(IntEnum):\n"
+        "    IDLE = 0\n"
+        "    DETECTING = 1\n"
+        "    SORTING = 2\n"
+        "\n"
+        "StepCount = Int('StepCount')\n"
+        "State = Int('State', choices=ConveyorState)\n"
+        "Running = Bool('Running')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(StepCount + 1, StepCount)\n"
+        "    with Rung(StepCount == 1):\n"
+        "        copy(1, State)\n"
+        "        copy(True, Running)\n"
+        "    with Rung(StepCount == 3):\n"
+        "        copy(2, State)\n"
+        "    with Rung(StepCount == 5):\n"
+        "        copy(False, Running)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _char_runner_script() -> str:
+    return (
+        "from pyrung.core import Char, PLC, Program, Rung, copy\n"
+        "\n"
+        "Mode = Char('Mode')\n"
+        "Mirror = Char('Mirror')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(Mode, Mirror)\n"
         "\n"
         "runner = PLC(prog)\n"
     )
@@ -1612,32 +1680,34 @@ def test_continue_breakpoint_stop_emits_trace_once(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={"source": {"path": str(script)}, "lines": [8]},
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
     breakpoint_stops = 0
-    traces = 0
+    frames = 0
     for _ in range(100):
         flushed = _drain_messages(out_stream)
         for stopped in _stopped_events(flushed):
             if stopped["body"]["reason"] == "breakpoint":
                 breakpoint_stops += 1
-        traces += len(_trace_events(flushed))
-        if breakpoint_stops and traces:
+        frames += len(_scan_frame_events(flushed))
+        if breakpoint_stops and frames:
             break
         _drain_internal_events_with_wait(adapter)
 
     assert breakpoint_stops == 1
-    assert traces >= 1
+    assert frames >= 1
 
     for _ in range(5):
         adapter._drain_internal_events()
@@ -2076,11 +2146,13 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2089,41 +2161,40 @@ def test_snapshot_logpoint_emits_snapshot_event_and_label_lookup(tmp_path: Path)
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
     saw_snapshot = False
     saw_output = False
     snapshot_event_body: dict[str, Any] | None = None
     for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
         flushed = _drain_messages(out_stream)
-        snapshots = _events(flushed, "pyrungSnapshot")
-        if snapshots:
-            saw_snapshot = True
-            snapshot_event_body = snapshots[-1].get("body", {})
-        outputs = _events(flushed, "output")
-        if any(
-            "Snapshot taken: tick_hit" in str(event.get("body", {}).get("output", ""))
-            for event in outputs
-        ):
-            saw_output = True
+        for frame in _scan_frame_events(flushed):
+            body = frame.get("body", {})
+            for s in body.get("snapshots", []):
+                if s.get("label") == "tick_hit":
+                    saw_snapshot = True
+                    snapshot_event_body = s
+            for o in body.get("outputs", []):
+                if "Snapshot taken: tick_hit" in o:
+                    saw_output = True
         if saw_snapshot and saw_output:
             break
-        _drain_internal_events_with_wait(adapter)
     assert saw_snapshot is True
     assert saw_output is True
     assert snapshot_event_body is not None
     assert isinstance(snapshot_event_body.get("rtcIso"), str)
     assert isinstance(snapshot_event_body.get("rtcOffsetSeconds"), (int, float))
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=5,
+        seq=6,
         command="pyrungFindLabel",
         arguments={"label": "tick_hit"},
     )
@@ -2143,11 +2214,13 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2162,21 +2235,32 @@ def test_snapshot_logpoint_labels_active_scan(tmp_path: Path):
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    snapshot_event = _wait_for_event(adapter, out_stream, event_name="pyrungSnapshot")
-    snapshot_scan_id = int(snapshot_event["body"]["scanId"]) if snapshot_event is not None else None
+    snapshot_scan_id = None
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for s in frame.get("body", {}).get("snapshots", []):
+                if s.get("label") == "tick_once":
+                    snapshot_scan_id = int(s["scanId"])
+                    break
+            if snapshot_scan_id is not None:
+                break
+        if snapshot_scan_id is not None:
+            break
     assert snapshot_scan_id is not None
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
     messages = _send_request(
         adapter,
         out_stream,
-        seq=5,
+        seq=6,
         command="pyrungFindLabel",
         arguments={"label": "tick_once"},
     )
@@ -2197,11 +2281,13 @@ def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
 
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="setBreakpoints",
         arguments={
             "source": {"path": str(script)},
@@ -2210,18 +2296,25 @@ def test_plain_logpoint_emits_output_and_execution_continues(tmp_path: Path):
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    output_event = _wait_for_event(
-        adapter,
-        out_stream,
-        event_name="output",
-        predicate=lambda event: "Tick executed" in str(event.get("body", {}).get("output", "")),
-    )
-    assert output_event is not None
+    found_output = False
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for o in frame.get("body", {}).get("outputs", []):
+                if "Tick executed" in o:
+                    found_output = True
+                    break
+            if found_output:
+                break
+        if found_output:
+            break
+    assert found_output is True
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
@@ -2550,24 +2643,37 @@ def test_monitor_callback_emits_custom_event(tmp_path: Path):
 
     _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
     _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
     _send_request(
         adapter,
         out_stream,
-        seq=2,
+        seq=3,
         command="pyrungAddMonitor",
         arguments={"tag": "Tick"},
     )
     _drain_messages(out_stream)
 
-    _send_request(adapter, out_stream, seq=3, command="continue")
+    _send_request(adapter, out_stream, seq=4, command="continue")
     _drain_messages(out_stream)
 
-    monitor_event = _wait_for_event(adapter, out_stream, event_name="pyrungMonitor")
-    assert monitor_event is not None
-    event_body = monitor_event["body"]
-    assert event_body["tag"] == "Tick"
+    found_monitor = None
+    for _ in range(100):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        for frame in _scan_frame_events(flushed):
+            for m in frame.get("body", {}).get("monitors", []):
+                if m.get("tag") == "Tick":
+                    found_monitor = m
+                    break
+            if found_monitor:
+                break
+        if found_monitor:
+            break
+    assert found_monitor is not None
+    assert found_monitor["tag"] == "Tick"
 
-    _send_request(adapter, out_stream, seq=4, command="pause")
+    _send_request(adapter, out_stream, seq=5, command="pause")
     _drain_messages(out_stream)
     assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
 
@@ -2730,3 +2836,1533 @@ def test_pyrung_seek_updates_playhead(tmp_path: Path):
     messages = _send_request(adapter, out_stream, seq=5, command="pyrungHistoryInfo")
     info_after_seek = _single_response(messages)["body"]
     assert info_after_seek["playhead"] == 0
+
+
+def test_history_requests_succeed_while_continue_is_running_and_pause_still_works(
+    tmp_path: Path,
+):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="continue")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="pyrungHistoryInfo")
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State"], "count": 10},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    _send_request(adapter, out_stream, seq=5, command="pause")
+    _drain_messages(out_stream)
+    assert _wait_for_stop_reason(adapter, out_stream, reason="pause") is True
+
+
+def test_pyrung_tag_changes_returns_only_matching_scans_and_supports_pagination(
+    tmp_path: Path,
+):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    for seq in range(2, 7):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=7,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 2},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [5, 3]
+    assert [entry["prevScanId"] for entry in entries] == [4, 2]
+    assert entries[0]["changes"] == {"Running": ["True", "False"]}
+    assert entries[1]["changes"] == {"State": ["1", "2"]}
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=8,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 2, "beforeScan": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [1]
+    assert [entry["prevScanId"] for entry in entries] == [0]
+    assert entries[0]["changes"] == {
+        "State": ["0", "1"],
+        "Running": ["False", "True"],
+    }
+
+    # afterScan: only entries newer than scan 3
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=9,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 50, "afterScan": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [5]
+    assert entries[0]["changes"] == {"Running": ["True", "False"]}
+
+    # afterScan + beforeScan: window between scan 1 and scan 5
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungTagChanges",
+        arguments={
+            "tags": ["State", "Running"],
+            "count": 50,
+            "afterScan": 1,
+            "beforeScan": 5,
+        },
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    entries = response["body"]["entries"]
+    assert [entry["scanId"] for entry in entries] == [3]
+    assert entries[0]["changes"] == {"State": ["1", "2"]}
+
+    # afterScan at latest: no new entries
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=11,
+        command="pyrungTagChanges",
+        arguments={"tags": ["State", "Running"], "count": 50, "afterScan": 5},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["entries"] == []
+
+
+def test_pyrung_fork_at_replaces_runner_and_can_step_from_branch(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "history_changes.py", _history_changes_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    for seq in range(2, 7):
+        _send_request(adapter, out_stream, seq=seq, command="pyrungStepScan")
+        _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=7,
+        command="pyrungAddMonitor",
+        arguments={"tag": "Running"},
+    )
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=8,
+        command="setDataBreakpoints",
+        arguments={"breakpoints": [{"dataId": "tag:Running"}]},
+    )
+    _drain_messages(out_stream)
+    assert adapter._monitor_handles
+    assert adapter._data_bp_handles
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=9,
+        command="pyrungForkAt",
+        arguments={"scanId": 3},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["scanId"] == 3
+    assert adapter._runner is not None
+    assert response["body"]["timestamp"] == adapter._runner.current_state.timestamp
+    assert adapter._runner.current_state.scan_id == 3
+    assert _stopped_events(messages)[0]["body"]["reason"] == "pause"
+    assert adapter._monitor_handles == {}
+    assert adapter._monitor_meta == {}
+    assert adapter._monitor_values == {}
+    assert adapter._data_bp_handles == {}
+    assert adapter._data_bp_meta == {}
+    assert adapter._scan_gen is None
+    assert adapter._current_step is None
+
+    _send_request(adapter, out_stream, seq=10, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    assert adapter._runner.current_state.scan_id == 4
+    assert adapter._runner.current_state.tags["StepCount"] == 4
+    assert adapter._runner.current_state.tags["State"] == 2
+    assert adapter._runner.current_state.tags["Running"] is True
+
+    _send_request(adapter, out_stream, seq=11, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    assert adapter._runner.current_state.scan_id == 5
+    assert adapter._runner.current_state.tags["StepCount"] == 5
+    assert adapter._runner.current_state.tags["Running"] is False
+
+
+# ---------------------------------------------------------------------------
+# Live trace emission during continue
+# ---------------------------------------------------------------------------
+
+
+def test_continue_emits_scan_frames(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="continue")
+    _drain_messages(out_stream)
+
+    # Let the continue thread complete some scans before pausing.
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=4, command="pause")
+    _drain_messages(out_stream)
+
+    # Collect all messages until the pause stop.
+    frames: list[dict[str, Any]] = []
+    stopped = False
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        frames.extend(_scan_frame_events(flushed))
+        if _stopped_events(flushed):
+            stopped = True
+            break
+
+    assert stopped, "Expected pause stop"
+    assert len(frames) >= 1, "Expected at least one pyrungScanFrame"
+    for frame in frames:
+        body = frame["body"]
+        assert body["trace"]["step"] is None
+        assert "tagValues" in body["trace"]
+        assert "changes" in body
+        assert "monitors" in body
+
+
+def test_continue_scan_frame_requires_configuration_done(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    # Deliberately omit configurationDone.
+
+    _send_request(adapter, out_stream, seq=2, command="continue")
+    _drain_messages(out_stream)
+
+    # Let the continue thread run — scans complete, but no frames should emit.
+    time.sleep(0.05)
+    _send_request(adapter, out_stream, seq=3, command="pause")
+    _drain_messages(out_stream)
+
+    frames: list[dict[str, Any]] = []
+    for _ in range(200):
+        _drain_internal_events_with_wait(adapter)
+        flushed = _drain_messages(out_stream)
+        frames.extend(_scan_frame_events(flushed))
+        if _stopped_events(flushed):
+            break
+
+    assert frames == [], "No scan frames should emit without configurationDone"
+
+
+def test_scan_frame_not_emitted_during_step(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    # Perform several step-next commands.
+    for seq_num in range(3, 8):
+        messages = _send_request(adapter, out_stream, seq=seq_num, command="next")
+        traces = _trace_events(messages)
+        for trace in traces:
+            assert trace["body"]["step"] is not None, (
+                "Step commands should never emit traces with step=None"
+            )
+        assert _scan_frame_events(messages) == [], "Step commands should never emit pyrungScanFrame"
+
+
+# ---------------------------------------------------------------------------
+# pyrungForce / pyrungUnforce / pyrungClearForces / pyrungPatch / pyrungListForces
+# ---------------------------------------------------------------------------
+
+
+def test_pyrung_force_sets_force_and_appears_in_trace(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    # Step to get first stopped state
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force a tag via structured request
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    # Runner should reflect the force
+    assert adapter._runner.forces["Button"] is True
+
+    # Step and check trace has forces field
+    messages = _send_request(adapter, out_stream, seq=5, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    assert traces[0]["body"]["forces"] == {"Button": True}
+
+
+def test_pyrung_unforce_removes_force(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force then unforce
+    _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+    messages = _send_request(
+        adapter, out_stream, seq=5, command="pyrungUnforce", arguments={"tag": "Button"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" not in adapter._runner.forces
+
+
+def test_pyrung_clear_forces_removes_all(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+    _send_request(
+        adapter, out_stream, seq=5, command="pyrungForce", arguments={"tag": "Light", "value": True}
+    )
+
+    messages = _send_request(adapter, out_stream, seq=6, command="pyrungClearForces")
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert dict(adapter._runner.forces) == {}
+
+
+def test_pyrung_patch_sets_one_shot_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungPatch",
+        arguments={"tag": "Button", "value": True},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    # Patch does NOT appear in forces
+    assert "Button" not in adapter._runner.forces
+
+
+def test_pyrung_list_forces_returns_current_map(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    # Empty before any forces
+    messages = _send_request(adapter, out_stream, seq=3, command="pyrungListForces")
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["forces"] == {}
+
+    _send_request(adapter, out_stream, seq=4, command="next")
+    _drain_messages(out_stream)
+
+    # Add a force and re-query
+    _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+    messages = _send_request(adapter, out_stream, seq=6, command="pyrungListForces")
+    response = _single_response(messages)
+    assert response["body"]["forces"] == {"Button": True}
+
+
+def test_pyrung_force_requires_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungForce", arguments={"tag": "", "value": True}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "tag is required" in response["message"]
+
+
+def test_pyrung_force_requires_bool_number_or_string_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": ["true"]},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be a bool, number, or string" in response["message"]
+
+
+def test_pyrung_force_accepts_string_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _char_runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungForce",
+        arguments={"tag": "Mode", "value": "Z"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner.forces["Mode"] == "Z"
+
+
+def test_pyrung_unforce_unknown_tag_succeeds_idempotent(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "Nonexistent"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+
+def test_pyrung_unforce_requires_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungUnforce", arguments={"tag": "  "}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "tag is required" in response["message"]
+
+
+def test_pyrung_patch_requires_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"tag": "", "value": 1}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "tag is required" in response["message"]
+
+
+def test_pyrung_patch_requires_bool_number_or_string_value(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"tag": "Button", "value": {}}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be a bool, number, or string" in response["message"]
+
+
+def test_pyrung_patch_batch_applies_multiple_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungPatch",
+        arguments={"patches": {"Button": True, "Light": True}},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    # Patches do NOT appear in forces
+    assert "Button" not in adapter._runner.forces
+    assert "Light" not in adapter._runner.forces
+
+
+def test_pyrung_patch_batch_empty_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"patches": {}}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must not be empty" in response["message"]
+
+
+def test_pyrung_patch_batch_invalid_value_type_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungPatch",
+        arguments={"patches": {"Button": ["yes"]}},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be a bool, number, or string" in response["message"]
+
+
+def test_pyrung_patch_batch_not_a_dict_raises_error(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungPatch", arguments={"patches": [1, 2]}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "must be an object" in response["message"]
+
+
+def test_trace_forces_field_empty_when_no_forces(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    assert traces[0]["body"]["forces"] == {}
+
+
+def test_trace_forces_field_present_after_force_and_unforce(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force Button
+    _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+
+    messages = _send_request(adapter, out_stream, seq=5, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    assert traces[0]["body"]["forces"] == {"Button": True}
+
+    # Unforce Button
+    _send_request(adapter, out_stream, seq=6, command="pyrungUnforce", arguments={"tag": "Button"})
+
+    messages = _send_request(adapter, out_stream, seq=7, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    assert traces[0]["body"]["forces"] == {}
+
+
+def test_trace_tag_values_present_on_step(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert "tagValues" in body
+    tag_values = body["tagValues"]
+    assert isinstance(tag_values, dict)
+    assert "Button" in tag_values
+    assert "Light" in tag_values
+
+
+def test_trace_tag_values_reflect_forced_state(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force Button to True
+    _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "Button", "value": True},
+    )
+
+    messages = _send_request(adapter, out_stream, seq=5, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    tag_values = traces[0]["body"]["tagValues"]
+    # Forced value should be reflected in tagValues
+    assert tag_values["Button"] == "True"
+
+
+def test_trace_tag_hints_present_for_choice_and_readonly_tags(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    mode_hints = body["tagHints"]["ModeTag"]
+    assert mode_hints == {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}
+    plain_hints = body["tagHints"]["Plain"]
+    assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
+
+
+def test_live_trace_body_includes_tag_hints(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=4, command="next")
+    _drain_messages(out_stream)
+
+    with adapter._state_lock:
+        body = adapter._live_trace_body_locked()
+
+    assert body is not None
+    mode_hints = body["tagHints"]["ModeTag"]
+    assert mode_hints == {"choices": {"0": "IDLE", "1": "RUN"}, "readonly": True}
+    plain_hints = body["tagHints"]["Plain"]
+    assert plain_hints == {"min": -32768, "max": 32767, "rangeDefault": True}
+
+
+def _tag_range_hints_script() -> str:
+    return (
+        "from pyrung.core import Bool, Char, Dint, Int, Real, Word, PLC, Program, Rung, copy\n"
+        "\n"
+        "flag = Bool('Flag')\n"
+        "temp = Int('Temp', min=0, max=100)\n"
+        "pressure = Dint('Pressure')\n"
+        "setpoint = Real('Setpoint', min=-10.0, max=50.0)\n"
+        "raw = Word('Raw')\n"
+        "label = Char('Label')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung():\n"
+        "        copy(0, temp)\n"
+        "        copy(0, pressure)\n"
+        "        copy(0.0, setpoint)\n"
+        "        copy(0, raw)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def test_tag_hints_min_max_declared_ranges(tmp_path: Path):
+    """Tags with explicit min/max emit declared ranges."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert hints["Temp"]["min"] == 0
+    assert hints["Temp"]["max"] == 100
+    assert hints["Temp"]["rangeDefault"] is False
+
+    assert hints["Setpoint"]["min"] == -10.0
+    assert hints["Setpoint"]["max"] == 50.0
+    assert hints["Setpoint"]["rangeDefault"] is False
+
+
+def test_tag_hints_min_max_type_defaults(tmp_path: Path):
+    """Tags without explicit min/max emit type-default ranges for numeric types."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert hints["Pressure"]["min"] == -2147483648
+    assert hints["Pressure"]["max"] == 2147483647
+    assert hints["Pressure"]["rangeDefault"] is True
+
+    assert hints["Raw"]["min"] == 0
+    assert hints["Raw"]["max"] == 65535
+    assert hints["Raw"]["rangeDefault"] is True
+
+
+def test_tag_hints_no_min_max_for_bool_and_char(tmp_path: Path):
+    """BOOL and CHAR tags should not have min/max in hints."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _tag_range_hints_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    hints = traces[0]["body"]["tagHints"]
+
+    assert "Flag" not in hints
+    assert "min" not in hints.get("Label", {})
+    assert "max" not in hints.get("Label", {})
+
+
+def test_trace_tag_groups_for_structured_tags(tmp_path: Path):
+    """tagGroups maps structure name to its member tag names."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _chained_builder_debug_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert "tagGroups" in body
+    tag_groups = body["tagGroups"]
+    assert isinstance(tag_groups, dict)
+
+    # Counter[1] and Timer[1] are structured UDTs — they should produce groups
+    assert "Counter" in tag_groups
+    assert "Timer" in tag_groups
+    assert "Counter2" in tag_groups
+
+    # Each group should list its member tag names (Done, Acc, etc.)
+    counter_members = tag_groups["Counter"]
+    assert isinstance(counter_members, list)
+    assert len(counter_members) >= 2  # at least Done + Acc
+    assert any("Done" in m for m in counter_members)
+    assert any("Acc" in m for m in counter_members)
+
+
+def test_trace_tag_groups_empty_for_plain_tags(tmp_path: Path):
+    """Programs with only plain tags should have an empty tagGroups."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=3, command="next")
+    traces = _trace_events(messages)
+    assert traces
+    body = traces[0]["body"]
+    assert body["tagGroups"] == {}
+    assert body["tagHints"] == {}
+
+
+def test_existing_debug_console_force_commands_still_work(tmp_path: Path):
+    """Ensure the Debug Console text commands are unaffected."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _runner_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Debug Console: force
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="evaluate",
+        arguments={"expression": "force Button true", "context": "repl"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner.forces["Button"] is True
+
+    # Debug Console: unforce
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="evaluate",
+        arguments={"expression": "unforce Button", "context": "repl"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" not in adapter._runner.forces
+
+    # Debug Console: clear_forces
+    _send_request(
+        adapter,
+        out_stream,
+        seq=6,
+        command="evaluate",
+        arguments={"expression": "force Button true", "context": "repl"},
+    )
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=7,
+        command="evaluate",
+        arguments={"expression": "clear_forces", "context": "repl"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert dict(adapter._runner.forces) == {}
+
+
+def test_pyrung_force_read_only_tag_returns_error(tmp_path: Path):
+    script_content = (
+        "from pyrung.core import Bool, Int, PLC, Program, Rung, out\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", script_content)
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Try to force sys.always_on which is a read-only system point
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=4,
+        command="pyrungForce",
+        arguments={"tag": "sys.always_on", "value": False},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+    assert "cannot force:" in response["message"]
+
+
+def test_pyrung_force_numeric_value_types(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _counter_change_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _send_request(adapter, out_stream, seq=2, command="configurationDone")
+    _drain_messages(out_stream)
+
+    _send_request(adapter, out_stream, seq=3, command="next")
+    _drain_messages(out_stream)
+
+    # Force with int
+    messages = _send_request(
+        adapter, out_stream, seq=4, command="pyrungForce", arguments={"tag": "Counter", "value": 99}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner.forces["Counter"] == 99
+
+    # Force with float
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=5,
+        command="pyrungForce",
+        arguments={"tag": "Counter", "value": 3.14},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert adapter._runner.forces["Counter"] == 3.14
+
+
+# ------------------------------------------------------------------
+# pyrungGraph / pyrungSlice
+# ------------------------------------------------------------------
+
+
+def _graph_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "relay = Bool('Relay')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        latch(relay)\n"
+        "    with Rung(relay):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def test_pyrung_graph_returns_valid_json(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungGraph")
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert isinstance(body["rungNodes"], list)
+    assert isinstance(body["tagRoles"], dict)
+    assert isinstance(body["graphEdges"], list)
+    assert "Button" in body["tagRoles"]
+    assert "Relay" in body["tagRoles"]
+    assert "Light" in body["tagRoles"]
+
+    # Check that graph edges are bipartite
+    for edge in body["graphEdges"]:
+        assert edge["type"] in ("condition", "data", "write")
+        if edge["type"] in ("condition", "data"):
+            assert not edge["source"].startswith("rung:")
+            assert edge["target"].startswith("rung:")
+        else:
+            assert edge["source"].startswith("rung:")
+            assert not edge["target"].startswith("rung:")
+
+
+def test_pyrung_slice_upstream(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Light", "direction": "upstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert "Light" in body["tags"]
+    assert "Relay" in body["tags"]
+    assert "Button" in body["tags"]
+
+
+def test_pyrung_slice_downstream(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Button", "direction": "downstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+
+    body = response["body"]
+    assert "Button" in body["tags"]
+    assert "Relay" in body["tags"]
+    assert "Light" in body["tags"]
+
+
+def test_pyrung_slice_requires_tag(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"direction": "upstream"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_slice_requires_valid_direction(tmp_path: Path):
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungSlice",
+        arguments={"tag": "Light", "direction": "sideways"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+# ------------------------------------------------------------------
+# pyrungQuery
+# ------------------------------------------------------------------
+
+
+def _query_adapter(tmp_path: Path):
+    """Set up an adapter with the graph script launched, return (adapter, out_stream)."""
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _graph_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+def test_pyrung_query_bare_contains(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "Relay"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Relay" in response["body"]["tags"]
+    assert "Button" not in response["body"]["tags"]
+
+
+def test_pyrung_query_role_filter(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # i: should return only inputs (Button)
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "i:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" in response["body"]["tags"]
+    assert "Relay" not in response["body"]["tags"]
+    assert "Light" not in response["body"]["tags"]
+
+
+def test_pyrung_query_role_with_contains(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # t:Light — terminals matching "Light"
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "t:Light"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["tags"] == ["Light"]
+
+
+def test_pyrung_query_upstream_slice(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "upstream:Light"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Button" in response["body"]["tags"]
+    assert "Relay" in response["body"]["tags"]
+    # upstream excludes the tag itself
+    assert "Light" not in response["body"]["tags"]
+
+
+def test_pyrung_query_downstream_slice(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungQuery",
+        arguments={"query": "downstream:Button"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert "Relay" in response["body"]["tags"]
+    assert "Light" in response["body"]["tags"]
+
+
+def test_pyrung_query_chained(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    # upstream:Light + p: — upstream of Light, filtered to pivots only
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=2,
+        command="pyrungQuery",
+        arguments={"query": "upstream:Light p:"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["tags"] == ["Relay"]
+
+
+def test_pyrung_query_returns_roles(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": "i:"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["roles"]["Button"] == "input"
+
+
+def test_pyrung_query_empty_string_fails(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=2, command="pyrungQuery", arguments={"query": ""}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_query_missing_query_fails(tmp_path: Path):
+    adapter, out_stream = _query_adapter(tmp_path)
+
+    messages = _send_request(adapter, out_stream, seq=2, command="pyrungQuery", arguments={})
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+# ------------------------------------------------------------------
+# pyrungCausal
+# ------------------------------------------------------------------
+
+
+def _causal_script() -> str:
+    return (
+        "from pyrung.core import Bool, PLC, Program, Rung, out, latch\n"
+        "\n"
+        "button = Bool('Button')\n"
+        "relay = Bool('Relay')\n"
+        "light = Bool('Light')\n"
+        "\n"
+        "with Program(strict=False) as prog:\n"
+        "    with Rung(button):\n"
+        "        latch(relay)\n"
+        "    with Rung(relay):\n"
+        "        out(light)\n"
+        "\n"
+        "runner = PLC(prog)\n"
+    )
+
+
+def _causal_adapter(tmp_path: Path):
+    """Launch the causal script, step a few scans so history accumulates.
+
+    Uses the DAP-native step/patch path end-to-end so the test covers the
+    full stack — including that ``pyrungStepScan`` populates ``rung_firings``.
+    """
+    out_stream = io.BytesIO()
+    adapter = DAPAdapter(in_stream=io.BytesIO(), out_stream=out_stream)
+    script = _write_script(tmp_path, "logic.py", _causal_script())
+    _send_request(adapter, out_stream, seq=1, command="launch", arguments={"program": str(script)})
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=2, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(
+        adapter,
+        out_stream,
+        seq=3,
+        command="pyrungPatch",
+        arguments={"tag": "Button", "value": True},
+    )
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=4, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    _send_request(adapter, out_stream, seq=5, command="pyrungStepScan")
+    _drain_messages(out_stream)
+    return adapter, out_stream
+
+
+def test_pyrung_causal_recorded_cause(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Relay"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "cause"
+    assert body["ok"] is True
+    chain = body["chain"]
+    assert chain["mode"] == "recorded"
+    assert chain["effect"]["tag"] == "Relay"
+    assert chain["effect"]["to"] is True
+    # Button is the proximate cause of Relay latching.
+    root_tags = {t["tag"] for t in chain["conjunctive_roots"] + chain["ambiguous_roots"]}
+    assert "Button" in root_tags
+
+
+def test_pyrung_causal_recorded_effect(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "effect:Button"}
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "effect"
+    assert body["ok"] is True
+    chain = body["chain"]
+    assert chain["mode"] == "recorded"
+    chain_tags = {chain["effect"]["tag"]} | {s["transition"]["tag"] for s in chain["steps"]}
+    assert {"Relay", "Light"} <= chain_tags
+
+
+def test_pyrung_causal_cause_at_scan(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    # First resolve which scan Relay transitioned on via cause:Relay, then
+    # look it up by explicit scan.
+    bootstrap = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": "cause:Relay"}
+    )
+    scan = _single_response(bootstrap)["body"]["chain"]["effect"]["scan"]
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=11,
+        command="pyrungCausal",
+        arguments={"query": f"cause:Relay@{scan}"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    assert response["body"]["chain"]["effect"]["scan"] == scan
+
+
+def test_pyrung_causal_projected_cause_unreachable(tmp_path: Path):
+    """Relay has no unlatch rung, so clearing it is unreachable."""
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Relay:false"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["ok"] is False
+    chain = body["chain"]
+    assert chain["mode"] == "unreachable"
+
+
+def test_pyrung_causal_recovers_false(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "recovers:Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["command"] == "recovers"
+    assert body["ok"] is False
+    # Witness chain is attached so the UI can explain why.
+    assert body["chain"] is not None
+    assert body["chain"]["mode"] == "unreachable"
+
+
+def test_pyrung_causal_recorded_cause_miss_returns_null_chain(tmp_path: Path):
+    """Button's most recent transition is TRUE; there is no FALSE→TRUE for Light
+    to search for either, but this test targets a tag that has simply never
+    transitioned in history (Light stays TRUE after scan 2 latch)."""
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Nonexistent"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is True
+    body = response["body"]
+    assert body["ok"] is False
+    assert body["chain"] is None
+
+
+def test_pyrung_causal_empty_query_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter, out_stream, seq=10, command="pyrungCausal", arguments={"query": ""}
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_unknown_command_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "bogus:Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_missing_colon_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause Relay"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False
+
+
+def test_pyrung_causal_bad_scan_fails(tmp_path: Path):
+    adapter, out_stream = _causal_adapter(tmp_path)
+
+    messages = _send_request(
+        adapter,
+        out_stream,
+        seq=10,
+        command="pyrungCausal",
+        arguments={"query": "cause:Relay@notanumber"},
+    )
+    response = _single_response(messages)
+    assert response["success"] is False

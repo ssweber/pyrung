@@ -40,8 +40,9 @@ from pyrung.core.memory_block import (
 )
 from pyrung.core.program import Program
 from pyrung.core.rung import Rung as LogicRung
+from pyrung.core.system_points import system
 from pyrung.core.tag import ImmediateRef, Tag, TagType
-from pyrung.core.validation.walker import _INSTRUCTION_FIELDS, _condition_children
+from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,20 @@ class CodegenContext:
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
 
+    @classmethod
+    def for_kernel(cls, program: Program) -> CodegenContext:
+        """Create a hardware-free context for kernel compilation."""
+        ctx = cls(
+            program=program,
+            hw=P1AM(),
+            target_scan_ms=0.0,
+            watchdog_ms=None,
+        )
+        ctx._runtime_state_keys = True
+        ctx.collect_program_references()
+        ctx.assign_symbols()
+        return ctx
+
     slot_bindings: list[SlotBinding] = field(default_factory=list)
     block_bindings: dict[int, BlockBinding] = field(default_factory=dict)
     scalar_tags: dict[str, Tag] = field(default_factory=dict)
@@ -135,8 +150,10 @@ class CodegenContext:
     _name_counters: dict[str, int] = field(default_factory=dict)
     _state_key_counter: int = 0
     _state_keys_by_obj: dict[int, str] = field(default_factory=dict)
+    _runtime_state_keys: bool = False
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
+    _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -202,7 +219,7 @@ class CodegenContext:
                     walk_instruction(item)
 
         def walk_instruction(instr: Any) -> None:
-            fields = _INSTRUCTION_FIELDS.get(type(instr).__name__)
+            fields = _instruction_fields(instr)
             if fields is None:
                 for key in sorted(vars(instr)):
                     if key.startswith("_"):
@@ -294,6 +311,12 @@ class CodegenContext:
         for sub_name in self.subroutine_names:
             for rung in self.program.subroutines[sub_name]:
                 walk_rung(rung)
+        for fault_tag in (
+            system.fault.division_error,
+            system.fault.out_of_range,
+            system.fault.address_error,
+        ):
+            self.referenced_tags.setdefault(fault_tag.name, fault_tag)
         self._refresh_board_usage()
 
     def collect_retentive_tags(self) -> None:
@@ -391,6 +414,8 @@ class CodegenContext:
 
     def state_key_for(self, obj: Any) -> str:
         obj_id = id(obj)
+        if self._runtime_state_keys:
+            return str(obj_id)
         existing = self._state_keys_by_obj.get(obj_id)
         if existing is not None:
             return existing

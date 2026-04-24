@@ -44,7 +44,7 @@ def test_named_array_width_gt_one_resolves_instance_slots_only():
 def test_udt_and_named_array_csv_export_include_expected_slot_metadata(tmp_path):
     @udt(count=2)
     class Alarm:
-        id: int = cast(Any, Field(default=auto(), retentive=True))
+        id: int = Field(default=auto(), retentive=True)
         val: int = 0
 
     alarms = cast(Any, Alarm)

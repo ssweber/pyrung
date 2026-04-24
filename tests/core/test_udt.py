@@ -8,6 +8,7 @@ Tracking issue: https://github.com/astral-sh/ty/issues/143
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -56,8 +57,8 @@ def test_udt_literal_and_auto_defaults_resolve_per_instance():
 def test_udt_retentive_policy_inherited_by_generated_tags():
     @udt(count=2)
     class Alarm:
-        id: Int = Field(retentive=True)  # ty: ignore[invalid-assignment]
-        On: Bool = Field(retentive=False)  # ty: ignore[invalid-assignment]
+        id: Int = Field(retentive=True)
+        On: Bool = Field(retentive=False)
 
     alarms = cast(Any, Alarm)
     assert alarms[1].id.retentive is True
@@ -84,12 +85,45 @@ def test_udt_retentive_explicit_overrides_type_default():
 
     @udt(count=1)
     class Sensor:
-        active: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
-        reading: Int = Field(retentive=False)  # ty: ignore[invalid-assignment]
+        active: Bool = Field(retentive=True)
+        reading: Int = Field(retentive=False)
 
     sensor = cast(Any, Sensor)
     assert sensor.active.retentive is True  # overridden from Bool default False
     assert sensor.reading.retentive is False  # overridden from Int default True
+
+
+def test_udt_field_choices_and_readonly_thread_through_blocks_and_fields():
+    class Mode(IntEnum):
+        IDLE = 0
+        RUN = 1
+
+    @udt(count=2)
+    class Device:
+        mode: Int = Field(choices=Mode, readonly=True)
+
+    device = cast(Any, Device)
+    assert device.fields["mode"].choices == {0: "IDLE", 1: "RUN"}
+    assert device.fields["mode"].readonly is True
+    assert device.mode.slot(1).choices == {0: "IDLE", 1: "RUN"}
+    assert device.mode.slot(1).readonly is True
+    assert device[2].mode.choices == {0: "IDLE", 1: "RUN"}
+    assert device[2].mode.readonly is True
+
+
+def test_udt_decorator_readonly_defaults_and_field_override():
+    @udt(count=2, readonly=True)
+    class Device:
+        mode: Int
+        editable: Int = Field(readonly=False)
+
+    device = cast(Any, Device)
+    assert device.fields["mode"].readonly is True
+    assert device.mode.slot(1).readonly is True
+    assert device[2].mode.readonly is True
+    assert device.fields["editable"].readonly is False
+    assert device.editable.slot(1).readonly is False
+    assert device[2].editable.readonly is False
 
 
 def test_udt_rejects_invalid_declarations():
@@ -249,7 +283,7 @@ def test_udt_count_one_fields_and_field_names():
     @udt()
     class Alarm:
         id: Int = 1  # ty: ignore[invalid-assignment]
-        On: Bool = Field(retentive=True)  # ty: ignore[invalid-assignment]
+        On: Bool = Field(retentive=True)
 
     alarm = cast(Any, Alarm)
     assert alarm.field_names == ("id", "On")

@@ -2,85 +2,83 @@
 
 ## Setting Up uv
 
-This project is set up to use [uv](https://docs.astral.sh/uv/) to manage Python and
-dependencies. First, be sure you
-[have uv installed](https://docs.astral.sh/uv/getting-started/installation/).
+This project uses [uv](https://docs.astral.sh/uv/) to manage Python and dependencies.
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/) first.
 
-Then [fork the ssweber/pyrung
-repo](https://github.com/ssweber/pyrung/fork) (having your own
-fork will make it easier to contribute) and
+Then [fork the repo](https://github.com/ssweber/pyrung/fork) and
 [clone it](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository).
 
 ## Basic Developer Workflows
 
-The `Makefile` simply offers shortcuts to `uv` commands for developer convenience.
-(For clarity, GitHub Actions don't use the Makefile and just call `uv` directly.)
+The `Makefile` offers shortcuts to `uv` commands.
+(GitHub Actions call `uv` directly, not the Makefile.)
 
 ```shell
-# First, install all dependencies and set up your virtual environment.
-# This simply runs `uv sync --all-extras --dev` to install all packages,
-# including dev dependencies and optional dependencies.
+# Install all dependencies (locked):
 make install
 
-# Run uv sync, lint, and test:
+# Run install, lint, and test:
 make
 
-# Build wheel:
-make build
-
-# Linting:
+# Linting (codespell, ruff, ty):
 make lint
 
 # Run tests:
 make test
 
-# Delete all the build artifacts:
+# Build wheel:
+make build
+
+# Delete build artifacts:
 make clean
 
-# Upgrade dependencies to compatible versions:
+# Upgrade dependencies:
 make upgrade
-
-# To run tests by hand:
-uv run pytest   # all tests
-uv run pytest -s src/module/some_file.py  # one test, showing outputs
-
-# Build and install current dev executables, to let you use your dev copies
-# as local tools:
-uv tool install --editable .
-
-# Dependency management directly with uv:
-# Add a new dependency:
-uv add package_name
-# Add a development dependency:
-uv add --dev package_name
-# Update to latest compatible versions (including dependencies on git repos):
-uv sync --upgrade
-# Update a specific package:
-uv lock --upgrade-package package_name
-# Update dependencies on a package:
-uv add package_name@latest
-
-# Run a shell within the Python environment:
-uv venv
-source .venv/bin/activate
 ```
 
-See [uv docs](https://docs.astral.sh/uv/) for details.
+### Running tests by hand
 
-## IDE setup
+```shell
+uv run pytest                              # all tests
+uv run pytest -s tests/core/test_tag.py    # one file, showing output
+```
 
-If you use VSCode or a fork like Cursor or Windsurf, you can install the following
-extensions:
+### Dependency management
+
+```shell
+uv add package_name          # add dependency
+uv add --dev package_name    # add dev dependency
+uv lock --upgrade            # upgrade all to latest compatible
+uv lock --upgrade-package X  # upgrade one package
+```
+
+## VS Code Extension (`editors/vscode/pyrung-debug/`)
+
+The debug extension is plain JS with no build step.
+
+```shell
+# Requires Node.js LTS:
+winget install OpenJS.NodeJS.LTS    # Windows
+# or download from https://nodejs.org
+
+# Package:
+cd editors/vscode/pyrung-debug
+npx @vscode/vsce package
+
+# Install the .vsix:
+code --install-extension pyrung-debug-0.1.0.vsix
+```
+
+## IDE Setup
+
+If you use VS Code (or Cursor/Windsurf):
 
 - [Python](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
-
-- [Based Pyright](https://marketplace.visualstudio.com/items?itemName=detachhead.basedpyright)
-  for type checking. Note that this extension works with non-Microsoft VSCode forks like
-  Cursor.
+- [ty](https://marketplace.visualstudio.com/items?itemName=astral-sh.ty) for type checking
 
 ## Internal Debug Architecture
 
-Debugger internals are intentionally split into a typed trace model plus adapter serialization:
+Debugger internals are split into a typed trace model plus adapter serialization:
 
 - Core stepping (`PLCDebugger`) emits `TraceEvent` objects (`SourceSpan`, `TraceRegion`,
   `ConditionTrace`) and `ScanStep.trace` carries this typed model.
@@ -102,14 +100,3 @@ Instruction stepping uses a registry + handler pattern:
   instructions.
 - `GenericInstructionDebugHandler` is the fallback for all other instructions.
 - `PLCDebugger` remains an orchestrator; handlers encapsulate instruction-specific flow.
-
-## Documentation
-
-- [uv docs](https://docs.astral.sh/uv/)
-
-- [basedpyright docs](https://docs.basedpyright.com/latest/)
-
-* * *
-
-*This file was built with
-[simple-modern-uv](https://github.com/jlevy/simple-modern-uv).*

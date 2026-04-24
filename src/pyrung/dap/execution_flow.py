@@ -69,6 +69,10 @@ def on_pyrung_step_scan(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
             if not adapter._advance_with_step_logpoints_locked():
                 break
 
+        from pyrung.dap.bounds_console import emit_bounds_violations
+
+        emit_bounds_violations(adapter)
+
     return {}, [("stopped", adapter._stopped_body("step"))]
 
 
@@ -93,16 +97,79 @@ def on_pause(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def continue_worker(adapter: Any) -> None:
+    from pyrung.dap.session import ScanFrameBuffer
+
+    last_emit_time = 0.0
+
+    def _emit_scan_frame(*, force: bool = False) -> None:
+        nonlocal last_emit_time
+        if not adapter._configuration_done:
+            return
+        now = time.monotonic()
+        if not force and (now - last_emit_time) < 0.033:
+            return
+
+        buffer = adapter._session.scan_frame_buffer
+        if buffer is None:
+            return
+
+        with adapter._state_lock:
+            trace_body = adapter._live_trace_body_locked()
+            if trace_body is None and not force:
+                return
+            current_tags = dict(adapter._runner.current_state.tags)
+
+        changes: list[dict[str, Any]] = []
+        prev = buffer.previous_tags
+        for tag_name in set(prev.keys()) | set(current_tags.keys()):
+            old_val = prev.get(tag_name)
+            new_val = current_tags.get(tag_name)
+            if old_val != new_val:
+                changes.append(
+                    {
+                        "tag": tag_name,
+                        "previous": adapter._format_value(old_val),
+                        "current": adapter._format_value(new_val),
+                    }
+                )
+
+        frame_body: dict[str, Any] = {
+            "scanId": trace_body.get("scanId") if trace_body else None,
+            "trace": trace_body,
+            "monitors": buffer.monitors,
+            "changes": changes,
+            "snapshots": buffer.snapshots,
+            "outputs": buffer.outputs,
+        }
+
+        adapter._enqueue_internal_event("pyrungScanFrame", frame_body)
+        last_emit_time = now
+
+        buffer.monitors = []
+        buffer.snapshots = []
+        buffer.outputs = []
+        buffer.previous_tags = current_tags
+
     try:
         adapter._pending_predicate_pause = False
+        with adapter._state_lock:
+            runner = adapter._runner
+            if runner is None:
+                return
+            adapter._session.scan_frame_buffer = ScanFrameBuffer(
+                previous_tags=dict(runner.current_state.tags),
+            )
+
         while not adapter._stop_event.is_set():
             if adapter._pause_event.is_set():
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("pause"))
                 return
 
             with adapter._state_lock:
                 if adapter._runner is None:
                     return
+                old_scan_id = adapter._current_scan_id
                 advanced = adapter._advance_one_step_locked()
                 adapter._flush_pending_snapshots_locked()
                 hit_breakpoint = adapter._current_rung_hits_breakpoint_locked()
@@ -110,22 +177,53 @@ def continue_worker(adapter: Any) -> None:
                 hit_data_breakpoint = adapter._pending_predicate_pause
                 if hit_data_breakpoint:
                     adapter._pending_predicate_pause = False
+                scan_completed = (
+                    advanced and old_scan_id is not None and adapter._current_scan_id != old_scan_id
+                )
+
+            if scan_completed:
+                _emit_scan_frame()
+                from pyrung.dap.bounds_console import emit_bounds_violations
+
+                emit_bounds_violations(adapter)
 
             if hit_breakpoint:
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("breakpoint"))
                 return
 
             if hit_data_breakpoint:
+                _emit_scan_frame(force=True)
                 adapter._enqueue_internal_event("stopped", adapter._stopped_body("data breakpoint"))
                 return
 
             if not advanced:
                 time.sleep(0.005)
+
+        _emit_scan_frame(force=True)
     finally:
         with adapter._state_lock:
             adapter._continue_thread = None
             adapter._pending_predicate_pause = False
+            adapter._session.scan_frame_buffer = None
         adapter._pause_event.clear()
+
+
+def invalidate_mid_scan(adapter: Any) -> None:
+    """Discard a partially-advanced scan so the next advance starts fresh.
+
+    Called when force/patch/unforce/clear_forces modify overrides while
+    the scan generator is paused mid-scan (e.g. after a DAP ``next``).
+    Without this, the override misses the current scan's ``prepare_scan``
+    and only takes effect on the *following* scan — a 1-scan lag that
+    diverges from pure ``PLC.force()`` + ``step()`` behaviour.
+    """
+    if adapter._scan_gen is not None:
+        adapter._scan_gen = None
+        adapter._current_step = None
+        adapter._current_rung_index = None
+        adapter._current_rung = None
+        adapter._current_ctx = None
 
 
 def advance_one_step_locked(adapter: Any) -> bool:

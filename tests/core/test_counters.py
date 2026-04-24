@@ -7,7 +7,6 @@ They manipulate both a done bit and an accumulator.
 import pytest
 
 from pyrung.core import (
-    PLC,
     Bool,
     Counter,
     Dint,
@@ -15,6 +14,7 @@ from pyrung.core import (
     Program,
     Real,
     Rung,
+    copy,
     count_down,
     count_up,
     latch,
@@ -27,7 +27,7 @@ from pyrung.core import (
 class TestCountUpInstruction:
     """Test Count Up (CTU) instruction."""
 
-    def test_count_up_increments_every_scan(self):
+    def test_count_up_increments_every_scan(self, runner_factory):
         """CTU increments accumulator EVERY SCAN when rung is true.
 
         Click behavior: NOT edge-triggered. Increments continuously while enabled.
@@ -39,9 +39,7 @@ class TestCountUpInstruction:
             with Rung(PartSensor):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"PartSensor": False, "ResetBtn": False})
         runner.step()
 
@@ -61,7 +59,7 @@ class TestCountUpInstruction:
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 3
 
-    def test_count_up_sets_done_bit_at_preset(self):
+    def test_count_up_sets_done_bit_at_preset(self, runner_factory):
         """CTU done bit turns ON when accumulator >= preset."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -70,9 +68,7 @@ class TestCountUpInstruction:
             with Rung(Trigger):
                 count_up(Counter[1], preset=3).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -90,7 +86,7 @@ class TestCountUpInstruction:
         assert runner.current_state.tags["Counter_Acc"] == 4
         assert runner.current_state.tags["Counter_Done"] is True
 
-    def test_count_up_reset(self):
+    def test_count_up_reset(self, runner_factory):
         """CTU reset clears both done bit and accumulator."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -99,9 +95,7 @@ class TestCountUpInstruction:
             with Rung(Trigger):
                 count_up(Counter[1], preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -119,7 +113,7 @@ class TestCountUpInstruction:
         assert runner.current_state.tags["Counter_Acc"] == 0
         assert runner.current_state.tags["Counter_Done"] is False
 
-    def test_count_up_with_down_bidirectional(self):
+    def test_count_up_with_down_bidirectional(self, runner_factory):
         """CTU with .down() creates bidirectional counter."""
         Enter = Bool("Enter")
         Exit = Bool("Exit")
@@ -129,9 +123,7 @@ class TestCountUpInstruction:
             with Rung(rise(Enter)):
                 count_up(Counter[1], preset=10).down(rise(Exit)).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Enter": False, "Exit": False, "ResetBtn": False})
         runner.step()
 
@@ -159,11 +151,50 @@ class TestCountUpInstruction:
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 0
 
+    def test_count_up_reset_condition_uses_rung_entry_snapshot(self, runner_factory):
+        """Same-rung writes do not fire reset() until the next snapshot."""
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, ResetBtn)
+                count_up(Counter[1], preset=5).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "ResetBtn": False})
+
+        runner.step()
+        assert runner.current_state.tags["ResetBtn"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 1
+
+        runner.step()
+        assert runner.current_state.tags["Counter_Acc"] == 0
+        assert runner.current_state.tags["Counter_Done"] is False
+
+    def test_count_up_down_condition_uses_rung_entry_snapshot(self, runner_factory):
+        """Same-rung writes do not affect bidirectional down() until next scan."""
+        Enable = Bool("Enable")
+        Down = Bool("Down")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, Down)
+                count_up(Counter[1], preset=5).down(Down).reset(ResetBtn)
+
+        runner = runner_factory(logic)
+        runner.patch({"Enable": True, "Down": False, "ResetBtn": False})
+
+        runner.step()
+        assert runner.current_state.tags["Down"] is True
+        assert runner.current_state.tags["Counter_Acc"] == 1
+
 
 class TestCountDownInstruction:
     """Test Count Down (CTD) instruction."""
 
-    def test_count_down_decrements_every_scan(self):
+    def test_count_down_decrements_every_scan(self, runner_factory):
         """CTD decrements accumulator EVERY SCAN when rung is true.
 
         Click behavior: NOT edge-triggered. Decrements continuously while enabled.
@@ -176,9 +207,7 @@ class TestCountDownInstruction:
             with Rung(Dispense):
                 count_down(Counter[1], preset=5).reset(Reload)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Dispense": False, "Reload": False})
         runner.step()
 
@@ -206,7 +235,7 @@ class TestCountDownInstruction:
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == -3
 
-    def test_count_down_sets_done_bit_at_negative_preset(self):
+    def test_count_down_sets_done_bit_at_negative_preset(self, runner_factory):
         """CTD done bit turns ON when accumulator <= -preset.
 
         Click behavior: Done bit activates when reaching negative preset value.
@@ -218,9 +247,7 @@ class TestCountDownInstruction:
             with Rung(Trigger):
                 count_down(Counter[1], preset=3).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -251,7 +278,7 @@ class TestCountDownInstruction:
         assert runner.current_state.tags["Counter_Acc"] == -4
         assert runner.current_state.tags["Counter_Done"] is True
 
-    def test_count_down_reset_clears_to_zero(self):
+    def test_count_down_reset_clears_to_zero(self, runner_factory):
         """CTD reset clears accumulator to 0.
 
         Click behavior: Reset sets acc to 0, not to preset.
@@ -263,9 +290,7 @@ class TestCountDownInstruction:
             with Rung(Trigger):
                 count_down(Counter[1], preset=10).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -289,7 +314,7 @@ class TestCountDownInstruction:
 class TestCounterAccumulatorClamp:
     """Tests for DINT clamp behavior in counter accumulators."""
 
-    def test_ctu_accumulator_clamps_at_dint_max(self):
+    def test_ctu_accumulator_clamps_at_dint_max(self, runner_factory):
         """CTU accumulator saturates at DINT max (2147483647)."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -298,9 +323,7 @@ class TestCounterAccumulatorClamp:
             with Rung(Trigger):
                 count_up(Counter[1], preset=2147483647).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -315,7 +338,7 @@ class TestCounterAccumulatorClamp:
         assert runner.current_state.tags["Counter_Acc"] == 2147483647
         assert runner.current_state.tags["Counter_Done"] is True
 
-    def test_ctd_accumulator_clamps_at_dint_min(self):
+    def test_ctd_accumulator_clamps_at_dint_min(self, runner_factory):
         """CTD accumulator saturates at DINT min (-2147483648)."""
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
@@ -324,9 +347,7 @@ class TestCounterAccumulatorClamp:
             with Rung(Trigger):
                 count_down(Counter[1], preset=1).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -341,7 +362,7 @@ class TestCounterAccumulatorClamp:
         assert runner.current_state.tags["Counter_Acc"] == -2147483648
         assert runner.current_state.tags["Counter_Done"] is True
 
-    def test_ctu_bidirectional_clamp_applies_after_net_delta(self):
+    def test_ctu_bidirectional_clamp_applies_after_net_delta(self, runner_factory):
         """Bidirectional CTU clamps after applying net (+1/-1) scan delta."""
         Enable = Bool("Enable")
         Down = Bool("Down")
@@ -351,9 +372,7 @@ class TestCounterAccumulatorClamp:
             with Rung(Enable):
                 count_up(Counter[1], preset=2147483647).down(Down).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Enable": False, "Down": False, "ResetBtn": False})
         runner.step()
 
@@ -371,7 +390,7 @@ class TestCounterAccumulatorClamp:
 class TestCounterIntegration:
     """Integration tests for counter instructions."""
 
-    def test_counter_accumulates_mid_scan_visible_to_later_rungs(self):
+    def test_counter_accumulates_mid_scan_visible_to_later_rungs(self, runner_factory):
         """Counter should accumulate during the scan and be visible to later rungs.
 
         This test verifies that when a counter increments in one rung, subsequent rungs
@@ -382,7 +401,6 @@ class TestCounterIntegration:
         - Later rungs can check the accumulator value and execute based on it
         - This all happens within a single scan cycle
         """
-        from pyrung.core import copy
 
         # Tags
         DataTest = Int("DataTest")
@@ -406,9 +424,7 @@ class TestCounterIntegration:
             with Rung(DataTest == 1):
                 copy(2, DataTest)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"DataTest": 1, "ResetBtn": False})
 
         # Execute 1 scan
@@ -445,7 +461,7 @@ class TestCounterIntegration:
             "Counter done bit should be false after reset"
         )
 
-    def test_counter_fires_mid_scan_current_implementation(self):
+    def test_counter_fires_mid_scan_current_implementation(self, runner_factory):
         """Verify our current implementation: does counter 'fire' mid-scan?
 
         This test explicitly checks if our implementation allows later rungs
@@ -472,9 +488,7 @@ class TestCounterIntegration:
             with Rung(Counter[1].Acc == 2):
                 latch(SawCounterAt2)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False})
         runner.step()
 
@@ -501,7 +515,7 @@ class TestCounterIntegration:
             "Should have seen counter == 2 mid-scan (Rung 3 executed same scan as increment)"
         )
 
-    def test_counter_in_production_line(self):
+    def test_counter_in_production_line(self, runner_factory):
         """Test counter used in a production line scenario."""
         PartSensor = Bool("PartSensor")
         BatchComplete = Bool("BatchComplete")
@@ -521,9 +535,7 @@ class TestCounterIntegration:
             with Rung(Counter[1].Acc >= 50):
                 out(HalfwayLight)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {
                 "PartSensor": False,
@@ -556,7 +568,7 @@ class TestCounterIntegration:
         assert runner.current_state.tags["Counter_Done"] is True
         assert runner.current_state.tags["BatchComplete"] is True
 
-    def test_counter_in_branch_requires_parent_and_branch_conditions(self):
+    def test_counter_in_branch_requires_parent_and_branch_conditions(self, runner_factory):
         """Counter in branch should require BOTH parent rung AND branch conditions."""
         from pyrung.core.program import branch
 
@@ -569,9 +581,7 @@ class TestCounterIntegration:
                 with branch(AutoMode):
                     count_up(Counter[1], preset=5).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": False, "ResetBtn": False})
         runner.step()
 
@@ -596,7 +606,7 @@ class TestCounterIntegration:
         runner.step()
         assert runner.current_state.tags["Counter_Acc"] == 2
 
-    def test_count_down_in_branch_requires_parent_and_branch_conditions(self):
+    def test_count_down_in_branch_requires_parent_and_branch_conditions(self, runner_factory):
         """Count down in branch should require BOTH parent rung AND branch conditions."""
         Enable = Bool("Enable")
         Mode = Bool("Mode")
@@ -609,9 +619,7 @@ class TestCounterIntegration:
                 with branch(Mode):
                     count_down(Counter[1], preset=10).reset(ResetBtn)
 
-        from pyrung.core import PLC
-
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Enable": False, "Mode": False, "ResetBtn": False})
         runner.step()
 
@@ -642,10 +650,8 @@ class TestCounterIntegration:
 class TestDynamicpresets:
     """Tests for dynamic presets (Tag references instead of literals)."""
 
-    def test_ctu_with_dynamic_preset(self):
+    def test_ctu_with_dynamic_preset(self, runner_factory):
         """CTU supports Tag preset that can change at runtime."""
-        from pyrung.core import PLC
-
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         preset = Int("preset")
@@ -654,7 +660,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_up(Counter[1], preset=preset).reset(ResetBtn)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 5})
         runner.step()
 
@@ -682,10 +688,8 @@ class TestDynamicpresets:
         assert runner.current_state.tags["Counter_Acc"] == 10
         assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
-    def test_ctd_with_dynamic_preset(self):
+    def test_ctd_with_dynamic_preset(self, runner_factory):
         """CTD supports Tag preset that can change at runtime."""
-        from pyrung.core import PLC
-
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         preset = Int("preset")
@@ -694,7 +698,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_down(Counter[1], preset=preset).reset(ResetBtn)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 3})
         runner.step()
 
@@ -727,10 +731,8 @@ class TestDynamicpresets:
         assert runner.current_state.tags["Counter_Acc"] == -5
         assert runner.current_state.tags["Counter_Done"] is True  # Done again
 
-    def test_preset_decrease_affects_done_immediately(self):
+    def test_preset_decrease_affects_done_immediately(self, runner_factory):
         """When preset decreases below acc, done bit changes immediately."""
-        from pyrung.core import PLC
-
         Trigger = Bool("Trigger")
         ResetBtn = Bool("ResetBtn")
         preset = Int("preset")
@@ -739,7 +741,7 @@ class TestDynamicpresets:
             with Rung(Trigger):
                 count_up(Counter[1], preset=preset).reset(ResetBtn)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Trigger": False, "ResetBtn": False, "preset": 100})
         runner.step()
 
@@ -792,7 +794,7 @@ class TestCounterConditionTypeGuards:
 class TestCounterStructuralContract:
     """Counter instructions accept any UDT with Done: Bool and Acc: Int|Dint."""
 
-    def test_custom_udt_with_dint_acc_works(self):
+    def test_custom_udt_with_dint_acc_works(self, runner_factory):
         Sensor = Bool("Sensor")
         Reset = Bool("Reset")
 
@@ -805,12 +807,12 @@ class TestCounterStructuralContract:
             with Rung(Sensor):
                 count_up(MyCounter[1], preset=5).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Sensor": True, "Reset": False})
         runner.step()
         assert runner.current_state.tags["MyCounter_Acc"] == 1
 
-    def test_custom_udt_with_int_acc_works(self):
+    def test_custom_udt_with_int_acc_works(self, runner_factory):
         Sensor = Bool("Sensor")
         Reset = Bool("Reset")
 
@@ -823,7 +825,7 @@ class TestCounterStructuralContract:
             with Rung(Sensor):
                 count_up(SmallCounter[1], preset=5).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Sensor": True, "Reset": False})
         runner.step()
         assert runner.current_state.tags["SmallCounter_Acc"] == 1

@@ -218,7 +218,7 @@ def test_motor_transitions():
 
 ```python
 def test_capture_fault_state():
-    with PLC(logic, history_limit=1000, dt=0.1) as plc:
+    with PLC(logic, dt=0.1) as plc:
         plc.when(Fault).snapshot("fault_triggered")
 
         Start.value = True
@@ -237,7 +237,7 @@ For debugging tests, `diff` shows exactly what changed between two scans:
 
 ```python
 def test_inspect_changes():
-    with PLC(logic, history_limit=100, dt=0.1) as plc:
+    with PLC(logic, dt=0.1) as plc:
         Start.value = True
         plc.step()   # scan 1
 
@@ -247,6 +247,58 @@ def test_inspect_changes():
         changes = plc.diff(scan_a=1, scan_b=2)
         # {"Motor": (True, False), "Stop": (False, True), ...}
 ```
+
+## Checking bounds
+
+Tags with `min`/`max` or `choices` get runtime bounds checking at the end of every scan. Values are never clamped — the write goes through, but a warning fires and the violation lands in `plc.bounds_violations`:
+
+```python
+from pyrung import Bool, Int, Real, PLC, Program, Rung, calc, copy
+
+Pressure = Real("Pressure", min=0, max=100)
+Mode     = Int("Mode", choices={0: "Off", 1: "On", 2: "Auto"})
+
+Enable = Bool("Enable")
+Src    = Int("Src")
+
+with Program() as logic:
+    with Rung(Enable):
+        calc(Pressure + 60, Pressure)
+        copy(Src, Mode)
+
+def test_pressure_stays_in_range():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Pressure: 50.0, Src: 1})
+        plc.step()
+
+        # 50 + 60 = 110, exceeds max=100
+        assert "Pressure" in plc.bounds_violations
+        assert plc.bounds_violations["Pressure"].kind == "range"
+        # Value goes through unclamped — the program sees its real output
+        assert Pressure.value == 110.0
+
+def test_mode_rejects_unknown_choice():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Src: 5})
+        plc.step()
+
+        assert "Mode" in plc.bounds_violations
+        assert plc.bounds_violations["Mode"].kind == "choices"
+
+def test_clean_scan_clears_violations():
+    with PLC(logic, dt=0.1) as plc:
+        plc.patch({Enable: True, Pressure: 50.0, Src: 1})
+        plc.step()
+        assert plc.bounds_violations  # violation from Pressure
+
+        plc.patch({Enable: False})
+        plc.step()
+        assert plc.bounds_violations == {}
+```
+
+Violations also emit `warnings.warn()`, so `pytest -W error::UserWarning` will fail any test that triggers one — useful as a catch-all without explicit assertions.
+
+The check runs after all instructions, forces, and system runtime writes — it sees the final committed values. Tags without `min`/`max`/`choices` are never checked (zero overhead). `copy()` still clamps to type limits (INT ±32768, etc.) before the bounds check runs, so a `copy(40000, IntTag)` where `IntTag` has `max=500` will show a violation for 32767 (type-clamped), not 40000.
 
 ## Pytest fixtures
 
@@ -292,8 +344,14 @@ make test       # recommended
 pytest tests/   # or directly
 ```
 
+## Autoharness: automatic feedback for device-heavy programs
+
+When your UDTs declare `physical=` and `link=` on feedback fields, the autoharness can drive all feedback patches automatically — no manual toggling. See [Physical Annotations and Autoharness](physical-harness.md).
+
 ## Next steps
 
+- [Physical Annotations and Autoharness](physical-harness.md) — annotate devices, eliminate feedback boilerplate
+- [Analysis](analysis.md) — dataview, cause/effect chains, coverage queries
 - [Forces & Debug](forces-debug.md) — force semantics, history, time travel
 - [Runner Guide](runner.md) — time modes, execution methods, numeric behavior
 - [Quickstart](../getting-started/quickstart.md) — the traffic light example

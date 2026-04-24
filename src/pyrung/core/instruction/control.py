@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 class FunctionCallInstruction(OneShotMixin, Instruction):
     """Stateless function call: copy-in / execute / copy-out."""
 
+    _reads = ("_ins",)
+    _writes = ("_outs",)
+    _conditions = ()
+    _structural_fields = ("_fn",)
+
     def __init__(
         self,
         fn: Callable[..., dict[str, Any]],
@@ -64,6 +69,10 @@ class EnabledFunctionCallInstruction(Instruction):
 
     ALWAYS_EXECUTES = True
     INERT_WHEN_DISABLED = False
+    _reads = ("_ins",)
+    _writes = ("_outs",)
+    _conditions = ("_enable_condition",)
+    _structural_fields = ("_fn",)
 
     def __init__(
         self,
@@ -102,6 +111,11 @@ class ForLoopInstruction(OneShotMixin, Instruction):
 
     Executes a captured instruction list N times within one scan.
     """
+
+    _reads = ("count",)
+    _writes = ("idx_tag",)
+    _conditions = ()
+    _structural_fields = ()
 
     def __init__(
         self,
@@ -150,6 +164,11 @@ class CallInstruction(Instruction):
     The subroutine must be defined in the same Program.
     """
 
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ("subroutine_name",)
+
     def __init__(self, subroutine_name: str, program: Any):
         self.subroutine_name = subroutine_name
         self._program = program  # Reference to Program for subroutine lookup
@@ -162,6 +181,11 @@ class CallInstruction(Instruction):
 
 class ReturnInstruction(Instruction):
     """Return from the current subroutine immediately."""
+
+    _reads = ()
+    _writes = ()
+    _conditions = ()
+    _structural_fields = ()
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
         if not enabled:

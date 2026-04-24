@@ -6,7 +6,7 @@ import queue
 import sys
 import threading
 from collections.abc import Callable, Generator
-from typing import Any, BinaryIO, TypeVar
+from typing import Any, BinaryIO, ClassVar, TypeVar
 
 from pyrung.core import PLC
 from pyrung.core.context import ScanContext
@@ -19,6 +19,9 @@ from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
 from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
+    causal,
+    force_patch,
+    graph_slice,
     history_seek,
     lifecycle_launch,
     monitor_data_breakpoints,
@@ -80,6 +83,25 @@ class DAPAdapter:
         self._data_bp_handles: dict[str, Any] = {}
         self._data_bp_meta: dict[str, monitor_data_breakpoints.DataBreakpointMeta] = {}
         self._pending_snapshot_labels_by_scan: dict[int, set[str]] = {}
+
+        from pyrung.dap.capture import CaptureBuffer
+
+        self._capture = CaptureBuffer()
+        self._live_server: Any = None
+        self._harness: Any = None
+        self._bounds_accumulator: dict[str, Any] = {}
+        self._notes: dict[int, list[str]] = {}
+        self._action_log: list[tuple[int | None, str, str]] = []
+
+        self._miner_candidates: list[Any] = []
+        self._miner_accepted: list[Any] = []
+        self._miner_suppressed: set[str] = set()
+
+        import pyrung.dap.bounds_console  # noqa: F401
+        import pyrung.dap.harness_console  # noqa: F401
+        import pyrung.dap.miner_console  # noqa: F401
+        import pyrung.dap.reload_console  # noqa: F401
+        import pyrung.dap.spec_console  # noqa: F401
 
     @property
     def _runner(self) -> PLC | None:
@@ -153,6 +175,14 @@ class DAPAdapter:
     def _pending_predicate_pause(self, value: bool) -> None:
         self._session.pending_predicate_pause = value
 
+    @property
+    def _configuration_done(self) -> bool:
+        return self._session.configuration_done
+
+    @_configuration_done.setter
+    def _configuration_done(self, value: bool) -> None:
+        self._session.configuration_done = value
+
     def run(self) -> None:
         """Run the adapter loop until EOF or disconnect."""
         self._reader_thread = threading.Thread(
@@ -172,8 +202,6 @@ class DAPAdapter:
                 continue
             if kind == "internal_event":
                 self._send_event(item["event"], item.get("body"))
-                if item.get("event") == "stopped":
-                    self._emit_trace_event()
                 continue
             if kind == "eof":
                 self._stop_event.set()
@@ -316,7 +344,9 @@ class DAPAdapter:
         return stack_variables_evaluate.on_evaluate(self, args)
 
     def _evaluate_repl_command_locked(self, expression: str) -> str:
-        return stack_variables_evaluate.evaluate_repl_command_locked(self, expression)
+        from pyrung.dap.console import dispatch
+
+        return dispatch(self, expression).text
 
     def _evaluate_watch_expression_locked(self, expression: str) -> Any:
         return stack_variables_evaluate.evaluate_watch_expression_locked(self, expression)
@@ -356,6 +386,39 @@ class DAPAdapter:
 
     def _on_pyrungSeek(self, args: dict[str, Any]) -> HandlerResult:
         return history_seek.on_pyrung_seek(self, args)
+
+    def _on_pyrungTagChanges(self, args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_tag_changes(self, args)
+
+    def _on_pyrungForkAt(self, args: dict[str, Any]) -> HandlerResult:
+        return history_seek.on_pyrung_fork_at(self, args)
+
+    def _on_pyrungForce(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_force(self, args)
+
+    def _on_pyrungUnforce(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_unforce(self, args)
+
+    def _on_pyrungClearForces(self, _args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_clear_forces(self, _args)
+
+    def _on_pyrungPatch(self, args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_patch(self, args)
+
+    def _on_pyrungListForces(self, _args: dict[str, Any]) -> HandlerResult:
+        return force_patch.on_pyrung_list_forces(self, _args)
+
+    def _on_pyrungGraph(self, _args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_graph(self, _args)
+
+    def _on_pyrungSlice(self, args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_slice(self, args)
+
+    def _on_pyrungQuery(self, args: dict[str, Any]) -> HandlerResult:
+        return graph_slice.on_pyrung_query(self, args)
+
+    def _on_pyrungCausal(self, args: dict[str, Any]) -> HandlerResult:
+        return causal.on_pyrung_causal(self, args)
 
     def _continue_worker(self) -> None:
         execution_flow.continue_worker(self)
@@ -434,10 +497,15 @@ class DAPAdapter:
             return
 
         message = breakpoint.log_message or ""
-        self._enqueue_internal_event(
-            "output",
-            {"category": "console", "output": f"{message}\n"},
-        )
+        output_text = f"{message}\n"
+        buffer = self._session.scan_frame_buffer
+        if buffer is not None:
+            buffer.outputs.append(output_text)
+        else:
+            self._enqueue_internal_event(
+                "output",
+                {"category": "console", "output": output_text},
+            )
 
     def _record_snapshot_locked(self, *, label: str, state: SystemState) -> None:
         runner = self._runner
@@ -445,23 +513,24 @@ class DAPAdapter:
             return
         metadata = runner._snapshot_metadata_for_state(state)
         runner.history._label_scan(label, state.scan_id, metadata=metadata)
-        self._enqueue_internal_event(
-            "pyrungSnapshot",
-            {
-                "label": label,
-                "scanId": state.scan_id,
-                "timestamp": state.timestamp,
-                "rtcIso": metadata["rtc_iso"],
-                "rtcOffsetSeconds": metadata["rtc_offset_seconds"],
-            },
-        )
-        self._enqueue_internal_event(
-            "output",
-            {
-                "category": "console",
-                "output": f"Snapshot taken: {label} (scan {state.scan_id})\n",
-            },
-        )
+        snapshot_payload = {
+            "label": label,
+            "scanId": state.scan_id,
+            "timestamp": state.timestamp,
+            "rtcIso": metadata["rtc_iso"],
+            "rtcOffsetSeconds": metadata["rtc_offset_seconds"],
+        }
+        output_text = f"Snapshot taken: {label} (scan {state.scan_id})\n"
+        buffer = self._session.scan_frame_buffer
+        if buffer is not None:
+            buffer.snapshots.append(snapshot_payload)
+            buffer.outputs.append(output_text)
+        else:
+            self._enqueue_internal_event("pyrungSnapshot", snapshot_payload)
+            self._enqueue_internal_event(
+                "output",
+                {"category": "console", "output": output_text},
+            )
 
     def _flush_pending_snapshots_locked(self) -> None:
         runner = self._runner
@@ -495,13 +564,66 @@ class DAPAdapter:
         if runner is None:
             return None
 
-        return self._formatter.current_trace_body(
+        body = self._formatter.current_trace_body(
             event_result=runner.debug.last_event(),
             current_scan_id=runner.current_state.scan_id,
             trace_version=self.TRACE_VERSION,
             canonical_path=self._canonical_path,
             format_value=self._format_value,
         )
+        if body is not None:
+            body["forces"] = force_patch.json_safe_forces(runner.forces)
+            body["tagValues"] = {
+                name: self._format_value(value) for name, value in runner.current_state.tags.items()
+            }
+            body["tagTypes"] = self._tag_types_locked(runner)
+            body["tagHints"] = self._tag_hints_locked(runner)
+            body["tagGroups"] = self._tag_groups_locked(runner)
+        return body
+
+    def _live_trace_body_locked(self) -> dict[str, Any] | None:
+        """Build a single merged trace body from the last committed scan."""
+        runner = self._runner
+        if runner is None:
+            return None
+        scan_id = runner.current_state.scan_id
+        all_regions: list[dict[str, Any]] = []
+        for rung_id, _rung in enumerate(runner.debug.iter_top_level_rungs()):
+            try:
+                trace = runner.debug.rung_trace(rung_id)
+            except KeyError:
+                continue
+            if not trace.events:
+                continue
+            # Use the first event (parent rung step) which contains regions
+            # for the rung itself and all its branches.  The later events are
+            # individual branch steps that duplicate subsets of the same regions.
+            body = self._formatter.current_trace_body(
+                event_result=(scan_id, rung_id, trace.events[0]),
+                current_scan_id=scan_id,
+                trace_version=self.TRACE_VERSION,
+                canonical_path=self._canonical_path,
+                format_value=self._format_value,
+            )
+            if body is not None:
+                all_regions.extend(body.get("regions", []))
+        if not all_regions:
+            return None
+        return {
+            "traceVersion": self.TRACE_VERSION,
+            "traceSource": "inspect",
+            "scanId": scan_id,
+            "rungId": None,
+            "step": None,
+            "regions": all_regions,
+            "forces": force_patch.json_safe_forces(runner.forces),
+            "tagValues": {
+                name: self._format_value(value) for name, value in runner.current_state.tags.items()
+            },
+            "tagTypes": self._tag_types_locked(runner),
+            "tagHints": self._tag_hints_locked(runner),
+            "tagGroups": self._tag_groups_locked(runner),
+        }
 
     def _stopped_body(self, reason: str) -> dict[str, Any]:
         return {"reason": reason, "threadId": self.THREAD_ID, "allThreadsStopped": True}
@@ -524,6 +646,60 @@ class DAPAdapter:
         if isinstance(value, str):
             return value
         return repr(value)
+
+    @staticmethod
+    def _tag_types_locked(runner: Any) -> dict[str, str]:
+        return {name: tag.type.value for name, tag in runner._known_tags_by_name.items()}
+
+    _TYPE_RANGE_DEFAULTS: ClassVar[dict[str, tuple[int | float, int | float]]] = {
+        "int": (-32768, 32767),
+        "dint": (-2147483648, 2147483647),
+        "real": (-3.4e38, 3.4e38),
+        "word": (0, 65535),
+    }
+
+    @staticmethod
+    def _tag_hints_locked(runner: Any) -> dict[str, dict[str, Any]]:
+        hints: dict[str, dict[str, Any]] = {}
+        for name, tag in runner._known_tags_by_name.items():
+            entry: dict[str, Any] = {}
+            choices = getattr(tag, "choices", None)
+            if choices is not None:
+                entry["choices"] = {str(key): label for key, label in choices.items()}
+            if getattr(tag, "readonly", False):
+                entry["readonly"] = True
+            if getattr(tag, "external", False):
+                entry["external"] = True
+            if getattr(tag, "final", False):
+                entry["final"] = True
+            if getattr(tag, "public", False):
+                entry["public"] = True
+            tag_min = getattr(tag, "min", None)
+            tag_max = getattr(tag, "max", None)
+            type_val = tag.type.value
+            if tag_min is not None or tag_max is not None:
+                if tag_min is not None:
+                    entry["min"] = tag_min
+                if tag_max is not None:
+                    entry["max"] = tag_max
+                entry["rangeDefault"] = False
+            elif choices is None and type_val in DAPAdapter._TYPE_RANGE_DEFAULTS:
+                default_min, default_max = DAPAdapter._TYPE_RANGE_DEFAULTS[type_val]
+                entry["min"] = default_min
+                entry["max"] = default_max
+                entry["rangeDefault"] = True
+            if entry:
+                hints[name] = entry
+        return hints
+
+    @staticmethod
+    def _tag_groups_locked(runner: Any) -> dict[str, list[str]]:
+        groups: dict[str, list[str]] = {}
+        for name, tag in runner._known_tags_by_name.items():
+            group = getattr(tag, "_pyrung_structure_name", None)
+            if group is not None:
+                groups.setdefault(group, []).append(name)
+        return groups
 
     def _parse_literal(self, raw_value: str) -> bool | int | float | str:
         text = raw_value.strip()
@@ -566,8 +742,6 @@ class DAPAdapter:
                 break
             if item.get("kind") == "internal_event":
                 self._send_event(item["event"], item.get("body"))
-                if item.get("event") == "stopped":
-                    self._emit_trace_event()
                 processed += 1
                 continue
             pending.append(item)

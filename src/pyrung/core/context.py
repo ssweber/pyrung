@@ -7,10 +7,14 @@ preserving read-after-write visibility.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from pyrsistent import PMap, pmap
+
 if TYPE_CHECKING:
+    from pyrung.core.scan_log import IoResultRecord, IoSubmitRecord
     from pyrung.core.state import SystemState
 
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
@@ -24,13 +28,14 @@ class ConditionView:
     by instructions that execute between branch evaluations.
     """
 
-    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver")
+    __slots__ = ("_state", "_tags_snapshot", "_memory_snapshot", "_resolver", "_scope_token")
 
     def __init__(self, ctx: ScanContext) -> None:
         self._state: SystemState = ctx._state
         self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
         self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
         self._resolver = ctx._resolver
+        self._scope_token = ctx._condition_scope_token
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         if name in self._tags_snapshot:
@@ -76,6 +81,10 @@ class ConditionView:
     def original_state(self) -> SystemState:
         return self._state
 
+    @property
+    def scope_token(self) -> object:
+        return self._scope_token
+
 
 class ScanContext:
     """Batched write context for a single scan cycle.
@@ -101,6 +110,14 @@ class ScanContext:
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
+        "_condition_scope_token",
+        "_rung_firings",
+        "_consumed_tags_getter",
+        "_io_submit_staging",
+        "_io_drain_staging",
+        "_replay_io_submits",
+        "_replay_io_drains",
+        "_is_replay_io",
     )
 
     def __init__(
@@ -109,11 +126,24 @@ class ScanContext:
         *,
         resolver: TagResolver | None = None,
         read_only_tags: frozenset[str] = frozenset(),
+        consumed_tags_getter: Callable[[], frozenset[str] | None] | None = None,
+        replay_io: tuple[Mapping[str, IoSubmitRecord], Mapping[str, IoResultRecord]] | None = None,
     ) -> None:
         """Create a new ScanContext from a SystemState.
 
         Args:
             state: The current system state to build upon.
+            resolver: Optional fallback for unresolved tag reads.
+            read_only_tags: System points that must not be written.
+            consumed_tags_getter: Optional callable returning the set of
+                tag names that at least one rung reads.  When provided
+                and non-None, :meth:`capturing_rung` drops writes to
+                tags outside the set — the firing log is consumed by
+                the simulator's own analysis APIs, which by definition
+                don't ask about unread tags.  Returning ``None`` from
+                the callable bypasses the filter (escape hatch).
+            replay_io: When replaying, a pair of (submits, drains)
+                for this scan.  ``None`` during live execution.
         """
         self._state = state
         self._tags_evolver = state.tags.evolver()
@@ -123,6 +153,18 @@ class ScanContext:
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
+        self._condition_scope_token = object()
+        self._rung_firings: dict[int, dict[str, Any]] = {}
+        self._consumed_tags_getter = consumed_tags_getter
+        self._io_submit_staging: dict[str, IoSubmitRecord] = {}
+        self._io_drain_staging: dict[str, IoResultRecord] = {}
+        self._is_replay_io: bool = replay_io is not None
+        self._replay_io_submits: Mapping[str, IoSubmitRecord] = (
+            replay_io[0] if replay_io is not None else {}
+        )
+        self._replay_io_drains: Mapping[str, IoResultRecord] = (
+            replay_io[1] if replay_io is not None else {}
+        )
 
     # =========================================================================
     # Read operations (with pending visibility)
@@ -268,6 +310,80 @@ class ScanContext:
         such as computing _prev:* for edge detection.
         """
         return self._state
+
+    # =========================================================================
+    # Rung-scoped firing capture
+    # =========================================================================
+
+    @contextmanager
+    def capturing_rung(self, rung_index: int) -> Iterator[None]:
+        """Attribute all tag writes made inside this block to ``rung_index``.
+
+        Produces the input data for :attr:`rung_firings` by diffing
+        ``_tags_pending`` at the scope boundary.  Wrap each top-level
+        rung evaluation in this context manager; both the non-debug and
+        debug scan paths rely on it to populate the firing log used by
+        causal-chain analysis.
+
+        Nesting is not supported — each scope must close before the next
+        opens.  Writes made outside any scope (e.g. pre-force, system
+        runtime) are intentionally unattributed.
+        """
+        before = dict(self._tags_pending)
+        try:
+            yield
+        finally:
+            pending = self._tags_pending
+            raw_writes = {
+                name: pending[name]
+                for name in pending
+                if name not in before or before[name] != pending[name]
+            }
+            if raw_writes:
+                consumed = (
+                    self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
+                )
+                if consumed is None:
+                    writes = raw_writes
+                else:
+                    writes = {name: val for name, val in raw_writes.items() if name in consumed}
+                # Record the rung_index even when the filter emptied
+                # ``writes`` — the non-empty ``raw_writes`` establishes
+                # that the rung fired, which ``query.cold_rungs`` /
+                # ``query.hot_rungs`` and ``effect()``'s PDG fallback
+                # both need.  Consumers that care about per-tag values
+                # (like ``cause()``'s value-match) see the filtered view
+                # and fall through cleanly when it's empty.
+                self._rung_firings[rung_index] = writes
+
+    @property
+    def rung_firings(self) -> PMap:
+        """Per-rung tag writes captured via :meth:`capturing_rung`.
+
+        ``PMap[int, PMap[str, Any]]`` — rung index to ``{tag: value_written}``.
+        Empty if no rung scopes were opened during the scan.
+        """
+        return pmap({i: pmap(w) for i, w in self._rung_firings.items()})
+
+    # =========================================================================
+    # I/O replay recording and lookup
+    # =========================================================================
+
+    @property
+    def is_replay_io(self) -> bool:
+        return self._is_replay_io
+
+    def record_io_submit(self, key: str, record: IoSubmitRecord) -> None:
+        self._io_submit_staging[key] = record
+
+    def record_io_drain(self, key: str, record: IoResultRecord) -> None:
+        self._io_drain_staging[key] = record
+
+    def has_replay_io_submit(self, key: str) -> bool:
+        return key in self._replay_io_submits
+
+    def get_replay_io_drain(self, key: str) -> IoResultRecord | None:
+        return self._replay_io_drains.get(key)
 
     # =========================================================================
     # Commit

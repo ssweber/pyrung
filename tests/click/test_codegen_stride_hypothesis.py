@@ -12,9 +12,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from pyrung.click import TagMap, ds, ladder_to_pyrung, pyrung_to_ladder, x
-from pyrung.core import Bool, Program, Rung, TagType
+from pyrung.core import Bool, Int, Program, Rung, named_array
 from pyrung.core.program import copy
-from pyrung.core.structure import _FieldSpec, _NamedArrayRuntime
+from tests.click.helpers import exec_with_source
 
 
 def _field_name(i: int) -> str:
@@ -44,24 +44,18 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
     count, field_count, stride = params
 
     # --- Build named_array runtime dynamically ---
-    field_specs = tuple(
-        _FieldSpec(name=_field_name(i), type=TagType.INT, default=0, retentive=True)
-        for i in range(field_count)
-    )
-    runtime = _NamedArrayRuntime(
-        name="Arr",
-        type=TagType.INT,
-        count=count,
-        stride=stride,
-        field_specs=field_specs,
-    )
+    runtime_namespace: dict[str, object] = {"__module__": __name__}
+    for i in range(field_count):
+        runtime_namespace[_field_name(i)] = 0
+    runtime_type = type("Arr", (), runtime_namespace)
+    runtime = named_array(Int, count=count, stride=stride)(runtime_type)
 
     # --- Build a minimal program that references two array tags ---
     Enable = Bool("Enable")
     # Use first field of first instance and last field of last instance
     # to guarantee we always reference two distinct tags from the array.
-    src_tag = runtime._blocks[_field_name(0)][1]
-    dst_tag = runtime._blocks[_field_name(field_count - 1)][count]
+    src_tag = getattr(runtime[1], _field_name(0))
+    dst_tag = getattr(runtime[count], _field_name(field_count - 1))
 
     with Program(strict=False) as logic:
         with Rung(Enable):
@@ -113,6 +107,6 @@ def test_named_array_stride_round_trip(params, tmp_path_factory):
 
     # Assertion 3: generated code executes and map_to succeeds
     ns: dict = {}
-    exec(code, ns)
+    exec_with_source(code, ns)
     assert "logic" in ns, "Generated code must define 'logic'"
     assert "mapping" in ns, "Generated code must define 'mapping'"

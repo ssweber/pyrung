@@ -76,6 +76,36 @@ class _AnalyzedRung:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class _PhysicalSpec:
+    """A serializable Physical(...) declaration used by codegen."""
+
+    name: str
+    on_delay: str | None = None
+    off_delay: str | None = None
+    profile: str | None = None
+    system: str | None = None
+
+
+@dataclass
+class _PhysicalDecl:
+    """A hoisted Physical(...) declaration."""
+
+    var_name: str
+    spec: _PhysicalSpec
+
+
+@dataclass
+class _TagMetadata:
+    """Physical/range metadata to emit on tags, fields, and slots."""
+
+    physical: _PhysicalSpec | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
+
+
 @dataclass
 class _TagDecl:
     """A tag declaration to emit."""
@@ -87,6 +117,7 @@ class _TagDecl:
     block_var: str  # block variable for TagMap (e.g. "x")
     block_index: int  # address index (e.g. 1 for X001)
     comment: str  # inline comment (e.g. "# X001" when using nicknames)
+    metadata: _TagMetadata = field(default_factory=_TagMetadata)
 
 
 @dataclass
@@ -135,6 +166,16 @@ class _BlockSlotDecl:
     default_overridden: bool
     comment: str
     comment_overridden: bool
+    physical: _PhysicalSpec | None = None
+    physical_overridden: bool = False
+    link: str | None = None
+    link_overridden: bool = False
+    min: int | float | None = None
+    min_overridden: bool = False
+    max: int | float | None = None
+    max_overridden: bool = False
+    uom: str | None = None
+    uom_overridden: bool = False
     alias_var_name: str | None = None
 
 
@@ -167,6 +208,8 @@ class _StructureDecl:
     hw_start: int | None  # first hw address (for named_array)
     hw_end: int | None  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
+    field_metadata: dict[str, _TagMetadata] = field(default_factory=dict)
+    field_slot_metadata: dict[tuple[str, int], _TagMetadata] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
     always_number: bool = False
 
@@ -210,6 +253,7 @@ class _OperandCollection:
     range_comments: dict[str, str] = field(default_factory=dict)
     timer_counter_operands: set[str] = field(default_factory=set)
     timer_counter_clones: list[_TimerCounterCloneDecl] = field(default_factory=list)
+    physical_decls: dict[_PhysicalSpec, _PhysicalDecl] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

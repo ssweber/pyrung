@@ -22,11 +22,14 @@ from pyrung.click.codegen.models import (
     _FieldHw,
     _FileRefs,
     _OperandCollection,
+    _PhysicalDecl,
+    _PhysicalSpec,
     _PlainBlockDecl,
     _RangeDecl,
     _SemanticRender,
     _StructureDecl,
     _TagDecl,
+    _TagMetadata,
     _TimerCounterCloneDecl,
 )
 from pyrung.click.codegen.utils import (
@@ -188,6 +191,54 @@ def _enrich_with_ownership(
 
     from pyclickplc.addresses import parse_address
 
+    def _spec_from_physical(physical: Any) -> _PhysicalSpec | None:
+        if physical is None:
+            return None
+        name = getattr(physical, "name", None)
+        if not isinstance(name, str) or name == "":
+            return None
+        return _PhysicalSpec(
+            name=name,
+            on_delay=getattr(physical, "on_delay", None),
+            off_delay=getattr(physical, "off_delay", None),
+            profile=getattr(physical, "profile", None),
+            system=getattr(physical, "system", None),
+        )
+
+    def _metadata_from_tag(tag: Any) -> _TagMetadata:
+        return _TagMetadata(
+            physical=_spec_from_physical(getattr(tag, "physical", None)),
+            link=getattr(tag, "link", None),
+            min=getattr(tag, "min", None),
+            max=getattr(tag, "max", None),
+            uom=getattr(tag, "uom", None),
+        )
+
+    def _metadata_is_empty(meta: _TagMetadata) -> bool:
+        return (
+            meta.physical is None
+            and meta.link is None
+            and meta.min is None
+            and meta.max is None
+            and meta.uom is None
+        )
+
+    def _register_physical(meta: _TagMetadata) -> None:
+        if meta.physical is None or meta.physical in collection.physical_decls:
+            return
+        raw_name = f"{meta.physical.name}_physical"
+        var_name = _make_safe_identifier(
+            raw_name, used_names=used_symbol_names, fallback="physical"
+        )
+        used_symbol_names.add(var_name)
+        collection.physical_decls[meta.physical] = _PhysicalDecl(
+            var_name=var_name, spec=meta.physical
+        )
+
+    def _register_metadata(meta: _TagMetadata) -> _TagMetadata:
+        _register_physical(meta)
+        return meta
+
     def _resolve_hw_tag(slot_tag: Any) -> Any:
         """Resolve a logical slot to its hardware tag."""
         hw = structured_map._block_slot_forward_by_name.get(slot_tag.name)
@@ -213,12 +264,22 @@ def _enrich_with_ownership(
 
         fields: list[tuple[str, str, object]] = []
         field_retentive: dict[str, bool] = {}
+        field_metadata: dict[str, _TagMetadata] = {}
+        field_slot_metadata: dict[tuple[str, int], _TagMetadata] = {}
         for fn in field_names:
             block = runtime._blocks[fn]
             type_name = _TAG_TYPE_MAP.get(block.type.name, block.type.name)
             sv = block.slot(1)
             fields.append((fn, type_name, sv.default))
             field_retentive[fn] = sv.retentive
+            slot_metadata = tuple(_metadata_from_tag(block.slot(i)) for i in range(1, si.count + 1))
+            nonempty_metadata = [meta for meta in slot_metadata if not _metadata_is_empty(meta)]
+            if nonempty_metadata and all(meta == slot_metadata[0] for meta in slot_metadata):
+                field_metadata[fn] = _register_metadata(slot_metadata[0])
+            else:
+                for idx, metadata in enumerate(slot_metadata, start=1):
+                    if not _metadata_is_empty(metadata):
+                        field_slot_metadata[(fn, idx)] = _register_metadata(metadata)
 
         base_type: str | None = None
         if si.kind == "named_array":
@@ -272,6 +333,8 @@ def _enrich_with_ownership(
             hw_start=hw_start,
             hw_end=hw_end,
             field_retentive=field_retentive,
+            field_metadata=field_metadata,
+            field_slot_metadata=field_slot_metadata,
             field_hw=per_field_hw,
             always_number=getattr(runtime, "always_number", False),
         )
@@ -319,6 +382,7 @@ def _enrich_with_ownership(
         )
         for logical_addr in entry.logical_addresses:
             slot = logical_block.slot(logical_addr)
+            metadata = _register_metadata(_metadata_from_tag(slot))
             decl.slots[logical_addr] = _BlockSlotDecl(
                 index=logical_addr,
                 tag_name=slot.name,
@@ -329,6 +393,16 @@ def _enrich_with_ownership(
                 default_overridden=slot.default_overridden,
                 comment=slot.comment,
                 comment_overridden=slot.comment_overridden,
+                physical=metadata.physical,
+                physical_overridden=slot.physical_overridden,
+                link=metadata.link,
+                link_overridden=slot.link_overridden,
+                min=metadata.min,
+                min_overridden=slot.min_overridden,
+                max=metadata.max,
+                max_overridden=slot.max_overridden,
+                uom=metadata.uom,
+                uom_overridden=slot.uom_overridden,
             )
 
         seen_plain_blocks[block_name] = decl
@@ -466,6 +540,15 @@ def _enrich_with_ownership(
             comment = _build_partial_range_comment(start_owner, end_owner)
             if comment is not None:
                 collection.range_comments[range_str] = comment
+
+    tag_by_hardware = {entry.hardware.name: entry.logical for entry in structured_map.tags()}
+    for operand, decl in collection.tags.items():
+        if operand in collection.semantic_operands or operand in collection.timer_counter_operands:
+            continue
+        logical_tag = tag_by_hardware.get(operand)
+        if logical_tag is None:
+            continue
+        decl.metadata = _register_metadata(_metadata_from_tag(logical_tag))
 
 
 def _build_partial_range_comment(

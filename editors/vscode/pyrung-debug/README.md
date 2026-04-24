@@ -9,7 +9,6 @@ Debug pyrung ladder logic programs directly in VS Code using the Debug Adapter P
 - Data breakpoints for monitored tags
 - Monitor values in the Variables panel under `PLC Monitors`
 - Trace decorations and inline condition annotations
-- Rapid auto-step mode (`next` / `stepIn` / `scan`) for live Watch and inline updates
 - Debug Console force commands (`force`, `unforce`, `clear_forces`)
 
 ## Requirements
@@ -68,15 +67,6 @@ Use the Command Palette:
 Monitors appear in the Variables panel (`PLC Monitors` scope) and the `pyrung: Debug Events` output channel. The status bar shows `M:<count>` during a session.
 
 Right-click a monitored variable to set a **data breakpoint** that stops when its value changes.
-
-## Rapid Step Mode
-
-Repeatedly sends step requests while paused for continuous Watch and inline feedback.
-
-- `pyrung: Toggle Rapid Step` — start/stop
-- `pyrung: Configure Rapid Step` — set mode (`next`, `stepIn`, `scan`) and interval
-
-Status bar shows `R:...` when active. Manual debug controls stop rapid mode automatically.
 
 ## Debug Console Commands
 

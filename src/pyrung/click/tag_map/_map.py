@@ -445,7 +445,7 @@ class TagMap:
         # 1. Index plain block entries
         structure_block_names: set[str] = set()
         for structure in self._structures:
-            runtime = cast(Any, structure.runtime)
+            runtime = structure.runtime
             for field_name in runtime.field_names:
                 structure_block_names.add(runtime._blocks[field_name].name)
 
@@ -469,7 +469,7 @@ class TagMap:
 
         # 2. Index structures (overwrites block entries for same addresses)
         for structure in self._structures:
-            runtime = cast(Any, structure.runtime)
+            runtime = structure.runtime
             for field_name in runtime.field_names:
                 block = runtime._blocks[field_name]
                 for i in range(1, structure.count + 1):
@@ -664,13 +664,13 @@ class TagMap:
             if kind != "named_array":
                 return
 
-            field_name = cast(str, logical._pyrung_structure_field)  # ty: ignore[unresolved-attribute]
+            field_name = cast(str, logical._pyrung_structure_field)
             field_offset = cast(tuple[str, ...], runtime.field_names).index(field_name)
             stride = cast(int, runtime.stride)
             instance = (
                 logical.start
                 if isinstance(logical, Block)
-                else cast(int, logical._pyrung_structure_index)  # ty: ignore[unresolved-attribute]
+                else cast(int, logical._pyrung_structure_index)
             )
             span_start = address - ((instance - 1) * stride + field_offset)
             span_end = span_start + cast(int, runtime.count) * stride - 1

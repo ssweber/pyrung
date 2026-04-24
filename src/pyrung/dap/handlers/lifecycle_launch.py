@@ -33,6 +33,7 @@ def on_initialize(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
 
 
 def on_configuration_done(adapter: Any, _args: dict[str, Any]) -> HandlerResult:
+    adapter._configuration_done = True
     return {}, []
 
 
@@ -80,10 +81,16 @@ def on_launch(adapter: Any, args: dict[str, Any]) -> HandlerResult:
         adapter._current_rung_index = None
         adapter._current_rung = None
         adapter._current_ctx = None
+        adapter._configuration_done = False
         adapter._program_path = str(program_path)
         adapter._breakpoints.clear()
         adapter._pending_predicate_pause = False
         adapter._rebuild_breakpoint_index_locked()
+
+    session_name = parsed.session or program_path.stem
+    adapter._session.session_name = session_name
+    _start_live_server(adapter, session_name)
+    _try_auto_install_harness(adapter)
 
     return {}, [("stopped", adapter._stopped_body("entry"))]
 
@@ -108,6 +115,17 @@ def discover_runner(adapter: Any, namespace: dict[str, Any]) -> PLC:
 
 
 def shutdown(adapter: Any) -> HandlerResult:
+    stop_event = getattr(adapter, "_watch_stop_event", None)
+    if stop_event is not None:
+        stop_event.set()
+    watch_thread = getattr(adapter, "_watch_thread", None)
+    if watch_thread is not None:
+        watch_thread.join(timeout=2.0)
+    adapter._watch_thread = None
+    adapter._watch_stop_event = None
+
+    _stop_live_server(adapter)
+    _uninstall_harness(adapter)
     with adapter._state_lock:
         adapter._clear_debug_registrations_locked()
         adapter._runner = None
@@ -117,11 +135,47 @@ def shutdown(adapter: Any) -> HandlerResult:
         adapter._current_rung_index = None
         adapter._current_rung = None
         adapter._current_ctx = None
+        adapter._configuration_done = False
     adapter._stop_event.set()
     adapter._pause_event.set()
     return {}, [("terminated", {})]
 
 
+def _start_live_server(adapter: Any, session_name: str) -> None:
+    if adapter._live_server is not None:
+        adapter._live_server.stop()
+    from pyrung.dap.live import LiveServer
+
+    server = LiveServer(adapter, session_name)
+    try:
+        server.start()
+    except OSError:
+        adapter._live_server = None
+        return
+    adapter._live_server = server
+
+
+def _stop_live_server(adapter: Any) -> None:
+    if adapter._live_server is not None:
+        adapter._live_server.stop()
+        adapter._live_server = None
+
+
+def _try_auto_install_harness(adapter: Any) -> None:
+    from pyrung.dap.harness_console import try_auto_install
+
+    banner = try_auto_install(adapter)
+    if banner is not None:
+        adapter._enqueue_internal_event("output", {"category": "console", "output": f"{banner}\n"})
+
+
+def _uninstall_harness(adapter: Any) -> None:
+    from pyrung.dap.harness_console import uninstall_harness
+
+    uninstall_harness(adapter)
+
+
 @dataclass(frozen=True)
 class _LaunchRequestArgs:
     program: Any = None
+    session: Any = None

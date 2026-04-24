@@ -14,6 +14,7 @@ from pyrung.core import (
     Counter,
     Dint,
     Field,
+    Harness,
     InputBlock,
     Int,
     ModbusAddress,
@@ -21,6 +22,7 @@ from pyrung.core import (
     ModbusTcpTarget,
     Or,
     OutputBlock,
+    Physical,
     Program,
     RangeComparison,
     RangeSlotView,
@@ -54,6 +56,7 @@ from pyrung.core import (
     pack_bits,
     pack_text,
     pack_words,
+    profile,
     program,
     receive,
     reset,
@@ -78,6 +81,9 @@ from pyrung.core import (
 
 __all__ = [
     "PLC",
+    "Physical",
+    "Harness",
+    "profile",
     "system",
     "Field",
     "auto",

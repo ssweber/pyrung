@@ -2,7 +2,19 @@
 
 import pytest
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, SystemState, branch, copy, out
+from pyrung.core import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    SystemState,
+    Timer,
+    branch,
+    copy,
+    on_delay,
+    out,
+)
 from tests.conftest import evaluate_program
 
 
@@ -179,6 +191,24 @@ class TestContinueRuntimeValidation:
         with pytest.raises(RuntimeError, match="no prior condition snapshot exists"):
             rung.evaluate(ctx)
 
+    def test_continue_rejects_snapshot_from_different_execution_scope(self):
+        """continued() requires the prior snapshot to come from the same scope."""
+        from pyrung.core.context import ConditionView, ScanContext
+        from pyrung.core.rung import Rung as RungLogic
+
+        A = Bool("A")
+
+        rung = RungLogic(A)
+        rung._use_prior_snapshot = True
+
+        state = SystemState().with_tags({"A": True})
+        ctx = ScanContext(state)
+        ctx._condition_snapshot = ConditionView(ctx)
+        ctx._condition_scope_token = object()
+
+        with pytest.raises(RuntimeError, match="same execution scope"):
+            rung.evaluate(ctx)
+
 
 class TestContinueSubroutineBoundary:
     """Subroutine boundaries fence the condition snapshot."""
@@ -239,6 +269,28 @@ class TestContinueSubroutineBoundary:
         assert runner.current_state.tags["Counter"] == 10
         assert runner.current_state.tags["X"] is False  # saw Counter=0
         assert runner.current_state.tags["Y"] is True  # saw Counter=0
+
+
+class TestContinueInstructionConditions:
+    """Instruction helper conditions inherit the continued snapshot too."""
+
+    def test_continued_rung_instruction_helper_uses_original_snapshot(self):
+        Enable = Bool("Enable")
+        ResetBtn = Bool("ResetBtn")
+
+        with Program() as logic:
+            with Rung(Enable):
+                copy(True, ResetBtn)
+            with Rung(Enable).continued():
+                on_delay(Timer[1], preset=100).reset(ResetBtn)
+
+        runner = PLC(logic, dt=0.010)
+        runner.patch({"Enable": True, "ResetBtn": False})
+        runner.step()
+
+        assert runner.current_state.tags["ResetBtn"] is True
+        assert runner.current_state.tags["Timer_Acc"] == 10
+        assert runner.current_state.tags["Timer_Done"] is False
 
 
 class TestContinueMethodChaining:

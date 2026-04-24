@@ -72,20 +72,18 @@ def test_send_starts_reports_success_then_restarts(monkeypatch: pytest.MonkeyPat
     assert runner.current_state.tags["Success"] is False
 
 
-def test_send_rung_false_discards_pending_result_and_clears_outputs(
+def test_send_enable_drop_lets_pending_complete_and_latches_success(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Click semantics: once submitted, a transaction runs to completion even
+    if Enable drops. Success/Error then latch and persist across disable."""
     from pyrung.core.instruction.send_receive import _core as click_send_receive
-
-    class _UncancellableFuture(Future[click_send_receive._RequestResult]):
-        def cancel(self) -> bool:
-            return False
 
     futures: list[Future[click_send_receive._RequestResult]] = []
 
     def fake_submit(**kwargs: object) -> Future[click_send_receive._RequestResult]:
         _ = kwargs
-        fut: Future[click_send_receive._RequestResult] = _UncancellableFuture()
+        fut: Future[click_send_receive._RequestResult] = Future()
         futures.append(fut)
         return fut
 
@@ -116,21 +114,85 @@ def test_send_rung_false_discards_pending_result_and_clears_outputs(
     assert runner.current_state.tags["Sending"] is True
     assert len(futures) == 1
 
+    # Enable drops while request is in flight — busy stays True.
     runner.patch({"Enable": False})
     runner.step()
-
-    assert runner.current_state.tags["Sending"] is False
+    assert runner.current_state.tags["Sending"] is True
     assert runner.current_state.tags["Success"] is False
     assert runner.current_state.tags["Error"] is False
-    assert runner.current_state.tags["ExCode"] == 0
 
+    # Future resolves successfully — busy clears, success latches True.
     futures[0].set_result(click_send_receive._RequestResult(ok=True, exception_code=0))
     runner.patch({"Enable": False})
     runner.step()
     assert runner.current_state.tags["Sending"] is False
-    assert runner.current_state.tags["Success"] is False
+    assert runner.current_state.tags["Success"] is True
     assert runner.current_state.tags["Error"] is False
     assert runner.current_state.tags["ExCode"] == 0
+
+    # Success stays latched across subsequent disabled scans.
+    runner.patch({"Enable": False})
+    runner.step()
+    assert runner.current_state.tags["Sending"] is False
+    assert runner.current_state.tags["Success"] is True
+    assert runner.current_state.tags["Error"] is False
+
+
+def test_send_re_enable_after_success_clears_latch_and_restarts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Re-enabling after a latched success clears success and starts a new request."""
+    from pyrung.core.instruction.send_receive import _core as click_send_receive
+
+    futures: list[Future[click_send_receive._RequestResult]] = []
+
+    def fake_submit(**kwargs: object) -> Future[click_send_receive._RequestResult]:
+        _ = kwargs
+        fut: Future[click_send_receive._RequestResult] = Future()
+        futures.append(fut)
+        return fut
+
+    monkeypatch.setattr(click_send_receive, "_submit_click_send_request", fake_submit)
+
+    Enable = Bool("Enable")
+    Source = Int("Source")
+    Sending = Bool("Sending")
+    Success = Bool("Success")
+    Error = Bool("Error")
+    ExCode = Int("ExCode")
+
+    with Program() as logic:
+        with Rung(Enable):
+            click_send_receive.send(
+                target=_TARGET,
+                remote_start="DS1",
+                source=Source,
+                sending=Sending,
+                success=Success,
+                error=Error,
+                exception_response=ExCode,
+            )
+
+    runner = PLC(logic=logic)
+    runner.patch({"Enable": True, "Source": 1})
+    runner.step()
+    futures[0].set_result(click_send_receive._RequestResult(ok=True, exception_code=0))
+    runner.patch({"Enable": True})
+    runner.step()
+    assert runner.current_state.tags["Success"] is True
+
+    # Drop enable — success stays latched.
+    runner.patch({"Enable": False})
+    runner.step()
+    assert runner.current_state.tags["Success"] is True
+    assert len(futures) == 1
+
+    # Re-enable — submit fires and success clears on the same scan.
+    runner.patch({"Enable": True, "Source": 2})
+    runner.step()
+    assert runner.current_state.tags["Sending"] is True
+    assert runner.current_state.tags["Success"] is False
+    assert len(futures) == 2
 
 
 def test_receive_applies_values_and_sets_success(monkeypatch: pytest.MonkeyPatch):

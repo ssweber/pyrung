@@ -6,8 +6,9 @@ They carry type metadata but hold no runtime state.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, IntEnum
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from pyrung.core._source import _capture_source
@@ -16,6 +17,7 @@ from pyrung.core.live_binding import get_active_runner
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.memory_block import Block, BlockRange
+    from pyrung.core.physical import Physical
 
 
 class TagType(Enum):
@@ -27,6 +29,76 @@ class TagType(Enum):
     REAL = "real"  # 32-bit float
     WORD = "word"  # 16-bit unsigned
     CHAR = "char"  # Single ASCII character
+
+
+ChoiceKey = int | float | str
+ChoiceMap = dict[ChoiceKey, str]
+
+
+def _normalize_default_value(raw: object) -> object:
+    """Resolve tag-backed defaults to plain scalar values."""
+    value = raw
+    while isinstance(value, Tag):
+        value = value.default
+    return value
+
+
+def _structured_choice_items(raw: object, *, owner: str):
+    structure_kind = getattr(raw, "_structure_kind", None)
+    if structure_kind not in {"udt", "named_array"}:
+        return None
+
+    count = getattr(raw, "count", None)
+    if count != 1:
+        raise TypeError(f"{owner} structure choices require count=1, got {count!r}.")
+
+    try:
+        field_names = tuple(cast(Any, raw).field_names)
+    except Exception as exc:  # pragma: no cover - defensive
+        raise TypeError(f"{owner} structure choices must expose field_names.") from exc
+
+    def _items():
+        for field_name in field_names:
+            tag = getattr(raw, field_name)
+            yield tag.default, field_name
+
+    return _items()
+
+
+def _normalize_choices(
+    raw: object,
+    *,
+    tag_type: TagType,
+    owner: str = "choices",
+) -> ChoiceMap | None:
+    if raw is None:
+        return None
+    if tag_type == TagType.BOOL:
+        raise TypeError(f"{owner} are not supported for BOOL tags.")
+
+    struct_items = _structured_choice_items(raw, owner=owner)
+    if struct_items is not None:
+        items = struct_items
+    elif isinstance(raw, type) and issubclass(raw, IntEnum):
+        items = ((member.value, member.name) for member in raw)
+    else:
+        try:
+            items = dict(cast(Mapping[object, object] | Any, raw)).items()
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"{owner} must be a mapping, IntEnum type, or count-one structure, "
+                f"got {type(raw).__name__}."
+            ) from exc
+
+    normalized: ChoiceMap = {}
+    for key, label in items:
+        if isinstance(key, bool) or not isinstance(key, (int, float, str)):
+            raise TypeError(f"{owner} keys must be int, float, or str, got {key!r}.")
+        if not isinstance(label, str):
+            raise TypeError(f"{owner} labels must be strings, got {label!r}.")
+        normalized[key] = label
+
+    return normalized or None
 
 
 @dataclass(frozen=True)
@@ -57,8 +129,20 @@ class Tag:
     default: Any = field(default=None)
     retentive: bool = False
     comment: str = ""
+    choices: ChoiceMap | None = None
+    readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
+    physical: Physical | None = None
+    link: str | None = None
+    min: int | float | None = None
+    max: int | float | None = None
+    uom: str | None = None
 
     def __post_init__(self):
+        object.__setattr__(self, "default", _normalize_default_value(self.default))
+
         # Set type-appropriate default if not specified
         if self.default is None:
             defaults = {
@@ -72,6 +156,29 @@ class Tag:
             # Use object.__setattr__ because frozen=True
             object.__setattr__(self, "default", defaults.get(self.type, 0))
 
+        # Mutual exclusivity checks
+        if self.readonly and self.final:
+            raise ValueError(
+                f"Tag {self.name!r}: readonly and final are mutually exclusive "
+                "(readonly = zero writers, final = exactly one)."
+            )
+        if self.readonly and self.external:
+            raise ValueError(
+                f"Tag {self.name!r}: readonly and external are mutually exclusive "
+                "(readonly = nothing writes it, external = something outside the ladder writes it)."
+            )
+        if self.min is not None and self.max is not None and self.min >= self.max:
+            raise ValueError(f"Tag {self.name!r}: min must be less than max.")
+        if self.choices is not None and (self.min is not None or self.max is not None):
+            raise ValueError(f"Tag {self.name!r}: choices cannot be combined with min/max.")
+        if self.readonly and self.physical is not None:
+            raise ValueError(f"Tag {self.name!r}: readonly cannot be combined with physical.")
+        if self.physical is not None and self.physical.profile is not None and self.link is None:
+            raise ValueError(
+                f"Tag {self.name!r}: physical profile requires link "
+                "(profile defines response to a linked command)."
+            )
+
     def __hash__(self) -> int:
         return hash(self.name)
 
@@ -79,7 +186,7 @@ class Tag:
         """Create equality comparison condition."""
         from pyrung.core.condition import CompareEq
 
-        cond = CompareEq(self, other)
+        cond = CompareEq(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -87,7 +194,7 @@ class Tag:
         """Create inequality comparison condition."""
         from pyrung.core.condition import CompareNe
 
-        cond = CompareNe(self, other)
+        cond = CompareNe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -95,7 +202,7 @@ class Tag:
         """Create less-than comparison condition."""
         from pyrung.core.condition import CompareLt
 
-        cond = CompareLt(self, other)
+        cond = CompareLt(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -103,7 +210,7 @@ class Tag:
         """Create less-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareLe
 
-        cond = CompareLe(self, other)
+        cond = CompareLe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -111,7 +218,7 @@ class Tag:
         """Create greater-than comparison condition."""
         from pyrung.core.condition import CompareGt
 
-        cond = CompareGt(self, other)
+        cond = CompareGt(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -119,7 +226,7 @@ class Tag:
         """Create greater-than-or-equal comparison condition."""
         from pyrung.core.condition import CompareGe
 
-        cond = CompareGe(self, other)
+        cond = CompareGe(cast(Any, self), other)
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -387,7 +494,7 @@ class Tag:
         if self.type == TagType.BOOL:
             from pyrung.core.condition import NormallyClosedCondition
 
-            cond = NormallyClosedCondition(self)
+            cond = NormallyClosedCondition(cast(Any, self))
             cond.source_file, cond.source_line = _capture_source(depth=2)
             return cond
 
@@ -448,7 +555,7 @@ class ImmediateRef:
         """Create a normally-closed immediate contact condition."""
         from pyrung.core.condition import NormallyClosedCondition
 
-        cond = NormallyClosedCondition(self)
+        cond = NormallyClosedCondition(cast(Any, self))
         cond.source_file, cond.source_line = _capture_source(depth=2)
         return cond
 
@@ -547,6 +654,16 @@ class _TagTypeBase(LiveTag):
         default: Any = None,
         retentive: bool | None = None,
         comment: str = "",
+        choices: type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
@@ -558,6 +675,16 @@ class _TagTypeBase(LiveTag):
         default: Any = None,
         retentive: bool | None = None,
         comment: str = "",
+        choices: type[IntEnum] | ChoiceMap | None = None,
+        readonly: bool = False,
+        external: bool = False,
+        final: bool = False,
+        public: bool = False,
+        physical: Physical | None = None,
+        link: str | None = None,
+        min: int | float | None = None,
+        max: int | float | None = None,
+        uom: str | None = None,
     ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
@@ -565,7 +692,28 @@ class _TagTypeBase(LiveTag):
             raise TypeError(f"{cls.__name__}() name must be a string.")
         if not isinstance(comment, str):
             raise TypeError(f"{cls.__name__}() comment must be a string.")
-        return LiveTag(name, cls._tag_type, default, retentive, comment)
+        normalized_choices = _normalize_choices(
+            choices,
+            tag_type=cls._tag_type,
+            owner=f"{cls.__name__}() choices",
+        )
+        return LiveTag(
+            name,
+            cls._tag_type,
+            default,
+            retentive,
+            comment,
+            normalized_choices,
+            bool(readonly),
+            bool(external),
+            bool(final),
+            bool(public),
+            physical,
+            link,
+            min,
+            max,
+            uom,
+        )
 
 
 class Bool(_TagTypeBase):

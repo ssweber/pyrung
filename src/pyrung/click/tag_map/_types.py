@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from pyrung.core import Block, BlockRange, Tag
 
@@ -37,9 +37,16 @@ class StructuredImport:
 
     name: str
     kind: Literal["udt", "named_array"]
-    runtime: object
+    runtime: StructureRuntime
     count: int
     stride: int | None
+
+
+class StructureRuntime(Protocol):
+    count: int
+    field_names: tuple[str, ...]
+    _blocks: dict[str, Block]
+    _pyrung_click_bg_color: str | None
 
 
 @dataclass(frozen=True)
@@ -65,3 +72,4 @@ class _BlockImportSpec:
     end_idx: int
     hardware_range: BlockRange
     hardware_addresses: tuple[int, ...]
+    bg_color: str | None = None

@@ -21,9 +21,9 @@ from pyrung.core.memory_block import (
 from pyrung.core.tag import InputTag, OutputTag, Tag
 from pyrung.core.time_mode import TimeUnit
 from pyrung.core.validation.walker import (
-    _INSTRUCTION_FIELDS,
     ProgramLocation,
     _condition_children,
+    _instruction_fields,
 )
 
 if TYPE_CHECKING:
@@ -181,7 +181,7 @@ def _extract_io_tags(instruction: Any) -> list[Tag]:
                 walk(item)
 
     instruction_type = type(instruction).__name__
-    fields = _INSTRUCTION_FIELDS.get(instruction_type)
+    fields = _instruction_fields(instruction)
 
     if fields is None:
         walk(instruction)

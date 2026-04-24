@@ -22,6 +22,7 @@ from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
 from pyrung.core import And, Bool, Int, Or, Program, Rung
 from pyrung.core.program import out
 from pyrung.core.tag import TagType
+from tests.click.helpers import exec_with_source
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -235,7 +236,7 @@ def _check_round_trip(bundle):
     """Parse CSV back to Python, re-export, and compare row-for-row."""
     code = ladder_to_pyrung(bundle)
     ns: dict = {}
-    exec(code, ns)  # noqa: S102
+    exec_with_source(code, ns)
 
     bundle2 = pyrung_to_ladder(ns["logic"], ns["mapping"])
     assert list(bundle.main_rows) == list(bundle2.main_rows), (

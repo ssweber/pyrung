@@ -217,6 +217,12 @@ class RisingEdgeCondition(Condition):
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag = _contact_tag(self.tag)
+        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
+
+        edge_fn = _DERIVED_EDGE_TAGS.get(tag.name)
+        if edge_fn is not None:
+            rise, _fall = edge_fn(ctx.scan_id)
+            return rise
         current = bool(ctx.get_tag(tag.name, False))
         previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         return current and not previous
@@ -233,6 +239,12 @@ class FallingEdgeCondition(Condition):
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag = _contact_tag(self.tag)
+        from pyrung.core.system_points import _DERIVED_EDGE_TAGS
+
+        edge_fn = _DERIVED_EDGE_TAGS.get(tag.name)
+        if edge_fn is not None:
+            _rise, fall = edge_fn(ctx.scan_id)
+            return fall
         current = bool(ctx.get_tag(tag.name, False))
         previous = bool(ctx.get_memory(f"_prev:{tag.name}", False))
         return not current and previous

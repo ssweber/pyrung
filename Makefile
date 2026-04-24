@@ -15,7 +15,7 @@ lint:
 	uv run devtools/lint.py
 
 test:
-	uv run pytest -m "not integration and not hypothesis"
+	uv run pytest -m "not integration and not hypothesis" --runner-backend=both
 
 test-hypothesis:
 	uv run pytest -m hypothesis
@@ -31,17 +31,6 @@ upgrade:
 
 build:
 	uv build
-
-docs-serve:
-	DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs serve
-
-docs-clean:
-	$(RM_SITE)
-
-docs-build: docs-clean
-	DISABLE_MKDOCS_2_WARNING=true uv run --group docs mkdocs build --strict
-
-docs-check: docs-build
 
 # Improved Windows detection
 ifeq ($(OS),Windows_NT)
@@ -59,12 +48,25 @@ ifeq ($(WINDOWS),1)
 	RM = powershell -Command "Remove-Item -Recurse -Force"
 	RM_SITE = powershell -Command "if (Test-Path 'site') { Remove-Item -Recurse -Force 'site' }"
 	FIND_PYCACHE = powershell -Command "Get-ChildItem -Path . -Filter '__pycache__' -Recurse -Directory | Remove-Item -Recurse -Force"
+	DOCS_ENV = set DISABLE_MKDOCS_2_WARNING=true&&
 else
     # Unix commands
     RM = rm -rf
     RM_SITE = rm -rf site/
     FIND_PYCACHE = find . -type d -name "__pycache__" -exec rm -rf {} +
+    DOCS_ENV = DISABLE_MKDOCS_2_WARNING=true
 endif
+
+docs-serve:
+	$(DOCS_ENV) uv run --group docs mkdocs serve
+
+docs-clean:
+	$(RM_SITE)
+
+docs-build: docs-clean
+	$(DOCS_ENV) uv run --group docs mkdocs build --strict
+
+docs-check: docs-build
 
 clean:
 	$(RM) dist/

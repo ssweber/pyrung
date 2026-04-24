@@ -71,6 +71,7 @@ def _evaluate_fact(
         allowed = loc.instruction_type == "CopyInstruction" and loc.arg_path in {
             "instruction.source",
             "instruction.source.source",
+            "instruction.dest",
             "instruction.target",
         }
         if not allowed:

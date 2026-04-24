@@ -26,6 +26,7 @@ pytestmark = pytest.mark.hypothesis
 from pyrung.click import TagMap, c, ladder_to_pyrung, pyrung_to_ladder, x, y
 from pyrung.core import And, Bool, Or, Program, Rung
 from pyrung.core.program import branch, out
+from tests.click.helpers import exec_with_source
 
 # ---------------------------------------------------------------------------
 # Strategy helpers
@@ -398,7 +399,7 @@ def _check_all_outputs_in_af(data_rows, output_addresses):
 def _check_round_trip(bundle):
     code = ladder_to_pyrung(bundle)
     ns: dict = {}
-    exec(code, ns)  # noqa: S102
+    exec_with_source(code, ns)
 
     bundle2 = pyrung_to_ladder(ns["logic"], ns["mapping"])
     assert list(bundle.main_rows) == list(bundle2.main_rows), (
@@ -412,7 +413,7 @@ def _check_round_trip_ignoring_tee_markers(bundle):
     """Importer may normalize tee markers while preserving row topology."""
     code = ladder_to_pyrung(bundle)
     ns: dict = {}
-    exec(code, ns)  # noqa: S102
+    exec_with_source(code, ns)
 
     bundle2 = pyrung_to_ladder(ns["logic"], ns["mapping"])
 

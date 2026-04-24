@@ -211,6 +211,7 @@ _DERIVED_TAG_NAMES = frozenset(
     {
         system.sys.always_on.name,
         system.sys.first_scan.name,
+        system.sys.scan_counter.name,
         system.sys.scan_clock_toggle.name,
         system.sys.clock_10ms.name,
         system.sys.clock_100ms.name,
@@ -243,6 +244,13 @@ _DERIVED_TAG_NAMES = frozenset(
         system.storage.sd.error_code.name,
     }
 )
+
+_DERIVED_EDGE_TAGS: dict[str, Callable[[int], tuple[bool, bool]]] = {
+    system.sys.scan_clock_toggle.name: lambda scan_id: (
+        scan_id % 2 == 1,
+        scan_id > 0 and scan_id % 2 == 0,
+    ),
+}
 
 _CLOCK_HALF_PERIODS = {
     system.sys.clock_10ms.name: 0.005,
@@ -302,6 +310,33 @@ def _raw_has_memory(ctx_or_state: ScanContext | SystemState, key: str) -> bool:
     return key in state.memory
 
 
+_UNSET = object()
+
+
+def _set_tags_if_changed(ctx: ScanContext, updates: dict[str, Any]) -> None:
+    """Apply only the tag writes whose value differs from the current state.
+
+    Skipping no-op writes keeps the tag-evolver clean so ``commit()`` can
+    return a PMap structurally shared with the prior scan.  An unbound
+    tag counts as "different" so the first write still materializes the
+    binding — callers that reach into ``state.tags`` directly depend on
+    system-point tags being present once seen.
+    """
+    changed: dict[str, Any] = {}
+    for name, value in updates.items():
+        current = _raw_get_tag(ctx, name, _UNSET)
+        if current is _UNSET or current != value:
+            changed[name] = value
+    if changed:
+        ctx._set_tags_internal(changed)
+
+
+def _set_memory_if_changed(ctx: ScanContext, key: str, value: Any) -> None:
+    current = _raw_get_memory(ctx, key, _UNSET)
+    if current is _UNSET or current != value:
+        ctx.set_memory(key, value)
+
+
 class SystemPointRuntime:
     """Runtime resolver and lifecycle hooks for core system points."""
 
@@ -340,9 +375,10 @@ class SystemPointRuntime:
             return True, True
         if name == system.sys.first_scan.name:
             return True, ctx_or_state.scan_id == 0
+        if name == system.sys.scan_counter.name:
+            return True, ctx_or_state.scan_id % 32768
         if name == system.sys.scan_clock_toggle.name:
-            counter = int(_raw_get_tag(ctx_or_state, system.sys.scan_counter.name, 0))
-            return True, (counter % 2) == 1
+            return True, (ctx_or_state.scan_id % 2) == 1
 
         half_period = _CLOCK_HALF_PERIODS.get(name)
         if half_period is not None:
@@ -406,8 +442,6 @@ class SystemPointRuntime:
 
     def on_scan_end(self, ctx: ScanContext) -> None:
         current_ms = self._scan_time_current_ms(ctx)
-        next_counter = int(_raw_get_tag(ctx, system.sys.scan_counter.name, 0)) + 1
-        ctx._set_tag_internal(system.sys.scan_counter.name, next_counter)
 
         min_name = system.sys.scan_time_min_ms.name
         max_name = system.sys.scan_time_max_ms.name
@@ -421,11 +455,12 @@ class SystemPointRuntime:
             if not _raw_has_tag(ctx, max_name)
             else max(int(_raw_get_tag(ctx, max_name, current_ms)), current_ms)
         )
-        ctx._set_tags_internal(
+        _set_tags_if_changed(
+            ctx,
             {
                 min_name: min_value,
                 max_name: max_value,
-            }
+            },
         )
 
     def _ensure_memory_defaults(self, ctx: ScanContext) -> None:
@@ -443,16 +478,17 @@ class SystemPointRuntime:
             ctx.set_memory(_SD_ERROR_CODE_KEY, _SD_ERROR_NONE)
 
     def _clear_transient_status(self, ctx: ScanContext) -> None:
-        ctx._set_tags_internal(
+        _set_tags_if_changed(
+            ctx,
             {
                 system.fault.division_error.name: False,
                 system.fault.out_of_range.name: False,
                 system.fault.address_error.name: False,
                 system.rtc.apply_date_error.name: False,
                 system.rtc.apply_time_error.name: False,
-            }
+            },
         )
-        ctx.set_memory(_SD_WRITE_STATUS_KEY, False)
+        _set_memory_if_changed(ctx, _SD_WRITE_STATUS_KEY, False)
 
     def _process_rtc_apply(self, ctx: ScanContext) -> None:
         if bool(_raw_get_tag(ctx, system.rtc.apply_date.name, False)):
@@ -460,11 +496,12 @@ class SystemPointRuntime:
         if bool(_raw_get_tag(ctx, system.rtc.apply_time.name, False)):
             self._apply_rtc_time(ctx)
 
-        ctx._set_tags_internal(
+        _set_tags_if_changed(
+            ctx,
             {
                 system.rtc.apply_date.name: False,
                 system.rtc.apply_time.name: False,
-            }
+            },
         )
 
     def _process_storage_sd_commands(self, ctx: ScanContext) -> None:
@@ -525,12 +562,13 @@ class SystemPointRuntime:
         if bool(_raw_get_tag(ctx, system.sys.cmd_mode_stop.name, False)):
             mode_run = False
 
-        ctx.set_memory(_MODE_RUN_KEY, mode_run)
-        ctx._set_tags_internal(
+        _set_memory_if_changed(ctx, _MODE_RUN_KEY, mode_run)
+        _set_tags_if_changed(
+            ctx,
             {
                 system.sys.cmd_mode_stop.name: False,
                 system.sys.cmd_watchdog_reset.name: False,
-            }
+            },
         )
 
     def _scan_time_current_ms(self, ctx_or_state: ScanContext | SystemState) -> int:

@@ -134,7 +134,7 @@ class TestCopyInstruction:
         from pyrung.core.instruction import CopyInstruction
 
         Step = Int("Step")
-        instr = CopyInstruction(source=5, target=Step)
+        instr = CopyInstruction(source=5, dest=Step)
 
         state = SystemState().with_tags({"Step": 0})
         new_state = execute(instr, state)
@@ -147,7 +147,7 @@ class TestCopyInstruction:
 
         Source = Int("Source")
         Target = Int("Target")
-        instr = CopyInstruction(source=Source, target=Target)
+        instr = CopyInstruction(source=Source, dest=Target)
 
         state = SystemState().with_tags({"Source": 42, "Target": 0})
         new_state = execute(instr, state)
@@ -161,7 +161,7 @@ class TestCopyInstruction:
 
         Target = Int("Target")
         # 70000 exceeds INT max (32767)
-        instr = CopyInstruction(source=70000, target=Target)
+        instr = CopyInstruction(source=70000, dest=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
@@ -174,7 +174,7 @@ class TestCopyInstruction:
 
         Target = Int("Target")
         # -70000 is below INT min (-32768)
-        instr = CopyInstruction(source=-70000, target=Target)
+        instr = CopyInstruction(source=-70000, dest=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
@@ -188,7 +188,7 @@ class TestCopyInstruction:
 
         Target = Dint("Target")
         # 2^31 exceeds DINT max (2147483647)
-        instr = CopyInstruction(source=2_147_483_648, target=Target)
+        instr = CopyInstruction(source=2_147_483_648, dest=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
@@ -202,7 +202,7 @@ class TestCopyInstruction:
 
         Target = Dint("Target")
         # One below DINT min
-        instr = CopyInstruction(source=-2_147_483_649, target=Target)
+        instr = CopyInstruction(source=-2_147_483_649, dest=Target)
 
         state = SystemState()
         new_state = execute(instr, state)
@@ -217,10 +217,10 @@ class TestCopyInstruction:
         Target = Word("Target")
 
         state = SystemState()
-        neg_state = execute(CopyInstruction(source=-1, target=Target), state)
+        neg_state = execute(CopyInstruction(source=-1, dest=Target), state)
         assert neg_state.tags["Target"] == 65535
 
-        large_state = execute(CopyInstruction(source=70000, target=Target), state)
+        large_state = execute(CopyInstruction(source=70000, dest=Target), state)
         assert large_state.tags["Target"] == 4464
 
 
@@ -289,7 +289,7 @@ class TestInstructionImmutability:
         from pyrung.core.instruction import CopyInstruction
 
         Step = Int("Step")
-        instr = CopyInstruction(source=99, target=Step)
+        instr = CopyInstruction(source=99, dest=Step)
 
         original_state = SystemState().with_tags({"Step": 0})
         new_state = execute(instr, original_state)

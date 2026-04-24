@@ -62,7 +62,7 @@ docs = [
 ]
 
 [project.scripts]
-pyrung-dap = "pyrung.dap:main"
+pyrung = "pyrung.cli:main"
 
 
 # ---- Build system ----

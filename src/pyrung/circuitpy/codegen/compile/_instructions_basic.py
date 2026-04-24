@@ -31,7 +31,7 @@ from pyrung.core.instruction import (
     ResetInstruction,
 )
 
-from ._core import compile_condition
+from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
@@ -153,7 +153,9 @@ def _compile_on_delay_instruction(
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
     ]
     if instr.reset_condition is not None:
-        reset_expr = compile_condition(instr.reset_condition, ctx)
+        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+            instr.reset_condition, ctx
+        )
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
@@ -240,7 +242,9 @@ def _compile_count_up_instruction(
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
-        reset_expr = compile_condition(instr.reset_condition, ctx)
+        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+            instr.reset_condition, ctx
+        )
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
@@ -262,7 +266,9 @@ def _compile_count_up_instruction(
         ]
     )
     if instr.down_condition is not None:
-        down_expr = compile_condition(instr.down_condition, ctx)
+        down_expr = _get_condition_snapshot(instr, "down_condition", ctx) or compile_condition(
+            instr.down_condition, ctx
+        )
         lines.extend(
             [
                 f"{isp}if {down_expr}:",
@@ -292,7 +298,9 @@ def _compile_count_down_instruction(
     sp = " " * indent
     lines: list[str] = []
     if instr.reset_condition is not None:
-        reset_expr = compile_condition(instr.reset_condition, ctx)
+        reset_expr = _get_condition_snapshot(instr, "reset_condition", ctx) or compile_condition(
+            instr.reset_condition, ctx
+        )
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",

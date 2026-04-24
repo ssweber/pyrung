@@ -210,7 +210,7 @@ class _InstructionMixin:
             return self._fn(
                 "copy",
                 self._render_operand(instruction.source, path=f"{path}.source", source=instruction),
-                self._render_operand(instruction.target, path=f"{path}.target", source=instruction),
+                self._render_operand(instruction.dest, path=f"{path}.dest", source=instruction),
                 **convert_kw,
                 **oneshot_kw,
             )

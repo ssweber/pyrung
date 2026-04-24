@@ -8,6 +8,7 @@ Tracking issue: https://github.com/astral-sh/ty/issues/143
 
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -133,6 +134,39 @@ def test_named_array_retentive_explicit_field_overrides_base_type():
     sp = cast(Any, Setpoints)
     assert sp.speed.retentive is False
     assert sp.pressure.retentive is True
+
+
+def test_named_array_field_choices_and_readonly_thread_through_blocks_and_fields():
+    class Mode(IntEnum):
+        IDLE = 0
+        RUN = 1
+
+    @named_array(Int, count=2, stride=1)
+    class DeviceStates:
+        mode = Field(choices=Mode, readonly=True)
+
+    states = cast(Any, DeviceStates)
+    assert states.fields["mode"].choices == {0: "IDLE", 1: "RUN"}
+    assert states.fields["mode"].readonly is True
+    assert states.mode.slot(1).choices == {0: "IDLE", 1: "RUN"}
+    assert states.mode.slot(1).readonly is True
+    assert states[2].mode.choices == {0: "IDLE", 1: "RUN"}
+    assert states[2].mode.readonly is True
+
+
+def test_named_array_decorator_readonly_defaults_and_field_override():
+    @named_array(Int, count=2, stride=2, readonly=True)
+    class DeviceStates:
+        mode = 0
+        editable = Field(readonly=False)
+
+    states = cast(Any, DeviceStates)
+    assert states.fields["mode"].readonly is True
+    assert states.mode.slot(1).readonly is True
+    assert states[2].mode.readonly is True
+    assert states.fields["editable"].readonly is False
+    assert states.editable.slot(1).readonly is False
+    assert states[2].editable.readonly is False
 
 
 def test_named_array_auto_default_restricted_by_base_type():

@@ -23,6 +23,10 @@ class OutInstruction(OneShotMixin, Instruction):
     """
 
     INERT_WHEN_DISABLED = False
+    _reads = ()
+    _writes = ("target",)
+    _conditions = ()
+    _structural_fields = ()
 
     def __init__(
         self,
@@ -54,6 +58,11 @@ class LatchInstruction(Instruction):
     not reset when the rung goes false.
     """
 
+    _reads = ()
+    _writes = ("target",)
+    _conditions = ()
+    _structural_fields = ()
+
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
 
@@ -69,6 +78,11 @@ class ResetInstruction(Instruction):
 
     Sets the target to its default value (False for bits, 0 for ints).
     """
+
+    _reads = ()
+    _writes = ("target",)
+    _conditions = ()
+    _structural_fields = ()
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target

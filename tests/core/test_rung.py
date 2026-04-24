@@ -182,8 +182,8 @@ class TestRungInstructions:
         Step = Int("Step")
 
         rung = Rung()  # Unconditional
-        rung.add_instruction(CopyInstruction(source=1, target=Step))
-        rung.add_instruction(CopyInstruction(source=2, target=Step))
+        rung.add_instruction(CopyInstruction(source=1, dest=Step))
+        rung.add_instruction(CopyInstruction(source=2, dest=Step))
 
         state = SystemState().with_tags({"Step": 0})
         new_state = evaluate_rung(rung, state)

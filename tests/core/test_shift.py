@@ -2,14 +2,14 @@
 
 import pytest
 
-from pyrung.core import PLC, Block, Bool, Int, Program, Rung, SystemState, TagType, shift
+from pyrung.core import Block, Bool, Int, Program, Rung, SystemState, TagType, copy, shift
 from tests.conftest import evaluate_program
 
 
 class TestShiftInstruction:
     """Behavior tests for shift register runtime semantics."""
 
-    def test_rising_edge_only(self):
+    def test_rising_edge_only(self, runner_factory):
         """Shift occurs only on clock OFF->ON transitions."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -20,7 +20,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": True, "C2": False, "C3": False}
         )
@@ -48,6 +48,30 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C1"] is True
         assert runner.current_state.tags["C2"] is True
         assert runner.current_state.tags["C3"] is False
+
+    def test_clock_condition_uses_rung_entry_snapshot(self, runner_factory):
+        """Same-rung writes do not trigger the shift clock until next scan."""
+        Data = Bool("Data")
+        Clock = Bool("Clock")
+        Reset = Bool("Reset")
+        C = Block("C", TagType.BOOL, 1, 100)
+
+        with Program() as logic:
+            with Rung(Data):
+                copy(True, Clock)
+                shift(C.select(1, 3)).clock(Clock).reset(Reset)
+
+        runner = runner_factory(logic)
+        runner.patch(
+            {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False}
+        )
+
+        runner.step()
+        assert runner.current_state.tags["Clock"] is True
+        assert runner.current_state.tags["C1"] is False
+
+        runner.step()
+        assert runner.current_state.tags["C1"] is True
 
     def test_reset_clears_full_range(self):
         """Reset condition clears every bit in the selected range."""
@@ -77,7 +101,7 @@ class TestShiftInstruction:
         for name in ("C2", "C3", "C4", "C5", "C6", "C7"):
             assert new_state.tags[name] is False
 
-    def test_reset_overwrites_on_simultaneous_clock_edge(self):
+    def test_reset_overwrites_on_simultaneous_clock_edge(self, runner_factory):
         """Reset dominates outputs when reset and clock edge happen together."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -88,7 +112,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": True, "C3": True}
         )
@@ -101,7 +125,7 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C2"] is False
         assert runner.current_state.tags["C3"] is False
 
-    def test_direction_forward_low_to_high(self):
+    def test_direction_forward_low_to_high(self, runner_factory):
         """shift(C.select(...)) moves data from lower addresses to higher addresses."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -112,7 +136,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(2, 7)).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Data": False, "Clock": False, "Reset": False, "C2": True, "C7": False})
         runner.step()
         runner.patch({"Clock": True})
@@ -121,7 +145,7 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C2"] is False
         assert runner.current_state.tags["C3"] is True
 
-    def test_direction_reverse_high_to_low(self):
+    def test_direction_reverse_high_to_low(self, runner_factory):
         """shift(C.select(...).reverse()) moves data from higher to lower addresses."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -132,7 +156,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(2, 7).reverse()).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Data": False, "Clock": False, "Reset": False, "C2": False, "C7": True})
         runner.step()
         runner.patch({"Clock": True})
@@ -141,7 +165,7 @@ class TestShiftInstruction:
         assert runner.current_state.tags["C7"] is False
         assert runner.current_state.tags["C6"] is True
 
-    def test_rung_true_shifts_in_true(self):
+    def test_rung_true_shifts_in_true(self, runner_factory):
         """When rung condition is true, shifted-in data bit is true."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -152,7 +176,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {"Data": True, "Clock": False, "Reset": False, "C1": False, "C2": False, "C3": False}
         )
@@ -162,7 +186,7 @@ class TestShiftInstruction:
 
         assert runner.current_state.tags["C1"] is True
 
-    def test_rung_false_shifts_in_false(self):
+    def test_rung_false_shifts_in_false(self, runner_factory):
         """Terminal execution still shifts on clock edge even when rung is false."""
         Data = Bool("Data")
         Clock = Bool("Clock")
@@ -173,7 +197,7 @@ class TestShiftInstruction:
             with Rung(Data):
                 shift(C.select(1, 3)).clock(Clock).reset(Reset)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {"Data": False, "Clock": False, "Reset": False, "C1": True, "C2": True, "C3": False}
         )

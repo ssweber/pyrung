@@ -11,6 +11,7 @@ SRC_PATHS = [
     str(PROJECT_ROOT / "tests"),
     str(PROJECT_ROOT / "devtools"),
 ]
+VSCODE_JS_DIR = PROJECT_ROOT / "editors" / "vscode" / "pyrung-debug"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +53,11 @@ def main() -> int:
             *SRC_PATHS,
         ]
     )
+
+    for js_file in sorted(VSCODE_JS_DIR.glob("*.js")):
+        errcount += run(["node", "-c", str(js_file)])
+
+    errcount += run(["node", str(PROJECT_ROOT / "devtools" / "check_webview_scripts.js")])
 
     print()
 

@@ -11,6 +11,9 @@ from pyrung.core.rung import Rung as RungLogic
 from ..validation import _check_with_body_from_frame
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.dataview import DataView
+    from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.simplified import TerminalForm
     from pyrung.core.context import ScanContext
 
     from ..validation import DialectValidator
@@ -43,6 +46,7 @@ class Program:
         self.subroutines: dict[str, list[RungLogic]] = {}
         self._current_subroutine: str | None = None  # Track if we're in a subroutine
         self._pending_comment: str | None = None
+        self._cached_graph: ProgramGraph | None = None
 
     def __enter__(self) -> Program:
         if self._strict:
@@ -59,6 +63,9 @@ class Program:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         Program._active = None
 
+    def _invalidate_graph_cache(self) -> None:
+        self._cached_graph = None
+
     def _add_rung(self, rung: RungLogic) -> None:
         """Add a rung to the program or current subroutine."""
         target = (
@@ -74,15 +81,17 @@ class Program:
             )
             raise RuntimeError(
                 f"Rung.continued() cannot be the first rung in a {scope}. "
-                "There is no prior condition snapshot to reuse."
+                "It can only reuse the prior rung snapshot in the same execution scope."
             )
         target.append(rung)
+        self._invalidate_graph_cache()
 
     def _start_subroutine(self, name: str) -> None:
         """Start defining a subroutine."""
         _validate_subroutine_name(name)
         self._current_subroutine = name
         self.subroutines[name] = []
+        self._invalidate_graph_cache()
 
     def _end_subroutine(self) -> None:
         """End subroutine definition."""
@@ -93,7 +102,9 @@ class Program:
         if name not in self.subroutines:
             raise KeyError(f"Subroutine '{name}' not defined")
         saved_snapshot = ctx._condition_snapshot
+        saved_scope_token = ctx._condition_scope_token
         ctx._condition_snapshot = None
+        ctx._condition_scope_token = object()
         try:
             for rung in self.subroutines[name]:
                 rung.evaluate(ctx)
@@ -101,6 +112,7 @@ class Program:
             pass
         finally:
             ctx._condition_snapshot = saved_snapshot
+            ctx._condition_scope_token = saved_scope_token
 
     @classmethod
     def _current(cls) -> Program | None:
@@ -123,17 +135,57 @@ class Program:
         """Return registered dialect names in deterministic order."""
         return tuple(sorted(cls._dialect_validators))
 
-    def validate(self, dialect: str, *, mode: str = "warn", **kwargs: Any) -> Any:
-        """Run dialect-specific portability validation for this Program."""
-        validator = self._dialect_validators.get(dialect)
-        if validator is None:
-            available = ", ".join(self.registered_dialects()) or "<none>"
-            raise KeyError(
-                f"Unknown validation dialect {dialect!r}. "
-                f"Available dialects: {available}. "
-                f"Import the dialect package first (example: import pyrung.{dialect})."
-            )
-        return validator(self, mode=mode, **kwargs)
+    def validate(
+        self,
+        dialect: str | None = None,
+        *,
+        mode: str = "warn",
+        select: set[str] | None = None,
+        ignore: set[str] | None = None,
+        dt: float = 0.010,
+        **kwargs: Any,
+    ) -> Any:
+        """Run validation on this Program.
+
+        Without arguments, runs all core validators and returns a
+        ``ValidationReport``.  Use ``select`` / ``ignore`` to filter by
+        rule code, and ``dt`` to configure the physical-realism validator.
+
+        With a ``dialect`` string, runs dialect-specific portability
+        validation (e.g. ``logic.validate("click", mode="strict")``).
+        """
+        if dialect is not None:
+            validator = self._dialect_validators.get(dialect)
+            if validator is None:
+                available = ", ".join(self.registered_dialects()) or "<none>"
+                raise KeyError(
+                    f"Unknown validation dialect {dialect!r}. "
+                    f"Available dialects: {available}. "
+                    f"Import the dialect package first (example: import pyrung.{dialect})."
+                )
+            return validator(self, mode=mode, **kwargs)
+        from pyrung.core.validation.report import validate as _validate_core
+
+        return _validate_core(self, select=select, ignore=ignore, dt=dt)
+
+    def dataview(self) -> DataView:
+        """Return a chainable query over this program's tag dependency graph.
+
+        The graph is built lazily on first call and cached.
+        """
+        if self._cached_graph is None:
+            from pyrung.core.analysis import build_program_graph
+
+            self._cached_graph = build_program_graph(self)
+        from pyrung.core.analysis.dataview import DataView
+
+        return DataView.from_graph(self._cached_graph)
+
+    def simplified(self) -> dict[str, TerminalForm]:
+        """Compute the simplified Boolean form for every terminal tag."""
+        from pyrung.core.analysis.simplified import simplified_forms
+
+        return simplified_forms(self)
 
     def _evaluate(self, ctx: ScanContext) -> None:
         """Evaluate all main rungs in order (not subroutines) within a ScanContext."""

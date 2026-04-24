@@ -3,6 +3,9 @@
 Aligned to types.md spec: inclusive bounds, .select(), no Click-specific features.
 """
 
+from enum import IntEnum
+from typing import Any, cast
+
 import pytest
 
 from pyrung.core import (
@@ -10,6 +13,7 @@ from pyrung.core import (
     BlockRange,
     Bool,
     Dint,
+    Field,
     ImmediateRef,
     IndirectRef,
     InputBlock,
@@ -24,6 +28,7 @@ from pyrung.core import (
     TagType,
     copy,
     out,
+    udt,
 )
 from pyrung.core.memory_block import IndirectBlockRange
 from tests.conftest import evaluate_condition, evaluate_program
@@ -143,27 +148,45 @@ class TestBlock:
         assert inherited.retentive is False
         assert inherited.default == 30
         assert inherited.comment == ""
+        assert inherited.choices is None
+        assert inherited.readonly is False
         assert inherited.name_overridden is False
         assert inherited.retentive_overridden is False
         assert inherited.default_overridden is False
         assert inherited.comment_overridden is False
+        assert inherited.choices_overridden is False
+        assert inherited.readonly_overridden is False
 
-        DS.slot(3, name="Speed_Command", retentive=True, default=999, comment="Speed command")
+        DS.slot(
+            3,
+            name="Speed_Command",
+            retentive=True,
+            default=999,
+            comment="Speed command",
+            choices={0: "Idle", 1: "Run"},
+            readonly=True,
+        )
         configured = DS.slot(3)
         assert configured.name == "Speed_Command"
         assert configured.retentive is True
         assert configured.default == 999
         assert configured.comment == "Speed command"
+        assert configured.choices == {0: "Idle", 1: "Run"}
+        assert configured.readonly is True
         assert configured.name_overridden is True
         assert configured.retentive_overridden is True
         assert configured.default_overridden is True
         assert configured.comment_overridden is True
+        assert configured.choices_overridden is True
+        assert configured.readonly_overridden is True
 
         tag = DS[3]
         assert tag.name == "Speed_Command"
         assert tag.retentive is True
         assert tag.default == 999
         assert tag.comment == "Speed command"
+        assert tag.choices == {0: "Idle", 1: "Run"}
+        assert tag.readonly is True
 
     def test_slot_reset_restores_defaults(self):
         DS = Block("DS", TagType.INT, 1, 10)
@@ -178,7 +201,15 @@ class TestBlock:
 
     def test_slot_configure_accepts_all_overrides(self):
         DS = Block("DS", TagType.INT, 1, 10)
-        DS.slot(4, name="ManualName", retentive=True, default=999, comment="Recipe")
+        DS.slot(
+            4,
+            name="ManualName",
+            retentive=True,
+            default=999,
+            comment="Recipe",
+            choices={0: "Idle"},
+            readonly=True,
+        )
 
         configured = DS.slot(4)
         assert configured.name == "ManualName"
@@ -186,12 +217,53 @@ class TestBlock:
         assert configured.retentive is True
         assert configured.default == 999
         assert configured.comment == "Recipe"
+        assert configured.choices == {0: "Idle"}
+        assert configured.readonly is True
 
         tag = DS[4]
         assert tag.name == "ManualName"
         assert tag.retentive is True
         assert tag.default == 999
         assert tag.comment == "Recipe"
+        assert tag.choices == {0: "Idle"}
+        assert tag.readonly is True
+
+    def test_slot_hint_precedence_resolves_before_tag_construction(self):
+        class Mode(IntEnum):
+            IDLE = 0
+            RUN = 1
+
+        @udt(count=3)
+        class Device:
+            mode: Int = Field(choices=Mode, readonly=True)
+
+        devices = cast(Any, Device)
+        mode_block = devices.mode
+
+        inherited = mode_block.slot(1)
+        assert inherited.choices == {0: "IDLE", 1: "RUN"}
+        assert inherited.readonly is True
+        assert inherited.choices_overridden is False
+        assert inherited.readonly_overridden is False
+
+        mode_block.slot(2, choices=None, readonly=False)
+        cleared = mode_block.slot(2)
+        assert cleared.choices is None
+        assert cleared.readonly is False
+        assert cleared.choices_overridden is True
+        assert cleared.readonly_overridden is True
+
+        mode_block.slot(3, choices={2: "JOG"}, readonly=False)
+        overridden = mode_block.slot(3)
+        assert overridden.choices == {2: "JOG"}
+        assert overridden.readonly is False
+
+        assert mode_block[1].choices == {0: "IDLE", 1: "RUN"}
+        assert mode_block[1].readonly is True
+        assert mode_block[2].choices is None
+        assert mode_block[2].readonly is False
+        assert mode_block[3].choices == {2: "JOG"}
+        assert mode_block[3].readonly is False
 
     def test_slot_range_applies_to_sparse_addresses_only(self):
         sparse = Block("X", TagType.BOOL, 1, 6, valid_ranges=((1, 2), (5, 6)))
@@ -213,12 +285,21 @@ class TestBlock:
             retentive=False,
             default_factory=lambda addr: addr,
         )
-        DS.slot(2, retentive=True, default=200, comment="Recipe")
+        DS.slot(
+            2,
+            retentive=True,
+            default=200,
+            comment="Recipe",
+            choices={0: "Idle"},
+            readonly=True,
+        )
         DS.slot(2).reset()
         after_reset = DS.slot(2)
         assert after_reset.retentive is False
         assert after_reset.default == 2
         assert after_reset.comment == ""
+        assert after_reset.choices is None
+        assert after_reset.readonly is False
 
         DS.slot(1, 6, retentive=True, default=100)
         DS.slot(1, 6).reset()
