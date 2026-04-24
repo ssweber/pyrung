@@ -15,7 +15,9 @@ SpecKind = Literal["edge_correlation", "steady_implication", "value_temporal"]
 # Formula regexes
 # ---------------------------------------------------------------------------
 
-_EDGE_RE = re.compile(r"^(.+?)(↑|↓)\s*->\s*(.+?)(↑|↓)\s+within\s+(\d+)\s+scans\s+\[dt=([\d.]+)\]$")
+_EDGE_RE = re.compile(
+    r"^(.+?)(\^|v)\s*->\s*(.+?)(\^|v)\s+within\s+(\d+)\s+scans\s+\[dt=([\d.]+)\]$"
+)
 
 _VALUE_TEMPORAL_RE = re.compile(
     r"^(.+?)=(.+?)\s+=>\s+(.+?)=(.+?)\s+within\s+(\d+)\s+scans\s+\[dt=([\d.]+)\]$"
@@ -41,7 +43,7 @@ class SpecEntry:
     dt_seconds: float = 0.010
 
 
-_ARROW_TO_DIR = {"↑": "up", "↓": "down"}
+_ARROW_TO_DIR = {"^": "up", "v": "down"}
 
 
 def parse_formula(formula: str) -> SpecEntry:

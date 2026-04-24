@@ -109,7 +109,7 @@ def _repl(
 
 class TestParseFormula:
     def test_edge_correlation(self):
-        entry = parse_formula("Button↑ -> Light↑ within 0 scans [dt=0.01]")
+        entry = parse_formula("Button^ -> Light^ within 0 scans [dt=0.01]")
         assert entry.kind == "edge_correlation"
         assert entry.antecedent_tag == "Button"
         assert entry.consequent_tag == "Light"
@@ -119,7 +119,7 @@ class TestParseFormula:
         assert entry.dt_seconds == 0.01
 
     def test_edge_down(self):
-        entry = parse_formula("Switch↓ -> Valve↓ within 3 scans [dt=0.005]")
+        entry = parse_formula("Switchv -> Valvev within 3 scans [dt=0.005]")
         assert entry.kind == "edge_correlation"
         assert entry.antecedent_direction == "down"
         assert entry.consequent_direction == "down"
@@ -173,7 +173,7 @@ _PROGRAM_SOURCE = (
 
 class TestGenerateTest:
     def test_edge_up_within_0(self):
-        spec = parse_formula("Button↑ -> Light↑ within 0 scans [dt=0.01]")
+        spec = parse_formula("Button^ -> Light^ within 0 scans [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "def test_button_up_light_up():" in output
         assert 'plc.patch({"Button": True})' in output
@@ -181,12 +181,12 @@ class TestGenerateTest:
         assert 'assert plc.current_state.tags["Light"]' in output
 
     def test_edge_up_within_3(self):
-        spec = parse_formula("Button↑ -> Light↑ within 3 scans [dt=0.01]")
+        spec = parse_formula("Button^ -> Light^ within 3 scans [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "plc.run(cycles=4)" in output
 
     def test_edge_down(self):
-        spec = parse_formula("Switch↓ -> Valve↓ within 0 scans [dt=0.01]")
+        spec = parse_formula("Switchv -> Valvev within 0 scans [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "def test_switch_down_valve_down():" in output
         assert 'plc.patch({"Switch": True})' in output
@@ -248,18 +248,18 @@ class TestGenerateTest:
         assert 'assert plc.current_state.tags["MotorOut"] == True' in output
 
     def test_program_source_embedded(self):
-        spec = parse_formula("Button↑ -> Light↑ within 0 scans [dt=0.01]")
+        spec = parse_formula("Button^ -> Light^ within 0 scans [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
         assert "with Program(strict=False) as prog:" in output
         assert "button = Bool('Button')" in output
 
     def test_formula_as_comment(self):
-        spec = parse_formula("Button↑ -> Light↑ within 0 scans [dt=0.01]")
+        spec = parse_formula("Button^ -> Light^ within 0 scans [dt=0.01]")
         output = generate_test_file([spec], _PROGRAM_SOURCE)
-        assert "# Button↑ -> Light↑ within 0 scans [dt=0.01]" in output
+        assert "# Button^ -> Light^ within 0 scans [dt=0.01]" in output
 
     def test_function_name_deduplication(self):
-        spec = parse_formula("Button↑ -> Light↑ within 0 scans [dt=0.01]")
+        spec = parse_formula("Button^ -> Light^ within 0 scans [dt=0.01]")
         output = generate_test_file([spec, spec], _PROGRAM_SOURCE)
         assert "def test_button_up_light_up():" in output
         assert "def test_button_up_light_up_2():" in output
@@ -307,7 +307,7 @@ class TestReplayNoSpecs:
         adapter, out = _setup(tmp_path)
         transcript = tmp_path / "session.txt"
         transcript.write_text(
-            ("# action: test\n# spec: Button↑ -> Light↑ within 0 scans [dt=0.01]\nstep 2\n"),
+            ("# action: test\n# spec: Button^ -> Light^ within 0 scans [dt=0.01]\nstep 2\n"),
             encoding="utf-8",
         )
         resp, _ = _repl(adapter, out, f"replay {transcript}")

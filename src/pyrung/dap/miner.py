@@ -8,6 +8,7 @@ suppress via the review console verbs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 from pyrung.dap.capture import CaptureEntry
@@ -76,6 +77,8 @@ def mine_candidates(
     tag_meta = getattr(runner, "_known_tags_by_name", {})
     dt = _dt_seconds(runner)
     scan_range = (scan_start, scan_end)
+    owned = _instruction_owned_tags(runner)
+    relevant -= owned
 
     edges = _build_edge_map(runner, relevant, scan_start, scan_end)
 
@@ -94,8 +97,11 @@ def mine_candidates(
             seen.add(key)
             deduped.append(c)
 
+    reduced = _transitive_reduce(deduped)
+    reduced = _lock_filter(reduced, runner)
+
     result: list[Candidate] = []
-    for i, c in enumerate(deduped, 1):
+    for i, c in enumerate(reduced, 1):
         result.append(
             Candidate(
                 id=f"c-{i:02d}",
@@ -134,6 +140,238 @@ def _program_graph(runner: Any) -> Any | None:
 
 def _dt_seconds(runner: Any) -> float:
     return float(getattr(runner, "_dt", 0.010))
+
+
+def _instruction_owned_tags(runner: Any) -> frozenset[str]:
+    """Return tags that are internal plumbing of timer/counter/drum instructions.
+
+    These are the bookkeeping fields (done_bit, accumulator, current_step,
+    completion_flag) — not user-meaningful outputs like drum output coils.
+    """
+    program = getattr(runner, "program", None)
+    if program is None:
+        return frozenset()
+
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
+
+    _PLUMBING_ATTRS = frozenset(
+        {
+            "done_bit",
+            "accumulator",
+            "current_step",
+            "completion_flag",
+        }
+    )
+    _OWNED_TYPES = (
+        OnDelayInstruction,
+        OffDelayInstruction,
+        CountUpInstruction,
+        CountDownInstruction,
+        EventDrumInstruction,
+        TimeDrumInstruction,
+    )
+
+    owned: set[str] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, _OWNED_TYPES):
+            continue
+        for attr in _PLUMBING_ATTRS:
+            val = getattr(instr, attr, None)
+            if isinstance(val, Tag):
+                owned.add(val.name)
+    return frozenset(owned)
+
+
+# ---------------------------------------------------------------------------
+# Transitive reduction
+# ---------------------------------------------------------------------------
+
+
+def _is_negated(c: Candidate) -> bool:
+    return c.kind == "steady_implication" and "=> ~" in c.description
+
+
+def _find_sccs(nodes: set[str], edges: set[tuple[str, str]]) -> list[frozenset[str]]:
+    """Kosaraju's algorithm for strongly connected components."""
+    adj: dict[str, set[str]] = {n: set() for n in nodes}
+    adj_rev: dict[str, set[str]] = {n: set() for n in nodes}
+    for u, v in edges:
+        adj[u].add(v)
+        adj_rev[v].add(u)
+
+    visited: set[str] = set()
+    order: list[str] = []
+    for node in sorted(nodes):
+        if node in visited:
+            continue
+        stack: list[tuple[str, bool]] = [(node, False)]
+        while stack:
+            n, processed = stack.pop()
+            if processed:
+                order.append(n)
+                continue
+            if n in visited:
+                continue
+            visited.add(n)
+            stack.append((n, True))
+            for neighbor in sorted(adj[n]):
+                if neighbor not in visited:
+                    stack.append((neighbor, False))
+
+    visited.clear()
+    sccs: list[frozenset[str]] = []
+    for node in reversed(order):
+        if node in visited:
+            continue
+        component: set[str] = set()
+        stack_simple = [node]
+        while stack_simple:
+            n = stack_simple.pop()
+            if n in visited:
+                continue
+            visited.add(n)
+            component.add(n)
+            for neighbor in adj_rev[n]:
+                if neighbor not in visited:
+                    stack_simple.append(neighbor)
+        sccs.append(frozenset(component))
+    return sccs
+
+
+def _transitive_reduce(candidates: list[Candidate]) -> list[Candidate]:
+    """Remove steady implications that are transitively implied by others.
+
+    Edges within SCCs (equivalence classes like Conv_Motor <=> Running) are
+    protected.  Only inter-SCC edges are candidates for greedy removal.
+    """
+    positive = [c for c in candidates if c.kind == "steady_implication" and not _is_negated(c)]
+
+    if len(positive) < 3:
+        return candidates
+
+    all_edges = {(c.antecedent_tag, c.consequent_tag) for c in positive}
+    nodes = {t for pair in all_edges for t in pair}
+
+    sccs = _find_sccs(nodes, all_edges)
+    node_to_scc: dict[str, int] = {}
+    for i, scc in enumerate(sccs):
+        for node in scc:
+            node_to_scc[node] = i
+
+    intra = {(u, v) for u, v in all_edges if node_to_scc[u] == node_to_scc[v]}
+    inter = sorted(all_edges - intra)
+
+    if not inter:
+        return candidates
+
+    remaining = set(all_edges)
+
+    for u, v in inter:
+        remaining.discard((u, v))
+        adj: dict[str, set[str]] = {}
+        for a, b in remaining:
+            adj.setdefault(a, set()).add(b)
+        visited: set[str] = set()
+        stack = list(adj.get(u, set()))
+        found = False
+        while stack:
+            node = stack.pop()
+            if node == v:
+                found = True
+                break
+            if node in visited:
+                continue
+            visited.add(node)
+            stack.extend(adj.get(node, set()) - visited)
+        if not found:
+            remaining.add((u, v))
+
+    redundant = all_edges - remaining
+    if not redundant:
+        return candidates
+
+    return [
+        c
+        for c in candidates
+        if not (
+            c.kind == "steady_implication"
+            and not _is_negated(c)
+            and (c.antecedent_tag, c.consequent_tag) in redundant
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Lock-aware filtering
+# ---------------------------------------------------------------------------
+
+
+def _find_lock(runner: Any) -> Path | None:
+    """Look for pyrung.lock next to the program source file."""
+    program_path = getattr(runner, "_program_path", None)
+    if program_path is not None:
+        lock = Path(program_path).parent / "pyrung.lock"
+        if lock.exists():
+            return lock
+    lock = Path("pyrung.lock")
+    if lock.exists():
+        return lock
+    return None
+
+
+def _lock_filter(candidates: list[Candidate], runner: Any) -> list[Candidate]:
+    """Drop steady implications already proven by the lock file's reachable states."""
+    lock_path = _find_lock(runner)
+    if lock_path is None:
+        return candidates
+
+    try:
+        from pyrung.core.analysis.prove import read_lock
+
+        lock_data = read_lock(lock_path)
+    except Exception:
+        return candidates
+
+    projection = set(lock_data.get("projection", []))
+    reachable = lock_data.get("reachable", [])
+    if not projection or not reachable:
+        return candidates
+
+    proven: set[tuple[str, str, bool]] = set()
+    for c in candidates:
+        if c.kind != "steady_implication":
+            continue
+        ant, cons = c.antecedent_tag, c.consequent_tag
+        if ant not in projection or cons not in projection:
+            continue
+        negated = _is_negated(c)
+        holds = True
+        for state in reachable:
+            if state.get(ant) is True:
+                if negated and state.get(cons) is True:
+                    holds = False
+                    break
+                if not negated and state.get(cons) is not True:
+                    holds = False
+                    break
+        if holds:
+            proven.add((ant, cons, negated))
+
+    if not proven:
+        return candidates
+
+    return [
+        c
+        for c in candidates
+        if not (
+            c.kind == "steady_implication"
+            and (c.antecedent_tag, c.consequent_tag, _is_negated(c)) in proven
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -268,9 +506,9 @@ def _mine_edge_correlations(
             if floor is not None and max_delay < floor:
                 continue
 
-            a_arrow = "↑" if a_rising else "↓"
-            b_arrow = "↑" if b_rising else "↓"
-            desc = f"{a_tag}{a_arrow} → {b_tag}{b_arrow} within {max_delay} scan{'s' if max_delay != 1 else ''}"
+            a_arrow = "^" if a_rising else "v"
+            b_arrow = "^" if b_rising else "v"
+            desc = f"{a_tag}{a_arrow} -> {b_tag}{b_arrow} within {max_delay} scan{'s' if max_delay != 1 else ''}"
             formula = f"{a_tag}{a_arrow} -> {b_tag}{b_arrow} within {max_delay} scans [dt={dt}]"
 
             candidates.append(
@@ -331,17 +569,21 @@ def _tags_forced_entire_window(runner: Any, scan_start: int, scan_end: int) -> f
     return frozenset(candidates)
 
 
-def _tags_constant_entire_window(
-    scans: list[dict[str, Any]], bool_tags: set[str]
-) -> frozenset[str]:
-    """Return bool tags that were True in every scan (never toggled off)."""
-    if not scans:
-        return frozenset()
-    constant = set()
-    for tag in bool_tags:
-        if all(s.get(tag) is True for s in scans):
-            constant.add(tag)
-    return frozenset(constant)
+def _structurally_provable(
+    a_tag: str, b_tag: str, negated: bool, forms: dict[str, Any], program: Any
+) -> bool:
+    """Check if A => B (or A => ~B) is provable from simplified forms or reset dominance."""
+    from pyrung.core.analysis.simplified import expr_requires, reset_dominance
+
+    form = forms.get(a_tag)
+    if form is not None and expr_requires(form.expr, b_tag, negated=negated):
+        return True
+    if program is not None:
+        try:
+            return reset_dominance(program, a_tag, b_tag, negated=negated)
+        except Exception:
+            pass
+    return False
 
 
 def _mine_steady_implications(
@@ -376,6 +618,17 @@ def _mine_steady_implications(
 
     noisy = _tags_forced_entire_window(runner, scan_start, scan_end)
 
+    program = getattr(runner, "program", None)
+    forms: dict[str, Any] = {}
+    if program is not None:
+        try:
+            forms = program.simplified()
+        except Exception:
+            pass
+
+    edges = _build_edge_map(runner, bool_tags, scan_start, scan_end)
+    varied = {tag for tag, tag_edges in edges.items() if tag_edges}
+
     candidates: list[Candidate] = []
 
     for a_tag in sorted(bool_tags):
@@ -403,7 +656,10 @@ def _mine_steady_implications(
 
             b_in_a_true = [s.get(b_tag) for s in a_true_scans]
             if all(v is True for v in b_in_a_true):
-                desc = f"{a_tag} ⟹ {b_tag}"
+                structural = _structurally_provable(a_tag, b_tag, False, forms, program)
+                if not structural and b_tag not in varied:
+                    continue
+                desc = f"{a_tag} => {b_tag}"
                 formula = f"{a_tag} => {b_tag} [dt={dt}]"
                 candidates.append(
                     Candidate(
@@ -422,7 +678,10 @@ def _mine_steady_implications(
                     )
                 )
             elif all(v is not True for v in b_in_a_true):
-                desc = f"{a_tag} ⟹ ¬{b_tag}"
+                structural = _structurally_provable(a_tag, b_tag, True, forms, program)
+                if not structural and b_tag not in varied:
+                    continue
+                desc = f"{a_tag} => ~{b_tag}"
                 formula = f"{a_tag} => ~{b_tag} [dt={dt}]"
                 candidates.append(
                     Candidate(
@@ -552,7 +811,7 @@ def _mine_value_temporals(
                 if b_is_bool:
                     b_repr = str(observed_b_val).lower()
                 desc = (
-                    f"{a_tag}={trigger_val} ⟹ {b_tag}={b_repr} "
+                    f"{a_tag}={trigger_val} => {b_tag}={b_repr} "
                     f"within {max_delay} scan{'s' if max_delay != 1 else ''}"
                 )
                 formula = (

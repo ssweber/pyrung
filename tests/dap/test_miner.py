@@ -10,7 +10,7 @@ from pyrung.core import PLC, Bool, Int, Program, Rung, latch, out
 from pyrung.core.physical import Physical
 from pyrung.dap.adapter import DAPAdapter
 from pyrung.dap.capture import CaptureEntry
-from pyrung.dap.miner import mine_candidates
+from pyrung.dap.miner import Candidate, _transitive_reduce, mine_candidates
 from pyrung.dap.protocol import read_message
 
 # ---------------------------------------------------------------------------
@@ -255,8 +255,8 @@ class TestPhysicsFloor:
             for c in candidates
             if c.kind == "edge_correlation"
             and c.consequent_tag == "Feedback"
-            and "↑" in c.description
-            and "Feedback↑" in c.description
+            and "^" in c.description
+            and "Feedback^" in c.description
         ]
         for c in fb_rising:
             if c.physics_floor_scans is not None:
@@ -329,7 +329,7 @@ class TestSteadyImplication:
             for c in candidates
             if c.kind == "steady_implication"
             and c.antecedent_tag == "Running"
-            and "¬Fault" in c.description
+            and "~Fault" in c.description
         ]
         assert len(bad) == 0
 
@@ -616,3 +616,194 @@ class TestRecordStopCandidates:
         resp, _ = _repl(adapter, out, "candidates", seq=10)
         assert resp["success"]
         assert "No pending" in resp["body"]["result"]
+
+
+# ---------------------------------------------------------------------------
+# Transitive reduction
+# ---------------------------------------------------------------------------
+
+
+def _make_impl(ant: str, cons: str, *, negated: bool = False) -> Candidate:
+    neg = "~" if negated else ""
+    return Candidate(
+        id="",
+        kind="steady_implication",
+        description=f"{ant} => {neg}{cons}",
+        formula=f"{ant} => {neg}{cons} [dt=0.01]",
+        antecedent_tag=ant,
+        consequent_tag=cons,
+        observed_delay_scans=0,
+        physics_floor_scans=None,
+        dt_seconds=0.01,
+        observation_count=5,
+        violation_count=0,
+        scan_range=(0, 10),
+    )
+
+
+def _make_edge(ant: str, cons: str) -> Candidate:
+    return Candidate(
+        id="",
+        kind="edge_correlation",
+        description=f"{ant}^ -> {cons}^ within 1 scan",
+        formula=f"{ant}^ -> {cons}^ within 1 scans [dt=0.01]",
+        antecedent_tag=ant,
+        consequent_tag=cons,
+        observed_delay_scans=1,
+        physics_floor_scans=None,
+        dt_seconds=0.01,
+        observation_count=3,
+        violation_count=0,
+        scan_range=(0, 10),
+    )
+
+
+class TestTransitiveReduction:
+    def test_basic_chain(self):
+        """A => B, B => C, A => C → removes A => C."""
+        cands = [_make_impl("A", "B"), _make_impl("B", "C"), _make_impl("A", "C")]
+        result = _transitive_reduce(cands)
+        formulas = {c.formula for c in result}
+        assert "A => B [dt=0.01]" in formulas
+        assert "B => C [dt=0.01]" in formulas
+        assert "A => C [dt=0.01]" not in formulas
+
+    def test_no_redundancy(self):
+        """Independent implications are all kept."""
+        cands = [_make_impl("A", "B"), _make_impl("C", "D")]
+        result = _transitive_reduce(cands)
+        assert len(result) == 2
+
+    def test_equivalence_class_preserved(self):
+        """A <=> B <=> C — all edges within an SCC are kept."""
+        cands = [
+            _make_impl("A", "B"),
+            _make_impl("B", "A"),
+            _make_impl("B", "C"),
+            _make_impl("C", "B"),
+            _make_impl("A", "C"),
+            _make_impl("C", "A"),
+        ]
+        result = _transitive_reduce(cands)
+        assert len(result) == 6
+
+    def test_scc_hub_reduces_satellites(self):
+        """A <=> B with shared targets: A => C, B => C → one removed."""
+        cands = [
+            _make_impl("A", "B"),
+            _make_impl("B", "A"),
+            _make_impl("A", "C"),
+            _make_impl("B", "C"),
+        ]
+        result = _transitive_reduce(cands)
+        impl_formulas = {c.formula for c in result if c.kind == "steady_implication"}
+        assert "A => B [dt=0.01]" in impl_formulas
+        assert "B => A [dt=0.01]" in impl_formulas
+        # One of the C edges survives, the other is redundant
+        c_edges = [c for c in result if c.consequent_tag == "C"]
+        assert len(c_edges) == 1
+
+    def test_negated_not_reduced(self):
+        """Negated implications don't participate in reduction."""
+        cands = [
+            _make_impl("A", "B"),
+            _make_impl("B", "C", negated=True),
+            _make_impl("A", "C", negated=True),
+        ]
+        result = _transitive_reduce(cands)
+        assert len(result) == 3
+
+    def test_edge_correlations_unaffected(self):
+        """Non-implication candidates pass through unchanged."""
+        cands = [
+            _make_impl("A", "B"),
+            _make_impl("B", "C"),
+            _make_impl("A", "C"),
+            _make_edge("A", "C"),
+        ]
+        result = _transitive_reduce(cands)
+        edge_cands = [c for c in result if c.kind == "edge_correlation"]
+        assert len(edge_cands) == 1
+
+    def test_fewer_than_three_unchanged(self):
+        """With fewer than 3 positive implications, no reduction possible."""
+        cands = [_make_impl("A", "B"), _make_impl("B", "C")]
+        result = _transitive_reduce(cands)
+        assert len(result) == 2
+
+
+class TestLockFiltering:
+    def test_lock_proven_filtered(self, tmp_path: Path):
+        """Implications proven by lock file reachable states are removed."""
+        import json
+
+        lock_data = {
+            "version": 1,
+            "program_hash": "test",
+            "projection": ["A", "B"],
+            "reachable": [
+                {"A": False, "B": False},
+                {"A": True, "B": True},
+            ],
+        }
+        lock_path = tmp_path / "pyrung.lock"
+        lock_path.write_text(json.dumps(lock_data))
+
+        a = Bool("A")
+        b = Bool("B")
+        with Program(strict=False) as prog:
+            with Rung(a):
+                out(b)
+
+        plc = PLC(prog, dt=0.010)
+        plc._program_path = str(tmp_path / "logic.py")
+        plc.step()
+        scan_base = plc.current_state.scan_id
+
+        entries: list[CaptureEntry] = []
+        plc.patch({"A": True})
+        entries.append(CaptureEntry("patch A true", plc.current_state.scan_id, 0.0))
+        for _ in range(5):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+
+        candidates = mine_candidates("test", entries, plc, start_scan_id=scan_base)
+        impl_formulas = {c.formula for c in candidates if c.kind == "steady_implication"}
+        # A => B and B => A are both proven by the lock (every reachable state satisfies both)
+        assert not any("=> A" in f or "=> B" in f for f in impl_formulas)
+
+    def test_lock_not_proven_kept(self, tmp_path: Path):
+        """Implications NOT proven by lock are kept."""
+        import json
+
+        lock_data = {
+            "version": 1,
+            "program_hash": "test",
+            "projection": ["A"],
+            "reachable": [{"A": False}, {"A": True}],
+        }
+        lock_path = tmp_path / "pyrung.lock"
+        lock_path.write_text(json.dumps(lock_data))
+
+        a = Bool("A")
+        b = Bool("B")
+        with Program(strict=False) as prog:
+            with Rung(a):
+                out(b)
+
+        plc = PLC(prog, dt=0.010)
+        plc._program_path = str(tmp_path / "logic.py")
+        plc.step()
+        scan_base = plc.current_state.scan_id
+
+        entries: list[CaptureEntry] = []
+        plc.patch({"A": True})
+        entries.append(CaptureEntry("patch A true", plc.current_state.scan_id, 0.0))
+        for _ in range(5):
+            plc.step()
+            entries.append(CaptureEntry("step 1", plc.current_state.scan_id, 0.0))
+
+        candidates = mine_candidates("test", entries, plc, start_scan_id=scan_base)
+        impl_cands = [c for c in candidates if c.kind == "steady_implication"]
+        # B is not in the lock projection, so implications involving B are kept
+        assert len(impl_cands) > 0
