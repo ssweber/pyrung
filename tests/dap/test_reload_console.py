@@ -226,6 +226,31 @@ class TestReloadErrors:
         assert adapter._runner is old_runner
 
 
+class TestReloadBlockedByRecording:
+    def test_reload_blocked_during_recording(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path)
+        _repl(adapter, out, "record test_action", seq=10)
+        resp, _ = _repl(adapter, out, "reload", seq=11)
+        assert resp["success"] is False
+        assert "recording" in resp.get("message", resp.get("body", {}).get("result", "")).lower()
+
+    def test_reload_allowed_after_recording_stops(self, tmp_path: Path):
+        adapter, out, script_path = _setup(tmp_path)
+        _repl(adapter, out, "record test_action", seq=10)
+        _repl(adapter, out, "patch Button true", seq=11)
+        _repl(adapter, out, "step 3", seq=12)
+        _repl(adapter, out, "patch Button false", seq=13)
+        _repl(adapter, out, "step 3", seq=14)
+        _repl(adapter, out, "patch Button true", seq=15)
+        _repl(adapter, out, "step 3", seq=16)
+        _repl(adapter, out, "patch Button false", seq=17)
+        _repl(adapter, out, "step 3", seq=18)
+        _repl(adapter, out, "record stop", seq=19)
+        resp, _ = _repl(adapter, out, "reload", seq=20)
+        assert resp["success"] is True
+        assert "Reloaded" in resp["body"]["result"]
+
+
 class TestWatchUnwatch:
     def test_watch_starts_thread(self, tmp_path: Path):
         adapter, out, script_path = _setup(tmp_path)

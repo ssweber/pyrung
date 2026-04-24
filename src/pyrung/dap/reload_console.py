@@ -32,6 +32,8 @@ def _reload_locked(
     """
     if adapter._thread_running_locked():
         raise adapter.DAPAdapterError("Cannot reload while continue is running")
+    if adapter._capture.recording:
+        raise adapter.DAPAdapterError("Cannot reload while recording — stop recording first")
 
     old_runner: PLC = adapter._require_runner_locked()
     old_state: SystemState = old_runner.current_state
