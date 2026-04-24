@@ -1,8 +1,8 @@
-"""pyrung-live: out-of-process console attachment.
+"""pyrung live: out-of-process console attachment.
 
 Server side (``LiveServer``) runs inside the DAP adapter process,
 accepting connections on a TCP socket bound to localhost.
-Client side (``main()``) is the ``pyrung-live`` CLI entry point.
+Client side (``main()``) is the ``pyrung live`` CLI entry point.
 
 Protocol: plain text over a length-prefixed TCP connection.
   - Client sends a command (UTF-8 text via ``send_bytes``).
@@ -193,11 +193,11 @@ def _build_command_epilog() -> str:
 
 
 def main() -> None:
-    """``pyrung-live`` command-line entry point."""
+    """``pyrung live`` command-line entry point."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
     parser = argparse.ArgumentParser(
-        prog="pyrung-live",
+        prog="pyrung live",
         description="Attach to a running pyrung DAP session",
         epilog=_build_command_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter,

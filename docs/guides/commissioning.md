@@ -29,6 +29,6 @@ Static validators run at build time via `logic.validate()` — conflicting outpu
 
 **[VS Code Debugger](dap-vscode.md)** — step through scans, set breakpoints, watch tags live. The debug console supports typed commands for stepping, forcing, causal queries, and monitoring. The [Data View](dap-vscode.md#data-view) panel watches and edits tags with live values. The [Graph View](dap-vscode.md#graph-view) shows the tag dependency graph interactively. The [History panel](dap-vscode.md#history) scrubs through retained scans with a Chain tab for interactive causal queries.
 
-**[pyrung-live](dap-vscode.md#pyrung-live)** — attach to a running debug session from another terminal or script. Chain commands with semicolons, force tags, run causal queries — everything the Debug Console can do, from the command line.
+**[pyrung live](dap-vscode.md#pyrung-live)** — attach to a running debug session from another terminal or script. Chain commands with semicolons, force tags, run causal queries — everything the Debug Console can do, from the command line.
 
 **[Session capture](dap-vscode.md#session-capture)** — record a debug session as a replayable transcript. Condense it to a minimal reproducer, mine invariants, and generate pytest test files from accepted findings.

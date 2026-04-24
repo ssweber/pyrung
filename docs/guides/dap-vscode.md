@@ -177,7 +177,7 @@ log                             # show last 20 scans of activity
 log 50                          # show last 50 scans
 ```
 
-`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window. When commands come from `pyrung-live`, the scan header is tagged with `(live)` so you can tell who did what in a pair-programming session.
+`log` shows patches, force changes, tag transitions, and notes — everything that happened in the scan window. When commands come from `pyrung live`, the scan header is tagged with `(live)` so you can tell who did what in a pair-programming session.
 
 ```text
 scan 12  forces: EstopOK=True
@@ -263,7 +263,7 @@ step 5
 
 On replay, the harness re-synthesizes its own patches from the program state — the comment lines are documentation, not inputs.
 
-## pyrung-live
+## pyrung live
 
 Attach to a running debug session from another terminal or process.
 
@@ -281,11 +281,11 @@ When the DAP adapter launches, it starts a TCP server on localhost and writes th
 ### CLI usage
 
 ```text
-pyrung-live                                # list active sessions
-pyrung-live step 5                         # works when only one session is active
-pyrung-live -s my_session step 5           # explicit session when multiple are running
-pyrung-live "force Button true; step 5; cause Light"  # chain commands with ;
-pyrung-live -h                             # show all available commands
+pyrung live                                # list active sessions
+pyrung live step 5                         # works when only one session is active
+pyrung live -s my_session step 5           # explicit session when multiple are running
+pyrung live "force Button true; step 5; cause Light"  # chain commands with ;
+pyrung live -h                             # show all available commands
 ```
 
 When only one session is active, `--session` can be omitted. With multiple sessions, the CLI lists them and asks you to pick one. Running with no arguments lists active sessions.
@@ -304,7 +304,7 @@ print(text)                         # "Stepped 5 scan(s), now at scan 10"
 
 ### Pair commissioning
 
-One person drives VS Code (breakpoints, Data View, Graph View), another runs `pyrung-live` from a terminal. Both hit the same PLC state. Commands from the live client show `(live)` in the `log` output so you can tell who did what:
+One person drives VS Code (breakpoints, Data View, Graph View), another runs `pyrung live` from a terminal. Both hit the same PLC state. Commands from the live client show `(live)` in the `log` output so you can tell who did what:
 
 ```text
 scan 10:

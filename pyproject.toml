@@ -63,8 +63,6 @@ docs = [
 
 [project.scripts]
 pyrung = "pyrung.cli:main"
-pyrung-dap = "pyrung.dap:main"
-pyrung-live = "pyrung.dap.live:main"
 
 
 # ---- Build system ----
