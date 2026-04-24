@@ -323,6 +323,46 @@ The server is a single-threaded TCP listener that dispatches commands through th
 
 Session discovery uses port files in the system temp directory (`<tempdir>/pyrung/pyrung-<name>.port`). The file is created on launch and removed on disconnect. Stale port files from crashed processes are pruned automatically when listing sessions.
 
+## Hot-reload
+
+Re-execute the program file while preserving PLC state — tags, memory, timer accumulators, counter values, and forces all carry over. History clears. Same experience as downloading a new program to a running PLC.
+
+### Manual reload
+
+```text
+reload                         # from the Debug Console
+pyrung live reload             # from another terminal
+```
+
+The reload re-runs your program file, discovers the new runner, and patches the old state onto it. Scan ID and timestamp continue from where they were. Forces are re-applied. Debug registrations (breakpoints, monitors) are cleared since rung indices may have shifted.
+
+### Auto-reload on file save
+
+```text
+watch                          # start watching the program file
+unwatch                        # stop watching
+```
+
+`watch` polls the program file's modification time once per second. When it changes (e.g. you save in your editor), the program reloads automatically. No new dependency — uses `os.stat` polling.
+
+If `continue` is running when a file change is detected, the watcher skips the reload and logs a message. Pause first, then save to trigger the reload.
+
+### Tag type changes
+
+If a tag changes type between reloads (e.g. `Bool('X')` becomes `Int('X')`), the old value is dropped and the tag gets its new default. A warning is printed:
+
+```text
+Reloaded at scan 42 (5 tag(s))
+Warnings:
+  X: type changed BOOL -> INT, using new default
+```
+
+New tags added to the program get their defaults. Removed tags become harmless orphans in state.
+
+### Errors
+
+If the program file has a syntax error or the runner can't be discovered, the reload aborts and the old runner stays active. Fix the file and reload again.
+
 ## DAP to runner mapping
 
 | VS Code action | Runner API |
