@@ -104,8 +104,8 @@ def _validate_function_call(
 
     try:
         signature = inspect.signature(fn)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{func_name}() could not inspect function signature") from exc
+    except (TypeError, ValueError):
+        return
 
     if ins is not None:
         if not isinstance(ins, dict):
