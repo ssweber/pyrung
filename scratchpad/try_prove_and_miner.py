@@ -6,6 +6,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 import sys
 from pathlib import Path
+from time import perf_counter
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -164,146 +165,135 @@ def logic():
 # =====================================================================
 # Part 1: Exhaustive verification — prove()
 # =====================================================================
-from pyrung.core.analysis.prove import (
-    Counterexample,
-    Intractable,
-    Proven,
-    prove,
-    reachable_states,
-    program_hash,
-    write_lock,
-)
+def main() -> None:
+    from pyrung.core.analysis.prove import Intractable, program_hash, prove, reachable_states
+    from pyrung.dap.capture import CaptureEntry
+    from pyrung.dap.miner import mine_candidates
 
-print("=" * 60)
-print("EXHAUSTIVE VERIFICATION: prove()")
-print("=" * 60)
+    print("=" * 60)
+    print("EXHAUSTIVE VERIFICATION: prove()")
+    print("=" * 60)
 
-properties = [
-    ("Property 1: Motor → EstopOK (motor cannot run without estop)", Or(~conv.Motor, EstopOK)),
-    (
-        "Property 2: Diverter → EstopOK (diverter cannot activate without estop)",
-        Or(~conv.Diverter, EstopOK),
-    ),
-    (
-        "Property 3: Motor ↔ StatusLight (light tracks motor)",
-        Or(And(conv.Motor, conv.StatusLight), And(~conv.Motor, ~conv.StatusLight)),
-    ),
-    ("Property 4: ~StopBtn → ~Running (stop kills running)", Or(StopBtn, ~Running)),
-    ("Property 5: ~EstopOK → ~Running (estop kills running)", Or(EstopOK, ~Running)),
-    (
-        "Property 6: State ∈ {IDLE, DETECTING, SORTING, RESETTING}",
-        Or(
-            State == SortState.IDLE,
-            State == SortState.DETECTING,
-            State == SortState.SORTING,
-            State == SortState.RESETTING,
+    properties = [
+        ("Property 1: Motor → EstopOK (motor cannot run without estop)", Or(~conv.Motor, EstopOK)),
+        (
+            "Property 2: Diverter → EstopOK (diverter cannot activate without estop)",
+            Or(~conv.Diverter, EstopOK),
         ),
-    ),
-]
+        (
+            "Property 3: Motor ↔ StatusLight (light tracks motor)",
+            Or(And(conv.Motor, conv.StatusLight), And(~conv.Motor, ~conv.StatusLight)),
+        ),
+        ("Property 4: ~StopBtn → ~Running (stop kills running)", Or(StopBtn, ~Running)),
+        ("Property 5: ~EstopOK → ~Running (estop kills running)", Or(EstopOK, ~Running)),
+        (
+            "Property 6: State ∈ {IDLE, DETECTING, SORTING, RESETTING}",
+            Or(
+                State == SortState.IDLE,
+                State == SortState.DETECTING,
+                State == SortState.SORTING,
+                State == SortState.RESETTING,
+            ),
+        ),
+    ]
 
-results = prove(logic, [prop for _label, prop in properties])
-for i, ((label, _prop), result) in enumerate(zip(properties, results, strict=True), start=1):
-    print(f"\n--- {label}")
-    print(f"    Result: {result}")
+    prove_started = perf_counter()
+    results = prove(logic, [prop for _label, prop in properties])
+    prove_elapsed = perf_counter() - prove_started
+    for i, ((label, _prop), result) in enumerate(zip(properties, results, strict=True), start=1):
+        print(f"\n--- {label}")
+        print(f"    Result: {result}")
+    print(f"\nprove() batch elapsed: {prove_elapsed:.3f}s")
 
-# =====================================================================
-# Part 2: Reachable states
-# =====================================================================
-print("\n" + "=" * 60)
-print("REACHABLE STATE SPACE")
-print("=" * 60)
+    print("\n" + "=" * 60)
+    print("REACHABLE STATE SPACE")
+    print("=" * 60)
 
-states = reachable_states(logic)
-if isinstance(states, Intractable):
-    print(f"\nIntractable: {states}")
-else:
-    print(f"\nTotal reachable states (public projection): {len(states)}")
-    # Show a few sample states
-    for i, s in enumerate(sorted(states, key=lambda s: sorted(s))[:10]):
-        print(f"  State {i}: {dict(sorted(s))}")
-    if len(states) > 10:
-        print(f"  ... and {len(states) - 10} more")
+    reachable_started = perf_counter()
+    states = reachable_states(logic)
+    reachable_elapsed = perf_counter() - reachable_started
+    if isinstance(states, Intractable):
+        print(f"\nIntractable: {states}")
+    else:
+        print(f"\nTotal reachable states (public projection): {len(states)}")
+        for i, s in enumerate(sorted(states, key=lambda s: sorted(s))[:10]):
+            print(f"  State {i}: {dict(sorted(s))}")
+        if len(states) > 10:
+            print(f"  ... and {len(states) - 10} more")
+    print(f"reachable_states() elapsed: {reachable_elapsed:.3f}s")
 
-# =====================================================================
-# Part 3: Program hash and lock file
-# =====================================================================
-print("\n" + "=" * 60)
-print("PROGRAM HASH & LOCK FILE")
-print("=" * 60)
+    print("\n" + "=" * 60)
+    print("PROGRAM HASH & LOCK FILE")
+    print("=" * 60)
 
-h = program_hash(logic)
-print(f"\nProgram hash: {h}")
+    h = program_hash(logic)
+    print(f"\nProgram hash: {h}")
 
-# =====================================================================
-# Part 4: Session recording & miner
-# =====================================================================
-print("\n" + "=" * 60)
-print("SESSION RECORDING & MINER")
-print("=" * 60)
+    print("\n" + "=" * 60)
+    print("SESSION RECORDING & MINER")
+    print("=" * 60)
 
-from pyrung.dap.capture import CaptureEntry
-from pyrung.dap.miner import mine_candidates
+    runner = PLC(logic, dt=0.010)
+    harness = Harness(runner)
+    harness.install()
 
-runner = PLC(logic, dt=0.010)
-harness = Harness(runner)
-harness.install()
+    with runner:
+        StopBtn.value = True
+        EstopOK.value = True
+        Auto.value = True
+        Size.Threshold.value = 100
 
-with runner:
-    StopBtn.value = True
-    EstopOK.value = True
-    Auto.value = True
-    Size.Threshold.value = 100
-
-runner.step()
-
-# Record a session — simulate start sequence
-entries: list[CaptureEntry] = []
-start_scan = runner.current_state.scan_id
-
-# Start the conveyor
-with runner:
-    StartBtn.value = True
-runner.step()
-entries.append(CaptureEntry("patch StartBtn true", runner.current_state.scan_id, 0.0))
-
-with runner:
-    StartBtn.value = False
-runner.step()
-entries.append(CaptureEntry("patch StartBtn false", runner.current_state.scan_id, 0.0))
-
-# Let it run a few cycles for feedback to arrive
-for i in range(60):
     runner.step()
-    entries.append(CaptureEntry(f"step {i}", runner.current_state.scan_id, 0.0))
 
-# Simulate a box arriving
-runner.force(EntrySensor, True)
-runner.force(Size.Reading, 150)
-runner.step()
-entries.append(CaptureEntry("force EntrySensor + Size.Reading", runner.current_state.scan_id, 0.0))
+    entries: list[CaptureEntry] = []
+    start_scan = runner.current_state.scan_id
 
-for i in range(200):
+    with runner:
+        StartBtn.value = True
     runner.step()
-    entries.append(CaptureEntry(f"detect step {i}", runner.current_state.scan_id, 0.0))
+    entries.append(CaptureEntry("patch StartBtn true", runner.current_state.scan_id, 0.0))
 
-runner.unforce(EntrySensor)
-runner.unforce(Size.Reading)
-
-for i in range(300):
+    with runner:
+        StartBtn.value = False
     runner.step()
-    entries.append(CaptureEntry(f"sort step {i}", runner.current_state.scan_id, 0.0))
+    entries.append(CaptureEntry("patch StartBtn false", runner.current_state.scan_id, 0.0))
 
-# Mine for invariants
-print("\nMining candidates from recorded session...")
-candidates = mine_candidates("conveyor_test", entries, runner, start_scan_id=start_scan)
+    for i in range(60):
+        runner.step()
+        entries.append(CaptureEntry(f"step {i}", runner.current_state.scan_id, 0.0))
 
-print(f"\nFound {len(candidates)} candidate invariants:\n")
-for c_item in candidates:
-    print(f"  [{c_item.id}] ({c_item.kind})")
-    print(f"       {c_item.description}")
-    print(f"       observed={c_item.observation_count}  violations={c_item.violation_count}  delay={c_item.observed_delay_scans} scans")
-    if c_item.physics_floor_scans is not None:
-        print(f"       physics floor: {c_item.physics_floor_scans} scans")
-    print()
+    runner.force(EntrySensor, True)
+    runner.force(Size.Reading, 150)
+    runner.step()
+    entries.append(CaptureEntry("force EntrySensor + Size.Reading", runner.current_state.scan_id, 0.0))
 
-print("Done!")
+    for i in range(200):
+        runner.step()
+        entries.append(CaptureEntry(f"detect step {i}", runner.current_state.scan_id, 0.0))
+
+    runner.unforce(EntrySensor)
+    runner.unforce(Size.Reading)
+
+    for i in range(300):
+        runner.step()
+        entries.append(CaptureEntry(f"sort step {i}", runner.current_state.scan_id, 0.0))
+
+    print("\nMining candidates from recorded session...")
+    candidates = mine_candidates("conveyor_test", entries, runner, start_scan_id=start_scan)
+
+    print(f"\nFound {len(candidates)} candidate invariants:\n")
+    for c_item in candidates:
+        print(f"  [{c_item.id}] ({c_item.kind})")
+        print(f"       {c_item.description}")
+        print(
+            f"       observed={c_item.observation_count}  violations={c_item.violation_count}  delay={c_item.observed_delay_scans} scans"
+        )
+        if c_item.physics_floor_scans is not None:
+            print(f"       physics floor: {c_item.physics_floor_scans} scans")
+        print()
+
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()
