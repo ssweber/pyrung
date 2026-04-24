@@ -22,7 +22,13 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `docs/guides/runner.md` — Execution engine (time modes, history, seek/rewind, fork, rung inspection)
 - `docs/guides/testing.md` — Unit testing patterns with FIXED_STEP, forces as fixtures, pytest usage
 - `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork
-- `docs/guides/dap-vscode.md` — VS Code DAP integration (breakpoints, logpoints, monitors, trace decorations)
+- `docs/guides/commissioning.md` — Declare/Analyze/Commission workflow, coverage plugin, CI gating
+- `docs/guides/physical-harness.md` — Physical annotations, autoharness, feedback synthesis
+- `docs/guides/analysis.md` — DataView queries, causal chains, coverage reports
+- `docs/guides/architecture.md` — Engine internals, compiled replay kernel, sparse scan log
+- `docs/guides/dap-vscode.md` — VS Code DAP integration (breakpoints, logpoints, monitors, trace decorations, Data View, Graph View, Chain tab)
+- `docs/guides/click-quickstart.md` — Click-specific getting started
+- `docs/guides/circuitpy-quickstart.md` — CircuitPython-specific getting started
 - `docs/dialects/click.md` — Click dialect (pre-built blocks, TagMap, nickname files, validation, soft-PLC via ClickDataProvider)
 - `docs/dialects/circuitpy.md` — CircuitPython dialect (P1AM hardware model, module catalog, validation, code generation)
 - `docs/internal/debug-spec.md` — Debug architecture specification
@@ -65,14 +71,37 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **Counters** count every scan while condition True — use `rise()` for edge-triggered counting
 - **Division by zero** → result = 0, fault flag set
 
+### Analysis and Verification
+
+- **`prove(logic, condition)`** — exhaustive state-space verification via BFS over reachable states using the compiled replay kernel. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (with replayable trace), or `Intractable`
+- **Lock file workflow** — `reachable_states()` projects to `public` tags, `write_lock()` / `check_lock()` serialize to JSON. Behavioral diffs show up in PRs
+- **`plc.dataview`** — chainable query API: `.inputs()`, `.pivots()`, `.terminals()`, `.upstream(tag)`, `.downstream(tag)`, `.physical_inputs()`, `.contains("cmd")`. Also available as `program.dataview()` for static use
+- **`plc.cause(tag)` / `plc.effect(tag)`** — causal chain analysis over scan history. Projected mode (`cause(tag, to=value)`) finds reachable paths or reports blockers. `plc.recovers(tag)` tests reachable clear paths
+- **`plc.query`** — whole-program surveys: `cold_rungs()`, `hot_rungs()`, `stranded_bits()`, `report()` for mergeable `CoverageReport`
+- **Pytest coverage plugin** — `pyrung_coverage` fixture collects per-test reports, merges at session end. CI gating via `--pyrung-whitelist`
+- **`program.simplified()`** — resolved Boolean form per terminal, eliminating intermediate pivots
+- **Physical annotations** — `physical=`, `link=`, `min=`, `max=`, `uom=` on tags for device behavior. `Harness` auto-synthesizes feedback. `link="Tag:value"` for value-triggered feedback
+- **Tag flags** — `readonly`, `external`, `final`, `public` metadata flags with static validator enforcement
+- **Runtime bounds checking** — `min`/`max`/`choices` checked per scan, populates `plc.bounds_violations`
+
 ### Debug System
 
-- **History**: `runner.history.at(scan_id)`, `.range()`, `.latest()`, configurable `history` (time-based retention, e.g. `"1h"`), `cache` (instant-lookup window), `history_budget` (byte ceiling, default 100 MB)
+- **History**: sparse `ScanLog` with compiled replay kernel. `runner.history.at(scan_id)`, `.range()`, `.latest()`, configurable `history` (time-based retention, e.g. `"1h"`), `cache` (instant-lookup window), `history_budget` (byte ceiling, default 100 MB). States outside cache reconstruct via replay from nearest checkpoint
 - **Breakpoints**: `runner.when(condition).pause()` / `.snapshot("label")`
 - **Monitors**: `runner.monitor(tag, callback)` fires on committed value changes
 - **Time travel**: `runner.seek(scan_id)`, `runner.rewind(seconds)`, `runner.playhead`
 - **Inspection**: `runner.inspect(rung_id)` → `RungTrace`, `runner.diff(scan_a, scan_b)`
 - **Fork**: `runner.fork(scan_id=None)` (primary) / `runner.fork_from(scan_id)` (alias) — independent runner from historical snapshot
+- **Hot-reload**: `reload` re-executes the program file preserving PLC state. `watch`/`unwatch` for auto-reload on save
+- **Session capture**: `record`/`record stop` captures replayable transcripts. Condenser shrinks to causal-minimum. Invariant miner proposes candidates from edge correlations and steady implications. Accepted invariants generate pytest files with structural verification
+- **`pyrung live`**: attach to a running debug session from another terminal via TCP. Semicolon-chained commands, session discovery
+
+### Unified CLI
+
+- `pyrung lock` — compute reachable states, write `pyrung.lock`
+- `pyrung check` — recompute and diff against lock file, exit 1 on change
+- `pyrung dap` — run the DAP debug adapter
+- `pyrung live` — attach to a running DAP session
 
 ### Click Dialect
 
@@ -84,7 +113,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 ## Current Status
 
-Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~26k lines of source and 1,600+ tests covering core, click, dap, and examples.
+Core engine, Click dialect, and DAP debugger are all implemented and tested. The codebase has ~59k lines of source and 3,000+ tests covering core, click, dap, and examples.
 
-**Not yet done:** PyPI publishing, stable public API guarantee.
+**API status:** Beta. All public exports are explicit (`__all__` on every module). The core DSL, Click dialect, and runner APIs are settled. The analysis layer (`prove()`, `cause()`/`effect()`, `dataview`, coverage) is newer and may evolve. No formal deprecation machinery yet — breaks are clean cuts with migration guides in CHANGELOG.md.
 

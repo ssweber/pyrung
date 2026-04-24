@@ -41,6 +41,8 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 
 **Write first, validate later.** Start with semantic tag names and plain Python. Map to hardware addresses when you're ready, then run the validator. It tells you what Click can and can't do — before you find out at the PLC.
 
+**Prove it before you ship it.** `prove()` exhaustively verifies safety properties across every reachable state — no test cases to write, no scenarios to miss. Lock files catch behavioral regressions in PRs. Causal chain analysis traces why a tag changed and what it would take to recover.
+
 ## Quick links
 
 - [Installation](getting-started/installation.md) — `pip install pyrung`
@@ -50,7 +52,7 @@ Ladder logic has always been a domain language for industrial control. pyrung as
 - [Click PLC Dialect](dialects/click.md) — memory banks, address mapping, validation
 - [Testing and Commissioning](guides/commissioning.md) — declare, analyze, commission: the full testing story
 - [Physical Annotations and Autoharness](guides/physical-harness.md) — annotate devices, eliminate feedback boilerplate in tests
-- [Analysis](guides/analysis.md) — dataview, cause/effect, coverage queries
+- [Analysis and Verification](guides/analysis.md) — dataview, cause/effect, coverage, prove(), lock files
 - [VS Code Debugger](guides/dap-vscode.md) — breakpoints, monitors, step-through debugging
 - [CircuitPython Dialect](dialects/circuitpy.md) — P1AM hardware model and code generation
 - [CircuitPython Modbus TCP](dialects/circuitpy-modbus.md) — Modbus server and client for P1AM-200
