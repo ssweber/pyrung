@@ -35,9 +35,11 @@ Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events syn
 ## Key Files
 
 - `extension.js` — main activation, DAP tracker with event fan-out
+- `adapterFactory.js` — debug adapter descriptor (resolves Python path, launches DAP)
 - `decorationController.js` — editor inline decorations from trace regions
-- `historyPanel.js` — history timeline (live-append from frame, backward-page from request)
-- `dataViewProvider.js` — live tag value grid
+- `inlineValuesProvider.js` — VS Code inline values during debug (filters noise identifiers)
+- `historyPanel.js` — history timeline, Chain tab for causal queries (`pyrungCausal` requests)
+- `dataViewProvider.js` — live tag value grid with force/patch/unforce
 - `graphPanel.js` — Cytoscape dependency graph with live value coloring
 
 ## Local Packaging Notes
@@ -46,4 +48,4 @@ Step handlers (next/stepIn/stepOut/pyrungStepScan) emit `pyrungTrace` events syn
 - Package with PowerShell from this folder:
   `& "$env:APPDATA\npm\vsce.cmd" package`
 - If `code` is not on `PATH`, reinstall with:
-  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.1.0.vsix" --force`
+  `& "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd" --install-extension "$PWD\pyrung-debug-0.6.0.vsix" --force`
