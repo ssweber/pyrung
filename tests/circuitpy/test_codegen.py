@@ -12,6 +12,7 @@ import pytest
 from pyrung.circuitpy import P1AM, ModbusServerConfig, RunStopConfig, board, generate_circuitpy
 from pyrung.circuitpy.codegen import (
     CodegenContext,
+    compile_kernel,
     compile_condition,
     compile_expression,
     compile_rung,
@@ -62,6 +63,7 @@ from pyrung.core import (
     to_value,
     unpack_to_bits,
     unpack_to_words,
+    named_array,
 )
 from pyrung.core.condition import (
     AllCondition,
@@ -717,6 +719,22 @@ class TestInstructionCoverage:
         assert namespace[step_symbol] == 4
         assert namespace[acc_symbol] == 0
         assert namespace[out4_symbol] is True
+
+    def test_compile_kernel_accepts_named_array_symbol_default(self):
+        @named_array(Int, stride=2, readonly=True)
+        class SortState:
+            IDLE = 0
+            RUNNING = 1
+
+        state = Int("State", choices=SortState, default=SortState.IDLE)
+        out_flag = Bool("Out")
+
+        with Program(strict=False) as prog:
+            with Rung(state == SortState.IDLE):
+                out(out_flag)
+
+        compiled = compile_kernel(prog)
+        assert compiled.referenced_tags["State"].default == 0
 
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()

@@ -428,3 +428,15 @@ class TestTagDefaultSeeding:
         state = SystemState().with_tags({"X": True})
         runner = PLC(logic, initial_state=state)
         assert runner.current_state.tags["X"] is True
+
+    def test_named_array_symbol_default_normalizes_to_scalar(self):
+        """default=NamedArray.FIELD should store the field's scalar default."""
+        from pyrung import Int, named_array
+
+        @named_array(Int, stride=2, readonly=True)
+        class SortState:
+            IDLE = 0
+            RUNNING = 1
+
+        state = Int("State", choices=SortState, default=SortState.IDLE)
+        assert state.default == 0

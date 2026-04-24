@@ -35,6 +35,14 @@ ChoiceKey = int | float | str
 ChoiceMap = dict[ChoiceKey, str]
 
 
+def _normalize_default_value(raw: object) -> object:
+    """Resolve tag-backed defaults to plain scalar values."""
+    value = raw
+    while isinstance(value, Tag):
+        value = value.default
+    return value
+
+
 def _structured_choice_items(raw: object, *, owner: str):
     structure_kind = getattr(raw, "_structure_kind", None)
     if structure_kind not in {"udt", "named_array"}:
@@ -133,6 +141,8 @@ class Tag:
     uom: str | None = None
 
     def __post_init__(self):
+        object.__setattr__(self, "default", _normalize_default_value(self.default))
+
         # Set type-appropriate default if not specified
         if self.default is None:
             defaults = {

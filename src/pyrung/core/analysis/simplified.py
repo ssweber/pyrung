@@ -102,6 +102,8 @@ def _operand_label(value: Any) -> Any:
     from pyrung.core.tag import Tag
 
     if isinstance(value, Tag):
+        if value.readonly:
+            return value.default
         return value.name
     return value
 

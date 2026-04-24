@@ -5,26 +5,24 @@ from __future__ import annotations
 from pathlib import Path
 
 from pyrung.core import (
-    Counter,
-    Or,
     PLC,
     Bool,
+    Counter,
     Int,
+    Or,
     Program,
     Rung,
     Timer,
-    copy,
     count_up,
     latch,
+    off_delay,
     on_delay,
     out,
     reset,
     rise,
     run_function,
+    named_array,
 )
-from pyrung.core.analysis.simplified import And as ExprAnd
-from pyrung.core.analysis.simplified import Atom, Const
-from pyrung.core.analysis.simplified import Or as ExprOr
 from pyrung.core.analysis.prove import (
     PENDING,
     Counterexample,
@@ -42,6 +40,9 @@ from pyrung.core.analysis.prove import (
     reachable_states,
     write_lock,
 )
+from pyrung.core.analysis.simplified import And as ExprAnd
+from pyrung.core.analysis.simplified import Atom, Const
+from pyrung.core.analysis.simplified import Or as ExprOr
 
 # ===================================================================
 # Group 1: Dimension classification
@@ -60,7 +61,7 @@ class TestDimensionClassification:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, combinational, _done_acc, _max_preset = result
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Light" not in stateful
         assert "Light" in combinational
         assert "InputA" in nd
@@ -79,7 +80,7 @@ class TestDimensionClassification:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, combinational, _done_acc, _max_preset = result
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Running" in stateful
         assert stateful["Running"] == (False, True)
         assert "Button" in nd
@@ -96,7 +97,7 @@ class TestDimensionClassification:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        _stateful, nd, _combinational, _done_acc, _max_preset = result
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Sensor" in nd
 
     def test_readonly_tags_excluded(self):
@@ -110,7 +111,7 @@ class TestDimensionClassification:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, nd, _combinational, _done_acc, _max_preset = result
+        stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Config" not in nd
         assert "Config" not in stateful
 
@@ -127,7 +128,7 @@ class TestDimensionClassification:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, _nd, _combinational, _done_acc, _max_preset = result
+        stateful, _nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "T1_Done" in stateful
         assert stateful["T1_Done"] == (False, PENDING, True)
 
@@ -149,7 +150,7 @@ class TestValueDomainExtraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        _stateful, nd, _combinational, _done_acc, _max_preset = result
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert nd["Flag"] == (False, True)
 
     def test_integer_comparison_literals(self):
@@ -166,7 +167,7 @@ class TestValueDomainExtraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        _stateful, nd, _combinational, _done_acc, _max_preset = result
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         domain = nd["State"]
         assert 1 in domain
         assert 2 in domain
@@ -183,7 +184,7 @@ class TestValueDomainExtraction:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        _stateful, nd, _combinational, _done_acc, _max_preset = result
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert set(nd["Mode"]) == {0, 1, 2}
 
     def test_unannotated_function_output_is_intractable(self):
@@ -351,6 +352,54 @@ class TestProve:
         )
         assert isinstance(result, Intractable)
         assert "max_states" in result.reason
+
+    def test_property_list_batches_results(self):
+        """A sole list argument batch-proves properties in one pass."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+
+        result = prove(logic, [~flag, Or(flag, ~flag)])
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert isinstance(result[0], Counterexample)
+        assert isinstance(result[1], Proven)
+
+    def test_tuple_property_keeps_grouped_and_semantics(self):
+        """Tuple input still means one property with implicit AND semantics."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(a, b):
+                latch(light)
+
+        result = prove(logic, (~light, ~a))
+        assert isinstance(result, Counterexample)
+
+    def test_readonly_named_array_symbol_is_treated_as_literal_constant(self):
+        """Readonly named-array symbols in comparisons should prove like literals."""
+
+        @named_array(Int, stride=2, readonly=True)
+        class SortState:
+            IDLE = 0
+            RUNNING = 1
+
+        state = Int("State", choices=SortState, default=SortState.IDLE)
+
+        with Program(strict=False) as logic:
+            with Rung(state == SortState.IDLE):
+                out(Bool("AtIdle"))
+
+        result = prove(
+            logic,
+            Or(state == SortState.IDLE, state == SortState.RUNNING),
+        )
+        assert isinstance(result, Proven)
 
 
 class TestReachableStates:
@@ -596,7 +645,7 @@ class TestScopeParameter:
 
         result = _classify_dimensions(logic, scope=["X"])
         assert not isinstance(result, Intractable)
-        _stateful, nd, _combinational, _done_acc, _max_preset = result
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert "A" in nd
         assert "B" not in nd
 
@@ -634,7 +683,7 @@ class TestConsumedAccumulator:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        stateful, _nd, _combinational, done_acc, _max_preset = result
+        stateful, _nd, _combinational, done_acc, _done_presets, _done_kinds = result
         assert "T1_Acc" in stateful
         assert "T1_Done" not in done_acc
 
@@ -733,8 +782,8 @@ class TestTimerFastForward:
         done_values = {dict(s).get("BigT_Done") for s in states}
         assert True in done_values
 
-    def test_max_preset_extracted(self):
-        """_classify_dimensions extracts max_preset from timer instructions."""
+    def test_done_preset_extracted(self):
+        """_classify_dimensions extracts constant done presets by tag name."""
         enable = Bool("Enable", external=True)
         t = Timer.clone("T1")
 
@@ -746,8 +795,44 @@ class TestTimerFastForward:
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
-        _s, _n, _c, _d, max_preset = result
-        assert max_preset == 5000
+        _s, _n, _c, _d, done_presets, _done_kinds = result
+        assert done_presets["T1_Done"] == 5000
+
+    def test_large_counter_reaches_done(self):
+        """Count-up with a large preset still reaches Done=True via event jump."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        counter = Counter.clone("C1")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                count_up(counter, preset=500).reset(reset_btn)
+            with Rung(counter.Done):
+                out(output)
+
+        states = reachable_states(logic, project=["Output", "C1_Done"], max_depth=10)
+        assert not isinstance(states, Intractable)
+        done_values = {dict(s).get("C1_Done") for s in states}
+        assert True in done_values
+
+    def test_large_off_delay_reaches_expired(self):
+        """Off-delay pending state eventually reaches Done=False via event jump."""
+        enable = Bool("Enable", external=True)
+        t = Timer.clone("T1")
+        expired = Bool("Expired")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                off_delay(t, preset=500)
+            with Rung(~t.Done):
+                out(expired)
+
+        states = reachable_states(logic, project=["Expired", "T1_Done"], max_depth=10)
+        assert not isinstance(states, Intractable)
+        done_values = {dict(s).get("T1_Done") for s in states}
+        assert False in done_values
+        assert True in done_values
 
 
 class TestIntractableTags:

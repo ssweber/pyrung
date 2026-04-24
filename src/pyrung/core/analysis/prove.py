@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import math
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -126,19 +127,23 @@ _TIMER_COUNTER_INSTRUCTIONS = frozenset(
 
 PENDING = "Pending"
 
-_TIMER_FORWARD_FLOOR = 10_000
+_DONE_KIND_ON_DELAY = "on_delay"
+_DONE_KIND_OFF_DELAY = "off_delay"
+_DONE_KIND_COUNT_UP = "count_up"
+_DONE_KIND_COUNT_DOWN = "count_down"
 
 
 @dataclass(frozen=True)
 class _DoneAccInfo:
     pairs: dict[str, str]
-    max_preset: int
+    presets: dict[str, int]
+    kinds: dict[str, str]
 
 
 def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     """Map Done tag names to their Acc tag names for timer/counter instructions.
 
-    Also tracks the largest constant preset to size the fast-forward budget.
+    Also captures constant presets and instruction kinds for event jumps.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
@@ -146,30 +151,39 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     from pyrung.core.validation._common import walk_instructions
 
     pairs: dict[str, str] = {}
-    max_preset = 0
+    presets: dict[str, int] = {}
+    kinds: dict[str, str] = {}
 
     for instr in walk_instructions(program):
-        if isinstance(
-            instr,
-            (
-                OnDelayInstruction,
-                OffDelayInstruction,
-                CountUpInstruction,
-                CountDownInstruction,
-            ),
-        ):
-            pairs[instr.done_bit.name] = instr.accumulator.name
-            if not isinstance(instr.preset, Tag) and isinstance(instr.preset, (int, float)):
-                max_preset = max(max_preset, int(instr.preset))
+        if isinstance(instr, OnDelayInstruction):
+            kind = _DONE_KIND_ON_DELAY
+        elif isinstance(instr, OffDelayInstruction):
+            kind = _DONE_KIND_OFF_DELAY
+        elif isinstance(instr, CountUpInstruction):
+            kind = _DONE_KIND_COUNT_UP
+        elif isinstance(instr, CountDownInstruction):
+            kind = _DONE_KIND_COUNT_DOWN
+        else:
+            continue
 
-    return _DoneAccInfo(pairs=pairs, max_preset=max_preset)
+        pairs[instr.done_bit.name] = instr.accumulator.name
+        kinds[instr.done_bit.name] = kind
+        if not isinstance(instr.preset, Tag) and isinstance(instr.preset, (int, float)):
+            presets[instr.done_bit.name] = int(instr.preset)
+
+    return _DoneAccInfo(pairs=pairs, presets=presets, kinds=kinds)
 
 
-def _done_acc_state(done_val: Any, acc_val: Any) -> bool | str:
+def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
     """Derive the three-valued timer/counter state from Done and Acc."""
+    acc_nonzero = bool(acc_val and acc_val != 0)
+    if kind == _DONE_KIND_OFF_DELAY:
+        if done_val and acc_nonzero:
+            return PENDING
+        return bool(done_val)
     if done_val:
         return True
-    if acc_val and acc_val != 0:
+    if acc_nonzero:
         return PENDING
     return False
 
@@ -228,13 +242,13 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
     elif isinstance(instr, (CountUpInstruction, CountDownInstruction)):
         targets = [instr.done_bit.name, instr.accumulator.name]
     elif isinstance(instr, CopyInstruction):
-        dest = instr.destination
+        dest = instr.target
         if isinstance(dest, Tag):
             targets = [dest.name]
         else:
             targets = _resolve_tag_names(dest)
     elif isinstance(instr, CalcInstruction):
-        dest = instr.destination
+        dest = instr.dest
         if isinstance(dest, Tag):
             targets = [dest.name]
         else:
@@ -255,9 +269,9 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
             if isinstance(target, Tag):
                 targets.append(target.name)
     elif isinstance(instr, BlockCopyInstruction):
-        targets = _resolve_tag_names(instr.destination)
+        targets = _resolve_tag_names(instr.dest)
     elif isinstance(instr, FillInstruction):
-        targets = _resolve_tag_names(instr.destination)
+        targets = _resolve_tag_names(instr.dest)
     elif isinstance(
         instr,
         (
@@ -268,7 +282,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
             UnpackToWordsInstruction,
         ),
     ):
-        targets = _resolve_tag_names(instr.destination)
+        targets = _resolve_tag_names(instr.dest)
     elif isinstance(instr, ModbusSendInstruction):
         targets = [
             instr.sending.name,
@@ -343,10 +357,27 @@ def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
             _walk_atoms(t, tag_name, out)
 
 
+def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
+    """Extract boundary-representative values from a tag's metadata.
+
+    For tag-vs-tag comparisons like ``A > B``, we only need values that
+    distinguish both comparison outcomes — not the full numeric range.
+    """
+    if other_tag.choices is not None:
+        return sorted(other_tag.choices.keys())
+    if other_tag.min is not None and other_tag.max is not None:
+        vals: list[Any] = [other_tag.min]
+        if other_tag.max != other_tag.min:
+            vals.append(other_tag.max)
+        return vals
+    return []
+
+
 def _extract_value_domain(
     tag_name: str,
     tag: Tag,
     all_exprs: list[Expr],
+    all_tags: dict[str, Tag] | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
     if tag.type == TagType.BOOL:
@@ -358,12 +389,17 @@ def _extract_value_domain(
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()
-    has_tag_comparison = False
+    unresolved_tag_comparison = False
 
     for atom in atoms:
         if atom.form in comparison_forms and atom.operand is not None:
             if isinstance(atom.operand, str):
-                has_tag_comparison = True
+                other = all_tags.get(atom.operand) if all_tags is not None else None
+                boundary = _boundary_values_for_tag(other) if other is not None else []
+                if boundary:
+                    literals.update(boundary)
+                else:
+                    unresolved_tag_comparison = True
             else:
                 literals.add(atom.operand)
 
@@ -373,10 +409,13 @@ def _extract_value_domain(
     if tag.min is not None and tag.max is not None:
         domain_size = tag.max - tag.min + 1
         if domain_size > 1000:
-            return None
-        return tuple(range(int(tag.min), int(tag.max) + 1))
+            if not literals:
+                return None
+            # Large range but we have comparison boundaries — use those
+        else:
+            return tuple(range(int(tag.min), int(tag.max) + 1))
 
-    if has_tag_comparison and not literals:
+    if unresolved_tag_comparison and not literals:
         return None
 
     if not literals:
@@ -400,7 +439,8 @@ _ClassifyResult = tuple[
     dict[str, tuple[Any, ...]],  # nondeterministic_dims
     frozenset[str],  # combinational_tags
     dict[str, str],  # done_acc_pairs: done_tag → acc_tag
-    int,  # max_preset: largest constant timer/counter preset
+    dict[str, int],  # done_presets: done_tag → constant preset value
+    dict[str, str],  # done_kinds: done_tag → timer/counter instruction kind
 ]
 
 
@@ -411,7 +451,8 @@ def _classify_dimensions(
     """Partition tags into stateful, nondeterministic, and combinational.
 
     Returns ``(stateful_dims, nondeterministic_dims, combinational_tags,
-    done_acc_pairs)`` where each dim dict maps tag name to its value domain.
+    done_acc_pairs, done_presets, done_kinds)`` where each dim dict maps
+    tag name to its value domain.
     Timer/counter Done bits get a three-valued domain ``(False, PENDING, True)``
     and their Acc tags are excluded from the state space.
     Returns ``Intractable`` when a domain cannot be bounded.
@@ -455,7 +496,7 @@ def _classify_dimensions(
         if role == TagRole.INPUT or (tag.external and not is_written):
             if scope_input_tags is not None and tag_name not in scope_input_tags:
                 continue
-            domain = _extract_value_domain(tag_name, tag, all_exprs)
+            domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
             if domain is None:
                 infeasible_tags.append(tag_name)
                 continue
@@ -474,7 +515,7 @@ def _classify_dimensions(
             stateful[tag_name] = (False, PENDING, True)
             continue
 
-        domain = _extract_value_domain(tag_name, tag, all_exprs)
+        domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
         if domain is None:
             infeasible_tags.append(tag_name)
             continue
@@ -500,7 +541,16 @@ def _classify_dimensions(
             tags=sorted(fn_escape),
         )
 
-    return stateful, nondeterministic, frozenset(combinational), done_acc, done_acc_info.max_preset
+    done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+    done_kinds = {d: done_acc_info.kinds[d] for d in done_acc}
+    return (
+        stateful,
+        nondeterministic,
+        frozenset(combinational),
+        done_acc,
+        done_presets,
+        done_kinds,
+    )
 
 
 def _detect_function_escape_hatches(
@@ -717,6 +767,7 @@ def _extract_state_key(
     stateful_names: tuple[str, ...],
     edge_tag_names: tuple[str, ...],
     done_acc_pairs: dict[str, str],
+    done_kinds: dict[str, str],
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful dims + edge prev values.
 
@@ -727,7 +778,9 @@ def _extract_state_key(
     for n in stateful_names:
         if n in done_acc_pairs:
             acc_name = done_acc_pairs[n]
-            parts.append(_done_acc_state(kernel.tags.get(n), kernel.tags.get(acc_name)))
+            parts.append(
+                _done_acc_state(done_kinds[n], kernel.tags.get(n), kernel.tags.get(acc_name))
+            )
         else:
             parts.append(kernel.tags.get(n))
     for n in edge_tag_names:
@@ -758,27 +811,135 @@ def _build_trace(
     return trace
 
 
+def _compile_property_spec(
+    spec: Any,
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+    """Compile one property spec into a predicate and optional auto-scope.
+
+    ``spec`` may be a single condition/callable or a tuple of conditions with
+    implicit AND semantics.
+    """
+    if isinstance(spec, tuple):
+        return _compile_property(*spec)
+    return _compile_property(spec)
+
+
+def _normalize_property_specs(*conditions: Any) -> tuple[bool, list[Any]]:
+    """Split prove() inputs into single-property or batch-property form.
+
+    A sole list argument means "batch prove these properties". Tuple items
+    inside that list represent grouped AND terms for one property.
+    """
+    if len(conditions) == 1 and isinstance(conditions[0], list):
+        property_specs = list(conditions[0])
+        if not property_specs:
+            raise ValueError("prove() property list cannot be empty")
+        return True, property_specs
+
+    if not conditions:
+        raise ValueError("prove() requires at least one condition")
+    if len(conditions) == 1:
+        return False, [conditions[0]]
+    return False, [tuple(conditions)]
+
+
+def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
+    """Return timer progress as accumulator plus fractional remainder."""
+    frac_key = f"_frac:{acc_name}"
+    acc = int(kernel.tags.get(acc_name, 0) or 0)
+    frac = float(kernel.memory.get(frac_key, 0.0) or 0.0)
+    return acc + frac
+
+
+def _scans_until_done_event(
+    kind: str,
+    preset: int,
+    acc_name: str,
+    before: _Snapshot,
+    kernel: ReplayKernel,
+) -> int | None:
+    """Estimate scans until this pending timer/counter reaches its next Done event."""
+    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
+    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
+
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        after_total = _timer_total(kernel, acc_name)
+        delta = after_total - before_total
+        remaining = preset - after_total
+    elif kind == _DONE_KIND_COUNT_UP:
+        delta = acc_after - acc_before
+        remaining = preset - acc_after
+    else:
+        delta = acc_before - acc_after
+        remaining = preset + acc_after
+
+    if delta <= 0:
+        return None
+    if remaining <= 0:
+        return 1
+    return max(1, int(math.ceil(remaining / delta)))
+
+
+def _advance_hidden_progress(
+    kind: str,
+    acc_name: str,
+    skipped_scans: int,
+    before: _Snapshot,
+    kernel: ReplayKernel,
+) -> None:
+    """Advance a hidden timer/counter through skipped scans before the event scan."""
+    if skipped_scans <= 0:
+        return
+
+    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
+    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
+
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        after_total = _timer_total(kernel, acc_name)
+        delta = after_total - before_total
+        target_total = after_total + (skipped_scans * delta)
+        target_acc = int(target_total)
+        kernel.tags[acc_name] = target_acc
+        kernel.memory[f"_frac:{acc_name}"] = target_total - target_acc
+        return
+
+    if kind == _DONE_KIND_COUNT_UP:
+        delta = acc_after - acc_before
+        kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
+        return
+
+    delta = acc_before - acc_after
+    kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
+
+
 def _bfs_explore(
     compiled: CompiledKernel,
     stateful_dims: dict[str, tuple[Any, ...]],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     done_acc_pairs: dict[str, str],
+    done_kinds: dict[str, str],
     all_exprs: list[Expr],
     *,
     predicate: Callable[[dict[str, Any]], bool] | None = None,
     project: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
-    max_preset: int = 0,
+    done_presets: dict[str, int] | None = None,
     dt: float = 0.010,
 ) -> Proven | Counterexample | Intractable | frozenset[frozenset[tuple[str, Any]]]:
     """BFS over the reachable state space."""
-    forward_budget = max(int(max_preset / dt) if dt > 0 else 0, _TIMER_FORWARD_FLOOR)
     stateful_names = tuple(sorted(stateful_dims))
     edge_tag_names = tuple(sorted(compiled.edge_tags))
+    _done_presets = done_presets or {}
 
     kernel = compiled.create_kernel()
-    initial_key = _extract_state_key(kernel, stateful_names, edge_tag_names, done_acc_pairs)
+    initial_key = _extract_state_key(
+        kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+    )
 
     visited: set[tuple[Any, ...]] = {initial_key}
     parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] = {}
@@ -827,41 +988,47 @@ def _bfs_explore(
                 trace.append(input_dict)
                 return Counterexample(trace=trace)
 
-            new_key = _extract_state_key(kernel, stateful_names, edge_tag_names, done_acc_pairs)
+            new_key = _extract_state_key(
+                kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+            )
 
-            # Fast-forward through Pending timer states: keep stepping
-            # (same inputs) until the state key changes or a budget is hit.
+            # Event jump: when we revisit a hidden PENDING state, skip ahead
+            # to the next timer/counter completion event instead of replaying
+            # every intermediate scan.
             #
-            # Soundness: the BFS has already explored all input combos
-            # from this PENDING state when it was first enqueued (since
-            # new_key ∈ visited).  Fast-forward only fires for re-visited
-            # PENDING keys, so it discovers the Pending→Done transition
-            # that the BFS can't reach within its depth budget.  Inputs
-            # are frozen, so this may explore states not reachable in the
-            # real system (the enable condition might go false mid-
-            # accumulation).  This makes the verifier sound (no missed
-            # violations) but conservative (possible false counterexamples
-            # if a violation only occurs with frozen inputs).
+            # Soundness: the abstraction already covers the whole Pending
+            # plateau.  The jump only surfaces the next completion edge out of
+            # that plateau, preserving ordering when multiple hidden timers or
+            # counters are active at once.  Consumed accumulators stay outside
+            # done_acc_pairs, so this only touches hidden monotonic progress.
             if done_acc_pairs and new_key in visited:
-                has_pending = any(v == PENDING for v in new_key[: len(stateful_names)])
-                if has_pending:
-                    for _ in range(forward_budget):
-                        _step_kernel(compiled, kernel, dt)
-                        if predicate is not None and not predicate(dict(kernel.tags)):
-                            # The trace records the parent-state inputs but not
-                            # how many fast-forward steps were taken.  A consumer
-                            # replaying this trace won't land at the exact scan
-                            # where the violation occurred — the intermediate
-                            # accumulation steps are elided.
-                            trace = _build_trace(parent_map, parent_key, input_dict)
-                            trace.append(input_dict)
-                            return Counterexample(trace=trace)
-                        candidate = _extract_state_key(
-                            kernel, stateful_names, edge_tag_names, done_acc_pairs
-                        )
-                        if candidate != new_key:
-                            new_key = candidate
-                            break
+                pending_events: list[tuple[str, str, str, int]] = []
+                for i, done_name in enumerate(stateful_names):
+                    if done_name not in done_acc_pairs or new_key[i] != PENDING:
+                        continue
+                    preset = _done_presets.get(done_name)
+                    kind = done_kinds.get(done_name)
+                    if preset is None or kind is None:
+                        continue
+                    acc_name = done_acc_pairs[done_name]
+                    scans = _scans_until_done_event(kind, preset, acc_name, snap, kernel)
+                    if scans is not None:
+                        pending_events.append((done_name, acc_name, kind, scans))
+
+                if pending_events:
+                    next_event_scans = min(scans for _done_name, _acc_name, _kind, scans in pending_events)
+                    skipped_scans = max(next_event_scans - 1, 0)
+                    for _done_name, acc_name, kind, _scans in pending_events:
+                        _advance_hidden_progress(kind, acc_name, skipped_scans, snap, kernel)
+
+                    _step_kernel(compiled, kernel, dt)
+                    if predicate is not None and not predicate(dict(kernel.tags)):
+                        trace = _build_trace(parent_map, parent_key, input_dict)
+                        trace.append(input_dict)
+                        return Counterexample(trace=trace)
+                    new_key = _extract_state_key(
+                        kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+                    )
 
             if project is not None:
                 projected.add(frozenset((n, kernel.tags.get(n)) for n in project))
@@ -881,6 +1048,147 @@ def _bfs_explore(
         return frozenset(projected)
 
     return Proven(states_explored=len(visited))
+
+
+def _bfs_explore_many(
+    compiled: CompiledKernel,
+    stateful_dims: dict[str, tuple[Any, ...]],
+    nondeterministic_dims: dict[str, tuple[Any, ...]],
+    done_acc_pairs: dict[str, str],
+    done_kinds: dict[str, str],
+    all_exprs: list[Expr],
+    *,
+    predicates: list[Callable[[dict[str, Any]], bool]],
+    max_depth: int = 50,
+    max_states: int = 100_000,
+    done_presets: dict[str, int] | None = None,
+    dt: float = 0.010,
+) -> list[Proven | Counterexample | Intractable]:
+    """BFS over the reachable state space for multiple properties at once."""
+    stateful_names = tuple(sorted(stateful_dims))
+    edge_tag_names = tuple(sorted(compiled.edge_tags))
+    _done_presets = done_presets or {}
+
+    kernel = compiled.create_kernel()
+    initial_key = _extract_state_key(
+        kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+    )
+
+    visited: set[tuple[Any, ...]] = {initial_key}
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] = {}
+    results: list[Counterexample | Proven | Intractable | None] = [None] * len(predicates)
+
+    def _record_failures(
+        *,
+        state: dict[str, Any],
+        parent_key: tuple[Any, ...],
+        input_dict: dict[str, Any],
+        initial: bool = False,
+    ) -> None:
+        for i, predicate in enumerate(predicates):
+            if results[i] is not None:
+                continue
+            if predicate(state):
+                continue
+            if initial:
+                results[i] = Counterexample(trace=[{}])
+                continue
+            trace = _build_trace(parent_map, parent_key, input_dict)
+            trace.append(input_dict)
+            results[i] = Counterexample(trace=trace)
+
+    _record_failures(state=dict(kernel.tags), parent_key=initial_key, input_dict={}, initial=True)
+    if all(result is not None for result in results):
+        return [result for result in results if result is not None]
+
+    queue: deque[tuple[_Snapshot, int, tuple[Any, ...]]] = deque()
+    queue.append((_snapshot_kernel(kernel), 0, initial_key))
+
+    while queue:
+        snap, depth, parent_key = queue.popleft()
+
+        if depth >= max_depth:
+            continue
+
+        _restore_kernel(kernel, snap)
+        current_state = dict(kernel.tags)
+
+        live = _live_inputs(current_state, nondeterministic_dims, all_exprs)
+
+        if live:
+            live_sorted = sorted(live)
+            domains = [nondeterministic_dims[n] for n in live_sorted]
+            combos: Any = itertools.product(*domains)
+        else:
+            live_sorted = []
+            combos = [()]
+
+        for combo in combos:
+            _restore_kernel(kernel, snap)
+
+            input_dict: dict[str, Any] = {}
+            for i, name in enumerate(live_sorted):
+                kernel.tags[name] = combo[i]
+                input_dict[name] = combo[i]
+
+            _step_kernel(compiled, kernel, dt)
+            _record_failures(state=dict(kernel.tags), parent_key=parent_key, input_dict=input_dict)
+            new_key = _extract_state_key(
+                kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+            )
+
+            if done_acc_pairs and new_key in visited:
+                pending_events: list[tuple[str, str, str, int]] = []
+                for i, done_name in enumerate(stateful_names):
+                    if done_name not in done_acc_pairs or new_key[i] != PENDING:
+                        continue
+                    preset = _done_presets.get(done_name)
+                    kind = done_kinds.get(done_name)
+                    if preset is None or kind is None:
+                        continue
+                    acc_name = done_acc_pairs[done_name]
+                    scans = _scans_until_done_event(kind, preset, acc_name, snap, kernel)
+                    if scans is not None:
+                        pending_events.append((done_name, acc_name, kind, scans))
+
+                if pending_events:
+                    next_event_scans = min(
+                        scans for _done_name, _acc_name, _kind, scans in pending_events
+                    )
+                    skipped_scans = max(next_event_scans - 1, 0)
+                    for _done_name, acc_name, kind, _scans in pending_events:
+                        _advance_hidden_progress(kind, acc_name, skipped_scans, snap, kernel)
+
+                    _step_kernel(compiled, kernel, dt)
+                    _record_failures(
+                        state=dict(kernel.tags), parent_key=parent_key, input_dict=input_dict
+                    )
+                    new_key = _extract_state_key(
+                        kernel, stateful_names, edge_tag_names, done_acc_pairs, done_kinds
+                    )
+
+            if new_key not in visited:
+                visited.add(new_key)
+                if len(visited) > max_states:
+                    intractable = Intractable(
+                        reason="max_states exceeded",
+                        dimensions=len(stateful_dims) + len(nondeterministic_dims),
+                        estimated_space=len(visited),
+                    )
+                    return [
+                        result if result is not None else intractable
+                        for result in results
+                    ]
+                parent_map[new_key] = (parent_key, input_dict)
+                queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
+
+            if all(result is not None for result in results):
+                return [result for result in results if result is not None]
+
+    return [
+        result if result is not None else Proven(states_explored=len(visited))
+        for result in results
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -934,13 +1242,15 @@ def prove(
     scope: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
-) -> Proven | Counterexample | Intractable:
+) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
     Accepts the same condition syntax as ``Rung()`` and ``when()``::
 
         prove(logic, Or(~Running, EstopOK))
         prove(logic, ~Running, EstopOK)        # implicit AND
+        prove(logic, (Ready, AutoMode))        # grouped AND as one property
+        prove(logic, [prop_a, prop_b, prop_c]) # batch prove in one pass
         prove(logic, lambda s: s["Running"] <= s["Limit"])
 
     When given condition expressions, the upstream cone is derived
@@ -950,9 +1260,11 @@ def prove(
     ----------
     program : Program
         The compiled ladder logic program.
-    *conditions : Tag, Condition, or callable
-        The property to prove.  Tag/Condition expressions are preferred;
-        a callable ``(state_dict) -> bool`` is accepted as a fallback.
+    *conditions : Tag, Condition, callable, tuple, or list
+        One property, or a sole list of properties for batch proving.
+        Tuple terms represent grouped AND conditions for one property.
+        Tag/Condition expressions are preferred; a callable
+        ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
         Override automatic scope derivation.
     max_depth : int
@@ -962,28 +1274,60 @@ def prove(
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
-    predicate, auto_scope = _compile_property(*conditions)
-    effective_scope = scope if scope is not None else auto_scope
+    is_batch, property_specs = _normalize_property_specs(*conditions)
+    compiled_properties = [_compile_property_spec(spec) for spec in property_specs]
+
+    if scope is not None:
+        effective_scope = scope
+    else:
+        auto_scopes = [auto_scope for _predicate, auto_scope in compiled_properties]
+        if any(auto_scope is None for auto_scope in auto_scopes):
+            effective_scope = None
+        else:
+            merged_scope: set[str] = set()
+            for auto_scope in auto_scopes:
+                assert auto_scope is not None
+                merged_scope.update(auto_scope)
+            effective_scope = sorted(merged_scope)
 
     result = _classify_dimensions(program, effective_scope)
     if isinstance(result, Intractable):
+        if is_batch:
+            return [result for _ in property_specs]
         return result
-    stateful_dims, nd_dims, _combinational, done_acc, max_preset = result
+    stateful_dims, nd_dims, _combinational, done_acc, done_presets, done_kinds = result
 
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=effective_scope)
 
     compiled = compile_kernel(program)
+    if is_batch:
+        predicates = [predicate for predicate, _auto_scope in compiled_properties]
+        return _bfs_explore_many(
+            compiled,
+            stateful_dims,
+            nd_dims,
+            done_acc,
+            done_kinds,
+            all_exprs,
+            predicates=predicates,
+            max_depth=max_depth,
+            max_states=max_states,
+            done_presets=done_presets,
+        )
+
+    predicate, _auto_scope = compiled_properties[0]
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         compiled,
         stateful_dims,
         nd_dims,
         done_acc,
+        done_kinds,
         all_exprs,
         predicate=predicate,
         max_depth=max_depth,
         max_states=max_states,
-        max_preset=max_preset,
+        done_presets=done_presets,
     )
 
 
@@ -1014,7 +1358,7 @@ def reachable_states(
     result = _classify_dimensions(program, scope)
     if isinstance(result, Intractable):
         return result
-    stateful_dims, nd_dims, _combinational, done_acc, max_preset = result
+    stateful_dims, nd_dims, _combinational, done_acc, done_presets, done_kinds = result
 
     if project is None:
         project = _default_projection(program)
@@ -1028,11 +1372,12 @@ def reachable_states(
         stateful_dims,
         nd_dims,
         done_acc,
+        done_kinds,
         all_exprs,
         project=project,
         max_depth=max_depth,
         max_states=max_states,
-        max_preset=max_preset,
+        done_presets=done_presets,
     )
 
 
