@@ -9,7 +9,6 @@ from pyrung.core.analysis.pdg import (
     build_program_graph,
     classify_tags,
 )
-from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
@@ -19,6 +18,7 @@ from pyrung.core.analysis.prove import (
     prove,
     reachable_states,
 )
+from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
 
 __all__ = [
     "Counterexample",
