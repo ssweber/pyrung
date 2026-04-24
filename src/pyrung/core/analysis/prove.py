@@ -472,6 +472,7 @@ class _ExploreContext:
     done_event_specs: tuple[_DoneEventSpec, ...]
     block_specs: tuple[BlockSpec, ...]
     dt: float
+    edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
 
 
 def _classify_dimensions_from_graph(
@@ -744,6 +745,93 @@ def _live_inputs(
 
 
 # ---------------------------------------------------------------------------
+# Edge tag compression
+# ---------------------------------------------------------------------------
+
+_EDGE_DEAD: Any = object()
+
+
+def _has_edge_atom(expr: Expr, tag_name: str) -> bool:
+    """True if *expr* contains a rise/fall atom for *tag_name*."""
+    if isinstance(expr, Atom):
+        return expr.tag == tag_name and expr.form in ("rise", "fall")
+    if isinstance(expr, (And, Or)):
+        return any(_has_edge_atom(t, tag_name) for t in expr.terms)
+    return False
+
+
+def _collect_edge_tag_exprs(
+    program: Program,
+    edge_tag_names: tuple[str, ...],
+) -> dict[str, list[Expr]]:
+    """For each edge tag, collect full rung conditions containing its rise/fall.
+
+    Uses the complete AND of all rung conditions so that partial evaluation
+    can resolve masked branches (e.g. ``And(State == IDLE, rise(Sensor))``
+    resolves to False when State != IDLE).
+    """
+    result: dict[str, list[Expr]] = {name: [] for name in edge_tag_names}
+    if not edge_tag_names:
+        return result
+    edge_set = frozenset(edge_tag_names)
+    seen: dict[str, set[int]] = {name: set() for name in edge_tag_names}
+    for rung_idx, rung in enumerate(program.rungs):
+        conds = rung._conditions
+        if not conds:
+            continue
+        if len(conds) == 1:
+            expr = _condition_to_expr(conds[0])
+        else:
+            expr = And(tuple(_condition_to_expr(c) for c in conds))
+        for name in edge_set:
+            if _has_edge_atom(expr, name) and rung_idx not in seen[name]:
+                seen[name].add(rung_idx)
+                result[name].append(expr)
+    return result
+
+
+def _live_edge_prevs(
+    state: dict[str, Any],
+    nd_dims: dict[str, tuple[Any, ...]],
+    edge_tag_exprs: dict[str, list[Expr]],
+) -> frozenset[str]:
+    """Determine which edge tag prev values are live at a given state.
+
+    An edge prev is live if any expression containing its rise/fall atom
+    does not resolve to a constant under partial evaluation of known
+    (non-nondeterministic) state.
+    """
+    nd_names = frozenset(nd_dims)
+    known = {k: v for k, v in state.items() if k not in nd_names}
+
+    live: set[str] = set()
+    for name, exprs in edge_tag_exprs.items():
+        for expr in exprs:
+            residual = _partial_eval(expr, known)
+            if not isinstance(residual, Const):
+                live.add(name)
+                break
+    return frozenset(live)
+
+
+def _precompute_always_live_edges(
+    edge_tag_exprs: dict[str, list[Expr]],
+) -> frozenset[str]:
+    """Find edge tags whose expressions can never be resolved.
+
+    Bare rise/fall atoms (no surrounding AND/OR with stateful guards)
+    are always live regardless of state.
+    """
+    always_live: set[str] = set()
+    for name, exprs in edge_tag_exprs.items():
+        for expr in exprs:
+            if isinstance(expr, Atom):
+                always_live.add(name)
+                break
+    return frozenset(always_live)
+
+
+# ---------------------------------------------------------------------------
 # Kernel integration
 # ---------------------------------------------------------------------------
 
@@ -803,16 +891,64 @@ def _restore_kernel(kernel: ReplayKernel, snap: _Snapshot) -> None:
     kernel.timestamp = timestamp
 
 
+class _EdgeCompressor:
+    """Cached edge-prev liveness for state key compression.
+
+    Edge liveness depends only on stateful dims (non-ND known state).
+    This caches the result per stateful-key prefix so the (relatively
+    expensive) partial evaluation runs at most once per unique stateful
+    configuration, not per combo.
+    """
+
+    __slots__ = ("_context", "_compressible", "_cache")
+
+    def __init__(self, context: _ExploreContext) -> None:
+        self._context = context
+        always_live = _precompute_always_live_edges(context.edge_tag_exprs)
+        self._compressible = {
+            name: exprs
+            for name, exprs in context.edge_tag_exprs.items()
+            if name not in always_live
+        }
+        self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
+
+    def live_edges(self, kernel: ReplayKernel) -> frozenset[str] | None:
+        """Return the set of live edge tags, or None if no compression."""
+        if not self._compressible:
+            return None
+        ctx = self._context
+        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        cached = self._cache.get(stateful_prefix)
+        if cached is not None:
+            return cached
+        result = _live_edge_prevs(
+            kernel.tags, ctx.nondeterministic_dims, self._compressible,
+        )
+        self._cache[stateful_prefix] = result
+        return result
+
+    def state_key(self, kernel: ReplayKernel) -> tuple[Any, ...]:
+        ctx = self._context
+        return _extract_state_key(
+            kernel, ctx.stateful_names, ctx.edge_tag_names,
+            ctx.state_key_done_specs, self.live_edges(kernel),
+        )
+
+
 def _extract_state_key(
     kernel: ReplayKernel,
     stateful_names: tuple[str, ...],
     edge_tag_names: tuple[str, ...],
     done_specs: tuple[_StateKeyDoneSpec, ...] = (),
+    live_edges: frozenset[str] | None = None,
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful dims + edge prev values.
 
     Timer/counter Done bits use three-valued abstraction
     ``(False, PENDING, True)`` derived from Done + Acc.
+
+    When *live_edges* is provided, edge tags not in the set use a sentinel
+    value, collapsing states that differ only in irrelevant prev values.
     """
     parts = [kernel.tags.get(name) for name in stateful_names]
     for spec in done_specs:
@@ -822,7 +958,10 @@ def _extract_state_key(
             kernel.tags.get(spec.acc_name),
         )
     for n in edge_tag_names:
-        parts.append(kernel.prev.get(n))
+        if live_edges is not None and n not in live_edges:
+            parts.append(_EDGE_DEAD)
+        else:
+            parts.append(kernel.prev.get(n))
     return tuple(parts)
 
 
@@ -865,6 +1004,8 @@ def _build_explore_context(
                 )
             )
 
+    edge_tag_exprs = _collect_edge_tag_exprs(program, edge_tag_names)
+
     return _ExploreContext(
         compiled=compiled,
         graph=graph,
@@ -877,6 +1018,7 @@ def _build_explore_context(
         done_event_specs=tuple(done_event_specs),
         block_specs=tuple(compiled.block_specs.values()),
         dt=dt,
+        edge_tag_exprs=edge_tag_exprs,
     )
 
 
@@ -1107,6 +1249,7 @@ def _maybe_jump_hidden_event(
     snap: _Snapshot,
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
 ) -> tuple[tuple[Any, ...], bool]:
     """Jump from a revisited hidden pending plateau to the next completion event."""
     if not context.done_event_specs or new_key not in visited:
@@ -1129,15 +1272,7 @@ def _maybe_jump_hidden_event(
         _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, snap, kernel)
 
     _step_kernel(context, kernel)
-    return (
-        _extract_state_key(
-            kernel,
-            context.stateful_names,
-            context.edge_tag_names,
-            context.state_key_done_specs,
-        ),
-        True,
-    )
+    return (edge_comp.state_key(kernel), True)
 
 
 def _bfs_explore(
@@ -1150,12 +1285,8 @@ def _bfs_explore(
 ) -> Proven | Counterexample | Intractable | frozenset[frozenset[tuple[str, Any]]]:
     """BFS over the reachable state space."""
     kernel = context.compiled.create_kernel()
-    initial_key = _extract_state_key(
-        kernel,
-        context.stateful_names,
-        context.edge_tag_names,
-        context.state_key_done_specs,
-    )
+    edge_comp = _EdgeCompressor(context)
+    initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
     parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] | None = (
@@ -1208,23 +1339,9 @@ def _bfs_explore(
                 trace.append(input_dict)
                 return Counterexample(trace=trace)
 
-            new_key = _extract_state_key(
-                kernel,
-                context.stateful_names,
-                context.edge_tag_names,
-                context.state_key_done_specs,
-            )
+            new_key = edge_comp.state_key(kernel)
 
-            # Event jump: when we revisit a hidden PENDING state, skip ahead
-            # to the next timer/counter completion event instead of replaying
-            # every intermediate scan.
-            #
-            # Soundness: the abstraction already covers the whole Pending
-            # plateau.  The jump only surfaces the next completion edge out of
-            # that plateau, preserving ordering when multiple hidden timers or
-            # counters are active at once.  Consumed accumulators stay outside
-            # done_acc_pairs, so this only touches hidden monotonic progress.
-            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key)
+            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key, edge_comp)
             if jumped and predicate is not None and not predicate(kernel.tags):
                 assert parent_map is not None
                 trace = _build_trace(parent_map, parent_key, input_dict)
@@ -1267,12 +1384,8 @@ def _bfs_explore_many(
 ) -> list[Proven | Counterexample | Intractable]:
     """BFS over the reachable state space for multiple properties at once."""
     kernel = context.compiled.create_kernel()
-    initial_key = _extract_state_key(
-        kernel,
-        context.stateful_names,
-        context.edge_tag_names,
-        context.state_key_done_specs,
-    )
+    edge_comp = _EdgeCompressor(context)
+    initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
     parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] = {}
@@ -1331,14 +1444,9 @@ def _bfs_explore_many(
 
             _step_kernel(context, kernel)
             _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
-            new_key = _extract_state_key(
-                kernel,
-                context.stateful_names,
-                context.edge_tag_names,
-                context.state_key_done_specs,
-            )
+            new_key = edge_comp.state_key(kernel)
 
-            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key)
+            new_key, jumped = _maybe_jump_hidden_event(context, kernel, snap, visited, new_key, edge_comp)
             if jumped:
                 _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
 
@@ -1537,10 +1645,23 @@ def _default_projection(
     program: Program,
     graph: ProgramGraph | None = None,
 ) -> list[str]:
-    """Choose default projection tags: public first, then terminals."""
+    """Choose default projection tags: public first, then terminals.
+
+    Nondeterministic inputs (INPUT role or unwritten externals) are excluded
+    from the default projection — they represent the environment, not the
+    program's behavior.
+    """
     if graph is None:
         graph = build_program_graph(program)
-    public = [name for name, tag in graph.tags.items() if tag.public]
+    public: list[str] = []
+    for name, tag in graph.tags.items():
+        if not tag.public:
+            continue
+        role = graph.tag_roles.get(name)
+        is_written = name in graph.writers_of
+        if role == TagRole.INPUT or (tag.external and not is_written):
+            continue
+        public.append(name)
     if public:
         return sorted(public)
     dv = program.dataview()

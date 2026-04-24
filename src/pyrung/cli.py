@@ -20,6 +20,10 @@ def _find_program(module_path: str):
     if ":" in module_path:
         module_path, variable = module_path.rsplit(":", 1)
 
+    cwd = str(Path.cwd())
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
     mod = importlib.import_module(module_path)
 
     if variable is not None:
@@ -73,17 +77,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
     projection = project or _default_projection_names(program)
 
     if project is None:
-        from pyrung.core.analysis.pdg import build_program_graph
-
-        graph = build_program_graph(program)
-        public = [name for name, tag in graph.tags.items() if tag.public]
-        if public:
-            print(f"Projecting to public tags: {', '.join(sorted(public))}", file=sys.stderr)
-        else:
-            print(
-                f"No public tags — projecting to terminals: {', '.join(projection)}",
-                file=sys.stderr,
-            )
+        print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
 
     write_lock(lock_path, states, projection, program_hash(program))
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
