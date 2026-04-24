@@ -418,6 +418,49 @@ class TestReachableStates:
         assert False in light_values
         assert True in light_values
 
+    def test_combinational_projection_collapses_duplicate_input_outcomes(self):
+        """Irrelevant extra inputs do not create duplicate projected states."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(light)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Light", False)}),
+                frozenset({("Light", True)}),
+            }
+        )
+
+    def test_projection_preserves_distinct_states_with_same_abstract_key(self):
+        """Projected public/input state is preserved even when the abstract key is identical."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        light = Bool("Light")
+        other = Bool("Other")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(light)
+            with Rung(b):
+                out(other)
+
+        states = reachable_states(logic, project=["Light", "Other"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Light", False), ("Other", False)}),
+                frozenset({("Light", False), ("Other", True)}),
+                frozenset({("Light", True), ("Other", False)}),
+                frozenset({("Light", True), ("Other", True)}),
+            }
+        )
+
     def test_equivalent_refactors_produce_same_states(self):
         """Two equivalent programs produce identical projected state sets."""
         button = Bool("Button", external=True)
