@@ -10,19 +10,17 @@ Run under DAP to see autoharness feedback, tag flag badges, and
 runtime bounds checking in action.
 """
 
-import os
 from typing import Any, cast
 
 from pyrung import (
+    PLC,
     And,
     Bool,
     Counter,
     Field,
-    Harness,
     Int,
     Or,
     Physical,
-    PLC,
     Rung,
     Timer,
     branch,
@@ -95,6 +93,7 @@ BinBSensor = Bool("BinBSensor")
 Running = Bool("Running", public=True)
 IsLarge = Bool("IsLarge")
 CountReset = Bool("CountReset", public=True)
+
 
 @named_array(Int, stride=4, readonly=True)
 class SortState:
@@ -232,6 +231,7 @@ def logic():
 import pytest
 
 from pyrung.core.analysis.simplified import expr_requires, reset_dominance
+
 
 def test_conv_motor_implies_running():
     # Conv_Motor => Running [dt=0.01]
