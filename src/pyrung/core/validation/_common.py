@@ -187,6 +187,34 @@ def _instruction_write_targets(instr: Any) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 
 
+def walk_instructions(program: Program):
+    """Yield every instruction in a program (flat).
+
+    Traverses main rungs, branches, subroutines, and ForLoop bodies.
+    """
+    from pyrung.core.instruction.control import ForLoopInstruction
+
+    def _from_rung(rung: Rung):  # type: ignore[name-defined]
+        for instr in rung._instructions:
+            yield instr
+            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
+                yield from _from_instructions(instr.instructions)
+        for branch in rung._branches:
+            yield from _from_rung(branch)
+
+    def _from_instructions(instructions: list):  # type: ignore[type-arg]
+        for instr in instructions:
+            yield instr
+            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
+                yield from _from_instructions(instr.instructions)
+
+    for rung in program.rungs:
+        yield from _from_rung(rung)
+    for sub_rungs in program.subroutines.values():
+        for rung in sub_rungs:
+            yield from _from_rung(rung)
+
+
 def _collect_write_sites(
     program: Program,
     *,

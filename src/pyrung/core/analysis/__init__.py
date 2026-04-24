@@ -10,14 +10,14 @@ from pyrung.core.analysis.pdg import (
     classify_tags,
 )
 from pyrung.core.analysis.simplified import TerminalForm, simplified_forms
-from pyrung.core.analysis.verification import (
+from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
     Proven,
     StateDiff,
     diff_states,
+    prove,
     reachable_states,
-    verify_invariant,
 )
 
 __all__ = [
@@ -35,7 +35,7 @@ __all__ = [
     "build_program_graph",
     "classify_tags",
     "diff_states",
+    "prove",
     "reachable_states",
     "simplified_forms",
-    "verify_invariant",
 ]

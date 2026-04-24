@@ -13,7 +13,7 @@ import itertools
 import json
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -62,6 +62,7 @@ class Intractable:
     reason: str
     dimensions: int
     estimated_space: int
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,8 @@ _STATEFUL_INSTRUCTIONS = frozenset(
         "UnpackToWordsInstruction",
         "ModbusSendInstruction",
         "ModbusReceiveInstruction",
+        "SearchInstruction",
+        "ForLoopInstruction",
     }
 )
 
@@ -123,40 +126,43 @@ _TIMER_COUNTER_INSTRUCTIONS = frozenset(
 
 PENDING = "Pending"
 
-_TIMER_FORWARD_BUDGET = 10_000
+_TIMER_FORWARD_FLOOR = 10_000
 
 
-def _collect_done_acc_pairs(program: Program) -> dict[str, str]:
+@dataclass(frozen=True)
+class _DoneAccInfo:
+    pairs: dict[str, str]
+    max_preset: int
+
+
+def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
     """Map Done tag names to their Acc tag names for timer/counter instructions.
 
-    Returns ``{done_name: acc_name}``.
+    Also tracks the largest constant preset to size the fast-forward budget.
     """
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.tag import Tag
+    from pyrung.core.validation._common import walk_instructions
 
     pairs: dict[str, str] = {}
+    max_preset = 0
 
-    def _walk_instructions(rungs: list[Any]) -> None:
-        for rung in rungs:
-            for instr in rung._instructions:
-                if isinstance(
-                    instr,
-                    (
-                        OnDelayInstruction,
-                        OffDelayInstruction,
-                        CountUpInstruction,
-                        CountDownInstruction,
-                    ),
-                ):
-                    pairs[instr.done_bit.name] = instr.accumulator.name
-            for branch in rung._branches:
-                _walk_instructions(branch)
+    for instr in walk_instructions(program):
+        if isinstance(
+            instr,
+            (
+                OnDelayInstruction,
+                OffDelayInstruction,
+                CountUpInstruction,
+                CountDownInstruction,
+            ),
+        ):
+            pairs[instr.done_bit.name] = instr.accumulator.name
+            if not isinstance(instr.preset, Tag) and isinstance(instr.preset, (int, float)):
+                max_preset = max(max_preset, int(instr.preset))
 
-    _walk_instructions(program.rungs)
-    for sub_rungs in program.subroutines.values():
-        _walk_instructions(sub_rungs)
-
-    return pairs
+    return _DoneAccInfo(pairs=pairs, max_preset=max_preset)
 
 
 def _done_acc_state(done_val: Any, acc_val: Any) -> bool | str:
@@ -170,7 +176,7 @@ def _done_acc_state(done_val: Any, acc_val: Any) -> bool | str:
 
 def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
     """Extract (tag_name, instruction_type) for every write target."""
-    from pyrung.core.instruction.advanced import ShiftInstruction
+    from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.coils import (
         LatchInstruction,
@@ -179,6 +185,7 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
     )
     from pyrung.core.instruction.control import (
         EnabledFunctionCallInstruction,
+        ForLoopInstruction,
         FunctionCallInstruction,
     )
     from pyrung.core.instruction.counters import (
@@ -276,6 +283,10 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
             instr.error.name,
             instr.exception_response.name,
         ]
+    elif isinstance(instr, SearchInstruction):
+        targets = [instr.result.name, instr.found.name]
+    elif isinstance(instr, ForLoopInstruction):
+        targets = [instr.idx_tag.name]
 
     return [(name, itype) for name in targets]
 
@@ -283,15 +294,32 @@ def _all_write_targets(instr: Any) -> list[tuple[str, str]]:
 def _collect_all_exprs(
     program: Program,
     graph: ProgramGraph,
+    scope: list[str] | None = None,
 ) -> list[Expr]:
-    """Collect all expression trees from simplified forms and write-site conditions."""
+    """Collect all expression trees from simplified forms and write-site conditions.
+
+    When *scope* is given, restricts to expressions in the upstream cone
+    of the scoped tags.  This improves don't-care pruning without
+    affecting soundness (filtering only discards irrelevant expressions).
+    """
     forms = simplified_forms(program)
+
+    upstream: frozenset[str] | None = None
+    if scope is not None:
+        upstream_tags: set[str] = set(scope)
+        for tag_name in scope:
+            upstream_tags.update(graph.upstream_slice(tag_name))
+        upstream = frozenset(upstream_tags)
+        forms = {k: v for k, v in forms.items() if k in upstream}
+
     exprs: list[Expr] = [tf.expr for tf in forms.values()]
 
     from pyrung.core.validation._common import _collect_write_sites
 
     sites = _collect_write_sites(program, target_extractor=_all_write_targets)
     for site in sites:
+        if upstream is not None and site.target_name not in upstream:
+            continue
         if site.conditions:
             for cond in site.conditions:
                 exprs.append(_condition_to_expr(cond))
@@ -372,6 +400,7 @@ _ClassifyResult = tuple[
     dict[str, tuple[Any, ...]],  # nondeterministic_dims
     frozenset[str],  # combinational_tags
     dict[str, str],  # done_acc_pairs: done_tag → acc_tag
+    int,  # max_preset: largest constant timer/counter preset
 ]
 
 
@@ -388,16 +417,16 @@ def _classify_dimensions(
     Returns ``Intractable`` when a domain cannot be bounded.
     """
     graph = build_program_graph(program)
-    all_exprs = _collect_all_exprs(program, graph)
+    all_exprs = _collect_all_exprs(program, graph, scope=scope)
 
-    done_acc_all = _collect_done_acc_pairs(program)
+    done_acc_info = _collect_done_acc_pairs(program)
 
     consumed_accs: set[str] = set()
-    for acc_name in done_acc_all.values():
+    for acc_name in done_acc_info.pairs.values():
         if _collect_atoms_for_tag(all_exprs, acc_name):
             consumed_accs.add(acc_name)
 
-    done_acc = {d: a for d, a in done_acc_all.items() if a not in consumed_accs}
+    done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
 
     scope_input_tags: frozenset[str] | None = None
@@ -458,6 +487,7 @@ def _classify_dimensions(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
+            tags=sorted(infeasible_tags),
         )
 
     fn_escape = _detect_function_escape_hatches(program, graph)
@@ -467,9 +497,10 @@ def _classify_dimensions(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
+            tags=sorted(fn_escape),
         )
 
-    return stateful, nondeterministic, frozenset(combinational), done_acc
+    return stateful, nondeterministic, frozenset(combinational), done_acc, done_acc_info.max_preset
 
 
 def _detect_function_escape_hatches(
@@ -738,9 +769,11 @@ def _bfs_explore(
     project: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
+    max_preset: int = 0,
     dt: float = 0.010,
 ) -> Proven | Counterexample | Intractable | frozenset[frozenset[tuple[str, Any]]]:
     """BFS over the reachable state space."""
+    forward_budget = max(int(max_preset / dt) if dt > 0 else 0, _TIMER_FORWARD_FLOOR)
     stateful_names = tuple(sorted(stateful_dims))
     edge_tag_names = tuple(sorted(compiled.edge_tags))
 
@@ -798,12 +831,28 @@ def _bfs_explore(
 
             # Fast-forward through Pending timer states: keep stepping
             # (same inputs) until the state key changes or a budget is hit.
+            #
+            # Soundness: the BFS has already explored all input combos
+            # from this PENDING state when it was first enqueued (since
+            # new_key ∈ visited).  Fast-forward only fires for re-visited
+            # PENDING keys, so it discovers the Pending→Done transition
+            # that the BFS can't reach within its depth budget.  Inputs
+            # are frozen, so this may explore states not reachable in the
+            # real system (the enable condition might go false mid-
+            # accumulation).  This makes the verifier sound (no missed
+            # violations) but conservative (possible false counterexamples
+            # if a violation only occurs with frozen inputs).
             if done_acc_pairs and new_key in visited:
                 has_pending = any(v == PENDING for v in new_key[: len(stateful_names)])
                 if has_pending:
-                    for _ in range(_TIMER_FORWARD_BUDGET):
+                    for _ in range(forward_budget):
                         _step_kernel(compiled, kernel, dt)
                         if predicate is not None and not predicate(dict(kernel.tags)):
+                            # The trace records the parent-state inputs but not
+                            # how many fast-forward steps were taken.  A consumer
+                            # replaying this trace won't land at the exact scan
+                            # where the violation occurred — the intermediate
+                            # accumulation steps are elided.
                             trace = _build_trace(parent_map, parent_key, input_dict)
                             trace.append(input_dict)
                             return Counterexample(trace=trace)
@@ -839,23 +888,73 @@ def _bfs_explore(
 # ---------------------------------------------------------------------------
 
 
-def verify_invariant(
+def _compile_property(
+    *conditions: Any,
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+    """Normalize a condition expression or callable into a dict predicate.
+
+    Returns ``(predicate_fn, auto_scope)`` where *auto_scope* is a list of
+    referenced tag names (for automatic upstream-cone restriction) or ``None``
+    when the caller passed an opaque callable.
+    """
+    if len(conditions) == 1 and callable(conditions[0]) and not _is_condition_like(conditions[0]):
+        return conditions[0], None
+
+    from pyrung.core.condition import _as_condition, _normalize_and_condition
+
+    normalized = _normalize_and_condition(
+        *conditions,
+        coerce=_as_condition,
+        empty_error="prove() requires at least one condition",
+        group_empty_error="prove() condition group cannot be empty",
+    )
+    expr = _condition_to_expr(normalized)
+    tags_in_expr = sorted(_referenced_tags(expr))
+
+    def _predicate(state: dict[str, Any]) -> bool:
+        result = _partial_eval(expr, state)
+        if isinstance(result, Const):
+            return bool(result.value)
+        return True
+
+    return _predicate, tags_in_expr
+
+
+def _is_condition_like(obj: Any) -> bool:
+    """True if *obj* is a Tag or Condition (not a plain callable)."""
+    from pyrung.core.condition import Condition
+    from pyrung.core.tag import Tag
+
+    return isinstance(obj, (Tag, Condition))
+
+
+def prove(
     program: Program,
-    predicate: Callable[[dict[str, Any]], bool],
+    *conditions: Any,
     scope: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
 ) -> Proven | Counterexample | Intractable:
-    """Exhaustively verify a predicate over all reachable states.
+    """Exhaustively prove a property over all reachable states.
+
+    Accepts the same condition syntax as ``Rung()`` and ``when()``::
+
+        prove(logic, Or(~Running, EstopOK))
+        prove(logic, ~Running, EstopOK)        # implicit AND
+        prove(logic, lambda s: s["Running"] <= s["Limit"])
+
+    When given condition expressions, the upstream cone is derived
+    automatically — no ``scope=`` needed.
 
     Parameters
     ----------
     program : Program
         The compiled ladder logic program.
-    predicate : callable
-        ``(state_dict) -> bool`` — the property to verify.
+    *conditions : Tag, Condition, or callable
+        The property to prove.  Tag/Condition expressions are preferred;
+        a callable ``(state_dict) -> bool`` is accepted as a fallback.
     scope : list of tag names, optional
-        If given, restrict input enumeration to the upstream cone.
+        Override automatic scope derivation.
     max_depth : int
         BFS depth limit (scan cycles).
     max_states : int
@@ -863,13 +962,16 @@ def verify_invariant(
     """
     from pyrung.circuitpy.codegen import compile_kernel
 
-    result = _classify_dimensions(program, scope)
+    predicate, auto_scope = _compile_property(*conditions)
+    effective_scope = scope if scope is not None else auto_scope
+
+    result = _classify_dimensions(program, effective_scope)
     if isinstance(result, Intractable):
         return result
-    stateful_dims, nd_dims, _combinational, done_acc = result
+    stateful_dims, nd_dims, _combinational, done_acc, max_preset = result
 
     graph = build_program_graph(program)
-    all_exprs = _collect_all_exprs(program, graph)
+    all_exprs = _collect_all_exprs(program, graph, scope=effective_scope)
 
     compiled = compile_kernel(program)
     return _bfs_explore(  # ty: ignore[invalid-return-type]
@@ -881,6 +983,7 @@ def verify_invariant(
         predicate=predicate,
         max_depth=max_depth,
         max_states=max_states,
+        max_preset=max_preset,
     )
 
 
@@ -911,13 +1014,13 @@ def reachable_states(
     result = _classify_dimensions(program, scope)
     if isinstance(result, Intractable):
         return result
-    stateful_dims, nd_dims, _combinational, done_acc = result
+    stateful_dims, nd_dims, _combinational, done_acc, max_preset = result
 
     if project is None:
         project = _default_projection(program)
 
     graph = build_program_graph(program)
-    all_exprs = _collect_all_exprs(program, graph)
+    all_exprs = _collect_all_exprs(program, graph, scope=scope)
 
     compiled = compile_kernel(program)
     return _bfs_explore(  # ty: ignore[invalid-return-type]
@@ -929,6 +1032,7 @@ def reachable_states(
         project=project,
         max_depth=max_depth,
         max_states=max_states,
+        max_preset=max_preset,
     )
 
 
