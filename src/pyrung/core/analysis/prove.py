@@ -53,7 +53,13 @@ class Proven:
 class Counterexample:
     """Invariant violated — trace reproduces the failure."""
 
-    trace: list[dict[str, Any]]
+    trace: list[TraceStep]
+
+
+@dataclass(frozen=True)
+class TraceStep:
+    inputs: dict[str, Any]
+    scans: int = 1
 
 
 @dataclass(frozen=True)
@@ -1044,18 +1050,17 @@ def _projected_states(
 
 
 def _build_trace(
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]],
-    failing_key: tuple[Any, ...],
-    failing_inputs: dict[str, Any],
-) -> list[dict[str, Any]]:
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]],
+    key: tuple[Any, ...],
+) -> list[TraceStep]:
     """Reconstruct the input trace from initial state to failure."""
-    trace: list[dict[str, Any]] = [failing_inputs]
-    current = failing_key
+    trace: list[TraceStep] = []
+    current = key
     while current in parent_map:
-        parent_key, inputs = parent_map[current]
+        parent_key, inputs, scans = parent_map[current]
+        trace.append(TraceStep(inputs=inputs, scans=scans))
         if parent_key is None:
             break
-        trace.append(inputs)
         current = parent_key
     trace.reverse()
     return trace
@@ -1256,11 +1261,13 @@ def _resolve_nearest_pending(
     before_snap: _Snapshot,
     key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[Any, ...] | None:
+) -> tuple[tuple[Any, ...], int] | None:
     """Advance to the nearest pending timer/counter completion and step once.
 
-    Returns the new state key, or ``None`` if no pending events can be resolved.
-    *before_snap* must precede the current kernel state by one step.
+    Returns ``(new_key, additional_scans)``, or ``None`` if no pending events
+    can be resolved. ``additional_scans`` is the skipped scan count beyond the
+    caller's already-executed step. *before_snap* must precede the current
+    kernel state by one step.
     """
     pending_events: list[tuple[_DoneEventSpec, int]] = []
     for spec in context.done_event_specs:
@@ -1279,7 +1286,7 @@ def _resolve_nearest_pending(
         _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
 
     _step_kernel(context, kernel)
-    return edge_comp.state_key(kernel)
+    return edge_comp.state_key(kernel), skipped_scans
 
 
 def _settle_pending(
@@ -1287,20 +1294,22 @@ def _settle_pending(
     kernel: ReplayKernel,
     before_snap: _Snapshot,
     edge_comp: _EdgeCompressor,
-) -> tuple[Any, ...]:
+) -> tuple[tuple[Any, ...], int]:
     """Resolve all pending timers/counters so the system reaches a stable state.
 
     *before_snap* must be from before the most recent ``_step_kernel`` call
     so that the per-scan delta can be computed (acc_after − acc_before).
     """
     key = edge_comp.state_key(kernel)
+    total_additional_scans = 0
     for _ in range(len(context.done_event_specs) + 1):
         resolved = _resolve_nearest_pending(context, kernel, before_snap, key, edge_comp)
         if resolved is None:
             break
+        key, additional_scans = resolved
+        total_additional_scans += additional_scans
         before_snap = _snapshot_kernel(kernel)
-        key = resolved
-    return key
+    return key, total_additional_scans
 
 
 def _maybe_jump_hidden_event(
@@ -1310,15 +1319,16 @@ def _maybe_jump_hidden_event(
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], bool]:
+) -> tuple[tuple[Any, ...], int]:
     """Jump from a revisited hidden pending plateau to the next completion event."""
     if not context.done_event_specs or new_key not in visited:
-        return new_key, False
+        return new_key, 0
 
     resolved = _resolve_nearest_pending(context, kernel, snap, new_key, edge_comp)
     if resolved is None:
-        return new_key, False
-    return resolved, True
+        return new_key, 0
+    resolved_key, additional_scans = resolved
+    return resolved_key, additional_scans
 
 
 def _bfs_explore(
@@ -1335,8 +1345,10 @@ def _bfs_explore(
     initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] | None = (
-        {} if predicate is not None else None
+    parent_map: dict[
+        tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]
+    ] | None = (
+        {initial_key: (None, {}, 0)} if predicate is not None else None
     )
     projected_rows: set[tuple[Any, ...]] = set()
 
@@ -1344,7 +1356,7 @@ def _bfs_explore(
         projected_rows.add(_projected_tuple(kernel, project))
 
     if predicate is not None and not predicate(kernel.tags):
-        return Counterexample(trace=[{}])
+        return Counterexample(trace=[TraceStep(inputs={}, scans=0)])
 
     queue: deque[tuple[_Snapshot, int, tuple[Any, ...]]] = deque()
     queue.append((_snapshot_kernel(kernel), 0, initial_key))
@@ -1378,26 +1390,35 @@ def _bfs_explore(
                 input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
+            edge_scans = 1
 
             if predicate is not None and not predicate(kernel.tags):
                 new_key = edge_comp.state_key(kernel)
                 if context.done_event_specs and _has_pending_done(context, new_key):
-                    new_key = _settle_pending(context, kernel, snap, edge_comp)
+                    new_key, additional_scans = _settle_pending(
+                        context, kernel, snap, edge_comp
+                    )
+                    edge_scans += additional_scans
                 if not predicate(kernel.tags):
                     assert parent_map is not None
-                    trace = _build_trace(parent_map, parent_key, input_dict)
-                    trace.append(input_dict)
+                    trace = _build_trace(parent_map, parent_key)
+                    trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
                     return Counterexample(trace=trace)
 
             new_key = edge_comp.state_key(kernel)
 
-            new_key, jumped = _maybe_jump_hidden_event(
+            before_jump_key = new_key
+            new_key, additional_scans = _maybe_jump_hidden_event(
                 context, kernel, snap, visited, new_key, edge_comp
             )
+            jumped = new_key != before_jump_key or additional_scans > 0
+            if additional_scans:
+                edge_scans += additional_scans
+
             if jumped and predicate is not None and not predicate(kernel.tags):
                 assert parent_map is not None
-                trace = _build_trace(parent_map, parent_key, input_dict)
-                trace.append(input_dict)
+                trace = _build_trace(parent_map, parent_key)
+                trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
                 return Counterexample(trace=trace)
 
             if project is not None:
@@ -1418,7 +1439,7 @@ def _bfs_explore(
                         estimated_space=len(visited),
                     )
                 if parent_map is not None:
-                    parent_map[new_key] = (parent_key, input_dict)
+                    parent_map[new_key] = (parent_key, input_dict, edge_scans)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
     if project is not None:
@@ -1440,7 +1461,9 @@ def _bfs_explore_many(
     initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] = {}
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] = {
+        initial_key: (None, {}, 0)
+    }
     results: list[Counterexample | Proven | Intractable | None] = [None] * len(predicates)
 
     def _record_failures(
@@ -1448,6 +1471,7 @@ def _bfs_explore_many(
         state: dict[str, Any],
         parent_key: tuple[Any, ...],
         input_dict: dict[str, Any],
+        edge_scans: int,
         initial: bool = False,
     ) -> None:
         for i, predicate in enumerate(predicates):
@@ -1456,13 +1480,19 @@ def _bfs_explore_many(
             if predicate(state):
                 continue
             if initial:
-                results[i] = Counterexample(trace=[{}])
+                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
                 continue
-            trace = _build_trace(parent_map, parent_key, input_dict)
-            trace.append(input_dict)
+            trace = _build_trace(parent_map, parent_key)
+            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
             results[i] = Counterexample(trace=trace)
 
-    _record_failures(state=kernel.tags, parent_key=initial_key, input_dict={}, initial=True)
+    _record_failures(
+        state=kernel.tags,
+        parent_key=initial_key,
+        input_dict={},
+        edge_scans=0,
+        initial=True,
+    )
     if all(result is not None for result in results):
         return [result for result in results if result is not None]
 
@@ -1495,6 +1525,7 @@ def _bfs_explore_many(
                 input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
+            edge_scans = 1
 
             any_unsettled = any(
                 results[i] is None and not predicates[i](kernel.tags)
@@ -1502,15 +1533,30 @@ def _bfs_explore_many(
             )
             new_key = edge_comp.state_key(kernel)
             if any_unsettled and context.done_event_specs and _has_pending_done(context, new_key):
-                new_key = _settle_pending(context, kernel, snap, edge_comp)
+                new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
+                edge_scans += additional_scans
 
-            _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
+            _record_failures(
+                state=kernel.tags,
+                parent_key=parent_key,
+                input_dict=input_dict,
+                edge_scans=edge_scans,
+            )
 
-            new_key, jumped = _maybe_jump_hidden_event(
+            before_jump_key = new_key
+            new_key, additional_scans = _maybe_jump_hidden_event(
                 context, kernel, snap, visited, new_key, edge_comp
             )
+            jumped = new_key != before_jump_key or additional_scans > 0
+            if additional_scans:
+                edge_scans += additional_scans
             if jumped:
-                _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
+                _record_failures(
+                    state=kernel.tags,
+                    parent_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=edge_scans,
+                )
 
             if new_key not in visited:
                 visited.add(new_key)
@@ -1521,7 +1567,7 @@ def _bfs_explore_many(
                         estimated_space=len(visited),
                     )
                     return [result if result is not None else intractable for result in results]
-                parent_map[new_key] = (parent_key, input_dict)
+                parent_map[new_key] = (parent_key, input_dict, edge_scans)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
             if all(result is not None for result in results):

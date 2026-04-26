@@ -47,9 +47,10 @@ if isinstance(result, Proven):
 elif isinstance(result, Counterexample):
     # Replay the trace on a real PLC
     with PLC(logic, dt=0.010) as plc:
-        for inputs in result.trace:
-            plc.patch(inputs)
-            plc.step()
+        for step in result.trace:
+            plc.patch(step.inputs)
+            for _ in range(step.scans):
+                plc.step()
     # The violation is now visible in plc state
 
 elif isinstance(result, Intractable):

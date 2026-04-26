@@ -30,6 +30,7 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     StateDiff,
+    TraceStep,
     _classify_dimensions,
     _default_projection,
     _eval_atom,
@@ -300,6 +301,7 @@ class TestProve:
         result = prove(logic, ~flag)
         assert isinstance(result, Counterexample)
         assert len(result.trace) > 0
+        assert isinstance(result.trace[0], TraceStep)
 
     def test_counterexample_trace_is_replayable(self):
         """Counterexample trace reproduces the violation on a real PLC."""
@@ -314,9 +316,10 @@ class TestProve:
         assert isinstance(result, Counterexample)
 
         runner = PLC(logic, dt=0.010)
-        for inputs in result.trace:
-            runner.patch(inputs)
-            runner.step()
+        for step in result.trace:
+            runner.patch(step.inputs)
+            for _ in range(step.scans):
+                runner.step()
         assert runner.current_state.tags.get("Flag") is True
 
     def test_callable_predicate_fallback(self):
