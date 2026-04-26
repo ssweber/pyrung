@@ -1672,7 +1672,7 @@ def reachable_states(
     scope : list of tag names, optional
         If given, restrict input enumeration to the upstream cone.
     project : list of tag names, optional
-        Tags to project onto. Defaults to ``public`` tags, then terminals.
+        Tags to project onto. Defaults to terminal tags.
     max_depth : int
         BFS depth limit (scan cycles).
     max_states : int
@@ -1682,11 +1682,7 @@ def reachable_states(
     if isinstance(context, Intractable):
         return context
 
-    project_names = (
-        tuple(project)
-        if project is not None
-        else tuple(_default_projection(program, context.graph))
-    )
+    project_names = tuple(project) if project is not None else tuple(_default_projection(program))
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         project=project_names,
@@ -1703,29 +1699,8 @@ def diff_states(
     return StateDiff(added=after - before, removed=before - after)
 
 
-def _default_projection(
-    program: Program,
-    graph: ProgramGraph | None = None,
-) -> list[str]:
-    """Choose default projection tags: public first, then terminals.
-
-    Nondeterministic inputs (INPUT role or unwritten externals) are excluded
-    from the default projection — they represent the environment, not the
-    program's behavior.
-    """
-    if graph is None:
-        graph = build_program_graph(program)
-    public: list[str] = []
-    for name, tag in graph.tags.items():
-        if not tag.public:
-            continue
-        role = graph.tag_roles.get(name)
-        is_written = name in graph.writers_of
-        if role == TagRole.INPUT or (tag.external and not is_written):
-            continue
-        public.append(name)
-    if public:
-        return sorted(public)
+def _default_projection(program: Program) -> list[str]:
+    """Choose default projection tags: terminal outputs only."""
     dv = program.dataview()
     return sorted(dv.terminals().tags)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
     Bool,
@@ -30,6 +31,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     StateDiff,
     _classify_dimensions,
+    _default_projection,
     _eval_atom,
     _live_inputs,
     _partial_eval,
@@ -551,6 +553,65 @@ class TestDiffStates:
         d = diff_states(before, after)
         assert not d.added
         assert frozenset({("A", True)}) in d.removed
+
+
+class TestDefaultProjection:
+    """_default_projection returns terminals, not public tags."""
+
+    def test_terminals_not_public(self):
+        button = Bool("Button", external=True)
+        running = Bool("Running", public=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(running)
+            with Rung(running):
+                out(light)
+
+        proj = _default_projection(logic)
+        assert proj == ["Light"]
+
+    def test_empty_when_no_terminals(self):
+        button = Bool("Button", external=True)
+        internal = Bool("Internal")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(internal)
+            with Rung(internal):
+                reset(internal)
+
+        proj = _default_projection(logic)
+        assert proj == []
+
+
+class TestApplyLockConfig:
+    """CLI _apply_lock_config include/exclude logic."""
+
+    def test_none_config_passthrough(self):
+        proj = _apply_lock_config(["A", "B"], None)
+        assert proj == ["A", "B"]
+
+    def test_include_adds_tags(self):
+        proj = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        assert proj == ["A", "B", "C"]
+
+    def test_exclude_removes_tags(self):
+        proj = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        assert proj == ["A", "C"]
+
+    def test_include_and_exclude(self):
+        proj = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
+        assert proj == ["B", "C"]
+
+    def test_exclude_nonexistent_is_noop(self):
+        proj = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        assert proj == ["A"]
+
+    def test_include_duplicate_is_noop(self):
+        proj = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        assert proj == ["A", "B"]
 
 
 # ===================================================================

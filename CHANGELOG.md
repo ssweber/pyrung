@@ -4,6 +4,25 @@
 
 ### Breaking changes
 
+- **Lock file default projection is now terminals** — `_default_projection` and `pyrung lock` now project to terminal tags by default instead of `public` tags with fallback to terminals. Terminal outputs are the behavioral contract; `public` is a UI concept for Data View and HMI filtering. Existing lock files generated with the old public-first projection will need to be regenerated with `pyrung lock`. Programs with no terminals produce an empty projection — that's a signal, not an error.
+
+### New features
+
+- **`__lock__` module-level projection override** — define `__lock__ = {"include": [...], "exclude": [...]}` at module level to customize which tags the lock file tracks. `include` adds tags the terminal default misses (pivots that matter behaviorally); `exclude` drops tags the terminal default includes (cosmetic outputs). `--project` on the CLI still overrides everything.
+- **Public `Coupling` API on `Harness`** — `harness.couplings()` iterates over all discovered enable→feedback couplings as `Coupling` dataclasses with `en_name`, `fb_name`, `physical`, and `trigger_value` fields. `Coupling` is exported from `pyrung` and `pyrung.core`. Useful for test assertions and tooling that needs to inspect harness wiring.
+- **`plc.tags` read-only tag mapping** — new `plc.tags` property returns a `MappingProxyType[str, Tag]` of all known tags by name. Convenient for introspection, iteration, and test assertions without reaching into internals.
+- **`prove()` settle-pending semantics** — `prove()` now settles pending timer/counter Done bits before reporting a counterexample. Previously, a timer-gated alarm that was reachable but hadn't yet elapsed could produce a spurious counterexample in the `PENDING` state. The BFS explorer now calls `_settle_pending()` to resolve all pending completions to a stable state before evaluating the predicate, eliminating false negatives for properties guarded by timing.
+- **`SumExpr` CircuitPython codegen** — `BlockRange.sum()` expressions now compile to CircuitPython code. Previously only Click ladder export was supported.
+- **Fault coverage example** — new `examples/fault_coverage.py` demonstrating `prove()`, `cause()`/`recovers()`, and the coverage plugin for verifying fault detection and recovery in a motor control program.
+
+### Internal
+
+- `_AnalogCoupling` renamed to `_ProfileCoupling` and harness status dict key changed from `"analog_couplings"` to `"profile_couplings"` for consistency with the `Physical` API terminology.
+
+## v0.6.0
+
+### Breaking changes
+
 - **`PLC(history_limit=...)` replaced by `history` / `cache` / `history_budget`** — the single `history_limit` snapshot-count parameter is replaced by three knobs: `history` (retention window for the scan log and checkpoints — duration string like `"1h"` or scan count), `cache` (instant-lookup window for full `SystemState` snapshots), and `history_budget` (byte ceiling, default 100 MB, minimum 1 MB). Internally, the fixed 20-scan `_recent_state_window` deque is replaced by a byte-bounded cache that evicts oldest entries when over budget, with a floor of 20 entries. Scans outside the cache reconstruct on demand via replay from the nearest checkpoint, so addressable history is unlimited — only the instant-hit zone is bounded.
 
 ### New features

@@ -570,10 +570,41 @@ pyrung lock my_program        # compute reachable states, write pyrung.lock
 pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
-The lock projects to `public` tags by default. Override with `--project`:
+The lock projects to terminal tags by default — physical outputs in well-structured ladder. Override with `--project`:
 
 ```bash
 pyrung lock my_program --project Running MotorOut StatusLight
+```
+
+#### `__lock__` — per-module projection override
+
+For programs where the terminal default misses something (a pivot that matters behaviorally) or includes something cosmetic, define `__lock__` at module level:
+
+```python
+__lock__ = {
+    "include": ["AlarmExtent", "BatchCount"],
+    "exclude": ["Sts_DisplayText"],
+}
+```
+
+- `include` adds tags the terminal default misses.
+- `exclude` drops tags the terminal default includes.
+- Both keys are optional. Most programs won't need `__lock__` at all.
+- `--project` on the CLI still overrides everything for one-off checks.
+
+Common patterns:
+
+```python
+# Lock down the operator-facing interface too
+dv = logic.dataview()
+__lock__ = {
+    "include": list(dv.public().tags),
+}
+
+# Lock Modbus registers
+__lock__ = {
+    "include": list(dv.contains("Modbus").tags),
+}
 ```
 
 #### Three levels of lock
@@ -581,7 +612,7 @@ pyrung lock my_program --project Running MotorOut StatusLight
 **Lock everything** — full state space equality. For purely cosmetic refactoring (renaming tags, reordering rungs that don't interact). Any behavioral change is flagged.
 
 ```python
-states = reachable_states(logic)  # default: public tags, fallback to terminals
+states = reachable_states(logic)  # default: terminal tags
 ```
 
 **Lock I/O** — project to inputs and terminals only. For restructuring internal logic where pivots can change freely.

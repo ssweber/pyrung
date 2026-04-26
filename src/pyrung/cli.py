@@ -8,8 +8,11 @@ import sys
 from pathlib import Path
 
 
-def _find_program(module_path: str):
+def _find_program(module_path: str) -> tuple:
     """Import a module and find the Program instance.
+
+    Returns ``(program, module)`` so callers can inspect module-level
+    declarations like ``__lock__``.
 
     Accepts ``module:variable`` syntax to select a specific Program
     when a module defines more than one.
@@ -31,7 +34,7 @@ def _find_program(module_path: str):
         if obj is None or not isinstance(obj, Program):
             msg = f"'{variable}' in {module_path} is not a Program instance"
             raise SystemExit(msg)
-        return obj
+        return obj, mod
 
     found: list[tuple[str, object]] = []
     for attr in sorted(dir(mod)):
@@ -49,7 +52,7 @@ def _find_program(module_path: str):
             f"Specify which one with {module_path}:<name>"
         )
         raise SystemExit(msg)
-    return found[0][1]
+    return found[0][1], mod
 
 
 def _cmd_lock(args: argparse.Namespace) -> None:
@@ -60,24 +63,25 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         write_lock,
     )
 
-    program = _find_program(args.module)
+    program, mod = _find_program(args.module)
     lock_path = Path(args.output)
 
-    project = args.project or None
+    if args.project:
+        projection = args.project
+    else:
+        lock_config = getattr(mod, "__lock__", None)
+        projection = _apply_lock_config(_default_projection_names(program), lock_config)
+        print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
+
     states = reachable_states(
         program,
-        project=project,
+        project=projection,
         max_depth=args.max_depth,
         max_states=args.max_states,
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
         raise SystemExit(1)
-
-    projection = project or _default_projection_names(program)
-
-    if project is None:
-        print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
 
     write_lock(lock_path, states, projection, program_hash(program))
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
@@ -86,7 +90,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
 def _cmd_check(args: argparse.Namespace) -> None:
     from pyrung.core.analysis.prove import check_lock
 
-    program = _find_program(args.module)
+    program, _mod = _find_program(args.module)
     lock_path = Path(args.lock)
 
     if not lock_path.exists():
@@ -114,6 +118,15 @@ def _default_projection_names(program) -> list[str]:
     from pyrung.core.analysis.prove import _default_projection
 
     return _default_projection(program)
+
+
+def _apply_lock_config(projection: list[str], lock_config: dict | None) -> list[str]:
+    if lock_config is None:
+        return projection
+    tags = set(projection)
+    tags.update(lock_config.get("include", ()))
+    tags -= set(lock_config.get("exclude", ()))
+    return sorted(tags)
 
 
 def _cmd_dap(_args: argparse.Namespace) -> None:
