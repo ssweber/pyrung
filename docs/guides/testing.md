@@ -111,7 +111,19 @@ def test_rise_fires_once():
         assert Pulse.value is False  # Still true, but no edge — doesn't fire
 ```
 
-## Using forces as test fixtures
+## Forces
+
+Forces override tag values independently of logic — the simulation equivalent of PLC "override" mode. Use them for edge-case testing, known-state setup, and debugging.
+
+### Force vs patch
+
+| | `patch()` | `force()` |
+|---|---|---|
+| Duration | One scan | Until explicitly removed |
+| Applied | Pre-logic, once | Pre-logic AND post-logic, every scan |
+| Use case | Momentary inputs, test steps | Persistent overrides, test fixtures |
+
+### Forces as test fixtures
 
 When you need an input held across many scans, forces are cleaner than setting `.value` before every step:
 
@@ -139,6 +151,37 @@ def test_fault_during_operation():
 
         # All forces released
 ```
+
+Safe to nest — inner blocks add to (and restore from) the outer block's forces:
+
+```python
+with plc.forced({AutoMode: True}):
+    plc.run(cycles=3)
+    with plc.forced({Fault: True}):   # adds Fault while AutoMode stays forced
+        plc.run(cycles=2)
+    # Fault removed; AutoMode still True
+# AutoMode removed
+```
+
+### Adding and removing forces
+
+```python
+plc.force(Button, True)
+plc.force(Temperature, 75.5)
+
+plc.unforce(Button)
+plc.clear_forces()           # remove all
+```
+
+### Inspecting active forces
+
+```python
+plc.forces   # read-only Mapping[str, value]
+```
+
+### Supported tag types
+
+Any writable tag (`BOOL`, `INT`, `DINT`, `REAL`, `WORD`, `CHAR`) can be forced. Read-only system tags cannot be forced and raise `ValueError`.
 
 > Forces and patches also accept string keys (`plc.force("Enable", True)`) for cases where you're working with tag names directly.
 
@@ -352,6 +395,6 @@ When your UDTs declare `physical=` and `link=` on feedback fields, the autoharne
 
 - [Physical Annotations and Autoharness](physical-harness.md) — annotate devices, eliminate feedback boilerplate
 - [Analysis](analysis.md) — dataview, cause/effect chains, coverage queries
-- [Forces & Debug](forces-debug.md) — force semantics, history, time travel
+- [Verification](verification.md) — prove(), fault coverage, lock files
 - [Runner Guide](runner.md) — time modes, execution methods, numeric behavior
 - [Quickstart](../getting-started/quickstart.md) — the traffic light example

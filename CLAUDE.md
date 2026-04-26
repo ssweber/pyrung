@@ -21,10 +21,10 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `docs/instructions/` — Full DSL reference split by instruction group (rungs, conditions, coils, timers, counters, copy, math, drums, program control, communication)
 - `docs/guides/runner.md` — Execution engine (time modes, history, seek/rewind, fork, rung inspection)
 - `docs/guides/testing.md` — Unit testing patterns with FIXED_STEP, forces as fixtures, pytest usage
-- `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork
-- `docs/guides/commissioning.md` — Declare/Analyze/Commission workflow, coverage plugin, CI gating
+- `docs/guides/commissioning.md` — Declare/Analyze/Verify/Commission workflow overview, entry point
 - `docs/guides/physical-harness.md` — Physical annotations, autoharness, feedback synthesis
-- `docs/guides/analysis.md` — DataView queries, causal chains, coverage reports
+- `docs/guides/analysis.md` — DataView queries, causal chains, coverage reports, static validators
+- `docs/guides/verification.md` — prove(), fault coverage, lock files
 - `docs/guides/architecture.md` — Engine internals, compiled replay kernel, sparse scan log
 - `docs/guides/dap-vscode.md` — VS Code DAP integration (breakpoints, logpoints, monitors, trace decorations, Data View, Graph View, Chain tab)
 - `docs/guides/click-quickstart.md` — Click-specific getting started

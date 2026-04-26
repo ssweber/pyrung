@@ -314,60 +314,12 @@ The static validator catches literal writes outside these bounds (`CORE_RANGE_VI
 
 ## Fault coverage
 
-The harness knows every device coupling. `Harness.couplings()` iterates them as `Coupling` dataclasses so you can automate fault coverage without maintaining a manual device list:
-
-```python
-from pyrung import Coupling, Harness, PLC
-
-plc = PLC(logic, dt=0.001)
-harness = Harness(plc)
-harness.install()
-
-for coupling in harness.couplings():
-    print(coupling.en_name, "→", coupling.fb_name)
-```
-
-Each `Coupling` has `en_name`, `fb_name`, `physical`, and `trigger_value` (None for plain bool links, the matched value for `link="Tag:value"` triggers).
-
-Fault coverage decomposes into two passes over the same coupling list:
-
-**Structural coverage** — does a path from the fault to an alarm exist at all? `prove()` answers this exhaustively:
-
-```python
-from pyrung.core.analysis import prove, Proven, Counterexample
-
-for coupling in harness.couplings():
-    fb = plc.tags[coupling.fb_name]
-    result = prove(logic, Or(~en, fb, AlarmExtent != 0))
-    assert isinstance(result, Proven), f"{coupling.fb_name}: no alarm path"
-```
-
-The property reads: "in every reachable state, either the enable is off, the feedback is healthy, or the alarm caught it." A `Counterexample` means there exists a reachable state where the feedback has failed and no alarm fired — a structural detection gap.
-
-`prove()` uses a three-valued timer abstraction (`False`/`Pending`/`True`) that collapses accumulator state to make BFS tractable. It settles pending timers before evaluating, so timer-gated alarm paths prove correctly. But it's timing-blind by design — it answers "can the alarm fire?" not "does it fire in time?"
-
-**Timing coverage** — does the fault timer trip fast enough under real timing? Force-based tests answer this:
-
-```python
-for coupling in harness.couplings():
-    plc2 = PLC(logic, dt=0.001)
-    h2 = Harness(plc2)
-    h2.install()
-    plc2.force(coupling.en_name, True)
-    plc2.run_for(1.5)
-    plc2.force(coupling.fb_name, False)
-    plc2.run_for(6.0)
-    with plc2:
-        assert AlarmExtent.value != 0, f"{coupling.fb_name}: too slow"
-```
-
-This catches fault timers that exist structurally but are too slow — the alarm path exists but takes longer than the machine can safely tolerate.
-
-Run `prove()` first — there's no point testing timing on a coupling that never reaches an alarm. Then run the force-based tests for timing validation on the ones that passed. See `examples/fault_coverage.py` for a complete working example.
+For fault coverage — proving every device has an alarm path — see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `prove()` to check structural detection paths.
 
 ## Next steps
 
+- [Verification](verification.md) — prove(), fault coverage, lock files
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
-- [Analysis](analysis.md) — validation findings, dataview, cause/effect
+- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging
 - [Harness in the debugger](dap-vscode.md#autoharness-in-the-debug-session) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance

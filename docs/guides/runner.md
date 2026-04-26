@@ -130,7 +130,23 @@ with PLC(logic) as plc:
 
 ### Forces
 
-For persistent overrides that hold across scans, see [Forces](forces-debug.md).
+Forces persist across scans, re-applied at two points each scan:
+
+```
+Phase 3: APPLY FORCES (pre-logic)    ← sets force values before any rung runs
+Phase 4: EXECUTE LOGIC               ← logic may overwrite forced values mid-scan
+Phase 5: APPLY FORCES (post-logic)   ← re-asserts force values after all logic
+```
+
+This means:
+
+- Forced values are present at scan start and scan end.
+- Logic may temporarily change a forced value mid-scan (for example, `latch()` on a forced-False tag sets it True temporarily, but the post-logic force pass restores it).
+- Edge detection (`rise`/`fall`) sees the post-force values that carry across scans.
+
+If a tag is both patched and forced in the same scan, the pre-logic force pass overwrites the patched value. The patch is consumed but has no effect.
+
+For force usage patterns in tests, see [Testing — Forces](testing.md#forces).
 
 ## Mode control
 

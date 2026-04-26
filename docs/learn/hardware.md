@@ -120,7 +120,7 @@ source = generate_circuitpy(logic, hw, target_scan_ms=10.0)
 
 !!! warning "Hardware will surprise you"
 
-    Your simulation was deterministic. Your hardware is not. Sensor noise, contact bounce, ground loops, EMI, and mechanical chatter are real, and pyrung can't simulate them. When something works on the bench but misbehaves in the cabinet, you're back to oscilloscopes and multimeters. [Lesson 5](timers.md)'s `on_delay` and [Lesson 4](assignment.md)'s `rise()` are the building blocks for debounce filters -- the [Forces & Debug guide](../guides/forces-debug.md) covers patterns.
+    Your simulation was deterministic. Your hardware is not. Sensor noise, contact bounce, ground loops, EMI, and mechanical chatter are real, and pyrung can't simulate them. When something works on the bench but misbehaves in the cabinet, you're back to oscilloscopes and multimeters. [Lesson 5](timers.md)'s `on_delay` and [Lesson 4](assignment.md)'s `rise()` are the building blocks for debounce filters -- the [Testing guide](../guides/testing.md#forces) covers patterns.
 
     The DAP debugger and forces work against a *running* pyrung program (Option A) -- but for Options B and C, your debugging tools are the vendor's: Click Programming Software's Data View, the P1AM-200's serial console.
 
