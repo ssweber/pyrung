@@ -14,6 +14,11 @@
 - **`prove()` settle-pending semantics** — `prove()` now settles pending timer/counter Done bits before reporting a counterexample. Previously, a timer-gated alarm that was reachable but hadn't yet elapsed could produce a spurious counterexample in the `PENDING` state. The BFS explorer now calls `_settle_pending()` to resolve all pending completions to a stable state before evaluating the predicate, eliminating false negatives for properties guarded by timing.
 - **`SumExpr` CircuitPython codegen** — `BlockRange.sum()` expressions now compile to CircuitPython code. Previously only Click ladder export was supported.
 - **Fault coverage example** — new `examples/fault_coverage.py` demonstrating `prove()`, `cause()`/`recovers()`, and the coverage plugin for verifying fault detection and recovery in a motor control program.
+- **`TraceStep` dataclass for counterexample traces** — `Counterexample.trace` now contains `TraceStep` objects with `inputs` and `scans` fields, enabling accurate replay of timer/counter fast-forward edges.
+
+### Fixes
+
+- **`prove()` domain coverage** — boundary partitions now emit lit-1/lit/lit+1 instead of just literals. Property expressions feed into domain analysis. Tag-vs-tag comparisons track both operand tags. Oneshot and other memory-backed state is included in the visited-state key.
 
 ### Internal
 
