@@ -28,8 +28,8 @@ def try_auto_install(adapter: Any) -> str | None:
 
     summary = harness.coupling_summary()
     n_bool = len(summary["bool_couplings"])
-    n_analog = len(summary["analog_couplings"])
-    total = n_bool + n_analog
+    n_profile = len(summary["profile_couplings"])
+    total = n_bool + n_profile
 
     if total == 0:
         harness.uninstall()
@@ -41,8 +41,8 @@ def try_auto_install(adapter: Any) -> str | None:
     parts = []
     if n_bool:
         parts.append(f"{n_bool} bool")
-    if n_analog:
-        parts.append(f"{n_analog} analog")
+    if n_profile:
+        parts.append(f"{n_profile} profile")
     return f"Harness: {total} feedback loop(s) ({', '.join(parts)}) — `harness status` for details"
 
 
@@ -125,7 +125,7 @@ def _harness_status(adapter: Any) -> ConsoleResult:
             f"  bool  {en_label} -> {bc['fb']}  "
             f"(on={bc['on_delay_ms']}ms, off={bc['off_delay_ms']}ms)"
         )
-    for ac in summary["analog_couplings"]:
+    for ac in summary["profile_couplings"]:
         active = " [active]" if ac["active"] else ""
         tv = ac.get("trigger_value")
         en_label = f"{ac['en']}=={tv}" if tv is not None else ac["en"]

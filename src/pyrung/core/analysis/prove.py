@@ -1245,6 +1245,64 @@ def _advance_hidden_progress(
     kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
 
 
+def _has_pending_done(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
+    """True if any timer/counter Done bit in *key* is PENDING."""
+    return any(key[spec.state_index] == PENDING for spec in context.done_event_specs)
+
+
+def _resolve_nearest_pending(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _Snapshot,
+    key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
+) -> tuple[Any, ...] | None:
+    """Advance to the nearest pending timer/counter completion and step once.
+
+    Returns the new state key, or ``None`` if no pending events can be resolved.
+    *before_snap* must precede the current kernel state by one step.
+    """
+    pending_events: list[tuple[_DoneEventSpec, int]] = []
+    for spec in context.done_event_specs:
+        if key[spec.state_index] != PENDING:
+            continue
+        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, before_snap, kernel)
+        if scans is not None:
+            pending_events.append((spec, scans))
+
+    if not pending_events:
+        return None
+
+    next_event_scans = min(scans for _spec, scans in pending_events)
+    skipped_scans = max(next_event_scans - 1, 0)
+    for spec, _scans in pending_events:
+        _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+
+    _step_kernel(context, kernel)
+    return edge_comp.state_key(kernel)
+
+
+def _settle_pending(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _Snapshot,
+    edge_comp: _EdgeCompressor,
+) -> tuple[Any, ...]:
+    """Resolve all pending timers/counters so the system reaches a stable state.
+
+    *before_snap* must be from before the most recent ``_step_kernel`` call
+    so that the per-scan delta can be computed (acc_after − acc_before).
+    """
+    key = edge_comp.state_key(kernel)
+    for _ in range(len(context.done_event_specs) + 1):
+        resolved = _resolve_nearest_pending(context, kernel, before_snap, key, edge_comp)
+        if resolved is None:
+            break
+        before_snap = _snapshot_kernel(kernel)
+        key = resolved
+    return key
+
+
 def _maybe_jump_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
@@ -1257,24 +1315,10 @@ def _maybe_jump_hidden_event(
     if not context.done_event_specs or new_key not in visited:
         return new_key, False
 
-    pending_events: list[tuple[_DoneEventSpec, int]] = []
-    for spec in context.done_event_specs:
-        if new_key[spec.state_index] != PENDING:
-            continue
-        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, snap, kernel)
-        if scans is not None:
-            pending_events.append((spec, scans))
-
-    if not pending_events:
+    resolved = _resolve_nearest_pending(context, kernel, snap, new_key, edge_comp)
+    if resolved is None:
         return new_key, False
-
-    next_event_scans = min(scans for _spec, scans in pending_events)
-    skipped_scans = max(next_event_scans - 1, 0)
-    for spec, _scans in pending_events:
-        _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, snap, kernel)
-
-    _step_kernel(context, kernel)
-    return (edge_comp.state_key(kernel), True)
+    return resolved, True
 
 
 def _bfs_explore(
@@ -1336,10 +1380,14 @@ def _bfs_explore(
             _step_kernel(context, kernel)
 
             if predicate is not None and not predicate(kernel.tags):
-                assert parent_map is not None
-                trace = _build_trace(parent_map, parent_key, input_dict)
-                trace.append(input_dict)
-                return Counterexample(trace=trace)
+                new_key = edge_comp.state_key(kernel)
+                if context.done_event_specs and _has_pending_done(context, new_key):
+                    new_key = _settle_pending(context, kernel, snap, edge_comp)
+                if not predicate(kernel.tags):
+                    assert parent_map is not None
+                    trace = _build_trace(parent_map, parent_key, input_dict)
+                    trace.append(input_dict)
+                    return Counterexample(trace=trace)
 
             new_key = edge_comp.state_key(kernel)
 
@@ -1447,8 +1495,16 @@ def _bfs_explore_many(
                 input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
-            _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
+
+            any_unsettled = any(
+                results[i] is None and not predicates[i](kernel.tags)
+                for i in range(len(predicates))
+            )
             new_key = edge_comp.state_key(kernel)
+            if any_unsettled and context.done_event_specs and _has_pending_done(context, new_key):
+                new_key = _settle_pending(context, kernel, snap, edge_comp)
+
+            _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
 
             new_key, jumped = _maybe_jump_hidden_event(
                 context, kernel, snap, visited, new_key, edge_comp

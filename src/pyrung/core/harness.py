@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import heapq
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.physical import Physical
 from pyrung.core.tag import TagType
 
 if TYPE_CHECKING:
@@ -49,20 +50,32 @@ class _ScheduledPatch:
         return self._seq < other._seq
 
 
+@dataclass(frozen=True)
+class Coupling:
+    """Public view of one enable→feedback coupling discovered by the harness."""
+
+    en_name: str
+    fb_name: str
+    physical: Physical
+    trigger_value: int | str | None = None
+
+
 @dataclass
 class _BoolCoupling:
     en_name: str
     fb_name: str
     on_delay_ms: int
     off_delay_ms: int
+    physical: Physical
     trigger_value: int | str | None = None
 
 
 @dataclass
-class _AnalogCoupling:
+class _ProfileCoupling:
     en_name: str
     fb_name: str
     profile_name: str
+    physical: Physical
     active: bool = False
     trigger_value: int | str | None = None
 
@@ -115,7 +128,7 @@ class Harness:
     _heap: list[_ScheduledPatch] = field(default_factory=list, init=False)
     _seq: int = field(default=0, init=False)
     _bool_couplings: list[_BoolCoupling] = field(default_factory=list, init=False)
-    _analog_couplings: list[_AnalogCoupling] = field(default_factory=list, init=False)
+    _profile_couplings: list[_ProfileCoupling] = field(default_factory=list, init=False)
     _monitors: list[Any] = field(default_factory=list, init=False)
     _installed: bool = field(default=False, init=False)
 
@@ -124,7 +137,7 @@ class Harness:
         self._heap: list[_ScheduledPatch] = []
         self._seq = 0
         self._bool_couplings: list[_BoolCoupling] = []
-        self._analog_couplings: list[_AnalogCoupling] = []
+        self._profile_couplings: list[_ProfileCoupling] = []
         self._monitors: list[Any] = []
         self._installed = False
         self.on_patches_applied: Callable[[list[tuple[str, Any, str]]], None] | None = None
@@ -150,11 +163,18 @@ class Harness:
             pass
         self._heap.clear()
         self._bool_couplings.clear()
-        self._analog_couplings.clear()
+        self._profile_couplings.clear()
 
     @property
     def pending_count(self) -> int:
         return len(self._heap)
+
+    def couplings(self) -> Iterator[Coupling]:
+        """Iterate over all discovered couplings (bool and profile)."""
+        for c in self._bool_couplings:
+            yield Coupling(c.en_name, c.fb_name, c.physical, c.trigger_value)
+        for c in self._profile_couplings:
+            yield Coupling(c.en_name, c.fb_name, c.physical, c.trigger_value)
 
     def _schedule(self, target_scan: int, tag_name: str, value: Any) -> None:
         entry = _ScheduledPatch(target_scan, tag_name, value, self._seq)
@@ -189,7 +209,7 @@ class Harness:
 
     def _tick_analog_with_provenance(self) -> list[tuple[str, Any, str]]:
         results: list[tuple[str, Any, str]] = []
-        for coupling in self._analog_couplings:
+        for coupling in self._profile_couplings:
             if not coupling.active:
                 continue
             fn = _profile_registry.get(coupling.profile_name)
@@ -270,11 +290,15 @@ class Harness:
             on_ms = physical.on_delay_ms or 0
             off_ms = physical.off_delay_ms or 0
             self._bool_couplings.append(
-                _BoolCoupling(en_name, fb_name, on_ms, off_ms, trigger_value=trigger_value)
+                _BoolCoupling(
+                    en_name, fb_name, on_ms, off_ms, physical, trigger_value=trigger_value
+                )
             )
         elif physical.feedback_type == "analog" and physical.profile is not None:
-            self._analog_couplings.append(
-                _AnalogCoupling(en_name, fb_name, physical.profile, trigger_value=trigger_value)
+            self._profile_couplings.append(
+                _ProfileCoupling(
+                    en_name, fb_name, physical.profile, physical, trigger_value=trigger_value
+                )
             )
 
     def _install_monitors(self) -> None:
@@ -282,8 +306,8 @@ class Harness:
         for coupling in self._bool_couplings:
             en_to_bool.setdefault(coupling.en_name, []).append(coupling)
 
-        en_to_analog: dict[str, list[_AnalogCoupling]] = {}
-        for coupling in self._analog_couplings:
+        en_to_analog: dict[str, list[_ProfileCoupling]] = {}
+        for coupling in self._profile_couplings:
             en_to_analog.setdefault(coupling.en_name, []).append(coupling)
 
         all_en_names = set(en_to_bool) | set(en_to_analog)
@@ -299,7 +323,7 @@ class Harness:
     def _make_en_callback(
         self,
         bool_couplings: list[_BoolCoupling],
-        analog_couplings: list[_AnalogCoupling],
+        analog_couplings: list[_ProfileCoupling],
     ) -> Callable[[Any, Any], None]:
         dt_ms = self._plc._dt * 1000
         plain_bool = [c for c in bool_couplings if c.trigger_value is None]
@@ -359,7 +383,7 @@ class Harness:
                 }
                 for c in self._bool_couplings
             ],
-            "analog_couplings": [
+            "profile_couplings": [
                 {
                     "en": c.en_name,
                     "fb": c.fb_name,
@@ -367,7 +391,7 @@ class Harness:
                     "active": c.active,
                     "trigger_value": c.trigger_value,
                 }
-                for c in self._analog_couplings
+                for c in self._profile_couplings
             ],
             "pending_patches": len(self._heap),
         }

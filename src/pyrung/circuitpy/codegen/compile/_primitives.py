@@ -24,6 +24,7 @@ from pyrung.core.expression import (
     LiteralExpr,
     MathFuncExpr,
     ShiftFuncExpr,
+    SumExpr,
     TagExpr,
     UnaryExpr,
 )
@@ -82,6 +83,10 @@ def _compile_expression_impl(expr: Expression, ctx: CodegenContext) -> str:
                 f"((int({value}) & 0xFFFF) << (16 - (int({count}) % 16)))) & 0xFFFF)"
             )
         raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
+
+    if isinstance(expr, SumExpr):
+        terms = [ctx.symbol_for_tag(tag) for tag in expr.block_range]
+        return f"({' + '.join(terms)})"
 
     raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
