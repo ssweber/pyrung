@@ -959,3 +959,62 @@ class TestIntractableTags:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.tags
+
+
+class TestSettlePending:
+    """prove() settles pending timers before reporting counterexamples."""
+
+    def test_timer_gated_alarm_proves_with_settle(self):
+        """A property guarded by a timer-gated alarm should prove, not produce
+        a spurious counterexample from the PENDING state."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("Fault")
+        Alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Alarm)
+
+        result = prove(logic, Or(~Cmd, Fb, Alarm))
+        assert isinstance(result, Proven), (
+            f"Expected Proven but got {type(result).__name__}: "
+            f"settle-pending should resolve the timer-gated alarm"
+        )
+
+    def test_genuinely_missing_alarm_still_counterexample(self):
+        """A feedback fault with no alarm should produce a Counterexample.
+        Uses the same timer pattern but proves a property that is NOT
+        reachable — Running latches but the property demands ~Running."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("NoAlarm")
+        Running = Bool("Running")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Running)
+
+        result = prove(logic, ~Running)
+        assert isinstance(result, Counterexample)
+
+    def test_batch_prove_settles_pending(self):
+        """Batch mode also settles pending timers."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("Fault")
+        Alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Alarm)
+
+        results = prove(logic, [Or(~Cmd, Fb, Alarm)])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Proven)
