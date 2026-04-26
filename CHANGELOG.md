@@ -1,6 +1,30 @@
 # Changelog
 
-## Unreleased
+## v0.7.0 (2026-04-26)
+
+### Breaking changes
+
+- **Lock file default projection is now terminals** — `_default_projection` and `pyrung lock` now project to terminal tags by default instead of `public` tags with fallback to terminals. Terminal outputs are the behavioral contract; `public` is a UI concept for Data View and HMI filtering. Existing lock files generated with the old public-first projection will need to be regenerated with `pyrung lock`. Programs with no terminals produce an empty projection — that's a signal, not an error.
+
+### New features
+
+- **`__lock__` module-level projection override** — define `__lock__ = {"include": [...], "exclude": [...]}` at module level to customize which tags the lock file tracks. `include` adds tags the terminal default misses (pivots that matter behaviorally); `exclude` drops tags the terminal default includes (cosmetic outputs). `--project` on the CLI still overrides everything.
+- **Public `Coupling` API on `Harness`** — `harness.couplings()` iterates over all discovered enable→feedback couplings as `Coupling` dataclasses with `en_name`, `fb_name`, `physical`, and `trigger_value` fields. `Coupling` is exported from `pyrung` and `pyrung.core`. Useful for test assertions and tooling that needs to inspect harness wiring.
+- **`plc.tags` read-only tag mapping** — new `plc.tags` property returns a `MappingProxyType[str, Tag]` of all known tags by name. Convenient for introspection, iteration, and test assertions without reaching into internals.
+- **`prove()` settle-pending semantics** — `prove()` now settles pending timer/counter Done bits before reporting a counterexample. Previously, a timer-gated alarm that was reachable but hadn't yet elapsed could produce a spurious counterexample in the `PENDING` state. The BFS explorer now calls `_settle_pending()` to resolve all pending completions to a stable state before evaluating the predicate, eliminating false negatives for properties guarded by timing.
+- **`SumExpr` CircuitPython codegen** — `BlockRange.sum()` expressions now compile to CircuitPython code. Previously only Click ladder export was supported.
+- **Fault coverage example** — new `examples/fault_coverage.py` demonstrating `prove()`, `cause()`/`recovers()`, and the coverage plugin for verifying fault detection and recovery in a motor control program.
+- **`TraceStep` dataclass for counterexample traces** — `Counterexample.trace` now contains `TraceStep` objects with `inputs` and `scans` fields, enabling accurate replay of timer/counter fast-forward edges.
+
+### Fixes
+
+- **`prove()` domain coverage** — boundary partitions now emit lit-1/lit/lit+1 instead of just literals. Property expressions feed into domain analysis. Tag-vs-tag comparisons track both operand tags. Oneshot and other memory-backed state is included in the visited-state key.
+
+### Internal
+
+- `_AnalogCoupling` renamed to `_ProfileCoupling` and harness status dict key changed from `"analog_couplings"` to `"profile_couplings"` for consistency with the `Physical` API terminology.
+
+## v0.6.0
 
 ### Breaking changes
 

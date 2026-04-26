@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
     Bool,
@@ -29,7 +30,9 @@ from pyrung.core.analysis.prove import (
     Intractable,
     Proven,
     StateDiff,
+    TraceStep,
     _classify_dimensions,
+    _default_projection,
     _eval_atom,
     _live_inputs,
     _partial_eval,
@@ -154,7 +157,7 @@ class TestValueDomainExtraction:
         assert nd["Flag"] == (False, True)
 
     def test_integer_comparison_literals(self):
-        """Int tag compared with literals extracts those values + unmatched."""
+        """Int tag compared with literals extracts boundary partitions."""
         state = Int("State", external=True)
         out_a = Bool("OutA")
         out_b = Bool("OutB")
@@ -171,7 +174,7 @@ class TestValueDomainExtraction:
         domain = nd["State"]
         assert 1 in domain
         assert 2 in domain
-        assert len(domain) == 3  # 1, 2, unmatched
+        assert set(domain) == {0, 1, 2, 3}
 
     def test_choices_tag_uses_declared_domain(self):
         """Tag with choices uses the declared values."""
@@ -298,6 +301,65 @@ class TestProve:
         result = prove(logic, ~flag)
         assert isinstance(result, Counterexample)
         assert len(result.trace) > 0
+        assert isinstance(result.trace[0], TraceStep)
+
+    def test_less_than_partition_explores_below_literal(self):
+        """Level < 5 includes values on both sides of the comparison."""
+        level = Int("Level", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level < 5):
+                latch(alarm)
+
+        result = prove(logic, ~alarm)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level") == 4 for step in result.trace)
+
+    def test_property_expression_contributes_input_domain(self):
+        """Property-only comparison literals are included in exploration domains."""
+        level = Int("Level", external=True)
+        seen_zero = Bool("SeenZero")
+
+        with Program(strict=False) as logic:
+            with Rung(level == 0):
+                out(seen_zero)
+
+        result = prove(logic, level < 5)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level") in {5, 6} for step in result.trace)
+
+    def test_tag_comparison_explores_operand_tag_domain(self):
+        """A > B keeps B live and explores B's finite domain."""
+        a = Int("A", external=True, min=0, max=1)
+        b = Int("B", external=True, default=1, min=0, max=1)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(a > b):
+                latch(target)
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("B") == 0 for step in result.trace)
+
+    def test_oneshot_memory_state_allows_rearming_after_false_scan(self):
+        """One-shot runtime memory is part of the visited-state key."""
+        gate = Bool("Gate", external=True)
+        fired_before = Bool("FiredBefore")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(gate):
+                out(target, oneshot=True)
+            with Rung(target, ~fired_before):
+                latch(fired_before)
+                reset(target)
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample)
+        gate_values = [step.inputs.get("Gate") for step in result.trace if "Gate" in step.inputs]
+        assert gate_values == [True, False, True]
 
     def test_counterexample_trace_is_replayable(self):
         """Counterexample trace reproduces the violation on a real PLC."""
@@ -312,9 +374,10 @@ class TestProve:
         assert isinstance(result, Counterexample)
 
         runner = PLC(logic, dt=0.010)
-        for inputs in result.trace:
-            runner.patch(inputs)
-            runner.step()
+        for step in result.trace:
+            runner.patch(step.inputs)
+            for _ in range(step.scans):
+                runner.step()
         assert runner.current_state.tags.get("Flag") is True
 
     def test_callable_predicate_fallback(self):
@@ -551,6 +614,65 @@ class TestDiffStates:
         d = diff_states(before, after)
         assert not d.added
         assert frozenset({("A", True)}) in d.removed
+
+
+class TestDefaultProjection:
+    """_default_projection returns terminals, not public tags."""
+
+    def test_terminals_not_public(self):
+        button = Bool("Button", external=True)
+        running = Bool("Running", public=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(running)
+            with Rung(running):
+                out(light)
+
+        proj = _default_projection(logic)
+        assert proj == ["Light"]
+
+    def test_empty_when_no_terminals(self):
+        button = Bool("Button", external=True)
+        internal = Bool("Internal")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(internal)
+            with Rung(internal):
+                reset(internal)
+
+        proj = _default_projection(logic)
+        assert proj == []
+
+
+class TestApplyLockConfig:
+    """CLI _apply_lock_config include/exclude logic."""
+
+    def test_none_config_passthrough(self):
+        proj = _apply_lock_config(["A", "B"], None)
+        assert proj == ["A", "B"]
+
+    def test_include_adds_tags(self):
+        proj = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        assert proj == ["A", "B", "C"]
+
+    def test_exclude_removes_tags(self):
+        proj = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        assert proj == ["A", "C"]
+
+    def test_include_and_exclude(self):
+        proj = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
+        assert proj == ["B", "C"]
+
+    def test_exclude_nonexistent_is_noop(self):
+        proj = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        assert proj == ["A"]
+
+    def test_include_duplicate_is_noop(self):
+        proj = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        assert proj == ["A", "B"]
 
 
 # ===================================================================
@@ -898,3 +1020,62 @@ class TestIntractableTags:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.tags
+
+
+class TestSettlePending:
+    """prove() settles pending timers before reporting counterexamples."""
+
+    def test_timer_gated_alarm_proves_with_settle(self):
+        """A property guarded by a timer-gated alarm should prove, not produce
+        a spurious counterexample from the PENDING state."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("Fault")
+        Alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Alarm)
+
+        result = prove(logic, Or(~Cmd, Fb, Alarm))
+        assert isinstance(result, Proven), (
+            f"Expected Proven but got {type(result).__name__}: "
+            f"settle-pending should resolve the timer-gated alarm"
+        )
+
+    def test_genuinely_missing_alarm_still_counterexample(self):
+        """A feedback fault with no alarm should produce a Counterexample.
+        Uses the same timer pattern but proves a property that is NOT
+        reachable — Running latches but the property demands ~Running."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("NoAlarm")
+        Running = Bool("Running")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Running)
+
+        result = prove(logic, ~Running)
+        assert isinstance(result, Counterexample)
+
+    def test_batch_prove_settles_pending(self):
+        """Batch mode also settles pending timers."""
+        Cmd = Bool("Cmd", external=True)
+        Fb = Bool("Fb", external=True)
+        FaultDone = Timer.clone("Fault")
+        Alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(Cmd, ~Fb):
+                on_delay(FaultDone, 3000)
+            with Rung(FaultDone.Done):
+                latch(Alarm)
+
+        results = prove(logic, [Or(~Cmd, Fb, Alarm)])
+        assert isinstance(results, list)
+        assert isinstance(results[0], Proven)

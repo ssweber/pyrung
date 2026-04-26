@@ -81,6 +81,7 @@ PAGES: tuple[ReferencePage, ...] = (
             "pyrung.PLC",
             "pyrung.Physical",
             "pyrung.Harness",
+            "pyrung.Coupling",
             "pyrung.profile",
             "pyrung.system",
         ),

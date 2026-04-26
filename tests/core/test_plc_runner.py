@@ -223,3 +223,34 @@ class TestPLCEdgeHistory:
         runner.patch({"DefaultBool": False})
         runner.step()
         assert runner.current_state.memory.get("_prev:DefaultBool") is False
+
+
+class TestPlcTags:
+    """plc.tags read-only mapping."""
+
+    def test_returns_known_tags(self):
+        from pyrung.core import PLC, Bool, Program, Rung, out
+
+        Light = Bool("Light")
+        Button = Bool("Button")
+        with Program(strict=False) as logic:
+            with Rung(Button):
+                out(Light)
+        plc = PLC(logic, dt=0.010)
+
+        tags = plc.tags
+        assert "Light" in tags
+        assert "Button" in tags
+        assert tags["Light"] is Light
+
+    def test_is_read_only(self):
+        from pyrung.core import PLC, Bool, Program, Rung, out
+
+        Light = Bool("Light")
+        with Program(strict=False) as logic:
+            with Rung():
+                out(Light)
+        plc = PLC(logic, dt=0.010)
+
+        with __import__("pytest").raises(TypeError):
+            plc.tags["Light"] = None  # ty: ignore[invalid-assignment]

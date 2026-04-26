@@ -12,6 +12,7 @@ from pyrung.core import (
     Bool,
     Char,
     Counter,
+    Coupling,
     Dint,
     Field,
     Harness,
@@ -82,6 +83,7 @@ from pyrung.core import (
 __all__ = [
     "PLC",
     "Physical",
+    "Coupling",
     "Harness",
     "profile",
     "system",

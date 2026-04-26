@@ -312,9 +312,14 @@ Fb_Temp: Real = Field(physical=THERMOCOUPLE, link="En",
 
 The static validator catches literal writes outside these bounds (`CORE_RANGE_VIOLATION`), and the runtime bounds checker flags dynamic writes that land outside the declared range after each scan — see [Testing: Checking bounds](testing.md#checking-bounds). Values are never clamped; the check sets a warning and populates `plc.bounds_violations`. The debugger's Data View shows declared ranges as hints. Profile functions receive only `(cur, en, dt)`, so pass constants explicitly if a profile needs bounds.
 
+## Fault coverage
+
+For fault coverage — proving every device has an alarm path — see [Verification](verification.md#fault-coverage). The workflow uses `harness.couplings()` to iterate device couplings and `prove()` to check structural detection paths.
+
 ## Next steps
 
+- [Verification](verification.md) — prove(), fault coverage, lock files
 - [Testing Guide](testing.md) — deterministic testing patterns, forces, monitors
-- [Analysis](analysis.md) — validation findings, dataview, cause/effect
+- [Analysis](analysis.md) — dataview, cause/effect, coverage queries, static validators
 - [VS Code Debugger](dap-vscode.md) — Data View, breakpoints, step-through debugging
 - [Harness in the debugger](dap-vscode.md#autoharness-in-the-debug-session) — auto-installs when annotations exist, `harness status/remove/install` console verbs, capture provenance

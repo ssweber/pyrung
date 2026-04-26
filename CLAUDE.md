@@ -21,10 +21,10 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `docs/instructions/` — Full DSL reference split by instruction group (rungs, conditions, coils, timers, counters, copy, math, drums, program control, communication)
 - `docs/guides/runner.md` — Execution engine (time modes, history, seek/rewind, fork, rung inspection)
 - `docs/guides/testing.md` — Unit testing patterns with FIXED_STEP, forces as fixtures, pytest usage
-- `docs/guides/forces-debug.md` — Force vs patch semantics, breakpoints, monitors, history/diff/fork
-- `docs/guides/commissioning.md` — Declare/Analyze/Commission workflow, coverage plugin, CI gating
+- `docs/guides/commissioning.md` — Declare/Analyze/Verify/Commission workflow overview, entry point
 - `docs/guides/physical-harness.md` — Physical annotations, autoharness, feedback synthesis
-- `docs/guides/analysis.md` — DataView queries, causal chains, coverage reports
+- `docs/guides/analysis.md` — DataView queries, causal chains, coverage reports, static validators
+- `docs/guides/verification.md` — prove(), fault coverage, lock files
 - `docs/guides/architecture.md` — Engine internals, compiled replay kernel, sparse scan log
 - `docs/guides/dap-vscode.md` — VS Code DAP integration (breakpoints, logpoints, monitors, trace decorations, Data View, Graph View, Chain tab)
 - `docs/guides/click-quickstart.md` — Click-specific getting started
@@ -65,6 +65,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **patch()** — one-shot input, consumed after one scan
 - **force()** — persistent override, re-applied pre- and post-logic every scan until removed
 - **`with plc.forced({...}):`** — scoped force context manager (restores on exit)
+- **`plc.tags`** — read-only `MappingProxyType[str, Tag]` of all known tags by name. Useful for introspection and iterating couplings
 - **copy()** clamps out-of-range; **calc()** wraps (modular arithmetic)
 - **Built-in `Timer` and `Counter` UDTs** (count=1) — `.Done` (Bool) + `.Acc` (Int/Dint). `Timer.clone("Name")` for named instances, single-arg `on_delay(timer, preset=...)`. Any UDT with `Done: Bool` and `Acc: Int|Dint` fields works with timer/counter instructions (structural contract).
 - **`And()` / `Or()`** — condition combinators. Comma inside `Rung(...)` is implicit AND.
@@ -73,14 +74,14 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 
 ### Analysis and Verification
 
-- **`prove(logic, condition)`** — exhaustively checks a property over all reachable states, with counterexample traces when it fails. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (replayable trace), or `Intractable`
+- **`prove(logic, condition)`** — exhaustively checks a property over all reachable states, with counterexample traces when it fails. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (replayable trace), or `Intractable`. Settles pending timers before evaluating, so timer-gated alarm paths don't produce false negatives
 - **Lock file workflow** — `reachable_states()` projects to `public` tags, `write_lock()` / `check_lock()` serialize to JSON. Behavioral diffs show up in PRs
 - **`plc.dataview`** — chainable query API: `.inputs()`, `.pivots()`, `.terminals()`, `.upstream(tag)`, `.downstream(tag)`, `.physical_inputs()`, `.contains("cmd")`. Also available as `program.dataview()` for static use
 - **`plc.cause(tag)` / `plc.effect(tag)`** — causal chain analysis over scan history. Projected mode (`cause(tag, to=value)`) finds reachable paths or reports blockers. `plc.recovers(tag)` tests reachable clear paths
 - **`plc.query`** — whole-program surveys: `cold_rungs()`, `hot_rungs()`, `stranded_bits()`, `report()` for mergeable `CoverageReport`
 - **Pytest coverage plugin** — `pyrung_coverage` fixture collects per-test reports, merges at session end. CI gating via `--pyrung-whitelist`
 - **`program.simplified()`** — resolved Boolean form per terminal, eliminating intermediate pivots
-- **Physical annotations** — `physical=`, `link=`, `min=`, `max=`, `uom=` on tags for device behavior. `Harness` auto-synthesizes feedback. `link="Tag:value"` for value-triggered feedback
+- **Physical annotations** — `physical=`, `link=`, `min=`, `max=`, `uom=` on tags for device behavior. `Harness` auto-synthesizes feedback. `link="Tag:value"` for value-triggered feedback. `Harness.couplings()` yields `Coupling` dataclasses for iterating all discovered enable/feedback pairings
 - **Tag flags** — `readonly`, `external`, `final`, `public` metadata flags with static validator enforcement
 - **Runtime bounds checking** — `min`/`max`/`choices` checked per scan, populates `plc.bounds_violations`
 

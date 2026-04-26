@@ -53,7 +53,13 @@ class Proven:
 class Counterexample:
     """Invariant violated — trace reproduces the failure."""
 
-    trace: list[dict[str, Any]]
+    trace: list[TraceStep]
+
+
+@dataclass(frozen=True)
+class TraceStep:
+    inputs: dict[str, Any]
+    scans: int = 1
 
 
 @dataclass(frozen=True)
@@ -350,7 +356,7 @@ def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
 
 def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
     if isinstance(expr, Atom):
-        if expr.tag == tag_name:
+        if expr.tag == tag_name or expr.operand == tag_name:
             out.append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
@@ -421,9 +427,13 @@ def _extract_value_domain(
     if not literals:
         return ()
 
-    sorted_literals = sorted(literals)
-    unmatched = sorted_literals[-1] + 1 if sorted_literals else 0
-    return tuple(sorted_literals) + (unmatched,)
+    partitioned: set[Any] = set()
+    for lit in literals:
+        partitioned.add(lit)
+        if isinstance(lit, (int, float)):
+            partitioned.add(lit - 1)
+            partitioned.add(lit + 1)
+    return tuple(sorted(partitioned))
 
 
 def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
@@ -468,6 +478,7 @@ class _ExploreContext:
     nondeterministic_dims: dict[str, tuple[Any, ...]]
     stateful_names: tuple[str, ...]
     edge_tag_names: tuple[str, ...]
+    memory_key_names: tuple[str, ...]
     state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
     done_event_specs: tuple[_DoneEventSpec, ...]
     block_specs: tuple[BlockSpec, ...]
@@ -499,7 +510,7 @@ def _classify_dimensions_from_graph(
         upstream_tags: set[str] = set()
         for tag_name in scope:
             upstream_tags.update(dv.upstream(tag_name).inputs().tags)
-        scope_input_tags = frozenset(upstream_tags)
+        scope_input_tags = frozenset(upstream_tags | set(scope))
 
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
@@ -720,6 +731,8 @@ def _referenced_tags(expr: Expr) -> frozenset[str]:
 def _walk_tags(expr: Expr, out: set[str]) -> None:
     if isinstance(expr, Atom):
         out.add(expr.tag)
+        if isinstance(expr.operand, str):
+            out.add(expr.operand)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
             _walk_tags(t, out)
@@ -933,6 +946,7 @@ class _EdgeCompressor:
             kernel,
             ctx.stateful_names,
             ctx.edge_tag_names,
+            ctx.memory_key_names,
             ctx.state_key_done_specs,
             self.live_edges(kernel),
         )
@@ -942,6 +956,7 @@ def _extract_state_key(
     kernel: ReplayKernel,
     stateful_names: tuple[str, ...],
     edge_tag_names: tuple[str, ...],
+    memory_key_names: tuple[str, ...] = (),
     done_specs: tuple[_StateKeyDoneSpec, ...] = (),
     live_edges: frozenset[str] | None = None,
 ) -> tuple[Any, ...]:
@@ -965,6 +980,8 @@ def _extract_state_key(
             parts.append(_EDGE_DEAD)
         else:
             parts.append(kernel.prev.get(n))
+    for mk in memory_key_names:
+        parts.append(kernel.memory.get(mk))
     return tuple(parts)
 
 
@@ -972,6 +989,7 @@ def _build_explore_context(
     program: Program,
     *,
     scope: list[str] | None = None,
+    extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
@@ -979,6 +997,8 @@ def _build_explore_context(
 
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
+    if extra_exprs:
+        all_exprs = all_exprs + extra_exprs
     result = _classify_dimensions_from_graph(program, graph, all_exprs, scope=scope)
     if isinstance(result, Intractable):
         return result
@@ -1008,6 +1028,15 @@ def _build_explore_context(
             )
 
     edge_tag_exprs = _collect_edge_tag_exprs(program, edge_tag_names)
+    pilot = compiled.create_kernel()
+    pilot.memory["_dt"] = dt
+    for spec in compiled.block_specs.values():
+        pilot.load_block_from_tags(spec)
+    compiled.step_fn(pilot.tags, pilot.blocks, pilot.memory, pilot.prev, dt)
+    excluded_prefixes = ("_dt", "_frac:")
+    memory_key_names = tuple(
+        sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
+    )
 
     return _ExploreContext(
         compiled=compiled,
@@ -1017,6 +1046,7 @@ def _build_explore_context(
         nondeterministic_dims=nondeterministic_dims,
         stateful_names=stateful_names,
         edge_tag_names=edge_tag_names,
+        memory_key_names=memory_key_names,
         state_key_done_specs=tuple(state_key_done_specs),
         done_event_specs=tuple(done_event_specs),
         block_specs=tuple(compiled.block_specs.values()),
@@ -1044,18 +1074,17 @@ def _projected_states(
 
 
 def _build_trace(
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]],
-    failing_key: tuple[Any, ...],
-    failing_inputs: dict[str, Any],
-) -> list[dict[str, Any]]:
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]],
+    key: tuple[Any, ...],
+) -> list[TraceStep]:
     """Reconstruct the input trace from initial state to failure."""
-    trace: list[dict[str, Any]] = [failing_inputs]
-    current = failing_key
+    trace: list[TraceStep] = []
+    current = key
     while current in parent_map:
-        parent_key, inputs = parent_map[current]
+        parent_key, inputs, scans = parent_map[current]
+        trace.append(TraceStep(inputs=inputs, scans=scans))
         if parent_key is None:
             break
-        trace.append(inputs)
         current = parent_key
     trace.reverse()
     return trace
@@ -1142,7 +1171,7 @@ def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | Non
 
 def _compile_property_spec(
     spec: Any,
-) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
     """Compile one property spec into a predicate and optional auto-scope.
 
     ``spec`` may be a single condition/callable or a tuple of conditions with
@@ -1245,6 +1274,68 @@ def _advance_hidden_progress(
     kernel.tags[acc_name] = acc_after - (skipped_scans * delta)
 
 
+def _has_pending_done(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
+    """True if any timer/counter Done bit in *key* is PENDING."""
+    return any(key[spec.state_index] == PENDING for spec in context.done_event_specs)
+
+
+def _resolve_nearest_pending(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _Snapshot,
+    key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
+) -> tuple[tuple[Any, ...], int] | None:
+    """Advance to the nearest pending timer/counter completion and step once.
+
+    Returns ``(new_key, additional_scans)``, or ``None`` if no pending events
+    can be resolved. ``additional_scans`` is the skipped scan count beyond the
+    caller's already-executed step. *before_snap* must precede the current
+    kernel state by one step.
+    """
+    pending_events: list[tuple[_DoneEventSpec, int]] = []
+    for spec in context.done_event_specs:
+        if key[spec.state_index] != PENDING:
+            continue
+        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, before_snap, kernel)
+        if scans is not None:
+            pending_events.append((spec, scans))
+
+    if not pending_events:
+        return None
+
+    next_event_scans = min(scans for _spec, scans in pending_events)
+    skipped_scans = max(next_event_scans - 1, 0)
+    for spec, _scans in pending_events:
+        _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+
+    _step_kernel(context, kernel)
+    return edge_comp.state_key(kernel), skipped_scans
+
+
+def _settle_pending(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _Snapshot,
+    edge_comp: _EdgeCompressor,
+) -> tuple[tuple[Any, ...], int]:
+    """Resolve all pending timers/counters so the system reaches a stable state.
+
+    *before_snap* must be from before the most recent ``_step_kernel`` call
+    so that the per-scan delta can be computed (acc_after − acc_before).
+    """
+    key = edge_comp.state_key(kernel)
+    total_additional_scans = 0
+    for _ in range(len(context.done_event_specs) + 1):
+        resolved = _resolve_nearest_pending(context, kernel, before_snap, key, edge_comp)
+        if resolved is None:
+            break
+        key, additional_scans = resolved
+        total_additional_scans += additional_scans
+        before_snap = _snapshot_kernel(kernel)
+    return key, total_additional_scans
+
+
 def _maybe_jump_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
@@ -1252,29 +1343,16 @@ def _maybe_jump_hidden_event(
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], bool]:
+) -> tuple[tuple[Any, ...], int]:
     """Jump from a revisited hidden pending plateau to the next completion event."""
     if not context.done_event_specs or new_key not in visited:
-        return new_key, False
+        return new_key, 0
 
-    pending_events: list[tuple[_DoneEventSpec, int]] = []
-    for spec in context.done_event_specs:
-        if new_key[spec.state_index] != PENDING:
-            continue
-        scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, snap, kernel)
-        if scans is not None:
-            pending_events.append((spec, scans))
-
-    if not pending_events:
-        return new_key, False
-
-    next_event_scans = min(scans for _spec, scans in pending_events)
-    skipped_scans = max(next_event_scans - 1, 0)
-    for spec, _scans in pending_events:
-        _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, snap, kernel)
-
-    _step_kernel(context, kernel)
-    return (edge_comp.state_key(kernel), True)
+    resolved = _resolve_nearest_pending(context, kernel, snap, new_key, edge_comp)
+    if resolved is None:
+        return new_key, 0
+    resolved_key, additional_scans = resolved
+    return resolved_key, additional_scans
 
 
 def _bfs_explore(
@@ -1291,8 +1369,8 @@ def _bfs_explore(
     initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] | None = (
-        {} if predicate is not None else None
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] | None = (
+        {initial_key: (None, {}, 0)} if predicate is not None else None
     )
     projected_rows: set[tuple[Any, ...]] = set()
 
@@ -1300,7 +1378,7 @@ def _bfs_explore(
         projected_rows.add(_projected_tuple(kernel, project))
 
     if predicate is not None and not predicate(kernel.tags):
-        return Counterexample(trace=[{}])
+        return Counterexample(trace=[TraceStep(inputs={}, scans=0)])
 
     queue: deque[tuple[_Snapshot, int, tuple[Any, ...]]] = deque()
     queue.append((_snapshot_kernel(kernel), 0, initial_key))
@@ -1334,22 +1412,33 @@ def _bfs_explore(
                 input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
+            edge_scans = 1
 
             if predicate is not None and not predicate(kernel.tags):
-                assert parent_map is not None
-                trace = _build_trace(parent_map, parent_key, input_dict)
-                trace.append(input_dict)
-                return Counterexample(trace=trace)
+                new_key = edge_comp.state_key(kernel)
+                if context.done_event_specs and _has_pending_done(context, new_key):
+                    new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
+                    edge_scans += additional_scans
+                if not predicate(kernel.tags):
+                    assert parent_map is not None
+                    trace = _build_trace(parent_map, parent_key)
+                    trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
+                    return Counterexample(trace=trace)
 
             new_key = edge_comp.state_key(kernel)
 
-            new_key, jumped = _maybe_jump_hidden_event(
+            before_jump_key = new_key
+            new_key, additional_scans = _maybe_jump_hidden_event(
                 context, kernel, snap, visited, new_key, edge_comp
             )
+            jumped = new_key != before_jump_key or additional_scans > 0
+            if additional_scans:
+                edge_scans += additional_scans
+
             if jumped and predicate is not None and not predicate(kernel.tags):
                 assert parent_map is not None
-                trace = _build_trace(parent_map, parent_key, input_dict)
-                trace.append(input_dict)
+                trace = _build_trace(parent_map, parent_key)
+                trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
                 return Counterexample(trace=trace)
 
             if project is not None:
@@ -1370,7 +1459,7 @@ def _bfs_explore(
                         estimated_space=len(visited),
                     )
                 if parent_map is not None:
-                    parent_map[new_key] = (parent_key, input_dict)
+                    parent_map[new_key] = (parent_key, input_dict, edge_scans)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
     if project is not None:
@@ -1392,7 +1481,9 @@ def _bfs_explore_many(
     initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any]]] = {}
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] = {
+        initial_key: (None, {}, 0)
+    }
     results: list[Counterexample | Proven | Intractable | None] = [None] * len(predicates)
 
     def _record_failures(
@@ -1400,6 +1491,7 @@ def _bfs_explore_many(
         state: dict[str, Any],
         parent_key: tuple[Any, ...],
         input_dict: dict[str, Any],
+        edge_scans: int,
         initial: bool = False,
     ) -> None:
         for i, predicate in enumerate(predicates):
@@ -1408,13 +1500,19 @@ def _bfs_explore_many(
             if predicate(state):
                 continue
             if initial:
-                results[i] = Counterexample(trace=[{}])
+                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
                 continue
-            trace = _build_trace(parent_map, parent_key, input_dict)
-            trace.append(input_dict)
+            trace = _build_trace(parent_map, parent_key)
+            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
             results[i] = Counterexample(trace=trace)
 
-    _record_failures(state=kernel.tags, parent_key=initial_key, input_dict={}, initial=True)
+    _record_failures(
+        state=kernel.tags,
+        parent_key=initial_key,
+        input_dict={},
+        edge_scans=0,
+        initial=True,
+    )
     if all(result is not None for result in results):
         return [result for result in results if result is not None]
 
@@ -1447,14 +1545,38 @@ def _bfs_explore_many(
                 input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
-            _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
-            new_key = edge_comp.state_key(kernel)
+            edge_scans = 1
 
-            new_key, jumped = _maybe_jump_hidden_event(
+            any_unsettled = any(
+                results[i] is None and not predicates[i](kernel.tags)
+                for i in range(len(predicates))
+            )
+            new_key = edge_comp.state_key(kernel)
+            if any_unsettled and context.done_event_specs and _has_pending_done(context, new_key):
+                new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
+                edge_scans += additional_scans
+
+            _record_failures(
+                state=kernel.tags,
+                parent_key=parent_key,
+                input_dict=input_dict,
+                edge_scans=edge_scans,
+            )
+
+            before_jump_key = new_key
+            new_key, additional_scans = _maybe_jump_hidden_event(
                 context, kernel, snap, visited, new_key, edge_comp
             )
+            jumped = new_key != before_jump_key or additional_scans > 0
+            if additional_scans:
+                edge_scans += additional_scans
             if jumped:
-                _record_failures(state=kernel.tags, parent_key=parent_key, input_dict=input_dict)
+                _record_failures(
+                    state=kernel.tags,
+                    parent_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=edge_scans,
+                )
 
             if new_key not in visited:
                 visited.add(new_key)
@@ -1465,7 +1587,7 @@ def _bfs_explore_many(
                         estimated_space=len(visited),
                     )
                     return [result if result is not None else intractable for result in results]
-                parent_map[new_key] = (parent_key, input_dict)
+                parent_map[new_key] = (parent_key, input_dict, edge_scans)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
             if all(result is not None for result in results):
@@ -1483,12 +1605,12 @@ def _bfs_explore_many(
 
 def _compile_property(
     *conditions: Any,
-) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
     """Normalize a condition expression or callable into a dict predicate.
 
-    Returns ``(predicate_fn, auto_scope)`` where *auto_scope* is a list of
-    referenced tag names (for automatic upstream-cone restriction) or ``None``
-    when the caller passed an opaque callable.
+    Returns ``(predicate_fn, auto_scope, expr_or_none)`` where *auto_scope* is
+    a list of referenced tag names (for automatic upstream-cone restriction)
+    or ``None`` when the caller passed an opaque callable.
     """
     if len(conditions) == 1 and callable(conditions[0]) and not _is_condition_like(conditions[0]):
         user_predicate = conditions[0]
@@ -1496,7 +1618,7 @@ def _compile_property(
         def _predicate(state: dict[str, Any]) -> bool:
             return bool(user_predicate(dict(state)))
 
-        return _predicate, None
+        return _predicate, None, None
 
     from pyrung.core.condition import _as_condition, _normalize_and_condition
 
@@ -1513,7 +1635,7 @@ def _compile_property(
     def _predicate(state: dict[str, Any]) -> bool:
         return evaluator(state) is not False
 
-    return _predicate, tags_in_expr
+    return _predicate, tags_in_expr, expr
 
 
 def _is_condition_like(obj: Any) -> bool:
@@ -1566,7 +1688,7 @@ def prove(
     if scope is not None:
         effective_scope = scope
     else:
-        auto_scopes = [auto_scope for _predicate, auto_scope in compiled_properties]
+        auto_scopes = [auto_scope for _predicate, auto_scope, _expr in compiled_properties]
         if any(auto_scope is None for auto_scope in auto_scopes):
             effective_scope = None
         else:
@@ -1576,14 +1698,21 @@ def prove(
                 merged_scope.update(auto_scope)
             effective_scope = sorted(merged_scope)
 
-    context = _build_explore_context(program, scope=effective_scope)
+    property_exprs = [
+        expr for _predicate, _auto_scope, expr in compiled_properties if expr is not None
+    ]
+    context = _build_explore_context(
+        program,
+        scope=effective_scope,
+        extra_exprs=property_exprs,
+    )
     if isinstance(context, Intractable):
         if is_batch:
             return [context for _ in property_specs]
         return context
 
     if is_batch:
-        predicates = [predicate for predicate, _auto_scope in compiled_properties]
+        predicates = [predicate for predicate, _auto_scope, _expr in compiled_properties]
         return _bfs_explore_many(
             context,
             predicates=predicates,
@@ -1591,7 +1720,7 @@ def prove(
             max_states=max_states,
         )
 
-    predicate, _auto_scope = compiled_properties[0]
+    predicate, _auto_scope, _expr = compiled_properties[0]
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         predicate=predicate,
@@ -1616,7 +1745,7 @@ def reachable_states(
     scope : list of tag names, optional
         If given, restrict input enumeration to the upstream cone.
     project : list of tag names, optional
-        Tags to project onto. Defaults to ``public`` tags, then terminals.
+        Tags to project onto. Defaults to terminal tags.
     max_depth : int
         BFS depth limit (scan cycles).
     max_states : int
@@ -1626,11 +1755,7 @@ def reachable_states(
     if isinstance(context, Intractable):
         return context
 
-    project_names = (
-        tuple(project)
-        if project is not None
-        else tuple(_default_projection(program, context.graph))
-    )
+    project_names = tuple(project) if project is not None else tuple(_default_projection(program))
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         project=project_names,
@@ -1647,29 +1772,8 @@ def diff_states(
     return StateDiff(added=after - before, removed=before - after)
 
 
-def _default_projection(
-    program: Program,
-    graph: ProgramGraph | None = None,
-) -> list[str]:
-    """Choose default projection tags: public first, then terminals.
-
-    Nondeterministic inputs (INPUT role or unwritten externals) are excluded
-    from the default projection — they represent the environment, not the
-    program's behavior.
-    """
-    if graph is None:
-        graph = build_program_graph(program)
-    public: list[str] = []
-    for name, tag in graph.tags.items():
-        if not tag.public:
-            continue
-        role = graph.tag_roles.get(name)
-        is_written = name in graph.writers_of
-        if role == TagRole.INPUT or (tag.external and not is_written):
-            continue
-        public.append(name)
-    if public:
-        return sorted(public)
+def _default_projection(program: Program) -> list[str]:
+    """Choose default projection tags: terminal outputs only."""
     dv = program.dataview()
     return sorted(dv.terminals().tags)
 

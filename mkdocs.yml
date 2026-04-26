@@ -44,18 +44,22 @@ nav:
       - Program Control: instructions/program-control.md
       - Communication: instructions/communication.md
   - Guides:
-      - Click Cheatsheet: guides/click-cheatsheet.md
-      - Click Quickstart: guides/click-quickstart.md
-      - CircuitPython Quickstart: guides/circuitpy-quickstart.md
-      - Tag Structures: guides/tag-structures.md
-      - Runner: guides/runner.md
-      - Testing and Commissioning: guides/commissioning.md
-      - Physical Harness: guides/physical-harness.md
-      - Testing: guides/testing.md
-      - Analysis: guides/analysis.md
-      - Forces: guides/forces-debug.md
-      - DAP Debugger in VS Code: guides/dap-vscode.md
-      - Architecture: guides/architecture.md
+      - Essentials:
+        - Execution Engine: guides/runner.md
+        - Testing: guides/testing.md
+        - Tag Structures: guides/tag-structures.md
+      - Declare, Analyze, Commission:
+        - Overview: guides/commissioning.md
+        - Physical Annotations: guides/physical-harness.md
+        - Analysis: guides/analysis.md
+        - Verification: guides/verification.md
+      - Platform:
+        - Click Quickstart: guides/click-quickstart.md
+        - Click Cheatsheet: guides/click-cheatsheet.md
+        - CircuitPython Quickstart: guides/circuitpy-quickstart.md
+      - Tools:
+        - VS Code Debugger: guides/dap-vscode.md
+        - Architecture: guides/architecture.md
   - Dialects:
       - Click PLC: dialects/click.md
       - Click Python Codegen: dialects/click-codegen.md

@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrsistent import PMap
@@ -580,6 +581,11 @@ class PLC:
     def current_state(self) -> SystemState:
         """Current state snapshot."""
         return self._state
+
+    @property
+    def tags(self) -> MappingProxyType[str, Tag]:
+        """Read-only mapping of tag name → Tag object."""
+        return MappingProxyType(self._known_tags_by_name)
 
     @property
     def bounds_violations(self) -> dict[str, BoundsViolation]:

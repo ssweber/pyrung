@@ -120,9 +120,9 @@ Hardware address mapping, memory bank validation, Modbus instructions, and nickn
 
 Generate a self-contained scan loop for the P1AM-200 with 35 supported I/O modules, SD-backed retentive storage, watchdog, and Modbus TCP.
 
-### [Analysis and verification](https://ssweber.github.io/pyrung/guides/analysis/)
+### [Analysis](https://ssweber.github.io/pyrung/guides/analysis/) and [verification](https://ssweber.github.io/pyrung/guides/verification/)
 
-`prove()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. `plc.cause()` and `plc.effect()` trace causal chains through scan history. A pytest coverage plugin gates CI on cold rungs and stranded bits. Lock files catch behavioral regressions in PRs.
+`plc.cause()` and `plc.effect()` trace causal chains through scan history — why did this tag change, and what would it take to recover? `prove()` exhaustively checks a property over all reachable states, with counterexample traces when it fails. Automated fault coverage proves every device has an alarm path. Lock files catch behavioral regressions in PRs.
 
 ### [VS Code debugger](https://ssweber.github.io/pyrung/guides/dap-vscode/)
 

@@ -8,6 +8,7 @@ from pyrung.core import (
     PLC,
     Bool,
     Char,
+    Coupling,
     Field,
     Harness,
     Int,
@@ -744,3 +745,67 @@ class TestTriggerCoupingSummary:
         summary = harness.coupling_summary()
         bc = summary["bool_couplings"][0]
         assert bc["trigger_value"] is None
+
+
+# --- Public Coupling Iterator ---
+
+
+class TestCouplings:
+    def test_iterates_bool_couplings(self):
+        plc, Cmd, dev = _make_plc(SimplePair)
+        harness = Harness(plc)
+        harness.install()
+
+        couplings = list(harness.couplings())
+        assert len(couplings) == 1
+        c = couplings[0]
+        assert isinstance(c, Coupling)
+        assert c.en_name == dev[1].En.name
+        assert c.fb_name == dev[1].Fb.name
+        assert c.physical == LIMIT_SWITCH
+        assert c.trigger_value is None
+
+    def test_iterates_profile_couplings(self):
+        @profile("test_thermal")
+        def ramp(cur, en, dt):
+            return cur + 1.0 * dt if en else cur
+
+        plc, Cmd, dev = _make_plc(MixedDevice)
+        harness = Harness(plc)
+        harness.install()
+
+        couplings = list(harness.couplings())
+        assert len(couplings) == 2
+        names = {c.fb_name for c in couplings}
+        assert dev[1].Fb_Contact.name in names
+        assert dev[1].Fb_Temp.name in names
+
+    def test_trigger_value_populated(self):
+        plc, dev = _make_trigger_plc(IntTriggerPair)
+        harness = Harness(plc)
+        harness.install()
+
+        couplings = list(harness.couplings())
+        assert len(couplings) == 1
+        assert couplings[0].trigger_value == 2
+
+    def test_empty_when_no_physical(self):
+        Cmd = Bool("Cmd")
+        Fb = Bool("Fb")
+        with Program() as logic:
+            with Rung(Cmd):
+                out(Fb)
+        plc = PLC(logic, dt=0.010)
+        harness = Harness(plc)
+        harness.install()
+
+        assert list(harness.couplings()) == []
+
+    def test_coupling_is_frozen(self):
+        plc, Cmd, dev = _make_plc(SimplePair)
+        harness = Harness(plc)
+        harness.install()
+
+        c = next(harness.couplings())
+        with pytest.raises(AttributeError):
+            c.en_name = "other"  # ty: ignore[invalid-assignment]
