@@ -157,7 +157,7 @@ class TestValueDomainExtraction:
         assert nd["Flag"] == (False, True)
 
     def test_integer_comparison_literals(self):
-        """Int tag compared with literals extracts those values + unmatched."""
+        """Int tag compared with literals extracts boundary partitions."""
         state = Int("State", external=True)
         out_a = Bool("OutA")
         out_b = Bool("OutB")
@@ -174,7 +174,7 @@ class TestValueDomainExtraction:
         domain = nd["State"]
         assert 1 in domain
         assert 2 in domain
-        assert len(domain) == 3  # 1, 2, unmatched
+        assert set(domain) == {0, 1, 2, 3}
 
     def test_choices_tag_uses_declared_domain(self):
         """Tag with choices uses the declared values."""
@@ -302,6 +302,64 @@ class TestProve:
         assert isinstance(result, Counterexample)
         assert len(result.trace) > 0
         assert isinstance(result.trace[0], TraceStep)
+
+    def test_less_than_partition_explores_below_literal(self):
+        """Level < 5 includes values on both sides of the comparison."""
+        level = Int("Level", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level < 5):
+                latch(alarm)
+
+        result = prove(logic, ~alarm)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level") == 4 for step in result.trace)
+
+    def test_property_expression_contributes_input_domain(self):
+        """Property-only comparison literals are included in exploration domains."""
+        level = Int("Level", external=True)
+        seen_zero = Bool("SeenZero")
+
+        with Program(strict=False) as logic:
+            with Rung(level == 0):
+                out(seen_zero)
+
+        result = prove(logic, level < 5)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level") in {5, 6} for step in result.trace)
+
+    def test_tag_comparison_explores_operand_tag_domain(self):
+        """A > B keeps B live and explores B's finite domain."""
+        a = Int("A", external=True, min=0, max=1)
+        b = Int("B", external=True, default=1, min=0, max=1)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(a > b):
+                latch(target)
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("B") == 0 for step in result.trace)
+
+    def test_oneshot_memory_state_allows_rearming_after_false_scan(self):
+        """One-shot runtime memory is part of the visited-state key."""
+        gate = Bool("Gate", external=True)
+        fired_before = Bool("FiredBefore")
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(gate):
+                out(target, oneshot=True)
+            with Rung(target, ~fired_before):
+                latch(fired_before)
+                reset(target)
+
+        result = prove(logic, ~target)
+        assert isinstance(result, Counterexample)
+        gate_values = [step.inputs.get("Gate") for step in result.trace if "Gate" in step.inputs]
+        assert gate_values == [True, False, True]
 
     def test_counterexample_trace_is_replayable(self):
         """Counterexample trace reproduces the violation on a real PLC."""

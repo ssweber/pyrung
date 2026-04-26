@@ -356,7 +356,7 @@ def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
 
 def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
     if isinstance(expr, Atom):
-        if expr.tag == tag_name:
+        if expr.tag == tag_name or expr.operand == tag_name:
             out.append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
@@ -427,9 +427,13 @@ def _extract_value_domain(
     if not literals:
         return ()
 
-    sorted_literals = sorted(literals)
-    unmatched = sorted_literals[-1] + 1 if sorted_literals else 0
-    return tuple(sorted_literals) + (unmatched,)
+    partitioned: set[Any] = set()
+    for lit in literals:
+        partitioned.add(lit)
+        if isinstance(lit, (int, float)):
+            partitioned.add(lit - 1)
+            partitioned.add(lit + 1)
+    return tuple(sorted(partitioned))
 
 
 def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
@@ -474,6 +478,7 @@ class _ExploreContext:
     nondeterministic_dims: dict[str, tuple[Any, ...]]
     stateful_names: tuple[str, ...]
     edge_tag_names: tuple[str, ...]
+    memory_key_names: tuple[str, ...]
     state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
     done_event_specs: tuple[_DoneEventSpec, ...]
     block_specs: tuple[BlockSpec, ...]
@@ -505,7 +510,7 @@ def _classify_dimensions_from_graph(
         upstream_tags: set[str] = set()
         for tag_name in scope:
             upstream_tags.update(dv.upstream(tag_name).inputs().tags)
-        scope_input_tags = frozenset(upstream_tags)
+        scope_input_tags = frozenset(upstream_tags | set(scope))
 
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
@@ -726,6 +731,8 @@ def _referenced_tags(expr: Expr) -> frozenset[str]:
 def _walk_tags(expr: Expr, out: set[str]) -> None:
     if isinstance(expr, Atom):
         out.add(expr.tag)
+        if isinstance(expr.operand, str):
+            out.add(expr.operand)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
             _walk_tags(t, out)
@@ -939,6 +946,7 @@ class _EdgeCompressor:
             kernel,
             ctx.stateful_names,
             ctx.edge_tag_names,
+            ctx.memory_key_names,
             ctx.state_key_done_specs,
             self.live_edges(kernel),
         )
@@ -948,6 +956,7 @@ def _extract_state_key(
     kernel: ReplayKernel,
     stateful_names: tuple[str, ...],
     edge_tag_names: tuple[str, ...],
+    memory_key_names: tuple[str, ...] = (),
     done_specs: tuple[_StateKeyDoneSpec, ...] = (),
     live_edges: frozenset[str] | None = None,
 ) -> tuple[Any, ...]:
@@ -971,6 +980,8 @@ def _extract_state_key(
             parts.append(_EDGE_DEAD)
         else:
             parts.append(kernel.prev.get(n))
+    for mk in memory_key_names:
+        parts.append(kernel.memory.get(mk))
     return tuple(parts)
 
 
@@ -978,6 +989,7 @@ def _build_explore_context(
     program: Program,
     *,
     scope: list[str] | None = None,
+    extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
@@ -985,6 +997,8 @@ def _build_explore_context(
 
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
+    if extra_exprs:
+        all_exprs = all_exprs + extra_exprs
     result = _classify_dimensions_from_graph(program, graph, all_exprs, scope=scope)
     if isinstance(result, Intractable):
         return result
@@ -1014,6 +1028,15 @@ def _build_explore_context(
             )
 
     edge_tag_exprs = _collect_edge_tag_exprs(program, edge_tag_names)
+    pilot = compiled.create_kernel()
+    pilot.memory["_dt"] = dt
+    for spec in compiled.block_specs.values():
+        pilot.load_block_from_tags(spec)
+    compiled.step_fn(pilot.tags, pilot.blocks, pilot.memory, pilot.prev, dt)
+    excluded_prefixes = ("_dt", "_frac:")
+    memory_key_names = tuple(
+        sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
+    )
 
     return _ExploreContext(
         compiled=compiled,
@@ -1023,6 +1046,7 @@ def _build_explore_context(
         nondeterministic_dims=nondeterministic_dims,
         stateful_names=stateful_names,
         edge_tag_names=edge_tag_names,
+        memory_key_names=memory_key_names,
         state_key_done_specs=tuple(state_key_done_specs),
         done_event_specs=tuple(done_event_specs),
         block_specs=tuple(compiled.block_specs.values()),
@@ -1147,7 +1171,7 @@ def _compile_expr_evaluator(expr: Expr) -> Callable[[dict[str, Any]], bool | Non
 
 def _compile_property_spec(
     spec: Any,
-) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
     """Compile one property spec into a predicate and optional auto-scope.
 
     ``spec`` may be a single condition/callable or a tuple of conditions with
@@ -1345,9 +1369,7 @@ def _bfs_explore(
     initial_key = edge_comp.state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[
-        tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]
-    ] | None = (
+    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] | None = (
         {initial_key: (None, {}, 0)} if predicate is not None else None
     )
     projected_rows: set[tuple[Any, ...]] = set()
@@ -1395,9 +1417,7 @@ def _bfs_explore(
             if predicate is not None and not predicate(kernel.tags):
                 new_key = edge_comp.state_key(kernel)
                 if context.done_event_specs and _has_pending_done(context, new_key):
-                    new_key, additional_scans = _settle_pending(
-                        context, kernel, snap, edge_comp
-                    )
+                    new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
                     edge_scans += additional_scans
                 if not predicate(kernel.tags):
                     assert parent_map is not None
@@ -1585,12 +1605,12 @@ def _bfs_explore_many(
 
 def _compile_property(
     *conditions: Any,
-) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None]:
+) -> tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]:
     """Normalize a condition expression or callable into a dict predicate.
 
-    Returns ``(predicate_fn, auto_scope)`` where *auto_scope* is a list of
-    referenced tag names (for automatic upstream-cone restriction) or ``None``
-    when the caller passed an opaque callable.
+    Returns ``(predicate_fn, auto_scope, expr_or_none)`` where *auto_scope* is
+    a list of referenced tag names (for automatic upstream-cone restriction)
+    or ``None`` when the caller passed an opaque callable.
     """
     if len(conditions) == 1 and callable(conditions[0]) and not _is_condition_like(conditions[0]):
         user_predicate = conditions[0]
@@ -1598,7 +1618,7 @@ def _compile_property(
         def _predicate(state: dict[str, Any]) -> bool:
             return bool(user_predicate(dict(state)))
 
-        return _predicate, None
+        return _predicate, None, None
 
     from pyrung.core.condition import _as_condition, _normalize_and_condition
 
@@ -1615,7 +1635,7 @@ def _compile_property(
     def _predicate(state: dict[str, Any]) -> bool:
         return evaluator(state) is not False
 
-    return _predicate, tags_in_expr
+    return _predicate, tags_in_expr, expr
 
 
 def _is_condition_like(obj: Any) -> bool:
@@ -1668,7 +1688,7 @@ def prove(
     if scope is not None:
         effective_scope = scope
     else:
-        auto_scopes = [auto_scope for _predicate, auto_scope in compiled_properties]
+        auto_scopes = [auto_scope for _predicate, auto_scope, _expr in compiled_properties]
         if any(auto_scope is None for auto_scope in auto_scopes):
             effective_scope = None
         else:
@@ -1678,14 +1698,21 @@ def prove(
                 merged_scope.update(auto_scope)
             effective_scope = sorted(merged_scope)
 
-    context = _build_explore_context(program, scope=effective_scope)
+    property_exprs = [
+        expr for _predicate, _auto_scope, expr in compiled_properties if expr is not None
+    ]
+    context = _build_explore_context(
+        program,
+        scope=effective_scope,
+        extra_exprs=property_exprs,
+    )
     if isinstance(context, Intractable):
         if is_batch:
             return [context for _ in property_specs]
         return context
 
     if is_batch:
-        predicates = [predicate for predicate, _auto_scope in compiled_properties]
+        predicates = [predicate for predicate, _auto_scope, _expr in compiled_properties]
         return _bfs_explore_many(
             context,
             predicates=predicates,
@@ -1693,7 +1720,7 @@ def prove(
             max_states=max_states,
         )
 
-    predicate, _auto_scope = compiled_properties[0]
+    predicate, _auto_scope, _expr = compiled_properties[0]
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         predicate=predicate,
