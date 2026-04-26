@@ -5,6 +5,10 @@ from __future__ import annotations
 import importlib
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.integration
+
 
 def test_fault_coverage_example_runs():
     module_name = "examples.fault_coverage"

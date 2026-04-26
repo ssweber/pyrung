@@ -29,7 +29,7 @@ from pyrung import (
     program,
     rise,
 )
-from pyrung.core.analysis import Counterexample, Proven, prove
+from pyrung.core.analysis import Counterexample, Intractable, Proven, prove
 from pyrung.core.tag import TagType
 
 # ---------------------------------------------------------------------------
@@ -102,16 +102,20 @@ plc = PLC(logic, dt=0.001)
 harness = Harness(plc)
 harness.install()
 
-for coupling in harness.couplings():
-    en = plc.tags[coupling.en_name]
-    fb = plc.tags[coupling.fb_name]
-    result = prove(logic, Or(~en, fb, AlarmExtent != 0))
+couplings = list(harness.couplings())
+conditions = [
+    Or(~plc.tags[c.en_name], plc.tags[c.fb_name], AlarmExtent != 0)
+    for c in couplings
+]
+results = prove(logic, conditions)
+
+for coupling, result in zip(couplings, results):
     if isinstance(result, Proven):
         print(f"  PASS  {coupling.fb_name}: alarm path exists")
         structural_pass.append(coupling.fb_name)
     elif isinstance(result, Counterexample):
         print(f"  FAIL  {coupling.fb_name}: no alarm path — structural gap")
-    else:
+    elif isinstance(result, Intractable):
         print(f"  SKIP  {coupling.fb_name}: intractable")
 
 # ---------------------------------------------------------------------------
