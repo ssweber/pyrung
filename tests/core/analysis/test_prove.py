@@ -36,8 +36,10 @@ from pyrung.core.analysis.prove import (
     _classify_dimensions,
     _default_projection,
     _eval_atom,
+    _has_data_feedback,
     _live_inputs,
     _partial_eval,
+    _pilot_sweep_domains,
     check_lock,
     diff_states,
     program_hash,
@@ -1529,7 +1531,7 @@ class TestThresholdEventAbstraction:
         assert isinstance(result, Intractable)
         assert "HmiThreshold" in result.tags
 
-    def test_projected_public_threshold_is_not_absorbed(self):
+    def test_projected_public_threshold_is_discovered(self):
         enable = Bool("Enable", external=True)
         active_threshold = Int("ProjectedThreshold", final=True, public=True)
         t = Timer.clone("ProjectedThresholdTmr")
@@ -1548,8 +1550,9 @@ class TestThresholdEventAbstraction:
             project=["ProjectedThresholdAlarm", "ProjectedThreshold"],
             max_depth=5,
         )
-        assert isinstance(states, Intractable)
-        assert "ProjectedThreshold" in states.tags or "ProjectedThresholdTmr_Acc" in states.tags
+        assert not isinstance(states, Intractable)
+        threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
+        assert 500 in threshold_vals
 
     def test_non_threshold_accumulator_read_is_not_absorbed(self):
         enable = Bool("Enable", external=True)
@@ -1736,6 +1739,180 @@ class TestIntractableHints:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert all("readonly=True" in h for h in result.hints)
+
+
+class TestKernelDomainDiscovery:
+    """Pilot sweep discovers finite domains for program-derived tags."""
+
+    def test_copy_choices_inherits_domain(self):
+        """copy(Step, StoredStep) where Step has choices= becomes tractable."""
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Fill", 2: "Dump"})
+        StoredStep = Int("StoredStep")
+        DumpMode = Bool("DumpMode")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 2):
+                out(DumpMode)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_calc_identity_inherits_domain(self):
+        """calc(Step, StoredStep) identity-style assignment becomes tractable."""
+        Step = Int("Step", external=True, choices={0: "Off", 1: "On"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_literal_writes_discover_domain(self):
+        """Literal writes discover {default, 5, 10}."""
+        trigger_a = Bool("TrigA", external=True)
+        trigger_b = Bool("TrigB", external=True)
+        dest = Int("Dest")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger_a):
+                copy(5, dest)
+            with Rung(trigger_b):
+                copy(10, dest)
+            with Rung(dest == 5):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_direct_self_feed_remains_intractable(self):
+        """Direct self-feed calc(Count + 1, Count) remains intractable."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        trigger = Bool("Trigger", external=True)
+        count = Int("Count")
+        threshold = Int("Threshold", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(count + 1, count)
+            with Rung(count > threshold):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        assert _has_data_feedback("Count", graph)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+
+    def test_transitive_feedback_remains_intractable(self):
+        """Transitive feedback A→B→A remains intractable."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        trigger = Bool("Trigger", external=True)
+        a = Int("A")
+        b = Int("B")
+        threshold = Int("Threshold", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(a + 1, b)
+            with Rung(trigger):
+                copy(b, a)
+            with Rung(a > threshold):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        assert _has_data_feedback("A", graph)
+        assert _has_data_feedback("B", graph)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+
+    def test_condition_only_not_data_feedback(self):
+        """Condition-only reference is not treated as data feedback."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Run"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung(StoredStep > 0):
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        graph = build_program_graph(logic)
+        assert not _has_data_feedback("StoredStep", graph)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_raw_external_no_writer_remains_intractable(self):
+        """Raw external tag with no writer remains intractable."""
+        ext = Int("ExtVal", external=True)
+        other = Int("OtherVal", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(ext > other):
+                latch(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+
+    def test_external_final_with_writer_discoverable(self):
+        """external=True, final=True with an in-ladder writer is discovered."""
+        trigger = Bool("Trigger", external=True)
+        ext_final = Int("ExtFinal", external=True, final=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                copy(42, ext_final)
+            with Rung(ext_final == 42):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_huge_input_product_skips_discovery(self):
+        """Huge relevant input product over max_combos skips discovery."""
+        from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        inputs = [Int(f"In{i}", external=True, min=0, max=200) for i in range(5)]
+        dest = Int("Dest")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            for i, inp in enumerate(inputs):
+                with Rung():
+                    calc(inp + i, dest)
+            with Rung(dest > 0):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        compiled = compile_kernel(logic)
+        nd = {inp.name: tuple(range(201)) for inp in inputs}
+        result = _pilot_sweep_domains(
+            compiled,
+            ["Dest"],
+            nd,
+            graph,
+            max_combos=100_000,
+        )
+        assert "Dest" not in result
 
 
 class TestSettlePending:

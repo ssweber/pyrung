@@ -1084,6 +1084,7 @@ def _classify_dimensions_from_graph(
     *,
     scope: list[str] | None = None,
     project: tuple[str, ...] | None = None,
+    discovered_domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
@@ -1173,12 +1174,18 @@ def _classify_dimensions_from_graph(
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
             if not _collect_atoms_for_tag(all_exprs, tag_name):
-                infeasible_tags.append(tag_name)
+                if discovered_domains is not None and tag_name in discovered_domains:
+                    stateful[tag_name] = discovered_domains[tag_name]
+                else:
+                    infeasible_tags.append(tag_name)
                 continue
 
         domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
         if domain is None:
-            infeasible_tags.append(tag_name)
+            if discovered_domains is not None and tag_name in discovered_domains:
+                stateful[tag_name] = discovered_domains[tag_name]
+            else:
+                infeasible_tags.append(tag_name)
             continue
         if domain:
             stateful[tag_name] = domain
@@ -1238,6 +1245,154 @@ def _classify_dimensions(
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
     return _classify_dimensions_from_graph(program, graph, all_exprs, scope=scope)
+
+
+# ---------------------------------------------------------------------------
+# Kernel domain discovery
+# ---------------------------------------------------------------------------
+
+
+def _has_data_feedback(tag_name: str, graph: ProgramGraph) -> bool:
+    """Detect data-flow cycles through *tag_name*.
+
+    Follows ``data_reads`` through writer rungs — condition-only reads do
+    not count as data feedback.  Returns True for direct self-feed
+    (e.g. ``calc(Count + 1, Count)``) and transitive cycles
+    (e.g. ``calc(A + 1, B)`` plus ``copy(B, A)``).
+    """
+    writer_indices = graph.writers_of.get(tag_name, frozenset())
+    if not writer_indices:
+        return False
+    for wi in writer_indices:
+        node = graph.rung_nodes[wi]
+        if tag_name in node.data_reads:
+            return True
+    visited: set[str] = set()
+    queue: list[str] = []
+    for wi in writer_indices:
+        node = graph.rung_nodes[wi]
+        for src in node.data_reads:
+            if src != tag_name and src not in visited:
+                queue.append(src)
+    while queue:
+        current = queue.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        for wi in graph.writers_of.get(current, frozenset()):
+            node = graph.rung_nodes[wi]
+            if tag_name in node.writes:
+                return True
+            for src in node.data_reads:
+                if src not in visited:
+                    queue.append(src)
+    return False
+
+
+def _pilot_sweep_domains(
+    compiled: CompiledKernel,
+    infeasible_tags: list[str],
+    nondeterministic_dims: dict[str, tuple[Any, ...]],
+    graph: ProgramGraph,
+    *,
+    dt: float = 0.010,
+    max_combos: int = 100_000,
+    max_domain: int = 1000,
+) -> dict[str, tuple[Any, ...]]:
+    """Discover finite domains for infeasible tags via kernel pilot sweep."""
+    candidates: list[str] = []
+    for tag_name in infeasible_tags:
+        tag = graph.tags.get(tag_name)
+        if tag is None:
+            continue
+        if tag.readonly:
+            continue
+        if tag_name not in graph.writers_of:
+            if not (tag.external and tag.final):
+                continue
+        if tag.external and not tag.final:
+            continue
+        if _has_data_feedback(tag_name, graph):
+            continue
+        candidates.append(tag_name)
+
+    if not candidates:
+        return {}
+
+    candidate_upstream: dict[str, dict[str, tuple[Any, ...]]] = {}
+    for cname in candidates:
+        upstream: dict[str, tuple[Any, ...]] = {}
+        visited_rungs: set[int] = set()
+        queue: list[str] = [cname]
+        visited_tags: set[str] = set()
+        while queue:
+            cur = queue.pop()
+            if cur in visited_tags:
+                continue
+            visited_tags.add(cur)
+            for wi in graph.writers_of.get(cur, frozenset()):
+                if wi in visited_rungs:
+                    continue
+                visited_rungs.add(wi)
+                node = graph.rung_nodes[wi]
+                for src in node.condition_reads | node.data_reads:
+                    if src not in visited_tags:
+                        queue.append(src)
+        for t in visited_tags:
+            if t in nondeterministic_dims:
+                upstream[t] = nondeterministic_dims[t]
+        candidate_upstream[cname] = upstream
+
+    relevant_nd: dict[str, tuple[Any, ...]] = {}
+    for up in candidate_upstream.values():
+        for t, domain in up.items():
+            if t not in relevant_nd:
+                relevant_nd[t] = domain
+
+    combo_count = 1
+    for domain in relevant_nd.values():
+        combo_count *= len(domain)
+        if combo_count > max_combos:
+            break
+
+    if combo_count > max_combos:
+        return {}
+
+    observed: dict[str, set[Any]] = {c: set() for c in candidates}
+    for c in candidates:
+        tag = graph.tags[c]
+        observed[c].add(tag.default)
+
+    nd_names = sorted(relevant_nd)
+    nd_domains = [relevant_nd[n] for n in nd_names]
+
+    initial_kernel = compiled.create_kernel()
+    initial_kernel.memory["_dt"] = dt
+    for spec in compiled.block_specs.values():
+        initial_kernel.load_block_from_tags(spec)
+    initial_snap = _snapshot_kernel(initial_kernel)
+
+    kernel = initial_kernel
+    for combo in itertools.product(*nd_domains) if nd_domains else [()]:
+        _restore_kernel(kernel, initial_snap)
+        for name, val in zip(nd_names, combo, strict=True):
+            kernel.tags[name] = val
+        kernel.memory["_dt"] = dt
+        for spec in compiled.block_specs.values():
+            kernel.load_block_from_tags(spec)
+        compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+        for spec in compiled.block_specs.values():
+            kernel.flush_block_to_tags(spec)
+        for c in candidates:
+            observed[c].add(kernel.tags.get(c, graph.tags[c].default))
+
+    result: dict[str, tuple[Any, ...]] = {}
+    for c in candidates:
+        vals = observed[c]
+        if len(vals) > max_domain:
+            continue
+        result[c] = tuple(sorted(vals))
+    return result
 
 
 def _detect_function_escape_hatches(
@@ -1695,6 +1850,41 @@ def _build_explore_context(
         scope=scope,
         project=project,
     )
+    if isinstance(result, Intractable) and result.tags:
+        if compiled is None:
+            compiled = _compile_kernel(program)
+        first_pass_nd: dict[str, tuple[Any, ...]] = {}
+        for tag_name, tag in graph.tags.items():
+            role = graph.tag_roles.get(tag_name)
+            is_written = tag_name in graph.writers_of
+            if not (role == TagRole.INPUT or (tag.external and not is_written)):
+                continue
+            domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
+            if not domain:
+                if tag.choices is not None:
+                    domain = tuple(sorted(tag.choices.keys()))
+                elif tag.min is not None and tag.max is not None:
+                    range_size = int(tag.max - tag.min + 1)
+                    if range_size <= 1000:
+                        domain = tuple(range(int(tag.min), int(tag.max) + 1))
+            if domain:
+                first_pass_nd[tag_name] = domain
+        discovered = _pilot_sweep_domains(
+            compiled,
+            result.tags,
+            first_pass_nd,
+            graph,
+            dt=dt,
+        )
+        if discovered:
+            result = _classify_dimensions_from_graph(
+                program,
+                graph,
+                all_exprs,
+                scope=scope,
+                project=project,
+                discovered_domains=discovered,
+            )
     if isinstance(result, Intractable):
         return result
     stateful_dims, nondeterministic_dims, _comb, done_acc, done_presets, done_kinds = result
