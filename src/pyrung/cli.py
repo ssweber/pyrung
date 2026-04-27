@@ -81,6 +81,8 @@ def _cmd_lock(args: argparse.Namespace) -> None:
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
+        for hint in states.hints:
+            print(hint, file=sys.stderr)
         raise SystemExit(1)
 
     write_lock(lock_path, states, projection, program_hash(program))

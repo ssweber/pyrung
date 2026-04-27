@@ -1235,6 +1235,109 @@ class TestIntractableTags:
         assert "Result" in result.tags
 
 
+class TestIntractableHints:
+    """Intractable results carry actionable hints for the user."""
+
+    def test_pointer_tag_hint(self):
+        """Pointer tag (IndirectRef) gets a hint naming the block and range."""
+        from pyrung.core import Block, TagType, copy
+
+        blk = Block("Regs", TagType.INT, 1, 50)
+        idx = Int("Idx", external=True)
+        other = Int("Other", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung(idx > other):
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("pointer" in h and "Regs" in h for h in result.hints)
+        assert any("Idx" in h for h in result.hints)
+        other_hints = [h for h in result.hints if "Other" in h]
+        assert other_hints
+        assert all("pointer" not in h for h in other_hints)
+
+    def test_wide_range_hint(self):
+        """Tag with min/max range > 1000 gets a 'too wide' hint."""
+        level = Int("Level", external=True, min=0, max=5000)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("too wide" in h and "Level" in h for h in result.hints)
+
+    def test_no_constraint_hint(self):
+        """Tag with no choices/min/max gets a generic hint."""
+        val = Int("Val", external=True)
+        other = Int("Other", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(val > other):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("no domain constraint" in h for h in result.hints)
+
+    def test_function_output_hint(self):
+        """Unannotated function output gets a hint."""
+        trigger = Bool("Trigger", external=True)
+        result_tag = Int("Result")
+
+        def compute() -> dict:
+            return {"result": 42}
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                run_function(compute, outs={"result": result_tag})
+            with Rung(result_tag == 1):
+                out(Bool("Output"))
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("function output" in h and "Result" in h for h in result.hints)
+
+    def test_max_states_dimension_breakdown(self):
+        """max_states exceeded carries dimension breakdown hints."""
+        inputs = [Bool(f"In{i}", external=True) for i in range(20)]
+        flags = [Bool(f"Flag{i}") for i in range(20)]
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            for inp, flag in zip(inputs, flags, strict=True):
+                with Rung(inp):
+                    latch(flag)
+            with Rung(*flags):
+                out(output)
+
+        result = prove(logic, lambda s: True, max_states=10)
+        assert isinstance(result, Intractable)
+        assert result.hints
+        assert any("state space:" in h for h in result.hints)
+        assert any("Constrain" in h for h in result.hints)
+
+    def test_hints_mention_readonly(self):
+        """All hint types mention readonly=True as an option."""
+        val = Int("Val", external=True)
+        other = Int("Other", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(val > other):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert all("readonly=True" in h for h in result.hints)
+
+
 class TestSettlePending:
     """prove() settles pending timers before reporting counterexamples."""
 

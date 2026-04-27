@@ -11,7 +11,13 @@ from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.memory_block import Block, BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.memory_block import (
+    Block,
+    BlockRange,
+    IndirectBlockRange,
+    IndirectExprRef,
+    IndirectRef,
+)
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
@@ -72,6 +78,7 @@ class ProgramGraph:
     writers_of: dict[str, frozenset[int]]
     tags: dict[str, Tag]
     block_ranges: dict[str, list[str]]  # range label → member tag names
+    pointer_tags: dict[str, tuple[str, int, int]]  # pointer name → (block, start, end)
 
     def is_physical_input(self, tag_name: str) -> bool:
         """Return whether ``tag_name`` resolves to a physical input tag."""
@@ -268,9 +275,7 @@ def _indirect_ref_tags(block: Block, pointer: Tag) -> list[Tag] | None:
     pointer, or ``None`` when the address is statically unbounded.
     """
     if pointer.choices is not None:
-        addrs = sorted(
-            int(k) for k in pointer.choices if block.start <= int(k) <= block.end
-        )
+        addrs = sorted(int(k) for k in pointer.choices if block.start <= int(k) <= block.end)
         return [block._get_tag(a) for a in addrs]
     if pointer.min is not None and pointer.max is not None:
         lo = max(int(pointer.min), block.start)
@@ -862,9 +867,57 @@ def build_program_graph(program: Program) -> ProgramGraph:
         writers_of={name: frozenset(indices) for name, indices in writers_of_mut.items()},
         tags=dict(sorted(tag_refs.items())),
         block_ranges=range_acc,
+        pointer_tags=_collect_pointer_tags(program),
     )
     graph.tag_roles = classify_tags(graph)
     return graph
+
+
+def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
+    """Find tags used as pointers in IndirectRef/IndirectExprRef accesses."""
+    from pyrung.core.validation._common import walk_instructions
+
+    pointers: dict[str, tuple[str, int, int]] = {}
+
+    def _scan(obj: Any, seen: set[int] | None = None) -> None:
+        if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
+            return
+        if seen is None:
+            seen = set()
+        obj_id = id(obj)
+        if obj_id in seen:
+            return
+        seen.add(obj_id)
+        if isinstance(obj, IndirectRef):
+            pointers.setdefault(obj.pointer.name, (obj.block.name, obj.block.start, obj.block.end))
+            return
+        if isinstance(obj, IndirectExprRef):
+            base = _indirect_expr_base_tag(obj.expr)
+            if base is not None:
+                pointers.setdefault(base.name, (obj.block.name, obj.block.start, obj.block.end))
+            return
+        if isinstance(obj, (list, tuple)):
+            for item in obj:
+                _scan(item, seen)
+            return
+        if isinstance(obj, dict):
+            for v in obj.values():
+                _scan(v, seen)
+            return
+        if hasattr(obj, "__dict__"):
+            for v in vars(obj).values():
+                _scan(v, seen)
+
+    for instr in walk_instructions(program):
+        _scan(instr)
+    for rung in program.rungs:
+        for cond in rung._conditions:
+            _scan(cond)
+        for branch in rung._branches:
+            for cond in branch._conditions:
+                _scan(cond)
+
+    return pointers
 
 
 __all__ = [

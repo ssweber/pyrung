@@ -70,6 +70,7 @@ class Intractable:
     dimensions: int
     estimated_space: int
     tags: list[str] = field(default_factory=list)
+    hints: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -491,6 +492,58 @@ class _ExploreContext:
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
 
 
+def _build_infeasible_hints(
+    infeasible_tags: list[str],
+    graph: ProgramGraph,
+) -> list[str]:
+    """Generate actionable hints for each infeasible tag."""
+    hints: list[str] = []
+    for name in infeasible_tags:
+        tag = graph.tags.get(name)
+        ptr_info = graph.pointer_tags.get(name)
+        if ptr_info is not None:
+            block_name, start, end = ptr_info
+            hints.append(
+                f"  {name}: pointer into {block_name}[{start}..{end}]"
+                f" — add choices=, min={start}/max={end}, or readonly=True"
+            )
+        elif tag is not None and tag.min is not None and tag.max is not None:
+            hints.append(
+                f"  {name}: range {tag.min}..{tag.max} ({int(tag.max - tag.min + 1)} values)"
+                f" — too wide; add choices=, narrow min=/max=, or readonly=True"
+            )
+        else:
+            hints.append(
+                f"  {name}: no domain constraint — add choices=, min=/max=, or readonly=True"
+            )
+    return hints
+
+
+def _build_dimension_hints(context: _ExploreContext) -> list[str]:
+    """Summarise the largest dimensions when max_states is exceeded."""
+    dims: list[tuple[str, int]] = []
+    for name, domain in context.stateful_dims.items():
+        dims.append((name, len(domain)))
+    for name, domain in context.nondeterministic_dims.items():
+        dims.append((name, len(domain)))
+    dims.sort(key=lambda x: x[1], reverse=True)
+    product = 1
+    for _, size in dims:
+        product *= size
+    hints = [f"  state space: {product:,} combinations across {len(dims)} dimensions"]
+    for name, size in dims[:10]:
+        ptr_info = context.graph.pointer_tags.get(name)
+        suffix = ""
+        if ptr_info is not None:
+            block_name, start, end = ptr_info
+            suffix = f" (pointer into {block_name}[{start}..{end}])"
+        hints.append(f"  {name}: {size} values{suffix}")
+    if len(dims) > 10:
+        hints.append(f"  ... and {len(dims) - 10} more")
+    hints.append("Constrain the largest dimensions with choices=, min=/max=, or readonly=True")
+    return hints
+
+
 def _classify_dimensions_from_graph(
     program: Program,
     graph: ProgramGraph,
@@ -563,21 +616,28 @@ def _classify_dimensions_from_graph(
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
+        hints = _build_infeasible_hints(sorted(infeasible_tags), graph)
         return Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(infeasible_tags),
+            hints=hints,
         )
 
     fn_escape = _detect_function_escape_hatches(program, graph)
     if fn_escape:
         total_dims = len(stateful) + len(nondeterministic) + len(fn_escape)
+        hints = [
+            f"  {name}: function output — add choices=, min=/max=, or readonly=True"
+            for name in sorted(fn_escape)
+        ]
         return Intractable(
             reason=f"unannotated function output: {', '.join(sorted(fn_escape))}",
             dimensions=total_dims,
             estimated_space=0,
             tags=sorted(fn_escape),
+            hints=hints,
         )
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
@@ -1464,6 +1524,7 @@ def _bfs_explore(
                         reason="max_states exceeded",
                         dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
                         estimated_space=len(visited),
+                        hints=_build_dimension_hints(context),
                     )
                 if parent_map is not None:
                     parent_map[new_key] = (parent_key, input_dict, edge_scans)
@@ -1592,6 +1653,7 @@ def _bfs_explore_many(
                         reason="max_states exceeded",
                         dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
                         estimated_space=len(visited),
+                        hints=_build_dimension_hints(context),
                     )
                     return [result if result is not None else intractable for result in results]
                 parent_map[new_key] = (parent_key, input_dict, edge_scans)
