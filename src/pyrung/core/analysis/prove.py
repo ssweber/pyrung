@@ -138,6 +138,10 @@ _DONE_KIND_ON_DELAY = "on_delay"
 _DONE_KIND_OFF_DELAY = "off_delay"
 _DONE_KIND_COUNT_UP = "count_up"
 _DONE_KIND_COUNT_DOWN = "count_down"
+_PROGRESS_KIND_INT_UP = "int_up"
+
+_THRESHOLD_FORM_GT = "gt"
+_THRESHOLD_FORM_GE = "ge"
 
 
 @dataclass(frozen=True)
@@ -504,6 +508,340 @@ def _find_redundant_acc_absorptions(
     )
 
 
+def _is_numeric_literal(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
+    """True when a threshold value is fixed for verifier event scheduling."""
+    if _is_numeric_literal(value):
+        return True
+    if not isinstance(value, str):
+        return False
+    tag = graph.tags.get(value)
+    if tag is None or tag.external or tag.public:
+        return False
+    if tag.readonly:
+        return True
+    return bool(tag.final and value in graph.writers_of)
+
+
+def _threshold_atom_for_progress(
+    atom: Atom,
+    acc_name: str,
+    graph: ProgramGraph,
+) -> _ThresholdAtomSpec | None:
+    """Normalize supported Progress/Threshold comparison atoms."""
+    if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        if _is_stable_threshold(atom.operand, graph):
+            return _ThresholdAtomSpec(acc_name, atom.operand, atom.form)
+        return None
+
+    if atom.operand == acc_name and atom.form in {"lt", "le"}:
+        if not _is_stable_threshold(atom.tag, graph):
+            return None
+        form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+        return _ThresholdAtomSpec(acc_name, atom.tag, form)
+
+    return None
+
+
+def _threshold_tag_name(spec: _ThresholdAtomSpec) -> str | None:
+    return spec.threshold if isinstance(spec.threshold, str) else None
+
+
+def _is_matching_owner_preset_read(instr: Any, threshold_name: str, acc_name: str) -> bool:
+    """Allow a threshold tag to also be the owning timer/counter preset."""
+    from pyrung.core.tag import Tag
+
+    if getattr(getattr(instr, "accumulator", None), "name", None) != acc_name:
+        return False
+    preset = getattr(instr, "preset", None)
+    return isinstance(preset, Tag) and preset.name == threshold_name
+
+
+def _direct_write_target(instr: Any) -> Any:
+    """Return a direct Tag write target for copy/calc-like instructions."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag
+
+    if isinstance(instr, CopyInstruction):
+        target = instr.target
+    elif isinstance(instr, CalcInstruction):
+        target = instr.dest
+    else:
+        return None
+    return target if isinstance(target, Tag) else None
+
+
+def _is_zero_literal(value: Any) -> bool:
+    from pyrung.core.expression import Expression, LiteralExpr
+
+    if isinstance(value, LiteralExpr):
+        return value.value == 0
+    if isinstance(value, Expression):
+        return False
+    return value == 0 and not isinstance(value, bool)
+
+
+def _tag_expr_name(value: Any) -> str | None:
+    from pyrung.core.expression import TagExpr
+
+    return value.tag.name if isinstance(value, TagExpr) else None
+
+
+def _literal_expr_value(value: Any) -> Any:
+    from pyrung.core.expression import LiteralExpr
+
+    return value.value if isinstance(value, LiteralExpr) else None
+
+
+def _is_unit_self_increment_expr(value: Any, tag_name: str) -> bool:
+    from pyrung.core.expression import BinaryExpr
+
+    if not isinstance(value, BinaryExpr) or value.symbol != "+":
+        return False
+    left_tag = _tag_expr_name(value.left)
+    right_tag = _tag_expr_name(value.right)
+    left_lit = _literal_expr_value(value.left)
+    right_lit = _literal_expr_value(value.right)
+    return (left_tag == tag_name and right_lit == 1) or (right_tag == tag_name and left_lit == 1)
+
+
+def _is_int_progress_write(instr: Any, tag_name: str) -> bool:
+    """True for the exact reset/self-increment writes accepted by v1."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    target = _direct_write_target(instr)
+    if target is None or target.name != tag_name:
+        return False
+    if isinstance(instr, CopyInstruction):
+        source = instr.source
+    elif isinstance(instr, CalcInstruction):
+        source = instr.expression
+    else:
+        return False
+    return _is_zero_literal(source) or _is_unit_self_increment_expr(source, tag_name)
+
+
+def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
+    """Find instruction-owned progress accumulators and recognized int counters."""
+    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    kinds: dict[str, str] = {}
+    invalid: set[str] = set()
+
+    for instr in walk_instructions(program):
+        if isinstance(instr, OnDelayInstruction):
+            acc_name = instr.accumulator.name
+            kind = _DONE_KIND_ON_DELAY
+        elif isinstance(instr, OffDelayInstruction):
+            acc_name = instr.accumulator.name
+            kind = _DONE_KIND_OFF_DELAY
+        elif isinstance(instr, CountUpInstruction) and instr.down_condition is None:
+            acc_name = instr.accumulator.name
+            kind = _DONE_KIND_COUNT_UP
+        else:
+            continue
+
+        if acc_name in kinds and kinds[acc_name] != kind:
+            invalid.add(acc_name)
+        else:
+            kinds[acc_name] = kind
+
+    for name in invalid:
+        kinds.pop(name, None)
+
+    return kinds
+
+
+def _has_forbidden_data_read(
+    program: Program,
+    tag_name: str,
+    *,
+    allowed: Callable[[Any], bool] | None = None,
+) -> bool:
+    """Detect non-condition data-flow reads of a candidate absorbed tag."""
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        for field_name in getattr(type(instr), "_reads", ()):
+            refs = _extract_tag_names(getattr(instr, field_name), {})
+            if tag_name not in refs:
+                continue
+            if allowed is not None and allowed(instr):
+                continue
+            return True
+    return False
+
+
+def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
+    """True when a timer/counter accumulator is written only by its owner instruction."""
+    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    saw_owner = False
+    for instr in walk_instructions(program):
+        if acc_name not in {name for name, _itype in _all_write_targets(instr)}:
+            continue
+
+        is_owner = False
+        if kind == _DONE_KIND_ON_DELAY:
+            is_owner = isinstance(instr, OnDelayInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_OFF_DELAY:
+            is_owner = isinstance(instr, OffDelayInstruction) and instr.accumulator.name == acc_name
+        elif kind == _DONE_KIND_COUNT_UP:
+            is_owner = (
+                isinstance(instr, CountUpInstruction)
+                and instr.accumulator.name == acc_name
+                and instr.down_condition is None
+            )
+        if not is_owner:
+            return False
+        saw_owner = True
+    return saw_owner
+
+
+def _collect_int_progress_source_kinds(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+) -> dict[str, str]:
+    """Find internal integer progress counters implemented as reset/+1 writes."""
+    from pyrung.core.validation._common import walk_instructions
+
+    result: dict[str, str] = {}
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+
+    for tag_name, tag in graph.tags.items():
+        if tag.type not in {TagType.INT, TagType.DINT}:
+            continue
+        if tag.external or tag.public or tag.readonly:
+            continue
+        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+        if not atoms:
+            continue
+        writes = by_target.get(tag_name, [])
+        if not writes or not all(_is_int_progress_write(instr, tag_name) for instr in writes):
+            continue
+        if _has_forbidden_data_read(
+            program,
+            tag_name,
+            allowed=lambda instr, name=tag_name: _is_int_progress_write(instr, name),
+        ):
+            continue
+        result[tag_name] = _PROGRESS_KIND_INT_UP
+
+    return result
+
+
+def _find_threshold_absorptions(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    *,
+    project: tuple[str, ...] | None = None,
+) -> _ThresholdAbsorptions:
+    """Find progress accumulator threshold comparisons that can be event-abstracted."""
+    projected = frozenset(project or ())
+    source_kinds = _collect_progress_source_kinds(program)
+    source_kinds.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
+
+    candidate_vectors: dict[str, _ThresholdVectorSpec] = {}
+    threshold_progress: dict[str, set[str]] = {}
+
+    for acc_name, kind in sorted(source_kinds.items()):
+        if acc_name in projected:
+            continue
+        tag = graph.tags.get(acc_name)
+        if tag is not None and (tag.external or tag.public):
+            continue
+        atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+        if not atoms:
+            continue
+
+        normalized: list[_ThresholdAtomSpec] = []
+        for atom in atoms:
+            spec = _threshold_atom_for_progress(atom, acc_name, graph)
+            if spec is None:
+                normalized = []
+                break
+            normalized.append(spec)
+        if not normalized:
+            continue
+
+        if kind != _PROGRESS_KIND_INT_UP:
+            if not _has_only_owner_writes(program, acc_name, kind):
+                continue
+            if _has_forbidden_data_read(program, acc_name):
+                continue
+
+        unique_atoms = tuple(dict.fromkeys(normalized))
+        if any(_threshold_tag_name(spec) in projected for spec in unique_atoms):
+            continue
+
+        candidate_vectors[acc_name] = _ThresholdVectorSpec(
+            acc_name=acc_name,
+            kind=kind,
+            atoms=unique_atoms,
+        )
+        for spec in unique_atoms:
+            threshold_name = _threshold_tag_name(spec)
+            if threshold_name is not None:
+                threshold_progress.setdefault(threshold_name, set()).add(acc_name)
+
+    shared_thresholds = {name for name, accs in threshold_progress.items() if len(accs) > 1}
+    absorbed_progress: set[str] = set()
+    absorbed_thresholds: set[str] = set()
+    vector_specs: list[_ThresholdVectorSpec] = []
+
+    for acc_name, vector in candidate_vectors.items():
+        threshold_names = {
+            name for spec in vector.atoms if (name := _threshold_tag_name(spec)) is not None
+        }
+        if threshold_names & shared_thresholds:
+            continue
+        forbidden_threshold_read = False
+        for threshold_name in threshold_names:
+            threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
+            if not all(
+                _threshold_atom_for_progress(atom, acc_name, graph) is not None
+                for atom in threshold_atoms
+            ):
+                forbidden_threshold_read = True
+                break
+            if _has_forbidden_data_read(
+                program,
+                threshold_name,
+                allowed=lambda instr, t=threshold_name, a=acc_name: _is_matching_owner_preset_read(
+                    instr, t, a
+                ),
+            ):
+                forbidden_threshold_read = True
+                break
+        if forbidden_threshold_read:
+            continue
+
+        absorbed_progress.add(acc_name)
+        absorbed_thresholds.update(threshold_names)
+        vector_specs.append(vector)
+
+    return _ThresholdAbsorptions(
+        progress_names=frozenset(absorbed_progress),
+        threshold_tags=frozenset(absorbed_thresholds),
+        vector_specs=tuple(vector_specs),
+    )
+
+
 def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
     """Extract boundary-representative values from a tag's metadata.
 
@@ -616,6 +954,37 @@ class _DoneEventSpec:
 
 
 @dataclass(frozen=True)
+class _ThresholdAtomSpec:
+    acc_name: str
+    threshold: int | float | str
+    form: str
+
+
+@dataclass(frozen=True)
+class _ThresholdVectorSpec:
+    acc_name: str
+    kind: str
+    atoms: tuple[_ThresholdAtomSpec, ...]
+
+
+@dataclass(frozen=True)
+class _ThresholdEventSpec:
+    vector_index: int
+    atom_index: int
+    acc_name: str
+    kind: str
+    threshold: int | float | str
+    form: str
+
+
+@dataclass(frozen=True)
+class _ThresholdAbsorptions:
+    progress_names: frozenset[str]
+    threshold_tags: frozenset[str]
+    vector_specs: tuple[_ThresholdVectorSpec, ...]
+
+
+@dataclass(frozen=True)
 class _ExploreContext:
     compiled: CompiledKernel
     graph: ProgramGraph
@@ -627,6 +996,8 @@ class _ExploreContext:
     memory_key_names: tuple[str, ...]
     state_key_done_specs: tuple[_StateKeyDoneSpec, ...]
     done_event_specs: tuple[_DoneEventSpec, ...]
+    threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
+    threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     block_specs: tuple[BlockSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
@@ -691,13 +1062,17 @@ def _classify_dimensions_from_graph(
     all_exprs: list[Expr],
     *,
     scope: list[str] | None = None,
+    project: tuple[str, ...] | None = None,
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
-        if _collect_atoms_for_tag(all_exprs, acc_name):
+        if _collect_atoms_for_tag(all_exprs, acc_name) or _has_forbidden_data_read(
+            program,
+            acc_name,
+        ):
             consumed_accs.add(acc_name)
 
     absorptions = _find_redundant_acc_absorptions(
@@ -708,6 +1083,14 @@ def _classify_dimensions_from_graph(
         consumed_accs,
     )
     consumed_accs.difference_update(absorptions.acc_names)
+
+    threshold_absorptions = _find_threshold_absorptions(
+        program,
+        graph,
+        all_exprs,
+        project=project,
+    )
+    consumed_accs.difference_update(threshold_absorptions.progress_names)
 
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
@@ -732,6 +1115,10 @@ def _classify_dimensions_from_graph(
         if tag_name in unconsumed_accs:
             continue
         if tag_name in absorptions.preset_tags:
+            continue
+        if tag_name in threshold_absorptions.progress_names:
+            continue
+        if tag_name in threshold_absorptions.threshold_tags:
             continue
 
         role = graph.tag_roles.get(tag_name)
@@ -762,6 +1149,11 @@ def _classify_dimensions_from_graph(
         if tag_name in done_acc:
             stateful[tag_name] = (False, PENDING, True)
             continue
+
+        if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
+            if not _collect_atoms_for_tag(all_exprs, tag_name):
+                infeasible_tags.append(tag_name)
+                continue
 
         domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
         if domain is None:
@@ -1162,6 +1554,8 @@ class _EdgeCompressor:
             return None
         ctx = self._context
         stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        stateful_prefix = stateful_prefix + threshold_prefix
         cached = self._cache.get(stateful_prefix)
         if cached is not None:
             return cached
@@ -1181,8 +1575,45 @@ class _EdgeCompressor:
             ctx.edge_tag_names,
             ctx.memory_key_names,
             ctx.state_key_done_specs,
+            ctx.threshold_vector_specs,
             self.live_edges(kernel),
         )
+
+
+def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
+    if isinstance(threshold, str):
+        return kernel.tags.get(threshold)
+    return threshold
+
+
+def _threshold_crossed(
+    kernel: ReplayKernel,
+    acc_name: str,
+    threshold: int | float | str,
+    form: str,
+) -> bool:
+    acc_value = kernel.tags.get(acc_name)
+    threshold_value = _threshold_value(kernel, threshold)
+    if acc_value is None or threshold_value is None:
+        return False
+    if form == _THRESHOLD_FORM_GT:
+        return acc_value > threshold_value
+    return acc_value >= threshold_value
+
+
+def _threshold_vector_key(
+    kernel: ReplayKernel,
+    specs: tuple[_ThresholdVectorSpec, ...],
+) -> tuple[Any, ...]:
+    result: list[Any] = []
+    for spec in specs:
+        result.append(
+            tuple(
+                _threshold_crossed(kernel, spec.acc_name, atom.threshold, atom.form)
+                for atom in spec.atoms
+            )
+        )
+    return tuple(result)
 
 
 def _extract_state_key(
@@ -1191,6 +1622,7 @@ def _extract_state_key(
     edge_tag_names: tuple[str, ...],
     memory_key_names: tuple[str, ...] = (),
     done_specs: tuple[_StateKeyDoneSpec, ...] = (),
+    threshold_vector_specs: tuple[_ThresholdVectorSpec, ...] = (),
     live_edges: frozenset[str] | None = None,
 ) -> tuple[Any, ...]:
     """Hash key for the visited set — stateful dims + edge prev values.
@@ -1208,6 +1640,7 @@ def _extract_state_key(
             parts[spec.index],
             kernel.tags.get(spec.acc_name),
         )
+    parts.extend(_threshold_vector_key(kernel, threshold_vector_specs))
     for n in edge_tag_names:
         if live_edges is not None and n not in live_edges:
             parts.append(_EDGE_DEAD)
@@ -1222,6 +1655,7 @@ def _build_explore_context(
     program: Program,
     *,
     scope: list[str] | None = None,
+    project: tuple[str, ...] | None = None,
     extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
@@ -1233,7 +1667,13 @@ def _build_explore_context(
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
     if extra_exprs:
         all_exprs = all_exprs + extra_exprs
-    result = _classify_dimensions_from_graph(program, graph, all_exprs, scope=scope)
+    result = _classify_dimensions_from_graph(
+        program,
+        graph,
+        all_exprs,
+        scope=scope,
+        project=project,
+    )
     if isinstance(result, Intractable):
         return result
     stateful_dims, nondeterministic_dims, _comb, done_acc, done_presets, done_kinds = result
@@ -1247,6 +1687,7 @@ def _build_explore_context(
         acc_name
         for acc_name in done_acc_info.pairs.values()
         if _collect_atoms_for_tag(all_exprs, acc_name)
+        or _has_forbidden_data_read(program, acc_name)
     }
     absorptions = _find_redundant_acc_absorptions(
         program,
@@ -1254,6 +1695,12 @@ def _build_explore_context(
         all_exprs,
         done_acc_info,
         consumed_accs,
+    )
+    threshold_absorptions = _find_threshold_absorptions(
+        program,
+        graph,
+        all_exprs,
+        project=project,
     )
 
     state_key_done_specs: list[_StateKeyDoneSpec] = []
@@ -1272,6 +1719,20 @@ def _build_explore_context(
                     acc_name=acc_name,
                     kind=kind,
                     preset=preset,
+                )
+            )
+
+    threshold_event_specs: list[_ThresholdEventSpec] = []
+    for vector_index, vector in enumerate(threshold_absorptions.vector_specs):
+        for atom_index, atom in enumerate(vector.atoms):
+            threshold_event_specs.append(
+                _ThresholdEventSpec(
+                    vector_index=vector_index,
+                    atom_index=atom_index,
+                    acc_name=vector.acc_name,
+                    kind=vector.kind,
+                    threshold=atom.threshold,
+                    form=atom.form,
                 )
             )
 
@@ -1299,6 +1760,8 @@ def _build_explore_context(
         memory_key_names=memory_key_names,
         state_key_done_specs=tuple(state_key_done_specs),
         done_event_specs=tuple(done_event_specs),
+        threshold_vector_specs=threshold_absorptions.vector_specs,
+        threshold_event_specs=tuple(threshold_event_specs),
         block_specs=tuple(compiled.block_specs.values()),
         dt=dt,
         edge_tag_exprs=edge_tag_exprs,
@@ -1491,6 +1954,55 @@ def _scans_until_done_event(
     return max(1, int(math.ceil(remaining / delta)))
 
 
+def _progress_delta_and_current(
+    kind: str,
+    acc_name: str,
+    before: _Snapshot,
+    kernel: ReplayKernel,
+) -> tuple[float, float] | None:
+    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
+    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_after = int(kernel.tags.get(acc_name, 0) or 0)
+
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        after_total = _timer_total(kernel, acc_name)
+        return after_total - before_total, after_total
+
+    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
+        return float(acc_after - acc_before), float(acc_after)
+
+    return None
+
+
+def _scans_until_threshold_event(
+    spec: _ThresholdEventSpec,
+    before: _Snapshot,
+    kernel: ReplayKernel,
+) -> int | None:
+    """Estimate scans until an uncrossed threshold atom crosses."""
+    threshold_value = _threshold_value(kernel, spec.threshold)
+    if not _is_numeric_literal(threshold_value):
+        return None
+
+    delta_current = _progress_delta_and_current(spec.kind, spec.acc_name, before, kernel)
+    if delta_current is None:
+        return None
+    delta, current = delta_current
+    if delta <= 0:
+        return None
+
+    threshold = float(threshold_value)
+    if spec.form == _THRESHOLD_FORM_GE:
+        if current >= threshold:
+            return 1
+        return max(1, int(math.ceil((threshold - current) / delta)))
+
+    if current > threshold:
+        return 1
+    return max(1, int(math.floor((threshold - current) / delta)) + 1)
+
+
 def _advance_hidden_progress(
     kind: str,
     acc_name: str,
@@ -1516,7 +2028,7 @@ def _advance_hidden_progress(
         kernel.memory[f"_frac:{acc_name}"] = target_total - target_acc
         return
 
-    if kind == _DONE_KIND_COUNT_UP:
+    if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
         delta = acc_after - acc_before
         kernel.tags[acc_name] = acc_after + (skipped_scans * delta)
         return
@@ -1530,35 +2042,62 @@ def _has_pending_done(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
     return any(key[spec.state_index] == PENDING for spec in context.done_event_specs)
 
 
-def _resolve_nearest_pending(
+def _has_uncrossed_threshold_event(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
+    """True if any threshold vector bit is currently false."""
+    offset = len(context.stateful_names)
+    for spec in context.threshold_event_specs:
+        vector = key[offset + spec.vector_index]
+        if not vector[spec.atom_index]:
+            return True
+    return False
+
+
+def _has_pending_hidden_event(context: _ExploreContext, key: tuple[Any, ...]) -> bool:
+    return _has_pending_done(context, key) or _has_uncrossed_threshold_event(context, key)
+
+
+def _resolve_nearest_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _Snapshot,
     key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
 ) -> tuple[tuple[Any, ...], int] | None:
-    """Advance to the nearest pending timer/counter completion and step once.
+    """Advance to the nearest hidden Done/threshold event and step once.
 
     Returns ``(new_key, additional_scans)``, or ``None`` if no pending events
     can be resolved. ``additional_scans`` is the skipped scan count beyond the
     caller's already-executed step. *before_snap* must precede the current
     kernel state by one step.
     """
-    pending_events: list[tuple[_DoneEventSpec, int]] = []
+    pending_sources: dict[tuple[str, str], int] = {}
+    pending_scans: list[int] = []
+
     for spec in context.done_event_specs:
         if key[spec.state_index] != PENDING:
             continue
         scans = _scans_until_done_event(spec.kind, spec.preset, spec.acc_name, before_snap, kernel)
         if scans is not None:
-            pending_events.append((spec, scans))
+            pending_scans.append(scans)
+            pending_sources[(spec.kind, spec.acc_name)] = scans
 
-    if not pending_events:
+    vector_offset = len(context.stateful_names)
+    for spec in context.threshold_event_specs:
+        vector = key[vector_offset + spec.vector_index]
+        if vector[spec.atom_index]:
+            continue
+        scans = _scans_until_threshold_event(spec, before_snap, kernel)
+        if scans is not None:
+            pending_scans.append(scans)
+            pending_sources[(spec.kind, spec.acc_name)] = scans
+
+    if not pending_scans:
         return None
 
-    next_event_scans = min(scans for _spec, scans in pending_events)
+    next_event_scans = min(pending_scans)
     skipped_scans = max(next_event_scans - 1, 0)
-    for spec, _scans in pending_events:
-        _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+    for kind, acc_name in pending_sources:
+        _advance_hidden_progress(kind, acc_name, skipped_scans, before_snap, kernel)
 
     _step_kernel(context, kernel)
     return edge_comp.state_key(kernel), skipped_scans
@@ -1577,8 +2116,9 @@ def _settle_pending(
     """
     key = edge_comp.state_key(kernel)
     total_additional_scans = 0
-    for _ in range(len(context.done_event_specs) + 1):
-        resolved = _resolve_nearest_pending(context, kernel, before_snap, key, edge_comp)
+    event_count = len(context.done_event_specs) + len(context.threshold_event_specs)
+    for _ in range(event_count + 1):
+        resolved = _resolve_nearest_hidden_event(context, kernel, before_snap, key, edge_comp)
         if resolved is None:
             break
         key, additional_scans = resolved
@@ -1596,10 +2136,10 @@ def _maybe_jump_hidden_event(
     edge_comp: _EdgeCompressor,
 ) -> tuple[tuple[Any, ...], int]:
     """Jump from a revisited hidden pending plateau to the next completion event."""
-    if not context.done_event_specs or new_key not in visited:
+    if not (context.done_event_specs or context.threshold_event_specs) or new_key not in visited:
         return new_key, 0
 
-    resolved = _resolve_nearest_pending(context, kernel, snap, new_key, edge_comp)
+    resolved = _resolve_nearest_hidden_event(context, kernel, snap, new_key, edge_comp)
     if resolved is None:
         return new_key, 0
     resolved_key, additional_scans = resolved
@@ -1668,7 +2208,7 @@ def _bfs_explore(
 
             if predicate is not None and not predicate(kernel.tags):
                 new_key = edge_comp.state_key(kernel)
-                if context.done_event_specs and _has_pending_done(context, new_key):
+                if _has_pending_hidden_event(context, new_key):
                     new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
                     edge_scans += additional_scans
                 if not predicate(kernel.tags):
@@ -1806,7 +2346,7 @@ def _bfs_explore_many(
                 for i in range(len(predicates))
             )
             new_key = edge_comp.state_key(kernel)
-            if any_unsettled and context.done_event_specs and _has_pending_done(context, new_key):
+            if any_unsettled and _has_pending_hidden_event(context, new_key):
                 new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
                 edge_scans += additional_scans
 
@@ -2101,11 +2641,11 @@ def reachable_states(
     max_states : int
         Visited-set cap.
     """
-    context = _build_explore_context(program, scope=scope)
+    project_names = tuple(project) if project is not None else tuple(_default_projection(program))
+    context = _build_explore_context(program, scope=scope, project=project_names)
     if isinstance(context, Intractable):
         return context
 
-    project_names = tuple(project) if project is not None else tuple(_default_projection(program))
     return _bfs_explore(  # ty: ignore[invalid-return-type]
         context,
         project=project_names,

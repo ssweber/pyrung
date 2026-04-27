@@ -14,6 +14,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    calc,
     copy,
     count_up,
     latch,
@@ -1065,22 +1066,20 @@ class TestConsumedAccumulator:
     """Item 15: accumulator consumed in a condition stays as separate dimension."""
 
     def test_consumed_acc_kept_as_dimension(self):
-        """Timer accumulator used in a condition is not collapsed."""
+        """Timer accumulator used as data flow is not threshold-abstracted."""
         enable = Bool("Enable", external=True)
         t = Timer.clone("T1")
-        early = Bool("Early")
+        saved = Int("SavedAcc")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 on_delay(t, preset=100)
-            with Rung(t.Acc > 50):
-                out(early)
+            with Rung():
+                copy(t.Acc, saved)
 
         result = _classify_dimensions(logic)
-        assert not isinstance(result, Intractable)
-        stateful, _nd, _combinational, done_acc, _done_presets, _done_kinds = result
-        assert "T1_Acc" in stateful
-        assert "T1_Done" not in done_acc
+        assert isinstance(result, Intractable)
+        assert "T1_Acc" in result.tags
 
 
 class TestAnnotatedFunctionOutput:
@@ -1281,7 +1280,7 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert "HmiPreset" in result.tags
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):
-        """Strictly greater-than carries information beyond the Done threshold."""
+        """Strictly greater-than is absorbed by Layer 2 threshold events."""
         enable = Bool("Enable", external=True)
         active_preset = Int("ActivePreset", final=True)
         t = Timer.clone("DynT")
@@ -1296,8 +1295,15 @@ class TestRedundantTimerAccumulatorAbstraction:
                 out(output)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "DynT_Acc" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+
+        states = reachable_states(logic, project=["Output", "DynT_Done"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Output", True), ("DynT_Done", True)}) in states
 
     def test_preset_data_use_elsewhere_is_not_absorbed(self):
         """A preset copied as a value elsewhere is not fully absorbed."""
@@ -1319,6 +1325,228 @@ class TestRedundantTimerAccumulatorAbstraction:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "ActivePreset" in result.tags or "DynT_Acc" in result.tags
+
+
+class TestThresholdEventAbstraction:
+    """Layer 2: progress threshold events for hidden accumulators."""
+
+    def test_timer_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        active_threshold = Int("ActiveThreshold", final=True)
+        t = Timer.clone("StepTmr")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Alarm", True)}) in states
+
+    def test_multiple_timer_threshold_events_become_tractable(self):
+        enable = Bool("Enable", external=True)
+        pan = Int("PanThreshold", final=True)
+        shaft = Int("ShaftThreshold", final=True)
+        drip = Int("DripThreshold", final=True)
+        t = Timer.clone("StepTmrMany")
+        pan_alarm = Bool("PanAlarm")
+        shaft_alarm = Bool("ShaftAlarm")
+        drip_alarm = Bool("DripAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(200, pan)
+                copy(400, shaft)
+                copy(600, drip)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > pan):
+                out(pan_alarm)
+            with Rung(t.Acc > shaft):
+                out(shaft_alarm)
+            with Rung(t.Acc > drip):
+                out(drip_alarm)
+
+        states = reachable_states(
+            logic,
+            project=["PanAlarm", "ShaftAlarm", "DripAlarm"],
+            max_depth=10,
+        )
+        assert not isinstance(states, Intractable)
+        assert (
+            frozenset(
+                {
+                    ("PanAlarm", True),
+                    ("ShaftAlarm", True),
+                    ("DripAlarm", True),
+                }
+            )
+            in states
+        )
+
+    def test_count_up_counter_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        active_threshold = Int("CounterThreshold", final=True)
+        counter = Counter.clone("StepCounter")
+        alarm = Bool("CounterAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                count_up(counter, preset=1000).reset(reset_btn)
+            with Rung(counter.Acc >= active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["CounterAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("CounterAlarm", True)}) in states
+
+    def test_internal_int_step_ticks_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("StepTicks")
+        threshold = Int("TickThreshold", final=True)
+        alarm = Bool("TickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["TickAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("TickAlarm", True)}) in states
+
+    def test_variable_stride_int_progress_is_rejected(self):
+        enable = Bool("Enable", external=True)
+        ticks = Int("VariableStepTicks")
+        stride = Int("Stride", final=True)
+        threshold = Int("VariableTickThreshold", final=True)
+        alarm = Bool("VariableTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, stride)
+                copy(500, threshold)
+            with Rung(enable):
+                calc(ticks + stride, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "VariableStepTicks" in result.tags
+
+    def test_raw_external_threshold_is_not_absorbed(self):
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int("HmiThreshold", external=True)
+        t = Timer.clone("ExternalThresholdTmr")
+        alarm = Bool("ExternalThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > hmi_threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "HmiThreshold" in result.tags
+
+    def test_projected_public_threshold_is_not_absorbed(self):
+        enable = Bool("Enable", external=True)
+        active_threshold = Int("ProjectedThreshold", final=True, public=True)
+        t = Timer.clone("ProjectedThresholdTmr")
+        alarm = Bool("ProjectedThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(
+            logic,
+            project=["ProjectedThresholdAlarm", "ProjectedThreshold"],
+            max_depth=5,
+        )
+        assert isinstance(states, Intractable)
+        assert "ProjectedThreshold" in states.tags or "ProjectedThresholdTmr_Acc" in states.tags
+
+    def test_non_threshold_accumulator_read_is_not_absorbed(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("SavedAccThreshold", final=True)
+        t = Timer.clone("SavedAccTmr")
+        saved = Int("SavedAccValue")
+        alarm = Bool("SavedAccAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung():
+                copy(t.Acc, saved)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "SavedAccTmr_Acc" in result.tags
+
+    def test_reset_recomputes_threshold_vector_false(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("ResetTicks", external=True)
+        ticks = Int("ResettableStepTicks")
+        threshold = Int("ResettableTickThreshold", final=True)
+        alarm = Bool("ResettableTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(3, threshold)
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableTickAlarm"], max_depth=8)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableTickAlarm", True)}) in states
+        assert frozenset({("ResettableTickAlarm", False)}) in states
+
+    def test_threshold_event_before_done_uses_nearest_event(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("NearestThreshold", final=True)
+        t = Timer.clone("NearestTmr")
+        warning = Bool("Warning")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(warning)
+
+        states = reachable_states(logic, project=["Warning", "NearestTmr_Done"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Warning", True), ("NearestTmr_Done", False)}) in states
 
 
 class TestIntractableTags:
