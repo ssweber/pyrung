@@ -207,6 +207,11 @@ def _enrich_with_ownership(
 
     def _metadata_from_tag(tag: Any) -> _TagMetadata:
         return _TagMetadata(
+            choices=getattr(tag, "choices", None),
+            readonly=getattr(tag, "readonly", False),
+            external=getattr(tag, "external", False),
+            final=getattr(tag, "final", False),
+            public=getattr(tag, "public", False),
             physical=_spec_from_physical(getattr(tag, "physical", None)),
             link=getattr(tag, "link", None),
             min=getattr(tag, "min", None),
@@ -216,7 +221,12 @@ def _enrich_with_ownership(
 
     def _metadata_is_empty(meta: _TagMetadata) -> bool:
         return (
-            meta.physical is None
+            meta.choices is None
+            and not meta.readonly
+            and not meta.external
+            and not meta.final
+            and not meta.public
+            and meta.physical is None
             and meta.link is None
             and meta.min is None
             and meta.max is None
@@ -393,6 +403,16 @@ def _enrich_with_ownership(
                 default_overridden=slot.default_overridden,
                 comment=slot.comment,
                 comment_overridden=slot.comment_overridden,
+                choices=metadata.choices,
+                choices_overridden=slot.choices_overridden,
+                readonly=metadata.readonly,
+                readonly_overridden=slot.readonly_overridden,
+                external=metadata.external,
+                external_overridden=slot.external_overridden,
+                final=metadata.final,
+                final_overridden=slot.final_overridden,
+                public=metadata.public,
+                public_overridden=slot.public_overridden,
                 physical=metadata.physical,
                 physical_overridden=slot.physical_overridden,
                 link=metadata.link,

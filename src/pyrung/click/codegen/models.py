@@ -99,6 +99,11 @@ class _PhysicalDecl:
 class _TagMetadata:
     """Physical/range metadata to emit on tags, fields, and slots."""
 
+    choices: dict[int | float | str, str] | None = None
+    readonly: bool = False
+    external: bool = False
+    final: bool = False
+    public: bool = False
     physical: _PhysicalSpec | None = None
     link: str | None = None
     min: int | float | None = None
@@ -166,6 +171,16 @@ class _BlockSlotDecl:
     default_overridden: bool
     comment: str
     comment_overridden: bool
+    choices: dict[int | float | str, str] | None = None
+    choices_overridden: bool = False
+    readonly: bool = False
+    readonly_overridden: bool = False
+    external: bool = False
+    external_overridden: bool = False
+    final: bool = False
+    final_overridden: bool = False
+    public: bool = False
+    public_overridden: bool = False
     physical: _PhysicalSpec | None = None
     physical_overridden: bool = False
     link: str | None = None

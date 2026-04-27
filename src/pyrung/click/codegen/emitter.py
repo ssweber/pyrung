@@ -97,7 +97,12 @@ def _has_metadata(meta: _TagMetadata | None) -> bool:
     return bool(
         meta is not None
         and (
-            meta.physical is not None
+            meta.choices is not None
+            or meta.readonly
+            or meta.external
+            or meta.final
+            or meta.public
+            or meta.physical is not None
             or meta.link is not None
             or meta.min is not None
             or meta.max is not None
@@ -116,6 +121,16 @@ def _append_metadata_kwargs(
     meta: _TagMetadata,
     collection: _OperandCollection,
 ) -> None:
+    if meta.choices is not None:
+        kwargs.append(f"choices={_format_literal(meta.choices)}")
+    if meta.readonly:
+        kwargs.append("readonly=True")
+    if meta.external:
+        kwargs.append("external=True")
+    if meta.final:
+        kwargs.append("final=True")
+    if meta.public:
+        kwargs.append("public=True")
     if meta.physical is not None:
         kwargs.append(f"physical={_format_physical_expr(meta.physical, collection)}")
     if meta.link is not None:
@@ -416,6 +431,11 @@ def _emit_plain_block_decl(
         if slot.comment_overridden:
             kwargs.append(f"comment={slot.comment!r}")
         slot_meta = _TagMetadata(
+            choices=slot.choices if slot.choices_overridden else None,
+            readonly=slot.readonly if slot.readonly_overridden else False,
+            external=slot.external if slot.external_overridden else False,
+            final=slot.final if slot.final_overridden else False,
+            public=slot.public if slot.public_overridden else False,
             physical=slot.physical if slot.physical_overridden else None,
             link=slot.link if slot.link_overridden else None,
             min=slot.min if slot.min_overridden else None,

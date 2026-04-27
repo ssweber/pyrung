@@ -3080,18 +3080,94 @@ class TestStructuredCodegen:
             " link='Enable', min=0, max=100, uom='psi')"
         ) in code
 
+    def test_flat_tag_codegen_emits_choices_and_flags_metadata(self, tmp_path: Path):
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        Enable = Bool("Enable")
+        ConfigOK = Bool("ConfigOK")
+        Done = Bool("Done")
+        Mode = Int("Mode")
+
+        with Program() as logic:
+            with Rung(Enable):
+                out(Done)
+            with Rung(ConfigOK):
+                copy(Mode, Mode)
+
+        mapping = TagMap(
+            {Enable: x[1], ConfigOK: x[2], Done: c[101], Mode: ds[101]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+
+        nick_path = self._make_nickname_csv(
+            tmp_path,
+            {
+                get_addr_key("X", 1): AddressRecord(
+                    memory_type="X",
+                    address=1,
+                    nickname="Enable",
+                    comment="[external, public]",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("X", 2): AddressRecord(
+                    memory_type="X",
+                    address=2,
+                    nickname="ConfigOK",
+                    comment="[readonly]",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("C", 101): AddressRecord(
+                    memory_type="C",
+                    address=101,
+                    nickname="Done",
+                    comment="[final]",
+                    initial_value="0",
+                    retentive=False,
+                    data_type=DataType.BIT,
+                ),
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Mode",
+                    comment="[choices=Off:0|On:1]",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+            },
+        )
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Enable = Bool("Enable", external=True, public=True)' in code
+        assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
+        assert 'Done = Bool("Done", final=True)' in code
+        assert 'Mode = Int("Mode", choices={0: \'Off\', 1: \'On\'})' in code
+
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
         from pyclickplc.banks import DataType
 
         Enable = Bool("Enable")
         Motor_running = Bool("Motor1_running")
+        Motor_mode = Int("Motor1_mode")
 
         with Program() as logic:
             with Rung(Enable):
                 out(Motor_running)
 
-        mapping = TagMap({Enable: x[1], Motor_running: c[102]}, include_system=False)
+        mapping = TagMap(
+            {Enable: x[1], Motor_running: c[102], Motor_mode: ds[101]},
+            include_system=False,
+        )
         bundle = pyrung_to_ladder(logic, mapping)
         csv_dir = tmp_path / "csv_out"
         bundle.write(csv_dir)
@@ -3114,11 +3190,29 @@ class TestStructuredCodegen:
                     nickname="Motor1_running",
                     comment=(
                         "<Motor.running:udt /> "
-                        "[link=cmd, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]"
+                        "[external, public, link=cmd, physical=MotorFb, on_delay=T#2ms, off_delay=T#1ms]"
                     ),
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
+                ),
+                get_addr_key("DS", 101): AddressRecord(
+                    memory_type="DS",
+                    address=101,
+                    nickname="Motor1_mode",
+                    comment="<Motor.mode:udt /> [choices=Off:0|On:1]",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
+                ),
+                get_addr_key("DS", 102): AddressRecord(
+                    memory_type="DS",
+                    address=102,
+                    nickname="Motor2_mode",
+                    comment="</Motor.mode:udt>",
+                    initial_value="0",
+                    retentive=True,
+                    data_type=DataType.INT,
                 ),
                 get_addr_key("X", 1): AddressRecord(
                     memory_type="X",
@@ -3135,7 +3229,11 @@ class TestStructuredCodegen:
         code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
 
         assert "MotorFb_physical = Physical('MotorFb', on_delay='T#2ms', off_delay='T#1ms')" in code
-        assert "running: Bool = Field(physical=MotorFb_physical, link='cmd')" in code
+        assert (
+            "running: Bool = Field(external=True, public=True, "
+            "physical=MotorFb_physical, link='cmd')"
+        ) in code
+        assert 'mode: Int = Field(choices={0: \'Off\', 1: \'On\'})' in code
 
     def test_project_tags_file_imports_physical_for_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3517,7 +3615,7 @@ class TestStructuredCodegen:
                     memory_type="C",
                     address=1004,
                     nickname="Cmd_Mode_Production",
-                    comment="[on_delay=T#2ms]",
+                    comment="[external, final, public, on_delay=T#2ms]",
                     initial_value="0",
                     retentive=False,
                     data_type=DataType.BIT,
@@ -3551,7 +3649,8 @@ class TestStructuredCodegen:
             in code
         )
         assert (
-            "CmdTagBits.slot(4, name='Cmd_Mode_Production', physical=Cmd_Mode_Production_physical)"
+            "CmdTagBits.slot(4, name='Cmd_Mode_Production', external=True, final=True, "
+            "public=True, physical=Cmd_Mode_Production_physical)"
         ) in code
         assert "Cmd_Mode_Production = CmdTagBits[4]" in code
         assert "out(Cmd_Mode_Production)" in code
