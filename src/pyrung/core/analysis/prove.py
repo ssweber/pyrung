@@ -414,10 +414,11 @@ def _extract_value_domain(
 
     if tag.min is not None and tag.max is not None:
         domain_size = tag.max - tag.min + 1
-        if domain_size > 1000:
-            if not literals:
-                return None
-            # Large range but we have comparison boundaries — use those
+        if literals:
+            literals.add(tag.min)
+            literals.add(tag.max)
+        elif domain_size > 1000:
+            return None
         else:
             return tuple(range(int(tag.min), int(tag.max) + 1))
 
@@ -433,6 +434,10 @@ def _extract_value_domain(
         if isinstance(lit, (int, float)):
             partitioned.add(lit - 1)
             partitioned.add(lit + 1)
+    if tag.min is not None:
+        partitioned = {v for v in partitioned if v >= tag.min}
+    if tag.max is not None:
+        partitioned = {v for v in partitioned if v <= tag.max}
     return tuple(sorted(partitioned))
 
 
@@ -991,9 +996,10 @@ def _build_explore_context(
     scope: list[str] | None = None,
     extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
+    compiled: CompiledKernel | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
-    from pyrung.circuitpy.codegen import compile_kernel
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
     graph = build_program_graph(program)
     all_exprs = _collect_all_exprs(program, graph, scope=scope)
@@ -1004,7 +1010,8 @@ def _build_explore_context(
         return result
     stateful_dims, nondeterministic_dims, _comb, done_acc, done_presets, done_kinds = result
 
-    compiled = compile_kernel(program)
+    if compiled is None:
+        compiled = _compile_kernel(program)
     stateful_names = tuple(sorted(stateful_dims))
     edge_tag_names = tuple(sorted(compiled.edge_tags))
 
@@ -1646,6 +1653,86 @@ def _is_condition_like(obj: Any) -> bool:
     return isinstance(obj, (Tag, Condition))
 
 
+def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
+    """Compute the full upstream dependency cone for a set of tags."""
+    dv = program.dataview()
+    cone: set[str] = set()
+    for tag_name in tags:
+        cone.update(dv.upstream(tag_name).tags)
+    cone.update(tags)
+    return frozenset(cone)
+
+
+def _partition_batch(
+    program: Program,
+    compiled_properties: list[
+        tuple[Callable[[dict[str, Any]], bool], list[str] | None, Expr | None]
+    ],
+) -> list[tuple[list[int], list[str] | None]]:
+    """Group batch properties into independent partitions by upstream cone overlap.
+
+    Returns a list of ``(original_indices, merged_scope)`` pairs.
+    Properties with ``auto_scope=None`` (lambdas) get full scope.
+    """
+    n = len(compiled_properties)
+    if n <= 1:
+        scope = compiled_properties[0][1] if n == 1 else None
+        return [(list(range(n)), scope)]
+
+    cones: list[frozenset[str] | None] = []
+    for _predicate, auto_scope, _expr in compiled_properties:
+        if auto_scope is None:
+            cones.append(None)
+        else:
+            cones.append(_upstream_cone(program, auto_scope))
+
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    null_indices = [i for i, c in enumerate(cones) if c is None]
+    if null_indices:
+        for i in null_indices[1:]:
+            union(null_indices[0], i)
+
+    for i in range(n):
+        cone_i = cones[i]
+        if cone_i is None:
+            continue
+        for j in range(i + 1, n):
+            cone_j = cones[j]
+            if cone_j is None:
+                union(i, j)
+            elif cone_i & cone_j:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    result: list[tuple[list[int], list[str] | None]] = []
+    for indices in groups.values():
+        group_scopes = [compiled_properties[i][1] for i in indices]
+        if any(s is None for s in group_scopes):
+            result.append((indices, None))
+        else:
+            merged: set[str] = set()
+            for s in group_scopes:
+                assert s is not None
+                merged.update(s)
+            result.append((indices, sorted(merged)))
+    return result
+
+
 def prove(
     program: Program,
     *conditions: Any,
@@ -1682,51 +1769,66 @@ def prove(
     max_states : int
         Visited-set cap — bail with ``Intractable`` if exceeded.
     """
+    from pyrung.circuitpy.codegen import compile_kernel
+
     is_batch, property_specs = _normalize_property_specs(*conditions)
     compiled_properties = [_compile_property_spec(spec) for spec in property_specs]
 
-    if scope is not None:
-        effective_scope = scope
-    else:
-        auto_scopes = [auto_scope for _predicate, auto_scope, _expr in compiled_properties]
-        if any(auto_scope is None for auto_scope in auto_scopes):
-            effective_scope = None
-        else:
-            merged_scope: set[str] = set()
-            for auto_scope in auto_scopes:
-                assert auto_scope is not None
-                merged_scope.update(auto_scope)
-            effective_scope = sorted(merged_scope)
-
-    property_exprs = [
-        expr for _predicate, _auto_scope, expr in compiled_properties if expr is not None
-    ]
-    context = _build_explore_context(
-        program,
-        scope=effective_scope,
-        extra_exprs=property_exprs,
-    )
-    if isinstance(context, Intractable):
-        if is_batch:
-            return [context for _ in property_specs]
-        return context
-
-    if is_batch:
-        predicates = [predicate for predicate, _auto_scope, _expr in compiled_properties]
-        return _bfs_explore_many(
+    if not is_batch:
+        predicate, auto_scope, expr = compiled_properties[0]
+        effective_scope = scope if scope is not None else auto_scope
+        extra = [expr] if expr is not None else []
+        context = _build_explore_context(program, scope=effective_scope, extra_exprs=extra)
+        if isinstance(context, Intractable):
+            return context
+        return _bfs_explore(  # ty: ignore[invalid-return-type]
             context,
-            predicates=predicates,
+            predicate=predicate,
             max_depth=max_depth,
             max_states=max_states,
         )
 
-    predicate, _auto_scope, _expr = compiled_properties[0]
-    return _bfs_explore(  # ty: ignore[invalid-return-type]
-        context,
-        predicate=predicate,
-        max_depth=max_depth,
-        max_states=max_states,
-    )
+    if scope is not None:
+        partitions = [(list(range(len(compiled_properties))), scope)]
+    else:
+        partitions = _partition_batch(program, compiled_properties)
+
+    compiled_kernel = compile_kernel(program)
+    results: list[Proven | Counterexample | Intractable | None] = [None] * len(compiled_properties)
+    for indices, group_scope in partitions:
+        group_exprs: list[Expr] = [
+            e for i in indices if (e := compiled_properties[i][2]) is not None
+        ]
+        context = _build_explore_context(
+            program,
+            scope=group_scope,
+            extra_exprs=group_exprs,
+            compiled=compiled_kernel,
+        )
+        if isinstance(context, Intractable):
+            for i in indices:
+                results[i] = context
+            continue
+
+        if len(indices) == 1:
+            results[indices[0]] = _bfs_explore(
+                context,
+                predicate=compiled_properties[indices[0]][0],
+                max_depth=max_depth,
+                max_states=max_states,
+            )
+        else:
+            group_predicates = [compiled_properties[i][0] for i in indices]
+            group_results = _bfs_explore_many(
+                context,
+                predicates=group_predicates,
+                max_depth=max_depth,
+                max_states=max_states,
+            )
+            for i, r in zip(indices, group_results, strict=True):
+                results[i] = r
+
+    return [r if r is not None else Proven(states_explored=0) for r in results]
 
 
 def reachable_states(

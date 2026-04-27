@@ -208,6 +208,105 @@ class TestValueDomainExtraction:
         assert isinstance(result, Intractable)
         assert "Result" in result.reason
 
+    def test_bounded_integer_with_comparison_uses_boundary_partition(self):
+        """Int with min/max and comparison literals uses boundary partitioning."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 5):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert len(domain) < 20
+        assert 0 in domain
+        assert 100 in domain
+        assert 5 in domain
+        assert 6 in domain
+
+    def test_bounded_integer_without_comparison_uses_full_range(self):
+        """Int with small min/max and no comparisons uses full range."""
+        level = Int("Level", external=True, min=0, max=10)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(level):
+                out(target)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+
+    def test_boundary_partition_includes_min_max_anchors(self):
+        """Boundary partition always includes min and max values."""
+        level = Int("Level", external=True, min=0, max=50)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 25):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert 0 in domain
+        assert 50 in domain
+
+    def test_boundary_values_clamped_to_min_max(self):
+        """Boundary partition does not include values outside min/max."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert all(0 <= v <= 100 for v in domain)
+
+    def test_boundary_partition_proves_correctly(self):
+        """End-to-end prove with boundary-partitioned integer domain."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 50):
+                latch(alarm)
+
+        result = prove(logic, ~alarm)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level", 0) > 50 for step in result.trace)
+
+    def test_multiple_comparisons_boundary_partition(self):
+        """Multiple comparison literals produce compact boundary domain."""
+        level = Int("Level", external=True, min=0, max=100)
+        low = Bool("Low")
+        high = Bool("High")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 5):
+                out(low)
+            with Rung(level > 20):
+                out(high)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert 0 in domain
+        assert 5 in domain
+        assert 6 in domain
+        assert 20 in domain
+        assert 21 in domain
+        assert 100 in domain
+        assert len(domain) < 20
+
 
 # ===================================================================
 # Group 3: Don't-care pruning
@@ -829,6 +928,99 @@ class TestScopeParameter:
 
         result = prove(logic, ~x, scope=["X"])
         assert isinstance(result, Counterexample)
+
+
+class TestBatchPartitioning:
+    """Auto-partition independent batch properties into separate BFS passes."""
+
+    def test_batch_partitions_independent_subsystems(self):
+        """Two independent subsystems are proved separately."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        results = prove(logic, [~x, ~y])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
+
+    def test_batch_overlapping_properties_share_bfs(self):
+        """Properties referencing the same tags are grouped together."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+
+        results = prove(logic, [~flag, Or(flag, ~flag)])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_batch_lambda_falls_back_to_full_scope(self):
+        """Lambda properties use full scope."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        results = prove(logic, [lambda s: not s.get("X"), ~y])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
+
+    def test_batch_partition_preserves_result_order(self):
+        """Results are returned in original property order, not partition order."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+        z = Bool("Z")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+            with Rung(c):
+                latch(z)
+
+        results = prove(logic, [~x, ~y, ~z])
+        assert isinstance(results, list)
+        assert len(results) == 3
+        assert all(isinstance(r, Counterexample) for r in results)
+
+    def test_batch_single_group_degenerates_to_current(self):
+        """All-overlapping properties produce one group."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+            with Rung(flag):
+                out(output)
+
+        results = prove(logic, [~flag, ~output])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
 
 
 class TestConsumedAccumulator:
