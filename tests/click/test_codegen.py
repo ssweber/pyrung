@@ -3150,7 +3150,7 @@ class TestStructuredCodegen:
         assert 'Enable = Bool("Enable", external=True, public=True)' in code
         assert 'ConfigOK = Bool("ConfigOK", readonly=True)' in code
         assert 'Done = Bool("Done", final=True)' in code
-        assert 'Mode = Int("Mode", choices={0: \'Off\', 1: \'On\'})' in code
+        assert "Mode = Int(\"Mode\", choices={0: 'Off', 1: 'On'})" in code
 
     def test_udt_codegen_emits_physical_field_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key
@@ -3233,7 +3233,7 @@ class TestStructuredCodegen:
             "running: Bool = Field(external=True, public=True, "
             "physical=MotorFb_physical, link='cmd')"
         ) in code
-        assert 'mode: Int = Field(choices={0: \'Off\', 1: \'On\'})' in code
+        assert "mode: Int = Field(choices={0: 'Off', 1: 'On'})" in code
 
     def test_project_tags_file_imports_physical_for_metadata(self, tmp_path: Path):
         from pyclickplc.addresses import AddressRecord, get_addr_key

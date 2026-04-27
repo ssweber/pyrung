@@ -144,6 +144,7 @@ _DONE_KIND_COUNT_DOWN = "count_down"
 class _DoneAccInfo:
     pairs: dict[str, str]
     presets: dict[str, int]
+    preset_tags: dict[str, str]
     kinds: dict[str, str]
 
 
@@ -159,6 +160,7 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
 
     pairs: dict[str, str] = {}
     presets: dict[str, int] = {}
+    preset_tags: dict[str, str] = {}
     kinds: dict[str, str] = {}
 
     for instr in walk_instructions(program):
@@ -175,10 +177,12 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
 
         pairs[instr.done_bit.name] = instr.accumulator.name
         kinds[instr.done_bit.name] = kind
-        if not isinstance(instr.preset, Tag) and isinstance(instr.preset, (int, float)):
+        if isinstance(instr.preset, Tag):
+            preset_tags[instr.done_bit.name] = instr.preset.name
+        elif isinstance(instr.preset, (int, float)):
             presets[instr.done_bit.name] = int(instr.preset)
 
-    return _DoneAccInfo(pairs=pairs, presets=presets, kinds=kinds)
+    return _DoneAccInfo(pairs=pairs, presets=presets, preset_tags=preset_tags, kinds=kinds)
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
@@ -364,6 +368,142 @@ def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
             _walk_atoms(t, tag_name, out)
 
 
+def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
+    """True when a dynamic preset is frozen or owned by the ladder."""
+    tag = graph.tags.get(preset_tag_name)
+    if tag is None:
+        return False
+    if tag.readonly:
+        return True
+    return bool(tag.final and preset_tag_name in graph.writers_of)
+
+
+def _atom_matches_acc_preset_boundary(
+    atom: Atom,
+    acc_name: str,
+    preset_match_values: frozenset[Any],
+) -> bool:
+    """True if *atom* is one side of the Acc/Preset done threshold."""
+    if atom.tag == acc_name:
+        return atom.operand in preset_match_values and atom.form in {"ge", "lt"}
+    if atom.operand == acc_name:
+        return atom.tag in preset_match_values and atom.form in {"le", "gt"}
+    return False
+
+
+def _is_acc_done_redundant(
+    acc_name: str,
+    preset_match_values: frozenset[Any],
+    kind: str,
+    atoms: list[Atom],
+) -> bool:
+    """True when every accumulator atom is representable by Done/Pending/True."""
+    if kind == _DONE_KIND_COUNT_DOWN or not atoms:
+        return False
+    return all(
+        _atom_matches_acc_preset_boundary(atom, acc_name, preset_match_values) for atom in atoms
+    )
+
+
+def _all_atoms_absorbed(
+    preset_atoms: list[Atom],
+    acc_name: str,
+    preset_match_values: frozenset[Any],
+) -> bool:
+    """True when every preset atom is the same absorbed Acc/Preset threshold."""
+    return all(
+        _atom_matches_acc_preset_boundary(atom, acc_name, preset_match_values)
+        for atom in preset_atoms
+    )
+
+
+def _is_matching_timer_preset_read(instr: Any, done_name: str, acc_name: str) -> bool:
+    return (
+        getattr(getattr(instr, "done_bit", None), "name", None) == done_name
+        and getattr(getattr(instr, "accumulator", None), "name", None) == acc_name
+    )
+
+
+def _has_non_timer_data_read(
+    program: Program,
+    preset_tag_name: str,
+    done_name: str,
+    acc_name: str,
+) -> bool:
+    """Detect value-flow uses of a preset outside its matching timer/counter."""
+    from pyrung.core.analysis.pdg import _extract_tag_names
+    from pyrung.core.validation._common import walk_instructions
+
+    for instr in walk_instructions(program):
+        if _is_matching_timer_preset_read(instr, done_name, acc_name):
+            continue
+        for field_name in getattr(type(instr), "_reads", ()):
+            refs = _extract_tag_names(getattr(instr, field_name), {})
+            if preset_tag_name in refs:
+                return True
+    return False
+
+
+def _preset_match_values(preset_tag_name: str, graph: ProgramGraph) -> frozenset[Any]:
+    """Values that may represent a stable preset in simplified atoms."""
+    values: set[Any] = {preset_tag_name}
+    tag = graph.tags.get(preset_tag_name)
+    if tag is not None and tag.readonly:
+        values.add(tag.default)
+    return frozenset(values)
+
+
+@dataclass(frozen=True)
+class _RedundantAccAbsorptions:
+    acc_names: frozenset[str]
+    preset_tags: frozenset[str]
+    synthetic_presets: dict[str, int]
+
+
+def _find_redundant_acc_absorptions(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    done_acc_info: _DoneAccInfo,
+    consumed_accs: set[str],
+) -> _RedundantAccAbsorptions:
+    """Find dynamic timer presets whose Acc/Preset comparisons are redundant."""
+    absorbed_accs: set[str] = set()
+    absorbed_preset_tags: set[str] = set()
+    synthetic_presets: dict[str, int] = {}
+
+    for done_name, acc_name in done_acc_info.pairs.items():
+        if acc_name not in consumed_accs:
+            continue
+        preset_tag_name = done_acc_info.preset_tags.get(done_name)
+        if preset_tag_name is None:
+            continue
+        if not _is_stable_dynamic_preset(preset_tag_name, graph):
+            continue
+
+        kind = done_acc_info.kinds[done_name]
+        match_values = _preset_match_values(preset_tag_name, graph)
+        acc_atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+        if not _is_acc_done_redundant(acc_name, match_values, kind, acc_atoms):
+            continue
+
+        preset_atoms = _collect_atoms_for_tag(all_exprs, preset_tag_name)
+        if not _all_atoms_absorbed(preset_atoms, acc_name, match_values):
+            continue
+        if _has_non_timer_data_read(program, preset_tag_name, done_name, acc_name):
+            continue
+
+        absorbed_accs.add(acc_name)
+        absorbed_preset_tags.add(preset_tag_name)
+        synthetic_presets[done_name] = 1
+
+    return _RedundantAccAbsorptions(
+        acc_names=frozenset(absorbed_accs),
+        preset_tags=frozenset(absorbed_preset_tags),
+        synthetic_presets=synthetic_presets,
+    )
+
+
 def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
     """Extract boundary-representative values from a tag's metadata.
 
@@ -490,6 +630,7 @@ class _ExploreContext:
     block_specs: tuple[BlockSpec, ...]
     dt: float
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
+    synthetic_preset_tags: tuple[str, ...] = ()
 
 
 def _build_infeasible_hints(
@@ -559,6 +700,15 @@ def _classify_dimensions_from_graph(
         if _collect_atoms_for_tag(all_exprs, acc_name):
             consumed_accs.add(acc_name)
 
+    absorptions = _find_redundant_acc_absorptions(
+        program,
+        graph,
+        all_exprs,
+        done_acc_info,
+        consumed_accs,
+    )
+    consumed_accs.difference_update(absorptions.acc_names)
+
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
     unconsumed_accs = frozenset(done_acc.values())
 
@@ -580,6 +730,8 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in unconsumed_accs:
+            continue
+        if tag_name in absorptions.preset_tags:
             continue
 
         role = graph.tag_roles.get(tag_name)
@@ -645,6 +797,7 @@ def _classify_dimensions_from_graph(
         )
 
     done_presets = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}
+    done_presets.update({d: p for d, p in absorptions.synthetic_presets.items() if d in done_acc})
     done_kinds = {d: done_acc_info.kinds[d] for d in done_acc}
     return (
         stateful,
@@ -756,7 +909,12 @@ def _partial_eval(expr: Expr, known: dict[str, Any]) -> Expr:
 
     if isinstance(expr, Atom):
         if expr.tag in known:
-            result = _eval_atom(expr, known[expr.tag])
+            eval_expr = expr
+            if isinstance(expr.operand, str):
+                if expr.operand not in known:
+                    return expr
+                eval_expr = Atom(expr.tag, expr.form, known[expr.operand])
+            result = _eval_atom(eval_expr, known[expr.tag])
             if result is not None:
                 return Const(result)
         return expr
@@ -935,6 +1093,12 @@ def _step_kernel(
     kernel.advance(context.dt)
 
 
+def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> None:
+    """Seed absorbed dynamic presets away from their default zero value."""
+    for name in context.synthetic_preset_tags:
+        kernel.tags[name] = 1
+
+
 _Snapshot = tuple[
     dict[str, Any],  # tags
     dict[str, list[Any]],  # blocks
@@ -1078,6 +1242,19 @@ def _build_explore_context(
         compiled = _compile_kernel(program)
     stateful_names = tuple(sorted(stateful_dims))
     edge_tag_names = tuple(sorted(compiled.edge_tags))
+    done_acc_info = _collect_done_acc_pairs(program)
+    consumed_accs = {
+        acc_name
+        for acc_name in done_acc_info.pairs.values()
+        if _collect_atoms_for_tag(all_exprs, acc_name)
+    }
+    absorptions = _find_redundant_acc_absorptions(
+        program,
+        graph,
+        all_exprs,
+        done_acc_info,
+        consumed_accs,
+    )
 
     state_key_done_specs: list[_StateKeyDoneSpec] = []
     done_event_specs: list[_DoneEventSpec] = []
@@ -1100,6 +1277,8 @@ def _build_explore_context(
 
     edge_tag_exprs = _collect_edge_tag_exprs(program, edge_tag_names)
     pilot = compiled.create_kernel()
+    for name in absorptions.preset_tags:
+        pilot.tags[name] = 1
     pilot.memory["_dt"] = dt
     for spec in compiled.block_specs.values():
         pilot.load_block_from_tags(spec)
@@ -1123,6 +1302,7 @@ def _build_explore_context(
         block_specs=tuple(compiled.block_specs.values()),
         dt=dt,
         edge_tag_exprs=edge_tag_exprs,
+        synthetic_preset_tags=tuple(sorted(absorptions.preset_tags)),
     )
 
 
@@ -1436,6 +1616,7 @@ def _bfs_explore(
 ) -> Proven | Counterexample | Intractable | frozenset[frozenset[tuple[str, Any]]]:
     """BFS over the reachable state space."""
     kernel = context.compiled.create_kernel()
+    _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
     initial_key = edge_comp.state_key(kernel)
 
@@ -1549,6 +1730,7 @@ def _bfs_explore_many(
 ) -> list[Proven | Counterexample | Intractable]:
     """BFS over the reachable state space for multiple properties at once."""
     kernel = context.compiled.create_kernel()
+    _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
     initial_key = edge_comp.state_key(kernel)
 

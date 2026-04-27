@@ -1230,6 +1230,97 @@ class TestTimerFastForward:
         assert True in done_values
 
 
+class TestRedundantTimerAccumulatorAbstraction:
+    """Dynamic timer presets whose Acc comparisons collapse to Done state."""
+
+    def test_final_preset_redundant_acc_comparison_is_absorbed(self):
+        """A ladder-owned dynamic preset can be absorbed with its redundant Acc check."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+        done_output = Bool("DoneOutput")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+            with Rung(t.Done):
+                out(done_output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
+
+    def test_external_preset_is_not_absorbed(self):
+        """Raw external HMI-style presets remain nondeterministic/unbounded."""
+        enable = Bool("Enable", external=True)
+        hmi_preset = Int("HmiPreset", external=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=hmi_preset)
+            with Rung(t.Acc >= hmi_preset):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "HmiPreset" in result.tags
+
+    def test_non_redundant_acc_comparison_is_not_absorbed(self):
+        """Strictly greater-than carries information beyond the Done threshold."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc > active_preset):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "DynT_Acc" in result.tags
+
+    def test_preset_data_use_elsewhere_is_not_absorbed(self):
+        """A preset copied as a value elsewhere is not fully absorbed."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        copied_preset = Int("CopiedPreset")
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+                copy(active_preset, copied_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "ActivePreset" in result.tags or "DynT_Acc" in result.tags
+
+
 class TestIntractableTags:
     """Item 3 follow-up: Intractable.tags field is populated."""
 
