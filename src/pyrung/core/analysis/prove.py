@@ -386,12 +386,12 @@ def _extract_value_domain(
     all_tags: dict[str, Tag] | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
-    if tag.type == TagType.BOOL:
-        return (False, True)
-
     atoms = _collect_atoms_for_tag(all_exprs, tag_name)
     if not atoms:
-        return ()  # not consumed in any condition — excluded
+        return ()
+
+    if tag.type == TagType.BOOL:
+        return (False, True)
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()

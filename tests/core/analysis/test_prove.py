@@ -70,16 +70,19 @@ class TestDimensionClassification:
         assert "InputA" in nd
 
     def test_latch_reset_are_stateful(self):
-        """Latch/reset writes make tags stateful."""
+        """Latch/reset writes make tags stateful when referenced."""
         button = Bool("Button", external=True)
         stop = Bool("Stop", external=True)
         running = Bool("Running")
+        light = Bool("Light")
 
         with Program(strict=False) as logic:
             with Rung(button):
                 latch(running)
             with Rung(stop):
                 reset(running)
+            with Rung(running):
+                out(light)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -88,6 +91,21 @@ class TestDimensionClassification:
         assert stateful["Running"] == (False, True)
         assert "Button" in nd
         assert "Stop" in nd
+
+    def test_unreferenced_bool_excluded(self):
+        """Written Bool not referenced in any expression is excluded."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "Flag" not in stateful
+        assert "Flag" not in combinational
 
     def test_external_tags_are_nondeterministic(self):
         """Tags with external=True are nondeterministic."""
@@ -501,11 +519,14 @@ class TestProve:
         """Large state space hits max_states cap → Intractable."""
         inputs = [Bool(f"In{i}", external=True) for i in range(20)]
         flags = [Bool(f"Flag{i}") for i in range(20)]
+        output = Bool("Output")
 
         with Program(strict=False) as logic:
             for inp, flag in zip(inputs, flags, strict=True):
                 with Rung(inp):
                     latch(flag)
+            with Rung(*flags):
+                out(output)
 
         result = prove(
             logic,
