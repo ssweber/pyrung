@@ -116,6 +116,7 @@ class CompiledKernel:
     block_specs: dict[str, BlockSpec] = field(default_factory=dict)
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
+    has_io_gaps: bool = False
 
     def create_kernel(self) -> ReplayKernel:
         """Create a fresh ReplayKernel initialized from this compiled program."""

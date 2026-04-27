@@ -1115,6 +1115,9 @@ class PLC:
                 self._compiled_replay_kernel = False
                 return None
             raise
+        if kernel.has_io_gaps:
+            self._compiled_replay_kernel = False
+            return None
         self._compiled_replay_kernel = kernel
         return kernel
 

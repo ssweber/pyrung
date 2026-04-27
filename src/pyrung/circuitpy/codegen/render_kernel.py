@@ -45,6 +45,7 @@ def compile_kernel(program: Program) -> CompiledKernel:
         block_specs=block_specs,
         edge_tags=set(ctx.edge_prev_tags),
         source=source,
+        has_io_gaps=ctx.has_io_gaps,
     )
 
 

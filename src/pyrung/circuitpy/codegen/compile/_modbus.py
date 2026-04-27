@@ -183,6 +183,9 @@ def _compile_modbus_send_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    if ctx.modbus_client is None:
+        ctx.has_io_gaps = True
+        return []
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, spec.var_name)
@@ -195,6 +198,9 @@ def _compile_modbus_receive_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
+    if ctx.modbus_client is None:
+        ctx.has_io_gaps = True
+        return []
     spec = _modbus_client_spec_for_instruction(instr, ctx)
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, spec.var_name)
