@@ -46,6 +46,12 @@ _EXPLICIT_BLOCK_START_RE = re.compile(
 _TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
 _CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
+_BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
+_CHOICE_PRESETS: dict[str, ChoiceMap] = {
+    "Bool": _BOOL_CHOICE_PRESET,
+    "bool": _BOOL_CHOICE_PRESET,
+    "BOOL": _BOOL_CHOICE_PRESET,
+}
 
 
 @dataclass(frozen=True)
@@ -416,6 +422,8 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     text = raw.strip()
     if text == "":
         raise ValueError("TagMeta choices must not be empty.")
+    if text in _CHOICE_PRESETS:
+        return dict(_CHOICE_PRESETS[text])
 
     choices: ChoiceMap = {}
     for pair in text.split("|"):
@@ -687,15 +695,18 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             raise ValueError(f"Invalid TagMeta uom value {meta.uom!r}.")
         tokens.append(f"uom={meta.uom}")
     if meta.choices is not None:
-        pairs: list[str] = []
-        for value, label in meta.choices.items():
-            if _CHOICE_LABEL_RE.fullmatch(label) is None:
-                raise ValueError(f"Invalid TagMeta choice label {label!r}.")
-            value_text = str(value)
-            if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
-                raise ValueError(f"Invalid TagMeta choice value {value!r}.")
-            pairs.append(f"{label}:{value_text}")
-        tokens.append(f"choices={'|'.join(pairs)}")
+        if meta.choices == _BOOL_CHOICE_PRESET:
+            tokens.append("choices=Bool")
+        else:
+            pairs: list[str] = []
+            for value, label in meta.choices.items():
+                if _CHOICE_LABEL_RE.fullmatch(label) is None:
+                    raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+                value_text = str(value)
+                if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
+                    raise ValueError(f"Invalid TagMeta choice value {value!r}.")
+                pairs.append(f"{label}:{value_text}")
+            tokens.append(f"choices={'|'.join(pairs)}")
     return f"[{', '.join(tokens)}]"
 
 

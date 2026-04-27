@@ -250,6 +250,8 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 
 Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, and `<Base.field />` do not reconstruct pyrung semantics. They simply group rows visually, and any inner nicknames import as ordinary standalone tags.
 
+Bracket metadata can appear alongside markers or ordinary comments. It preserves tag flags, choices, range bounds, units, and physical annotations through nickname CSV import/export. For int-backed boolean values in register memory, use the built-in shorthand `[choices=Bool]` instead of spelling out `[choices=False:0|True:1]`.
+
 **Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
 
 **Named arrays** use `:named_array` markers. Count and stride are optional — the importer infers them from the row span between open/close tags:

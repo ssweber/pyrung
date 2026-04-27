@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New features
+
+- **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
+
 ## v0.7.0 (2026-04-26)
 
 ### Breaking changes

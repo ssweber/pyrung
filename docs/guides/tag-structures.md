@@ -324,4 +324,7 @@ All flags round-trip through the Click nickname CSV comment parser using bracket
 [final]
 [public]
 [readonly, choices=Off:0|On:1]
+[choices=Bool]
 ```
+
+Use `[choices=Bool]` for int-backed boolean fields stored in Click register memory. It round-trips as the same metadata as `choices={0: "False", 1: "True"}` and replaces the longer `[choices=False:0|True:1]` spelling on export.
