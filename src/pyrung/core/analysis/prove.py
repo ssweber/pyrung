@@ -599,6 +599,10 @@ def _classify_dimensions_from_graph(
         if not is_written:
             continue
 
+        if tag_name not in graph.readers_of:
+            combinational.add(tag_name)
+            continue
+
         if _is_ote_only(tag_name, graph):
             combinational.add(tag_name)
             continue

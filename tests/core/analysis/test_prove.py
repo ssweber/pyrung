@@ -14,6 +14,7 @@ from pyrung.core import (
     Program,
     Rung,
     Timer,
+    copy,
     count_up,
     latch,
     named_array,
@@ -105,7 +106,23 @@ class TestDimensionClassification:
         assert not isinstance(result, Intractable)
         stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
         assert "Flag" not in stateful
-        assert "Flag" not in combinational
+        assert "Flag" in combinational
+
+    def test_write_only_terminal_is_combinational(self):
+        """Tag written by copy but never read is combinational (dead output)."""
+        sensor = Bool("Sensor", external=True)
+        level = Int("Level", external=True, min=0, max=10)
+        output = Int("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(sensor):
+                copy(level, output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "Output" not in stateful
+        assert "Output" in combinational
 
     def test_external_tags_are_nondeterministic(self):
         """Tags with external=True are nondeterministic."""
