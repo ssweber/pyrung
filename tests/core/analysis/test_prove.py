@@ -1348,6 +1348,48 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("Alarm", True)}) in states
 
+    def test_timer_threshold_event_allows_direct_zero_acc_reset(self):
+        enable = Bool("ResettableTimerEnable", external=True)
+        reset_btn = Bool("ResettableTimerReset", external=True)
+        active_threshold = Int("ResettableTimerThreshold", final=True)
+        t = Timer.clone("ResettableThresholdTmr")
+        alarm = Bool("ResettableTimerAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(reset_btn):
+                copy(0, t.Acc)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableTimerAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableTimerAlarm", True)}) in states
+
+    def test_timer_threshold_event_rejects_nonzero_acc_assignment(self):
+        enable = Bool("AssignedTimerEnable", external=True)
+        force = Bool("AssignedTimerForce", external=True)
+        active_threshold = Int("AssignedTimerThreshold", final=True)
+        t = Timer.clone("AssignedThresholdTmr")
+        alarm = Bool("AssignedTimerAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(force):
+                copy(7, t.Acc)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "AssignedThresholdTmr_Acc" in result.tags
+
     def test_multiple_timer_threshold_events_become_tractable(self):
         enable = Bool("Enable", external=True)
         pan = Int("PanThreshold", final=True)
@@ -1407,6 +1449,28 @@ class TestThresholdEventAbstraction:
         states = reachable_states(logic, project=["CounterAlarm"], max_depth=5)
         assert not isinstance(states, Intractable)
         assert frozenset({("CounterAlarm", True)}) in states
+
+    def test_count_up_counter_threshold_event_allows_direct_zero_acc_reset(self):
+        enable = Bool("ResettableCounterEnable", external=True)
+        reset_btn = Bool("ResettableCounterReset", external=True)
+        counter_reset = Bool("ResettableCounterOwnerReset", external=True)
+        active_threshold = Int("ResettableCounterThreshold", final=True)
+        counter = Counter.clone("ResettableThresholdCounter")
+        alarm = Bool("ResettableCounterAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(reset_btn):
+                copy(0, counter.Acc)
+            with Rung(enable):
+                count_up(counter, preset=1000).reset(counter_reset)
+            with Rung(counter.Acc >= active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableCounterAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableCounterAlarm", True)}) in states
 
     def test_internal_int_step_ticks_threshold_event_becomes_tractable(self):
         enable = Bool("Enable", external=True)

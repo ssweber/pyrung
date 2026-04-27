@@ -626,6 +626,21 @@ def _is_int_progress_write(instr: Any, tag_name: str) -> bool:
     return _is_zero_literal(source) or _is_unit_self_increment_expr(source, tag_name)
 
 
+def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
+    """True for a plain direct ``copy(0, tag)`` reset write."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+
+    if not isinstance(instr, CopyInstruction):
+        return False
+    target = _direct_write_target(instr)
+    return (
+        target is not None
+        and target.name == tag_name
+        and instr.convert is None
+        and _is_zero_literal(instr.source)
+    )
+
+
 def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     """Find instruction-owned progress accumulators and recognized int counters."""
     from pyrung.core.instruction.counters import CountUpInstruction
@@ -681,7 +696,7 @@ def _has_forbidden_data_read(
 
 
 def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
-    """True when a timer/counter accumulator is written only by its owner instruction."""
+    """True when a progress accumulator has only owner/reset-safe writes."""
     from pyrung.core.instruction.counters import CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
@@ -703,6 +718,12 @@ def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
                 and instr.down_condition is None
             )
         if not is_owner:
+            if kind in {
+                _DONE_KIND_ON_DELAY,
+                _DONE_KIND_OFF_DELAY,
+                _DONE_KIND_COUNT_UP,
+            } and _is_zero_copy_to_tag(instr, acc_name):
+                continue
             return False
         saw_owner = True
     return saw_owner
