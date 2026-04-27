@@ -75,7 +75,7 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
     assert node.writes == frozenset({"PdgTimer_Acc", "PdgTimer_Done", "Result"})
 
 
-def test_indirect_refs_keep_pointer_as_read_and_block_as_conservative_target() -> None:
+def test_indirect_ref_unbounded_pointer_does_not_expand() -> None:
     ds = Block("DS", TagType.INT, 1, 3)
     index = Int("Index")
     result = Int("Result")
@@ -88,9 +88,47 @@ def test_indirect_refs_keep_pointer_as_read_and_block_as_conservative_target() -
     graph = build_program_graph(prog)
     node = graph.rung_nodes[0]
 
-    assert {"DS1", "DS2", "DS3", "Index"} <= node.data_reads
-    assert {"DS1", "DS2", "DS3", "Result"} <= node.writes
+    assert "Index" in node.data_reads
+    assert "DS1" not in node.data_reads
+    assert "Result" in node.writes
+    assert "DS1" not in node.writes
     assert "Index" not in node.writes
+
+
+def test_indirect_ref_bounded_pointer_expands_to_range() -> None:
+    ds = Block("DS", TagType.INT, 1, 100)
+    index = Int("Index", min=5, max=10)
+    result = Int("Result")
+
+    with Program() as prog:
+        with Rung():
+            copy(ds[index], result)
+            copy(1, ds[index])
+
+    graph = build_program_graph(prog)
+    node = graph.rung_nodes[0]
+
+    assert {"DS5", "DS6", "DS7", "DS8", "DS9", "DS10", "Index"} <= node.data_reads
+    assert {"DS5", "DS6", "DS7", "DS8", "DS9", "DS10", "Result"} <= node.writes
+    assert "DS1" not in node.data_reads
+    assert "DS1" not in node.writes
+    assert "DS100" not in node.writes
+
+
+def test_indirect_ref_choices_pointer_expands_to_choices() -> None:
+    ds = Block("DS", TagType.INT, 1, 100)
+    index = Int("Index", choices={10: "A", 20: "B", 30: "C"})
+
+    with Program() as prog:
+        with Rung():
+            copy(1, ds[index])
+
+    graph = build_program_graph(prog)
+    node = graph.rung_nodes[0]
+
+    assert {"DS10", "DS20", "DS30"} <= node.writes
+    assert "DS1" not in node.writes
+    assert "DS100" not in node.writes
 
 
 def test_def_use_chain_tracks_write_then_next_rung_read() -> None:

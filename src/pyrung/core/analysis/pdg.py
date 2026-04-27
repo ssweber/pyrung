@@ -11,7 +11,7 @@ from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
-from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
+from pyrung.core.memory_block import Block, BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
 
@@ -261,6 +261,42 @@ def _block_tags(block_range: BlockRange | IndirectBlockRange) -> list[Tag]:
     return [block._get_tag(addr) for addr in block._window_addresses(block.start, block.end)]
 
 
+def _indirect_ref_tags(block: Block, pointer: Tag) -> list[Tag] | None:
+    """Narrow an indirect block access using pointer tag metadata.
+
+    Returns the bounded tag list when choices or min/max constrain the
+    pointer, or ``None`` when the address is statically unbounded.
+    """
+    if pointer.choices is not None:
+        addrs = sorted(
+            int(k) for k in pointer.choices if block.start <= int(k) <= block.end
+        )
+        return [block._get_tag(a) for a in addrs]
+    if pointer.min is not None and pointer.max is not None:
+        lo = max(int(pointer.min), block.start)
+        hi = min(int(pointer.max), block.end)
+        if lo <= hi:
+            return _block_tags(block.select(lo, hi))
+    return None
+
+
+def _indirect_expr_base_tag(expr: Any) -> Tag | None:
+    """Walk an Expression tree to find the underlying Tag, if any."""
+    from pyrung.core.expression import Expression
+
+    if isinstance(expr, Tag):
+        return expr
+    if isinstance(expr, Expression):
+        for key in vars(expr):
+            if key.startswith("_"):
+                continue
+            child = getattr(expr, key)
+            result = _indirect_expr_base_tag(child)
+            if result is not None:
+                return result
+    return None
+
+
 _RANGE_COLLAPSE_THRESHOLD = 3
 
 
@@ -331,24 +367,23 @@ def _extract_tag_names(
 
         if isinstance(current, IndirectRef):
             walk(current.pointer)
-            block = current.block
-            full_range = block.select(block.start, block.end)
-            tags = _block_tags(full_range)
-            for tag in tags:
-                _register_tag(tag, tag_refs, found)
-            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                _record_range(ranges, block.name, tags)
+            tags = _indirect_ref_tags(current.block, current.pointer)
+            if tags is not None:
+                for tag in tags:
+                    _register_tag(tag, tag_refs, found)
+                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                    _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
             walk(current.expr)
-            block = current.block
-            full_range = block.select(block.start, block.end)
-            tags = _block_tags(full_range)
-            for tag in tags:
-                _register_tag(tag, tag_refs, found)
-            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                _record_range(ranges, block.name, tags)
+            base = _indirect_expr_base_tag(current.expr)
+            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            if tags is not None:
+                for tag in tags:
+                    _register_tag(tag, tag_refs, found)
+                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                    _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, Condition):
@@ -434,24 +469,23 @@ def _extract_write_targets(
 
         if isinstance(current, IndirectRef):
             reads.update(_extract_tag_names(current.pointer, tag_refs, ranges=ranges))
-            block = current.block
-            full_range = block.select(block.start, block.end)
-            tags = _block_tags(full_range)
-            for tag in tags:
-                _register_tag(tag, tag_refs, writes)
-            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                _record_range(ranges, block.name, tags)
+            tags = _indirect_ref_tags(current.block, current.pointer)
+            if tags is not None:
+                for tag in tags:
+                    _register_tag(tag, tag_refs, writes)
+                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                    _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, IndirectExprRef):
             reads.update(_extract_tag_names(current.expr, tag_refs, ranges=ranges))
-            block = current.block
-            full_range = block.select(block.start, block.end)
-            tags = _block_tags(full_range)
-            for tag in tags:
-                _register_tag(tag, tag_refs, writes)
-            if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
-                _record_range(ranges, block.name, tags)
+            base = _indirect_expr_base_tag(current.expr)
+            tags = _indirect_ref_tags(current.block, base) if base is not None else None
+            if tags is not None:
+                for tag in tags:
+                    _register_tag(tag, tag_refs, writes)
+                if ranges is not None and len(tags) >= _RANGE_COLLAPSE_THRESHOLD:
+                    _record_range(ranges, current.block.name, tags)
             return
 
         if isinstance(current, dict):
