@@ -23,6 +23,8 @@ from .absorb import (
 from .classify import (
     _classify_dimensions_from_graph,
     _collect_all_exprs,
+    _collect_literal_write_domains,
+    _collect_structural_domains,
     _extract_value_domain,
     _pilot_sweep_domains,
 )
@@ -169,6 +171,13 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
     if ctx.intractable is None or not ctx.intractable.tags:
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
+    literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
+    structural_domains = _collect_structural_domains(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        literal_write_domains,
+    )
     if ctx.compiled is None:
         ctx.compiled = _compile_kernel(ctx.program)
     first_pass_nd: dict[str, tuple[Any, ...]] = {}
@@ -177,7 +186,15 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
         is_written = tag_name in ctx.graph.writers_of
         if not (role == TagRole.INPUT or (tag.external and not is_written)):
             continue
-        domain = _extract_value_domain(tag_name, tag, ctx.all_exprs, ctx.graph.tags)
+        domain = _extract_value_domain(
+            tag_name,
+            tag,
+            ctx.all_exprs,
+            ctx.graph.tags,
+            literal_write_domains,
+            structural_domains,
+            ctx.graph,
+        )
         if not domain:
             if tag.choices is not None:
                 domain = tuple(sorted(tag.choices.keys()))

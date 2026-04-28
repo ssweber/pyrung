@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from pyrung.core import Bool, Int, Program, Rung, Timer, copy, latch, on_delay, out, rise
+from pyrung.core import (
+    Block,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    TagType,
+    Timer,
+    copy,
+    fill,
+    latch,
+    on_delay,
+    out,
+    rise,
+)
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
@@ -64,6 +78,37 @@ def _settle_pending_program() -> Program:
     return logic
 
 
+def _literal_copy_program() -> Program:
+    trig_a = Bool("TrigA", external=True)
+    trig_b = Bool("TrigB", external=True)
+    dest = Int("Dest")
+    flag = Bool("Flag")
+
+    with Program(strict=False) as logic:
+        with Rung(trig_a):
+            copy(5, dest)
+        with Rung(trig_b):
+            copy(10, dest)
+        with Rung(dest == 5):
+            out(flag)
+
+    return logic
+
+
+def _literal_fill_program() -> Program:
+    enable = Bool("Enable", external=True)
+    ds = Block("DS", TagType.INT, 1, 3)
+    flag = Bool("Flag")
+
+    with Program(strict=False) as logic:
+        with Rung(enable):
+            fill(7, ds.select(1, 3))
+        with Rung(ds[1] == 7):
+            out(flag)
+
+    return logic
+
+
 def _edge_masked_rise_program() -> Program:
     trigger = Bool("Trigger", external=True)
     armed = Bool("Armed")
@@ -103,7 +148,7 @@ class TestPassManifest:
 
 
 class TestPassDisabling:
-    def test_disable_pilot_sweep_returns_intractable(self) -> None:
+    def test_disable_pilot_sweep_still_allows_structural_discovery(self) -> None:
         logic = _discovery_program()
 
         default_result = _run_pre_bfs_pipeline(_make_pass_context(logic))
@@ -118,8 +163,33 @@ class TestPassDisabling:
             passes=disabled_passes,
         )
 
-        assert isinstance(disabled_result, Intractable)
-        assert disabled_result.tags == ["StoredStep", "StoredThreshold"]
+        assert not isinstance(disabled_result, Intractable)
+
+    def test_disable_pilot_sweep_still_allows_literal_copy_domain_mining(self) -> None:
+        disabled_passes = tuple(
+            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            for p in _DEFAULT_PRE_BFS_PASSES
+        )
+
+        result = _run_pre_bfs_pipeline(
+            _make_pass_context(_literal_copy_program()),
+            passes=disabled_passes,
+        )
+
+        assert not isinstance(result, Intractable)
+
+    def test_disable_pilot_sweep_still_allows_literal_fill_domain_mining(self) -> None:
+        disabled_passes = tuple(
+            replace(p, enabled=False) if p.name == "pilot_sweep" else p
+            for p in _DEFAULT_PRE_BFS_PASSES
+        )
+
+        result = _run_pre_bfs_pipeline(
+            _make_pass_context(_literal_fill_program()),
+            passes=disabled_passes,
+        )
+
+        assert not isinstance(result, Intractable)
 
     def test_disable_hidden_event_jumping_still_proves(self) -> None:
         context = _build_explore_context(_settle_pending_program())

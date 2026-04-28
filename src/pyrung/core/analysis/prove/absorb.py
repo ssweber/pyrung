@@ -365,8 +365,6 @@ def _find_redundant_acc_absorptions(
         preset_tag_name = done_acc_info.preset_tags.get(done_name)
         if preset_tag_name is None:
             continue
-        if not _is_stable_dynamic_preset(preset_tag_name, graph):
-            continue
 
         kind = done_acc_info.kinds[done_name]
         match_values = _preset_match_values(preset_tag_name, graph)
@@ -409,7 +407,11 @@ def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
     if not isinstance(value, str):
         return False
     tag = graph.tags.get(value)
-    if tag is None or tag.external or tag.public:
+    if tag is None:
+        return False
+    if value not in graph.writers_of and not tag.external:
+        return True
+    if tag.external or tag.public:
         return False
     if tag.readonly:
         return True

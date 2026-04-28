@@ -91,7 +91,9 @@ def _collect_all_exprs(
 
     When *scope* is given, restricts to expressions in the upstream cone
     of the scoped tags.  This improves don't-care pruning without
-    affecting soundness (filtering only discards irrelevant expressions).
+    affecting soundness — cone-of-influence reduction and abstraction
+    commute for safety properties, so absorption decisions made on the
+    scoped set are sound even though out-of-cone reads are not visible.
     """
     forms = simplified_forms(program)
 
@@ -133,19 +135,342 @@ def _boundary_values_for_tag(other_tag: Tag) -> list[Any]:
     return []
 
 
+_NO_LITERAL_WRITE = object()
+_EQ_NE_OTHER = object()
+
+
+def _has_non_condition_data_read(tag_name: str, graph: ProgramGraph | None) -> bool:
+    """True when a tag participates in non-condition data flow."""
+    if graph is None:
+        return False
+    return any(tag_name in node.data_reads for node in graph.rung_nodes)
+
+
+def _normalize_literal_write_value(raw_value: Any, target: Tag) -> Any | object:
+    """Return the concrete value stored by a literal copy/fill write."""
+    from pyrung.core.expression import Expression
+    from pyrung.core.instruction.conversions import _store_copy_value_to_tag_type
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    value = raw_value.value if isinstance(raw_value, ImmediateRef) else raw_value
+    if isinstance(value, (Tag, Expression)):
+        return _NO_LITERAL_WRITE
+    if not isinstance(value, (bool, int, float)):
+        return _NO_LITERAL_WRITE
+    return _store_copy_value_to_tag_type(value, target)
+
+
+def _literal_write_values(
+    instr: Any,
+    tags: dict[str, Tag],
+) -> dict[str, Any] | None:
+    """Return normalized literal values for copy/fill targets, if any."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
+        raw_value = instr.source
+    elif isinstance(instr, FillInstruction):
+        raw_value = instr.value
+    else:
+        return None
+
+    values: dict[str, Any] = {}
+    for target_name, _itype in _all_write_targets(instr):
+        target = tags.get(target_name)
+        if target is None:
+            return None
+        stored = _normalize_literal_write_value(raw_value, target)
+        if stored is _NO_LITERAL_WRITE:
+            return None
+        values[target_name] = stored
+    return values
+
+
+def _collect_literal_write_domains(
+    program: Program,
+    tags: dict[str, Tag],
+) -> dict[str, tuple[Any, ...]]:
+    """Infer exact finite domains for tags written only by literal copy/fill."""
+    from pyrung.core.validation._common import walk_instructions
+
+    literal_values_by_target: dict[str, set[Any]] = {}
+    disqualified: set[str] = set()
+
+    for instr in walk_instructions(program):
+        targets = [name for name, _itype in _all_write_targets(instr)]
+        if not targets:
+            continue
+
+        literal_values = _literal_write_values(instr, tags)
+        for target_name in targets:
+            if target_name in disqualified:
+                continue
+            if literal_values is None or target_name not in literal_values:
+                disqualified.add(target_name)
+                literal_values_by_target.pop(target_name, None)
+                continue
+            literal_values_by_target.setdefault(target_name, set()).add(literal_values[target_name])
+
+    domains: dict[str, tuple[Any, ...]] = {}
+    for target_name, values in literal_values_by_target.items():
+        if target_name in disqualified:
+            continue
+        tag = tags.get(target_name)
+        if tag is None:
+            continue
+        domains[target_name] = tuple(sorted({tag.default, *values}))
+    return domains
+
+
+def _declared_domain(tag: Tag) -> tuple[Any, ...] | None:
+    """Return a direct metadata domain when one is finite and explicit."""
+    if tag.type == TagType.BOOL:
+        return (False, True)
+    if tag.choices is not None:
+        return tuple(sorted(tag.choices.keys()))
+    if tag.min is None or tag.max is None:
+        return None
+    if not isinstance(tag.min, int | float) or not isinstance(tag.max, int | float):
+        return None
+    domain_size = tag.max - tag.min + 1
+    if domain_size > 1000:
+        return None
+    return tuple(range(int(tag.min), int(tag.max) + 1))
+
+
+def _tag_name_from_value(value: Any) -> str | None:
+    """Extract a source tag name from a raw instruction operand/expression node."""
+    from pyrung.core.expression import TagExpr
+    from pyrung.core.tag import ImmediateRef, Tag
+
+    raw = value.value if isinstance(value, ImmediateRef) else value
+    if isinstance(raw, Tag):
+        return raw.name
+    if isinstance(raw, TagExpr):
+        return raw.tag.name
+    return None
+
+
+def _literal_value_from_value(value: Any) -> Any | None:
+    """Extract a plain literal value from a raw instruction operand/expression node."""
+    from pyrung.core.expression import LiteralExpr
+    from pyrung.core.tag import ImmediateRef
+
+    raw = value.value if isinstance(value, ImmediateRef) else value
+    if isinstance(raw, LiteralExpr):
+        return raw.value
+    if isinstance(raw, (bool, int, float)):
+        return raw
+    return None
+
+
+def _domain_for_source_tag(
+    tag_name: str,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Resolve the best current finite domain for a source tag."""
+    if tag_name in known_domains:
+        return known_domains[tag_name]
+
+    tag = graph.tags.get(tag_name)
+    if tag is None:
+        return None
+    if not tag.external and tag_name not in graph.writers_of:
+        return (tag.default,)
+
+    domain = _extract_value_domain(
+        tag_name,
+        tag,
+        all_exprs,
+        graph.tags,
+        known_domains=known_domains,
+        graph=graph,
+    )
+    if domain:
+        return domain
+    return _declared_domain(tag)
+
+
+def _domain_from_copy_like_value(
+    raw_value: Any,
+    target: Tag,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer a target domain from a copy/fill-style source operand."""
+    source_tag_name = _tag_name_from_value(raw_value)
+    if source_tag_name is not None:
+        return _domain_for_source_tag(source_tag_name, graph, all_exprs, known_domains)
+
+    literal = _literal_value_from_value(raw_value)
+    if literal is None:
+        return None
+    stored = _normalize_literal_write_value(literal, target)
+    if stored is _NO_LITERAL_WRITE:
+        return None
+    return (stored,)
+
+
+def _domain_from_calc_expression(
+    expression: Any,
+    target: Tag,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer a target domain from a supported calc expression shape."""
+    from pyrung.core.expression import BinaryExpr
+
+    direct = _domain_from_copy_like_value(expression, target, graph, all_exprs, known_domains)
+    if direct is not None:
+        return direct
+
+    if not isinstance(expression, BinaryExpr) or expression.symbol != "%":
+        return None
+    modulus = _literal_value_from_value(expression.right)
+    if not isinstance(modulus, int) or isinstance(modulus, bool) or modulus <= 0 or modulus > 1000:
+        return None
+    return tuple(range(modulus))
+
+
+def _domain_from_write_instruction(
+    instr: Any,
+    target_name: str,
+    target: Tag,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+) -> tuple[Any, ...] | None:
+    """Infer a target domain from one supported writer instruction."""
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+
+    if isinstance(instr, CopyInstruction):
+        if instr.convert is not None:
+            return None
+        return _domain_from_copy_like_value(instr.source, target, graph, all_exprs, known_domains)
+
+    if isinstance(instr, FillInstruction):
+        return _domain_from_copy_like_value(instr.value, target, graph, all_exprs, known_domains)
+
+    if isinstance(instr, CalcInstruction):
+        if instr.dest.name != target_name:
+            return None
+        return _domain_from_calc_expression(
+            instr.expression,
+            target,
+            graph,
+            all_exprs,
+            known_domains,
+        )
+
+    return None
+
+
+def _collect_structural_domains(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
+) -> dict[str, tuple[Any, ...]]:
+    """Discover finite domains from structural writes via fixed-point propagation."""
+    from pyrung.core.validation._common import walk_instructions
+
+    known_domains = dict(literal_write_domains or _collect_literal_write_domains(program, graph.tags))
+    for tag_name, tag in graph.tags.items():
+        if not tag.external and tag_name not in graph.writers_of:
+            known_domains.setdefault(tag_name, (tag.default,))
+
+    by_target: dict[str, list[Any]] = {}
+    for instr in walk_instructions(program):
+        for target_name, _itype in _all_write_targets(instr):
+            by_target.setdefault(target_name, []).append(instr)
+
+    changed = True
+    while changed:
+        changed = False
+        for target_name, writers in by_target.items():
+            target = graph.tags.get(target_name)
+            if target is None or not writers:
+                continue
+
+            candidate_values: set[Any] = set()
+            for instr in writers:
+                domain = _domain_from_write_instruction(
+                    instr,
+                    target_name,
+                    target,
+                    graph,
+                    all_exprs,
+                    known_domains,
+                )
+                if domain is None:
+                    candidate_values = set()
+                    break
+                candidate_values.update(domain)
+
+            if not candidate_values:
+                continue
+
+            merged_values = set(known_domains.get(target_name, ()))
+            merged_values.update(candidate_values)
+            if len(merged_values) > 1000:
+                continue
+
+            merged = tuple(sorted(merged_values))
+            if known_domains.get(target_name) != merged:
+                known_domains[target_name] = merged
+                changed = True
+
+    return known_domains
+
+
 def _extract_value_domain(
     tag_name: str,
     tag: Tag,
     all_exprs: list[Expr],
     all_tags: dict[str, Tag] | None = None,
+    literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
+    known_domains: dict[str, tuple[Any, ...]] | None = None,
+    graph: ProgramGraph | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
+    if literal_write_domains is not None and tag_name in literal_write_domains:
+        return literal_write_domains[tag_name]
+    if known_domains is not None and tag_name in known_domains:
+        return known_domains[tag_name]
+
     atoms = _collect_atoms_for_tag(all_exprs, tag_name)
     if not atoms:
         return ()
 
     if tag.type == TagType.BOOL:
         return (False, True)
+
+    if tag.choices is None and not (tag.min is not None and tag.max is not None):
+        eq_ne_literals = {
+            atom.operand
+            for atom in atoms
+            if atom.form in {"eq", "ne"}
+            and atom.operand is not None
+            and not isinstance(atom.operand, str)
+        }
+        if (
+            eq_ne_literals
+            and all(
+                atom.form in {"eq", "ne"}
+                and atom.operand is not None
+                and not isinstance(atom.operand, str)
+                for atom in atoms
+            )
+            and not _has_non_condition_data_read(tag_name, graph)
+        ):
+            return tuple(sorted(eq_ne_literals)) + (_EQ_NE_OTHER,)
 
     comparison_forms = {"eq", "ne", "lt", "le", "gt", "ge"}
     literals: set[Any] = set()
@@ -154,8 +479,11 @@ def _extract_value_domain(
     for atom in atoms:
         if atom.form in comparison_forms and atom.operand is not None:
             if isinstance(atom.operand, str):
-                other = all_tags.get(atom.operand) if all_tags is not None else None
-                boundary = _boundary_values_for_tag(other) if other is not None else []
+                if known_domains is not None and atom.operand in known_domains:
+                    boundary = list(known_domains[atom.operand])
+                else:
+                    other = all_tags.get(atom.operand) if all_tags is not None else None
+                    boundary = _boundary_values_for_tag(other) if other is not None else []
                 if boundary:
                     literals.update(boundary)
                 else:
@@ -293,6 +621,16 @@ def _classify_dimensions_from_graph(
 ) -> _ClassifyResult | Intractable:
     """Classify dimensions using prebuilt graph/expression context."""
     done_acc_info = _collect_done_acc_pairs(program)
+    literal_write_domains = _collect_literal_write_domains(program, graph.tags)
+    structural_domains = _collect_structural_domains(
+        program,
+        graph,
+        all_exprs,
+        literal_write_domains,
+    )
+    known_domains = dict(structural_domains)
+    if discovered_domains is not None:
+        known_domains.update(discovered_domains)
 
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
@@ -351,10 +689,21 @@ def _classify_dimensions_from_graph(
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
+        if not tag.external and not is_written:
+            continue
+
         if role == TagRole.INPUT or (tag.external and not is_written):
             if scope_input_tags is not None and tag_name not in scope_input_tags:
                 continue
-            domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
+            domain = _extract_value_domain(
+                tag_name,
+                tag,
+                all_exprs,
+                graph.tags,
+                literal_write_domains,
+                known_domains,
+                graph,
+            )
             if domain is None:
                 infeasible_tags.append(tag_name)
                 continue
@@ -379,16 +728,24 @@ def _classify_dimensions_from_graph(
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
             if not _collect_atoms_for_tag(all_exprs, tag_name):
-                if discovered_domains is not None and tag_name in discovered_domains:
-                    stateful[tag_name] = discovered_domains[tag_name]
+                if tag_name in known_domains:
+                    stateful[tag_name] = known_domains[tag_name]
                 else:
                     infeasible_tags.append(tag_name)
                 continue
 
-        domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
+        domain = _extract_value_domain(
+            tag_name,
+            tag,
+            all_exprs,
+            graph.tags,
+            literal_write_domains,
+            known_domains,
+            graph,
+        )
         if domain is None:
-            if discovered_domains is not None and tag_name in discovered_domains:
-                stateful[tag_name] = discovered_domains[tag_name]
+            if tag_name in known_domains:
+                stateful[tag_name] = known_domains[tag_name]
             else:
                 infeasible_tags.append(tag_name)
             continue

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pyrung.cli import _apply_lock_config
 from pyrung.core import (
+    Block,
     PLC,
     Bool,
     Counter,
@@ -13,10 +14,12 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
+    TagType,
     Timer,
     calc,
     copy,
     count_up,
+    fill,
     latch,
     named_array,
     off_delay,
@@ -195,7 +198,7 @@ class TestValueDomainExtraction:
         assert nd["Flag"] == (False, True)
 
     def test_integer_comparison_literals(self):
-        """Int tag compared with literals extracts boundary partitions."""
+        """Pure equality-only inputs collapse to {literals..., OTHER}."""
         state = Int("State", external=True)
         out_a = Bool("OutA")
         out_b = Bool("OutB")
@@ -212,7 +215,7 @@ class TestValueDomainExtraction:
         domain = nd["State"]
         assert 1 in domain
         assert 2 in domain
-        assert set(domain) == {0, 1, 2, 3}
+        assert len(domain) == 3
 
     def test_choices_tag_uses_declared_domain(self):
         """Tag with choices uses the declared values."""
@@ -227,6 +230,42 @@ class TestValueDomainExtraction:
         assert not isinstance(result, Intractable)
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert set(nd["Mode"]) == {0, 1, 2}
+
+    def test_eq_ne_only_input_gets_literal_plus_other_domain(self):
+        """Pure-switch eq/ne inputs collapse to {literals..., OTHER}."""
+        mode = Int("Mode", external=True)
+        light = Bool("Light")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 1):
+                out(light)
+            with Rung(mode != 2):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert 1 in nd["Mode"]
+        assert 2 in nd["Mode"]
+        assert len(nd["Mode"]) == 3
+
+    def test_eq_ne_only_closure_rejects_data_flow_usage(self):
+        """Arithmetic/data-flow usage keeps eq/ne-only closure from applying."""
+        step = Int("Step", external=True)
+        odd = Int("Odd")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(step % 2, odd)
+            with Rung(step == 5):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert set(nd["Step"]) == {4, 5, 6}
 
     def test_unannotated_function_output_is_intractable(self):
         """run_function output without choices/min/max returns Intractable."""
@@ -1264,22 +1303,63 @@ class TestRedundantTimerAccumulatorAbstraction:
         proved = prove(logic, Or(~output, t.Done), max_depth=5)
         assert isinstance(proved, Proven)
 
-    def test_external_preset_is_not_absorbed(self):
-        """Raw external HMI-style presets remain nondeterministic/unbounded."""
+    def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
+        """Literal-written presets absorb without readonly/final annotations."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset")
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+        done_output = Bool("DoneOutput")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+            with Rung(t.Done):
+                out(done_output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
+
+    def test_external_preset_redundant_acc_comparison_is_absorbed(self):
+        """External presets still absorb when their value is threshold-only."""
         enable = Bool("Enable", external=True)
         hmi_preset = Int("HmiPreset", external=True)
         t = Timer.clone("DynT")
         output = Bool("Output")
+        done_output = Bool("DoneOutput")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 on_delay(t, preset=hmi_preset)
             with Rung(t.Acc >= hmi_preset):
                 out(output)
+            with Rung(t.Done):
+                out(done_output)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "HmiPreset" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "HmiPreset" not in stateful
+        assert "HmiPreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
 
     def test_non_redundant_acc_comparison_is_not_absorbed(self):
         """Strictly greater-than is absorbed by Layer 2 threshold events."""
@@ -1307,8 +1387,8 @@ class TestRedundantTimerAccumulatorAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("Output", True), ("DynT_Done", True)}) in states
 
-    def test_preset_data_use_elsewhere_is_not_absorbed(self):
-        """A preset copied as a value elsewhere is not fully absorbed."""
+    def test_preset_data_use_elsewhere_is_bounded_but_not_absorbed(self):
+        """A preset copied elsewhere stays explicit instead of being absorbed."""
         enable = Bool("Enable", external=True)
         active_preset = Int("ActivePreset", final=True)
         copied_preset = Int("CopiedPreset")
@@ -1325,8 +1405,12 @@ class TestRedundantTimerAccumulatorAbstraction:
                 out(output)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "ActivePreset" in result.tags or "DynT_Acc" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, done_presets, _done_kinds = result
+        assert "ActivePreset" in stateful
+        assert "DynT_Acc" in stateful
+        assert done_acc == {}
+        assert done_presets == {}
 
 
 class TestThresholdEventAbstraction:
@@ -1371,7 +1455,7 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("ResettableTimerAlarm", True)}) in states
 
-    def test_timer_threshold_event_rejects_nonzero_acc_assignment(self):
+    def test_timer_threshold_event_nonzero_acc_assignment_stays_explicit(self):
         enable = Bool("AssignedTimerEnable", external=True)
         force = Bool("AssignedTimerForce", external=True)
         active_threshold = Int("AssignedTimerThreshold", final=True)
@@ -1389,8 +1473,11 @@ class TestThresholdEventAbstraction:
                 out(alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "AssignedThresholdTmr_Acc" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "AssignedThresholdTmr_Acc" in stateful
+        assert "AssignedTimerThreshold" in stateful
+        assert done_acc == {}
 
     def test_multiple_timer_threshold_events_become_tractable(self):
         enable = Bool("Enable", external=True)
@@ -1495,7 +1582,7 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         assert frozenset({("TickAlarm", True)}) in states
 
-    def test_variable_stride_int_progress_is_rejected(self):
+    def test_variable_stride_int_progress_stays_explicit(self):
         enable = Bool("Enable", external=True)
         ticks = Int("VariableStepTicks")
         stride = Int("Stride", final=True)
@@ -1512,8 +1599,11 @@ class TestThresholdEventAbstraction:
                 out(alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "VariableStepTicks" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "VariableStepTicks" in stateful
+        assert "Stride" in stateful
+        assert "VariableTickThreshold" in stateful
 
     def test_raw_external_threshold_is_not_absorbed(self):
         enable = Bool("Enable", external=True)
@@ -1530,6 +1620,22 @@ class TestThresholdEventAbstraction:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "HmiThreshold" in result.tags
+
+    def test_unwritten_internal_threshold_is_absorbed_as_constant(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("ImplicitThreshold")
+        t = Timer.clone("ImplicitThresholdTmr")
+        alarm = Bool("ImplicitThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ImplicitThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ImplicitThresholdAlarm", True)}) in states
 
     def test_projected_public_threshold_is_discovered(self):
         enable = Bool("Enable", external=True)
@@ -1554,7 +1660,7 @@ class TestThresholdEventAbstraction:
         threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
         assert 500 in threshold_vals
 
-    def test_non_threshold_accumulator_read_is_not_absorbed(self):
+    def test_non_threshold_accumulator_read_stays_explicit(self):
         enable = Bool("Enable", external=True)
         threshold = Int("SavedAccThreshold", final=True)
         t = Timer.clone("SavedAccTmr")
@@ -1572,8 +1678,11 @@ class TestThresholdEventAbstraction:
                 out(alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "SavedAccTmr_Acc" in result.tags
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "SavedAccTmr_Acc" in stateful
+        assert "SavedAccThreshold" in stateful
+        assert done_acc == {}
 
     def test_reset_recomputes_threshold_vector_false(self):
         enable = Bool("Enable", external=True)
@@ -1744,8 +1853,8 @@ class TestIntractableHints:
 class TestThresholdBlockerHints:
     """Intractable hints explain why threshold abstraction was blocked."""
 
-    def test_unstable_threshold_hint_names_tags(self):
-        """When thresholds aren't stable, hints name the specific tags."""
+    def test_literal_thresholds_are_structurally_bounded(self):
+        """Literal-written thresholds no longer need readonly/final hints."""
         enable = Bool("Enable", external=True)
         pan_ts = Int("PanWatchdog_Ts")
         shaft_ts = Int("ShaftWatchdog_Ts")
@@ -1754,6 +1863,9 @@ class TestThresholdBlockerHints:
         shaft_alarm = Bool("ShaftAlarm")
 
         with Program(strict=False) as logic:
+            with Rung():
+                copy(500, pan_ts)
+                copy(600, shaft_ts)
             with Rung(enable):
                 on_delay(t, preset=1000)
             with Rung(t.Acc > pan_ts):
@@ -1762,28 +1874,32 @@ class TestThresholdBlockerHints:
                 out(shaft_alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "CurStep_tmr_Acc" in result.tags
-        assert any("threshold abstraction blocked" in h for h in result.hints)
-        assert any("PanWatchdog_Ts" in h for h in result.hints)
-        assert any("ShaftWatchdog_Ts" in h for h in result.hints)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "CurStep_tmr_Acc" in stateful
+        assert "PanWatchdog_Ts" in stateful
+        assert "ShaftWatchdog_Ts" in stateful
 
-    def test_unstable_threshold_hint_suggests_readonly(self):
-        """Hint for unstable threshold suggests readonly=True."""
+    def test_literal_threshold_no_longer_suggests_readonly(self):
+        """Literal-written thresholds are bounded without readonly hints."""
         enable = Bool("Enable", external=True)
         ts = Int("WatchdogTs")
         t = Timer.clone("WdTmr")
         alarm = Bool("WdAlarm")
 
         with Program(strict=False) as logic:
+            with Rung():
+                copy(500, ts)
             with Rung(enable):
                 on_delay(t, preset=1000)
             with Rung(t.Acc > ts):
                 out(alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert any("readonly=True" in h and "WatchdogTs" in h for h in result.hints)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "WdTmr_Acc" in stateful
+        assert "WatchdogTs" in stateful
 
     def test_external_threshold_hint_mentions_external(self):
         """External threshold hints mention the external flag."""
@@ -1802,8 +1918,8 @@ class TestThresholdBlockerHints:
         assert isinstance(result, Intractable)
         assert any("external" in h and "HmiThreshold" in h for h in result.hints)
 
-    def test_data_read_blocker_hint(self):
-        """Accumulator read in data-flow gets a specific hint."""
+    def test_data_read_blocker_falls_back_to_structural_bounding(self):
+        """Data-flow reads can block absorption without forcing Intractable."""
         enable = Bool("Enable", external=True)
         threshold = Int("DataReadThreshold", final=True)
         t = Timer.clone("DataReadTmr")
@@ -1821,8 +1937,11 @@ class TestThresholdBlockerHints:
                 out(alarm)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert any("data-flow" in h for h in result.hints)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "DataReadTmr_Acc" in stateful
+        assert "DataReadThreshold" in stateful
+        assert done_acc == {}
 
     def test_stable_threshold_no_blocker(self):
         """Stable thresholds produce no blocker — absorption succeeds."""
@@ -1887,6 +2006,21 @@ class TestKernelDomainDiscovery:
             with Rung(trigger_b):
                 copy(10, dest)
             with Rung(dest == 5):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_fill_literal_writes_discover_domain(self):
+        """fill(constant, block.select(...)) counts as literal writes per target."""
+        enable = Bool("Enable", external=True)
+        ds = Block("DS", TagType.INT, 1, 3)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                fill(7, ds.select(1, 3))
+            with Rung(ds[1] == 7):
                 out(flag)
 
         result = prove(logic, lambda s: True)
