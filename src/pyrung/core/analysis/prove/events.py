@@ -15,13 +15,16 @@ from .absorb import (
     _DONE_KIND_ON_DELAY,
     _PROGRESS_KIND_INT_UP,
     _THRESHOLD_FORM_GE,
+    _THRESHOLD_MODE_EXACT,
     _is_numeric_literal,
 )
 from .kernel import (
     _EdgeCompressor,
     _KernelSnapshot,
+    _restore_kernel,
     _snapshot_kernel,
     _step_kernel,
+    _threshold_crossed,
     _threshold_value,
 )
 
@@ -52,6 +55,14 @@ class _ThresholdEventSpec:
     kind: str
     threshold: int | float | str
     form: str
+    mode: str
+
+
+@dataclass(frozen=True)
+class _HiddenEventOutcome:
+    snapshot: _KernelSnapshot
+    key: tuple[Any, ...]
+    additional_scans: int
 
 
 def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
@@ -192,7 +203,7 @@ def _has_pending_hidden_event(context: _ExploreContext, key: tuple[Any, ...]) ->
     return _has_pending_done(context, key) or _has_uncrossed_threshold_event(context, key)
 
 
-def _resolve_nearest_hidden_event(
+def _resolve_nearest_exact_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
@@ -219,6 +230,8 @@ def _resolve_nearest_hidden_event(
 
     vector_offset = len(context.stateful_names)
     for spec in context.threshold_event_specs:
+        if spec.mode != _THRESHOLD_MODE_EXACT:
+            continue
         vector = key[vector_offset + spec.vector_index]
         if vector[spec.atom_index]:
             continue
@@ -239,28 +252,140 @@ def _resolve_nearest_hidden_event(
     return edge_comp.state_key(kernel), skipped_scans
 
 
-def _settle_pending(
+def _settle_exact_pending(
     context: _ExploreContext,
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], int]:
+) -> _HiddenEventOutcome | None:
     """Resolve all pending timers/counters so the system reaches a stable state.
 
     *before_snap* must be from before the most recent ``_step_kernel`` call
     so that the per-scan delta can be computed (acc_after − acc_before).
     """
+    base_snap = _snapshot_kernel(kernel)
     key = edge_comp.state_key(kernel)
     total_additional_scans = 0
-    event_count = len(context.done_event_specs) + len(context.threshold_event_specs)
+    event_count = len(context.done_event_specs) + sum(
+        1 for spec in context.threshold_event_specs if spec.mode == _THRESHOLD_MODE_EXACT
+    )
+    changed = False
     for _ in range(event_count + 1):
-        resolved = _resolve_nearest_hidden_event(context, kernel, before_snap, key, edge_comp)
+        resolved = _resolve_nearest_exact_hidden_event(context, kernel, before_snap, key, edge_comp)
         if resolved is None:
             break
+        changed = True
         key, additional_scans = resolved
         total_additional_scans += additional_scans
         before_snap = _snapshot_kernel(kernel)
-    return key, total_additional_scans
+    if not changed:
+        _restore_kernel(kernel, base_snap)
+        return None
+    outcome = _HiddenEventOutcome(_snapshot_kernel(kernel), key, total_additional_scans)
+    _restore_kernel(kernel, base_snap)
+    return outcome
+
+
+def _materialize_abstract_threshold_outcome(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _KernelSnapshot,
+    spec: _ThresholdEventSpec,
+    edge_comp: _EdgeCompressor,
+) -> _HiddenEventOutcome | None:
+    """Build one representative crossed successor for an abstract threshold."""
+    threshold_name = spec.threshold if isinstance(spec.threshold, str) else None
+    if threshold_name is None:
+        return None
+
+    delta_current = _progress_delta_and_current(spec.kind, spec.acc_name, before_snap, kernel)
+    if delta_current is None:
+        return None
+    delta, _current = delta_current
+    if delta <= 0:
+        return None
+
+    acc_value = kernel.tags.get(spec.acc_name)
+    if not _is_numeric_literal(acc_value):
+        return None
+
+    # Pin the hidden threshold to the current progress boundary, then advance
+    # to the next representative crossing state in one abstract future edge.
+    kernel.tags[threshold_name] = acc_value
+    scans = _scans_until_threshold_event(spec, before_snap, kernel)
+    if scans is None:
+        return None
+    skipped_scans = max(scans - 1, 0)
+    _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
+    _step_kernel(context, kernel)
+    if not _threshold_crossed(kernel, spec.acc_name, spec.threshold, spec.form):
+        return None
+    return _HiddenEventOutcome(
+        snapshot=_snapshot_kernel(kernel),
+        key=edge_comp.state_key(kernel),
+        additional_scans=1,
+    )
+
+
+def _abstract_threshold_outcomes(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _KernelSnapshot,
+    key: tuple[Any, ...],
+    edge_comp: _EdgeCompressor,
+) -> list[_HiddenEventOutcome]:
+    """Emit abstract threshold-crossing branches from the current plateau."""
+    vector_offset = len(context.stateful_names)
+    base_snap = _snapshot_kernel(kernel)
+    outcomes: list[_HiddenEventOutcome] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+
+    for spec in context.threshold_event_specs:
+        if spec.mode == _THRESHOLD_MODE_EXACT:
+            continue
+        vector = key[vector_offset + spec.vector_index]
+        if vector[spec.atom_index]:
+            continue
+        _restore_kernel(kernel, base_snap)
+        outcome = _materialize_abstract_threshold_outcome(
+            context,
+            kernel,
+            before_snap,
+            spec,
+            edge_comp,
+        )
+        if outcome is None or outcome.key in seen_keys:
+            continue
+        seen_keys.add(outcome.key)
+        outcomes.append(outcome)
+
+    _restore_kernel(kernel, base_snap)
+    return outcomes
+
+
+def _settle_pending(
+    context: _ExploreContext,
+    kernel: ReplayKernel,
+    before_snap: _KernelSnapshot,
+    edge_comp: _EdgeCompressor,
+) -> list[_HiddenEventOutcome]:
+    """Resolve pending exact events and emit abstract threshold branches."""
+    key = edge_comp.state_key(kernel)
+    outcomes: list[_HiddenEventOutcome] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+
+    exact = _settle_exact_pending(context, kernel, before_snap, edge_comp)
+    if exact is not None and exact.key not in seen_keys:
+        seen_keys.add(exact.key)
+        outcomes.append(exact)
+
+    for outcome in _abstract_threshold_outcomes(context, kernel, before_snap, key, edge_comp):
+        if outcome.key in seen_keys:
+            continue
+        seen_keys.add(outcome.key)
+        outcomes.append(outcome)
+
+    return outcomes
 
 
 def _maybe_jump_hidden_event(
@@ -270,13 +395,28 @@ def _maybe_jump_hidden_event(
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
-) -> tuple[tuple[Any, ...], int]:
-    """Jump from a revisited hidden pending plateau to the next completion event."""
+) -> list[_HiddenEventOutcome]:
+    """Jump from a revisited hidden pending plateau to future hidden-event states."""
     if not (context.done_event_specs or context.threshold_event_specs) or new_key not in visited:
-        return new_key, 0
+        return []
 
-    resolved = _resolve_nearest_hidden_event(context, kernel, snap, new_key, edge_comp)
-    if resolved is None:
-        return new_key, 0
-    resolved_key, additional_scans = resolved
-    return resolved_key, additional_scans
+    base_snap = _snapshot_kernel(kernel)
+    outcomes: list[_HiddenEventOutcome] = []
+    seen_keys: set[tuple[Any, ...]] = set()
+
+    resolved = _resolve_nearest_exact_hidden_event(context, kernel, snap, new_key, edge_comp)
+    if resolved is not None:
+        resolved_key, additional_scans = resolved
+        outcome = _HiddenEventOutcome(_snapshot_kernel(kernel), resolved_key, additional_scans)
+        seen_keys.add(outcome.key)
+        outcomes.append(outcome)
+        _restore_kernel(kernel, base_snap)
+
+    for outcome in _abstract_threshold_outcomes(context, kernel, snap, new_key, edge_comp):
+        if outcome.key in seen_keys:
+            continue
+        seen_keys.add(outcome.key)
+        outcomes.append(outcome)
+
+    _restore_kernel(kernel, base_snap)
+    return outcomes

@@ -306,6 +306,7 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
                     kind=vector.kind,
                     threshold=atom.threshold,
                     form=atom.form,
+                    mode=atom.mode,
                 )
             )
     ctx.threshold_event_specs = tuple(t_events)

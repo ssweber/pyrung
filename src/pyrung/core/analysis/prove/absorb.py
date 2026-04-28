@@ -19,13 +19,12 @@ threshold is already discarded (synthetic preset=1).  The stability check
 (``_is_stable_dynamic_preset``) is purely unnecessary — the exclusivity
 check (``_has_non_timer_data_read``) is the only gate that matters.
 
-*Threshold vector absorption* (``_find_threshold_absorptions``): the event
-scheduler stores the concrete threshold in ``ThresholdAtomSpec`` and looks
-it up per BFS state.  Relaxing ``_is_stable_threshold`` here requires
-either keeping the threshold tag as a BFS dimension (needs a finite domain)
-or reworking the scheduler to handle unknown thresholds.  Until then, the
-stability check remains as a pragmatic implementation constraint, not a
-soundness requirement.
+*Threshold vector absorption* (``_find_threshold_absorptions``): accepts
+both exact and abstract threshold atoms.  Exact atoms keep the current
+scan-distance scheduling.  Abstract atoms represent exclusive threshold-only
+tags whose concrete value is hidden from the state key; the BFS materializes
+representative crossed successors when needed instead of requiring a stable
+value up front.
 """
 
 from __future__ import annotations
@@ -57,6 +56,10 @@ _PROGRESS_KIND_INT_UP = "int_up"
 _THRESHOLD_FORM_GT = "gt"
 
 _THRESHOLD_FORM_GE = "ge"
+
+_THRESHOLD_MODE_EXACT = "exact"
+
+_THRESHOLD_MODE_ABSTRACT = "abstract"
 
 
 @dataclass(frozen=True)
@@ -394,14 +397,7 @@ def _is_numeric_literal(value: Any) -> bool:
 
 
 def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
-    """True when a threshold value is fixed for verifier event scheduling.
-
-    Stricter than necessary for soundness — per the threshold absorption
-    principle the real gate is exclusivity, not stability.  However, the
-    threshold vector event scheduler currently stores the concrete value
-    and looks it up per BFS state, so this check remains as a pragmatic
-    implementation constraint until the scheduler is reworked.
-    """
+    """True when a threshold value is fixed for precise event scheduling."""
     if _is_numeric_literal(value):
         return True
     if not isinstance(value, str):
@@ -418,6 +414,22 @@ def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
     return bool(tag.final and value in graph.writers_of)
 
 
+def _threshold_mode(
+    threshold: Any,
+    graph: ProgramGraph,
+) -> str | None:
+    """Classify a threshold operand as exact, abstract, or unsupported."""
+    if _is_numeric_literal(threshold):
+        return _THRESHOLD_MODE_EXACT
+    if not isinstance(threshold, str):
+        return None
+    if graph.tags.get(threshold) is None:
+        return None
+    if _is_stable_threshold(threshold, graph):
+        return _THRESHOLD_MODE_EXACT
+    return _THRESHOLD_MODE_ABSTRACT
+
+
 def _threshold_atom_for_progress(
     atom: Atom,
     acc_name: str,
@@ -425,15 +437,17 @@ def _threshold_atom_for_progress(
 ) -> _ThresholdAtomSpec | None:
     """Normalize supported Progress/Threshold comparison atoms."""
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
-        if _is_stable_threshold(atom.operand, graph):
-            return _ThresholdAtomSpec(acc_name, atom.operand, atom.form)
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            return _ThresholdAtomSpec(acc_name, atom.operand, atom.form, mode)
         return None
 
     if atom.operand == acc_name and atom.form in {"lt", "le"}:
-        if not _is_stable_threshold(atom.tag, graph):
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
             return None
         form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
-        return _ThresholdAtomSpec(acc_name, atom.tag, form)
+        return _ThresholdAtomSpec(acc_name, atom.tag, form, mode)
 
     return None
 
@@ -445,10 +459,8 @@ def _diagnose_unstable_atom(
 ) -> str | None:
     """Return a human-readable reason when an atom blocks threshold abstraction.
 
-    Hints currently reference stability (readonly/final).  For the
-    redundant-absorption path this is misleading — exclusivity is the
-    real gate.  For the threshold-vector path the stability requirement
-    is a scheduler limitation, not a soundness requirement.
+    This diagnoses unsupported comparison structure or unknown threshold
+    operands.  Stability is no longer an admission gate.
     """
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         threshold = atom.operand
@@ -472,11 +484,7 @@ def _diagnose_unstable_atom(
     tag = graph.tags.get(threshold)
     if tag is None:
         return f"{threshold}: unknown tag"
-    if tag.external:
-        return f"{threshold}: external — add readonly=True or bounded metadata (min=/max=)"
-    if tag.public:
-        return f"{threshold}: public — add readonly=True or bounded metadata (min=/max=)"
-    return f"{threshold}: not stable — add readonly=True or final=True (with a write)"
+    return None
 
 
 def _threshold_tag_name(spec: _ThresholdAtomSpec) -> str | None:
@@ -839,6 +847,7 @@ class _ThresholdAtomSpec:
     acc_name: str
     threshold: int | float | str
     form: str
+    mode: str
 
 
 @dataclass(frozen=True)

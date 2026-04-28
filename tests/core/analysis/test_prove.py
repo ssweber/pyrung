@@ -1605,9 +1605,9 @@ class TestThresholdEventAbstraction:
         assert "Stride" in stateful
         assert "VariableTickThreshold" in stateful
 
-    def test_raw_external_threshold_is_not_absorbed(self):
+    def test_raw_external_threshold_is_absorbed_when_threshold_only(self):
         enable = Bool("Enable", external=True)
-        hmi_threshold = Int("HmiThreshold", external=True)
+        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
         t = Timer.clone("ExternalThresholdTmr")
         alarm = Bool("ExternalThresholdAlarm")
 
@@ -1617,9 +1617,10 @@ class TestThresholdEventAbstraction:
             with Rung(t.Acc > hmi_threshold):
                 out(alarm)
 
-        result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert "HmiThreshold" in result.tags
+        states = reachable_states(logic, project=["ExternalThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ExternalThresholdAlarm", False)}) in states
+        assert frozenset({("ExternalThresholdAlarm", True)}) in states
 
     def test_unwritten_internal_threshold_is_absorbed_as_constant(self):
         enable = Bool("Enable", external=True)
@@ -1659,6 +1660,43 @@ class TestThresholdEventAbstraction:
         assert not isinstance(states, Intractable)
         threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
         assert 500 in threshold_vals
+
+    def test_public_threshold_is_absorbed_when_not_projected(self):
+        enable = Bool("Enable", external=True)
+        public_threshold = Int("PublicThreshold", public=True, default=1000)
+        t = Timer.clone("PublicThresholdTmr")
+        alarm = Bool("PublicThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > public_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["PublicThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("PublicThresholdAlarm", False)}) in states
+        assert frozenset({("PublicThresholdAlarm", True)}) in states
+
+    def test_exact_and_abstract_threshold_events_both_branch(self):
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
+        t = Timer.clone("MixedThresholdTmr")
+        exact_alarm = Bool("ExactAlarm")
+        hmi_alarm = Bool("HmiAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > 500):
+                out(exact_alarm)
+            with Rung(t.Acc > hmi_threshold):
+                out(hmi_alarm)
+
+        states = reachable_states(logic, project=["ExactAlarm", "HmiAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ExactAlarm", True), ("HmiAlarm", False)}) in states
+        assert frozenset({("ExactAlarm", False), ("HmiAlarm", True)}) in states
 
     def test_non_threshold_accumulator_read_stays_explicit(self):
         enable = Bool("Enable", external=True)
@@ -1876,9 +1914,9 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "CurStep_tmr_Acc" in stateful
-        assert "PanWatchdog_Ts" in stateful
-        assert "ShaftWatchdog_Ts" in stateful
+        assert "CurStep_tmr_Acc" not in stateful
+        assert "PanWatchdog_Ts" not in stateful
+        assert "ShaftWatchdog_Ts" not in stateful
 
     def test_literal_threshold_no_longer_suggests_readonly(self):
         """Literal-written thresholds are bounded without readonly hints."""
@@ -1898,25 +1936,63 @@ class TestThresholdBlockerHints:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert "WdTmr_Acc" in stateful
-        assert "WatchdogTs" in stateful
+        assert "WdTmr_Acc" not in stateful
+        assert "WatchdogTs" not in stateful
 
-    def test_external_threshold_hint_mentions_external(self):
-        """External threshold hints mention the external flag."""
-        enable = Bool("Enable", external=True)
-        ts = Int("HmiThreshold", external=True)
-        t = Timer.clone("ExtTmr")
-        alarm = Bool("ExtAlarm")
+    def test_shared_threshold_blocks_absorption(self):
+        """One threshold shared across progress sources stays explicit."""
+        enable_a = Bool("EnableA", external=True)
+        enable_b = Bool("EnableB", external=True)
+        shared_ts = Int("SharedWatchdogTs")
+        t_a = Timer.clone("SharedA")
+        t_b = Timer.clone("SharedB")
+        alarm_a = Bool("SharedAlarmA")
+        alarm_b = Bool("SharedAlarmB")
 
         with Program(strict=False) as logic:
+            with Rung():
+                copy(500, shared_ts)
+            with Rung(enable_a):
+                on_delay(t_a, preset=1000)
+            with Rung(enable_b):
+                on_delay(t_b, preset=1000)
+            with Rung(t_a.Acc > shared_ts):
+                out(alarm_a)
+            with Rung(t_b.Acc > shared_ts):
+                out(alarm_b)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "SharedWatchdogTs" in stateful
+        assert "SharedA_Acc" in stateful
+        assert "SharedB_Acc" in stateful
+        assert done_acc == {}
+
+    def test_threshold_tag_non_threshold_comparison_blocks_absorption(self):
+        """Threshold tags used in other comparisons stay explicit."""
+        enable = Bool("Enable", external=True)
+        ts = Int("ComparedThreshold")
+        t = Timer.clone("ComparedTmr")
+        alarm = Bool("ComparedAlarm")
+        mode = Bool("ThresholdMode")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, ts)
             with Rung(enable):
                 on_delay(t, preset=1000)
             with Rung(t.Acc > ts):
                 out(alarm)
+            with Rung(ts == 500):
+                out(mode)
 
         result = _classify_dimensions(logic)
-        assert isinstance(result, Intractable)
-        assert any("external" in h and "HmiThreshold" in h for h in result.hints)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "ComparedThreshold" in stateful
+        assert "ComparedTmr_Acc" in stateful
+        assert done_acc == {}
 
     def test_data_read_blocker_falls_back_to_structural_bounding(self):
         """Data-flow reads can block absorption without forcing Intractable."""
@@ -2026,13 +2102,13 @@ class TestKernelDomainDiscovery:
         result = prove(logic, lambda s: True)
         assert isinstance(result, Proven)
 
-    def test_direct_self_feed_remains_intractable(self):
-        """Direct self-feed calc(Count + 1, Count) remains intractable."""
+    def test_direct_self_feed_threshold_only_progress_becomes_tractable(self):
+        """Monotone self-feed is tractable when the only consumer is a threshold."""
         from pyrung.core.analysis.pdg import build_program_graph
 
         trigger = Bool("Trigger", external=True)
         count = Int("Count")
-        threshold = Int("Threshold", external=True)
+        threshold = Int("Threshold", external=True, default=1000)
         flag = Bool("Flag")
 
         with Program(strict=False) as logic:
@@ -2044,8 +2120,10 @@ class TestKernelDomainDiscovery:
         graph = build_program_graph(logic)
         assert _has_data_feedback("Count", graph)
 
-        result = prove(logic, lambda s: True)
-        assert isinstance(result, Intractable)
+        states = reachable_states(logic, project=["Flag"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Flag", False)}) in states
+        assert frozenset({("Flag", True)}) in states
 
     def test_transitive_feedback_remains_intractable(self):
         """Transitive feedback A→B→A remains intractable."""
@@ -2152,7 +2230,7 @@ class TestKernelDomainDiscovery:
         """copy(Source, Dest) where Source has min=/max= but no comparison atoms."""
         Source = Int("Source", external=True, min=0, max=5)
         Stored = Int("Stored")
-        Other = Int("Other", external=True)
+        Other = Int("Other", external=True, default=5)
         Flag = Bool("Flag")
 
         with Program(strict=False) as logic:
@@ -2162,9 +2240,7 @@ class TestKernelDomainDiscovery:
                 out(Flag)
 
         result = prove(logic, lambda s: True)
-        assert isinstance(result, Intractable)
-        assert "Other" in result.tags
-        assert "Stored" not in result.tags
+        assert isinstance(result, Proven)
 
     def test_copy_with_reset_from_bounded_source(self):
         """copy(CurStep, StoredStep) plus copy(0, StoredStep) reset path."""
