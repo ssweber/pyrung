@@ -370,10 +370,17 @@ def _run_pre_bfs_pipeline(
     ctx: _PassContext,
     passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
 ) -> _ExploreContext | Intractable:
-    for p in passes:
+    for i, p in enumerate(passes):
         if not p.enabled:
             continue
         p.run(ctx)
-        if ctx.intractable is not None and p.name not in {"classify_dimensions"}:
+        if ctx.intractable is None:
+            continue
+        if p.name != "classify_dimensions":
+            return ctx.intractable
+        pilot_sweep_ahead = any(
+            later.enabled and later.name == "pilot_sweep" for later in passes[i + 1 :]
+        )
+        if not pilot_sweep_ahead:
             return ctx.intractable
     return ctx.freeze()
