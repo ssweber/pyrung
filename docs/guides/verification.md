@@ -151,7 +151,7 @@ pyrung lock my_program        # compute reachable states, write pyrung.lock
 pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
-The lock projects to terminal Bool tags by default — the discrete outputs that define your program's observable behavior. Non-Bool terminals (analog values, step counters) are excluded because they belong in `dt=` tests, not exhaustive proofs. Override with `--project`:
+The lock projects to terminal Bool tags by default — the discrete outputs that define your program's observable behavior. Non-Bool terminals (step counters, analog outputs) are not included automatically but can be added via `__lock__` or `--project`:
 
 ```bash
 pyrung lock my_program --project Running MotorOut StatusLight

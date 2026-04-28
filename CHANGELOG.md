@@ -4,7 +4,7 @@
 
 ### Breaking changes
 
-- **Lock file default projection is now terminal Bools only** — `_default_projection` and `pyrung lock` now project to terminal Bool tags only (previously all terminal tags). Non-Bool terminals are excluded — analog values and step counters belong in `dt=` testing, not exhaustive proofs. To include specific non-Bool tags, add them via `__lock__ = {"include": [...]}` or `--project`. Existing lock files will need regeneration with `pyrung lock`.
+- **Lock file default projection is now terminal Bools only** — `_default_projection` and `pyrung lock` now project to terminal Bool tags only (previously all terminal tags). Non-Bool terminals (Int step counters, Real outputs, etc.) can still be included explicitly via `__lock__ = {"include": [...]}` or `--project`. Existing lock files will need regeneration with `pyrung lock`.
 - **Lock file omits False values** — reachable state entries now only include tags whose value is True. Each state reads as "what's ON." Empty `{}` means nothing is active. Existing lock files will diff on regeneration but `check_lock` handles both formats transparently.
 
 ### New features
