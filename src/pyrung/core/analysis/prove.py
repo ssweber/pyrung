@@ -546,6 +546,41 @@ def _threshold_atom_for_progress(
     return None
 
 
+def _diagnose_unstable_atom(
+    atom: Atom,
+    acc_name: str,
+    graph: ProgramGraph,
+) -> str | None:
+    """Return a human-readable reason when an atom blocks threshold abstraction."""
+    if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        threshold = atom.operand
+    elif atom.operand == acc_name and atom.form in {"lt", "le"}:
+        threshold = atom.tag
+    else:
+        if atom.form in {"eq", "ne"}:
+            return (
+                f"compared with {atom.form}"
+                " — only monotonic threshold comparisons (>, >=) can be abstracted"
+            )
+        return (
+            "compared as below-threshold"
+            " — only upward-crossing (Acc > T, Acc >= T) can be abstracted"
+        )
+
+    if _is_numeric_literal(threshold):
+        return None
+    if not isinstance(threshold, str):
+        return "non-tag threshold operand"
+    tag = graph.tags.get(threshold)
+    if tag is None:
+        return f"{threshold}: unknown tag"
+    if tag.external:
+        return f"{threshold}: external — add readonly=True or bounded metadata (min=/max=)"
+    if tag.public:
+        return f"{threshold}: public — add readonly=True or bounded metadata (min=/max=)"
+    return f"{threshold}: not stable — add readonly=True or final=True (with a write)"
+
+
 def _threshold_tag_name(spec: _ThresholdAtomSpec) -> str | None:
     return spec.threshold if isinstance(spec.threshold, str) else None
 
@@ -779,6 +814,7 @@ def _find_threshold_absorptions(
 
     candidate_vectors: dict[str, _ThresholdVectorSpec] = {}
     threshold_progress: dict[str, set[str]] = {}
+    blockers: list[_ThresholdBlocker] = []
 
     for acc_name, kind in sorted(source_kinds.items()):
         if acc_name in projected:
@@ -791,23 +827,67 @@ def _find_threshold_absorptions(
             continue
 
         normalized: list[_ThresholdAtomSpec] = []
+        atom_reasons: list[str] = []
+        blocked = False
         for atom in atoms:
             spec = _threshold_atom_for_progress(atom, acc_name, graph)
             if spec is None:
-                normalized = []
-                break
-            normalized.append(spec)
+                reason = _diagnose_unstable_atom(atom, acc_name, graph)
+                if reason:
+                    atom_reasons.append(reason)
+                blocked = True
+            else:
+                normalized.append(spec)
+        if blocked:
+            if atom_reasons:
+                seen: set[str] = set()
+                unique = []
+                for r in atom_reasons:
+                    if r not in seen:
+                        seen.add(r)
+                        unique.append(r)
+                blockers.append(_ThresholdBlocker(acc_name, kind, tuple(unique)))
+            normalized = []
         if not normalized:
             continue
 
         if kind != _PROGRESS_KIND_INT_UP:
             if not _has_only_owner_writes(program, acc_name, kind):
+                blockers.append(
+                    _ThresholdBlocker(
+                        acc_name,
+                        kind,
+                        (f"{acc_name}: has non-owner writes — remove direct assignments",),
+                    )
+                )
                 continue
             if _has_forbidden_data_read(program, acc_name):
+                blockers.append(
+                    _ThresholdBlocker(
+                        acc_name,
+                        kind,
+                        (f"{acc_name}: read in data-flow — remove copy/calc reads of accumulator",),
+                    )
+                )
                 continue
 
         unique_atoms = tuple(dict.fromkeys(normalized))
-        if any(_threshold_tag_name(spec) in projected for spec in unique_atoms):
+        projected_thresholds = [
+            _threshold_tag_name(spec)
+            for spec in unique_atoms
+            if _threshold_tag_name(spec) in projected
+        ]
+        if projected_thresholds:
+            blockers.append(
+                _ThresholdBlocker(
+                    acc_name,
+                    kind,
+                    tuple(
+                        f"{name}: in projection — remove from project= to allow abstraction"
+                        for name in projected_thresholds
+                    ),
+                )
+            )
             continue
 
         candidate_vectors[acc_name] = _ThresholdVectorSpec(
@@ -830,15 +910,25 @@ def _find_threshold_absorptions(
             name for spec in vector.atoms if (name := _threshold_tag_name(spec)) is not None
         }
         if threshold_names & shared_thresholds:
+            shared = threshold_names & shared_thresholds
+            blockers.append(
+                _ThresholdBlocker(
+                    acc_name,
+                    vector.kind,
+                    tuple(f"{name}: shared with other accumulators" for name in sorted(shared)),
+                )
+            )
             continue
-        forbidden_threshold_read = False
+        forbidden_reasons: list[str] = []
         for threshold_name in threshold_names:
             threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
             if not all(
                 _threshold_atom_for_progress(atom, acc_name, graph) is not None
                 for atom in threshold_atoms
             ):
-                forbidden_threshold_read = True
+                forbidden_reasons.append(
+                    f"{threshold_name}: also used in non-threshold comparisons"
+                )
                 break
             if _has_forbidden_data_read(
                 program,
@@ -847,9 +937,12 @@ def _find_threshold_absorptions(
                     instr, t, a
                 ),
             ):
-                forbidden_threshold_read = True
+                forbidden_reasons.append(
+                    f"{threshold_name}: read in data-flow outside accumulator comparisons"
+                )
                 break
-        if forbidden_threshold_read:
+        if forbidden_reasons:
+            blockers.append(_ThresholdBlocker(acc_name, vector.kind, tuple(forbidden_reasons)))
             continue
 
         absorbed_progress.add(acc_name)
@@ -860,6 +953,7 @@ def _find_threshold_absorptions(
         progress_names=frozenset(absorbed_progress),
         threshold_tags=frozenset(absorbed_thresholds),
         vector_specs=tuple(vector_specs),
+        blockers=tuple(blockers),
     )
 
 
@@ -999,10 +1093,18 @@ class _ThresholdEventSpec:
 
 
 @dataclass(frozen=True)
+class _ThresholdBlocker:
+    acc_name: str
+    kind: str
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class _ThresholdAbsorptions:
     progress_names: frozenset[str]
     threshold_tags: frozenset[str]
     vector_specs: tuple[_ThresholdVectorSpec, ...]
+    blockers: tuple[_ThresholdBlocker, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1025,13 +1127,31 @@ class _ExploreContext:
     synthetic_preset_tags: tuple[str, ...] = ()
 
 
+_KIND_LABELS: dict[str, str] = {
+    _DONE_KIND_ON_DELAY: "on-delay timer",
+    _DONE_KIND_OFF_DELAY: "off-delay timer",
+    _DONE_KIND_COUNT_UP: "count-up counter",
+    _DONE_KIND_COUNT_DOWN: "count-down counter",
+    _PROGRESS_KIND_INT_UP: "integer progress",
+}
+
+
 def _build_infeasible_hints(
     infeasible_tags: list[str],
     graph: ProgramGraph,
+    threshold_blockers: dict[str, _ThresholdBlocker] | None = None,
 ) -> list[str]:
     """Generate actionable hints for each infeasible tag."""
+    blockers = threshold_blockers or {}
     hints: list[str] = []
     for name in infeasible_tags:
+        blocker = blockers.get(name)
+        if blocker is not None:
+            label = _KIND_LABELS.get(blocker.kind, "accumulator")
+            hints.append(f"  {name}: {label} — threshold abstraction blocked:")
+            for reason in blocker.reasons:
+                hints.append(f"    {reason}")
+            continue
         tag = graph.tags.get(name)
         ptr_info = graph.pointer_tags.get(name)
         if ptr_info is not None:
@@ -1192,7 +1312,8 @@ def _classify_dimensions_from_graph(
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
-        hints = _build_infeasible_hints(sorted(infeasible_tags), graph)
+        blocker_map = {b.acc_name: b for b in threshold_absorptions.blockers}
+        hints = _build_infeasible_hints(sorted(infeasible_tags), graph, blocker_map)
         return Intractable(
             reason=f"unbounded domain on {', '.join(sorted(infeasible_tags))}",
             dimensions=total_dims,
@@ -1298,6 +1419,7 @@ def _pilot_sweep_domains(
     dt: float = 0.010,
     max_combos: int = 100_000,
     max_domain: int = 1000,
+    max_scans: int = 30,
 ) -> dict[str, tuple[Any, ...]]:
     """Discover finite domains for infeasible tags via kernel pilot sweep."""
     candidates: list[str] = []
@@ -1363,6 +1485,7 @@ def _pilot_sweep_domains(
         tag = graph.tags[c]
         observed[c].add(tag.default)
 
+    edge_tag_names = tuple(compiled.edge_tags)
     nd_names = sorted(relevant_nd)
     nd_domains = [relevant_nd[n] for n in nd_names]
 
@@ -1380,11 +1503,21 @@ def _pilot_sweep_domains(
         kernel.memory["_dt"] = dt
         for spec in compiled.block_specs.values():
             kernel.load_block_from_tags(spec)
-        compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
-        for spec in compiled.block_specs.values():
-            kernel.flush_block_to_tags(spec)
-        for c in candidates:
-            observed[c].add(kernel.tags.get(c, graph.tags[c].default))
+
+        for _scan in range(max_scans):
+            prev_sizes = tuple(len(observed[c]) for c in candidates)
+            compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+            for spec in compiled.block_specs.values():
+                kernel.flush_block_to_tags(spec)
+            for c in candidates:
+                observed[c].add(kernel.tags.get(c, graph.tags[c].default))
+            for name in edge_tag_names:
+                if name in kernel.tags:
+                    kernel.prev[name] = kernel.tags[name]
+            kernel.advance(dt)
+            new_sizes = tuple(len(observed[c]) for c in candidates)
+            if new_sizes == prev_sizes:
+                break
 
     result: dict[str, tuple[Any, ...]] = {}
     for c in candidates:

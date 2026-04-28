@@ -1741,6 +1741,106 @@ class TestIntractableHints:
         assert all("readonly=True" in h for h in result.hints)
 
 
+class TestThresholdBlockerHints:
+    """Intractable hints explain why threshold abstraction was blocked."""
+
+    def test_unstable_threshold_hint_names_tags(self):
+        """When thresholds aren't stable, hints name the specific tags."""
+        enable = Bool("Enable", external=True)
+        pan_ts = Int("PanWatchdog_Ts")
+        shaft_ts = Int("ShaftWatchdog_Ts")
+        t = Timer.clone("CurStep_tmr")
+        pan_alarm = Bool("PanAlarm")
+        shaft_alarm = Bool("ShaftAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > pan_ts):
+                out(pan_alarm)
+            with Rung(t.Acc > shaft_ts):
+                out(shaft_alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "CurStep_tmr_Acc" in result.tags
+        assert any("threshold abstraction blocked" in h for h in result.hints)
+        assert any("PanWatchdog_Ts" in h for h in result.hints)
+        assert any("ShaftWatchdog_Ts" in h for h in result.hints)
+
+    def test_unstable_threshold_hint_suggests_readonly(self):
+        """Hint for unstable threshold suggests readonly=True."""
+        enable = Bool("Enable", external=True)
+        ts = Int("WatchdogTs")
+        t = Timer.clone("WdTmr")
+        alarm = Bool("WdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("readonly=True" in h and "WatchdogTs" in h for h in result.hints)
+
+    def test_external_threshold_hint_mentions_external(self):
+        """External threshold hints mention the external flag."""
+        enable = Bool("Enable", external=True)
+        ts = Int("HmiThreshold", external=True)
+        t = Timer.clone("ExtTmr")
+        alarm = Bool("ExtAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("external" in h and "HmiThreshold" in h for h in result.hints)
+
+    def test_data_read_blocker_hint(self):
+        """Accumulator read in data-flow gets a specific hint."""
+        enable = Bool("Enable", external=True)
+        threshold = Int("DataReadThreshold", final=True)
+        t = Timer.clone("DataReadTmr")
+        saved = Int("SavedValue")
+        alarm = Bool("DataReadAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung():
+                copy(t.Acc, saved)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("data-flow" in h for h in result.hints)
+
+    def test_stable_threshold_no_blocker(self):
+        """Stable thresholds produce no blocker — absorption succeeds."""
+        enable = Bool("Enable", external=True)
+        ts = Int("StableTs", readonly=True)
+        t = Timer.clone("StableTmr")
+        alarm = Bool("StableAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+
+        result = reachable_states(logic, project=["StableAlarm"], max_depth=5)
+        assert not isinstance(result, Intractable)
+
+
 class TestKernelDomainDiscovery:
     """Pilot sweep discovers finite domains for program-derived tags."""
 
@@ -1913,6 +2013,68 @@ class TestKernelDomainDiscovery:
             max_combos=100_000,
         )
         assert "Dest" not in result
+
+    def test_copy_from_min_max_source_inherits_domain(self):
+        """copy(Source, Dest) where Source has min=/max= but no comparison atoms."""
+        Source = Int("Source", external=True, min=0, max=5)
+        Stored = Int("Stored")
+        Other = Int("Other", external=True)
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Source, Stored)
+            with Rung(Stored > Other):
+                out(Flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+        assert "Other" in result.tags
+        assert "Stored" not in result.tags
+
+    def test_copy_with_reset_from_bounded_source(self):
+        """copy(CurStep, StoredStep) plus copy(0, StoredStep) reset path."""
+        CurStep = Int("CurStep", external=True, min=0, max=3)
+        StoredStep = Int("StoredStep")
+        ResetBtn = Bool("ResetBtn", external=True)
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(CurStep, StoredStep)
+            with Rung(ResetBtn):
+                copy(0, StoredStep)
+            with Rung(StoredStep == 2):
+                out(Active)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_subroutine_gated_tag_discovered_via_multiscan(self):
+        """Tag written inside a subroutine behind a call gate needs multi-scan."""
+        from pyrung.core import call, subroutine
+
+        xCall = Bool("xCall", external=True)
+        running = Bool("Running")
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        @subroutine("Worker", strict=False)
+        def worker():
+            with Rung():
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        with Program(strict=False) as logic:
+            with Rung(xCall):
+                out(running)
+            with Rung(running):
+                call(worker)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
 
 
 class TestSettlePending:
