@@ -10,8 +10,10 @@ from pyrung.core import (
     Block,
     Bool,
     Counter,
+    InputBlock,
     Int,
     Or,
+    OutputBlock,
     Program,
     Rung,
     TagType,
@@ -2411,3 +2413,109 @@ class TestSettlePending:
         results = prove(logic, [Or(~Cmd, Fb, Alarm)])
         assert isinstance(results, list)
         assert isinstance(results[0], Proven)
+
+
+# ===================================================================
+# InputBlock / TagMap input inference
+# ===================================================================
+
+
+class TestInputBlockNondeterministic:
+    def test_input_block_tags_classified_nondeterministic(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        sd, nd, combinational, _, _, _ = result
+        assert "X1" in nd
+        assert nd["X1"] == (False, True)
+        assert "X1" not in sd
+
+    def test_output_block_tags_not_nondeterministic(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        y = OutputBlock("Y", TagType.BOOL, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(y[1])
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        sd, nd, combinational, _, _, _ = result
+        assert "X1" in nd
+        assert "Y1" not in nd
+        assert "Y1" in combinational
+
+    def test_reachable_states_with_input_block(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 2
+
+    def test_prove_with_input_block(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        result = prove(logic, light)
+        assert isinstance(result, Counterexample)
+
+    def test_tagmap_stamps_external_on_input_mapped_tags(self):
+        from pyrung.click import TagMap, x, y
+
+        button = Bool("Button")
+        motor = Bool("Motor")
+        assert not button.external
+        assert not motor.external
+
+        TagMap({button: x[1], motor: y[1]}, include_system=False)
+
+        assert button.external
+        assert not motor.external
+
+    def test_tagmap_stamped_tag_becomes_nondeterministic(self):
+        from pyrung.click import TagMap, x
+
+        button = Bool("Button")
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        TagMap({button: x[1]}, include_system=False)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _, nd, _, _, _, _ = result
+        assert "Button" in nd
+
+    def test_tagmap_stamped_reachable_states(self):
+        from pyrung.click import TagMap, x
+
+        button = Bool("Button")
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        TagMap({button: x[1]}, include_system=False)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 2

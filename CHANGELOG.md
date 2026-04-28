@@ -5,6 +5,8 @@
 ### New features
 
 - **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
+- **Prover recognizes `InputBlock` tags as nondeterministic** — tags produced by indexing an `InputBlock` (e.g., `x[1]`) are now automatically treated as nondeterministic inputs by the verifier, without requiring `external=True`. The PDG already classifies these as `TagRole.INPUT`; the classifier now respects that instead of dropping them. `OutputBlock` tags are not affected.
+- **`TagMap` stamps `external=True` on input-mapped tags** — when a `TagMap` maps a semantic tag to an input bank (`x`, `xd`), the tag is automatically marked `external=True` at construction time. This means `prove()` and `pyrung lock` treat input-mapped tags as nondeterministic without the user needing to declare `external=True` manually. Tags that are `readonly` are not stamped (readonly and external are mutually exclusive).
 
 ## v0.7.0 (2026-04-26)
 

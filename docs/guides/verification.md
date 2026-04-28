@@ -76,7 +76,7 @@ The verifier classifies every tag into one of three roles:
 
 - **Combinational** — OTE-only writes, derived from inputs each scan. Not a state dimension.
 - **Stateful** — latch/reset, timer/counter, copy, calc. Tracked in the visited set.
-- **Nondeterministic** — external inputs. Enumerated at each state.
+- **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`) are automatically nondeterministic. Semantic tags mapped to input banks via `TagMap` are also auto-detected (see [Click dialect](../dialects/click.md#tagmap--mapping-to-hardware)).
 
 Value domains come from the expression tree: comparison literals in conditions, `choices` metadata, `min`/`max` bounds. A tag compared against `== 1` and `== 2` gets domain `{1, 2, unmatched}` — three values instead of 65K.
 

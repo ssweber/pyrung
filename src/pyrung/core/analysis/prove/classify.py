@@ -279,7 +279,11 @@ def _domain_for_source_tag(
     tag = graph.tags.get(tag_name)
     if tag is None:
         return None
-    if not tag.external and tag_name not in graph.writers_of:
+    if (
+        not tag.external
+        and tag_name not in graph.writers_of
+        and not graph.is_physical_input(tag_name)
+    ):
         return (tag.default,)
 
     domain = _extract_value_domain(
@@ -385,7 +389,11 @@ def _collect_structural_domains(
         literal_write_domains or _collect_literal_write_domains(program, graph.tags)
     )
     for tag_name, tag in graph.tags.items():
-        if not tag.external and tag_name not in graph.writers_of:
+        if (
+            not tag.external
+            and tag_name not in graph.writers_of
+            and not graph.is_physical_input(tag_name)
+        ):
             known_domains.setdefault(tag_name, (tag.default,))
 
     by_target: dict[str, list[Any]] = {}
@@ -691,7 +699,7 @@ def _classify_dimensions_from_graph(
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
 
-        if not tag.external and not is_written:
+        if not tag.external and not is_written and not graph.is_physical_input(tag_name):
             continue
 
         if role == TagRole.INPUT or (tag.external and not is_written):
