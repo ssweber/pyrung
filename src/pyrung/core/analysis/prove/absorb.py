@@ -1,4 +1,32 @@
-"""Accumulator absorption and threshold abstraction helpers."""
+"""Accumulator absorption and threshold abstraction helpers.
+
+Threshold absorption principle
+------------------------------
+The concrete value of a threshold is irrelevant to reachability.  A timer
+fires or it doesn't — prove explores both outcomes.  Whether the threshold
+is 100 or 4000 changes WHEN the crossing occurs, not WHETHER it's
+reachable.  The gate for absorption is **exclusivity** (the threshold tag
+is only used in threshold comparisons and as a timer/counter preset, never
+in copy/calc data-flow), not **stability** (the threshold doesn't change
+between scans).  If a tag passes the exclusivity check it can be absorbed
+regardless of how, when, or by whom it is written.
+
+Implementation status: this module has two absorption paths with different
+readiness for the exclusivity framing.
+
+*Redundant Acc absorption* (``_find_redundant_acc_absorptions``): the
+threshold is already discarded (synthetic preset=1).  The stability check
+(``_is_stable_dynamic_preset``) is purely unnecessary — the exclusivity
+check (``_has_non_timer_data_read``) is the only gate that matters.
+
+*Threshold vector absorption* (``_find_threshold_absorptions``): the event
+scheduler stores the concrete threshold in ``ThresholdAtomSpec`` and looks
+it up per BFS state.  Relaxing ``_is_stable_threshold`` here requires
+either keeping the threshold tag as a BFS dimension (needs a finite domain)
+or reworking the scheduler to handle unknown thresholds.  Until then, the
+stability check remains as a pragmatic implementation constraint, not a
+soundness requirement.
+"""
 
 from __future__ import annotations
 
@@ -223,7 +251,12 @@ def _has_forbidden_data_read(
 
 
 def _is_stable_dynamic_preset(preset_tag_name: str, graph: ProgramGraph) -> bool:
-    """True when a dynamic preset is frozen or owned by the ladder."""
+    """True when a dynamic preset is frozen or owned by the ladder.
+
+    Redundant — the synthetic preset=1 path discards the concrete value,
+    so stability doesn't matter.  The real gate is exclusivity
+    (_has_non_timer_data_read).  Safe to relax or remove.
+    """
     tag = graph.tags.get(preset_tag_name)
     if tag is None:
         return False
@@ -363,7 +396,14 @@ def _is_numeric_literal(value: Any) -> bool:
 
 
 def _is_stable_threshold(value: Any, graph: ProgramGraph) -> bool:
-    """True when a threshold value is fixed for verifier event scheduling."""
+    """True when a threshold value is fixed for verifier event scheduling.
+
+    Stricter than necessary for soundness — per the threshold absorption
+    principle the real gate is exclusivity, not stability.  However, the
+    threshold vector event scheduler currently stores the concrete value
+    and looks it up per BFS state, so this check remains as a pragmatic
+    implementation constraint until the scheduler is reworked.
+    """
     if _is_numeric_literal(value):
         return True
     if not isinstance(value, str):
@@ -401,7 +441,13 @@ def _diagnose_unstable_atom(
     acc_name: str,
     graph: ProgramGraph,
 ) -> str | None:
-    """Return a human-readable reason when an atom blocks threshold abstraction."""
+    """Return a human-readable reason when an atom blocks threshold abstraction.
+
+    Hints currently reference stability (readonly/final).  For the
+    redundant-absorption path this is misleading — exclusivity is the
+    real gate.  For the threshold-vector path the stability requirement
+    is a scheduler limitation, not a soundness requirement.
+    """
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         threshold = atom.operand
     elif atom.operand == acc_name and atom.form in {"lt", "le"}:
