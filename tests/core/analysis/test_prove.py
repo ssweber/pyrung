@@ -6,8 +6,8 @@ from pathlib import Path
 
 from pyrung.cli import _apply_lock_config
 from pyrung.core import (
-    Block,
     PLC,
+    Block,
     Bool,
     Counter,
     Int,
@@ -1604,6 +1604,73 @@ class TestThresholdEventAbstraction:
         assert "VariableStepTicks" in stateful
         assert "Stride" in stateful
         assert "VariableTickThreshold" in stateful
+
+    def test_int_progress_eq_comparison_becomes_tractable(self):
+        """calc(ticks + 1, ticks) with Rung(ticks == k) decomposes into ge/gt boundary atoms."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("EqTicks")
+        at_five = Bool("AtFive")
+
+        with Program(strict=False) as logic:
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks == 5):
+                out(at_five)
+
+        states = reachable_states(logic, project=["AtFive"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("AtFive", True)}) in states
+        assert frozenset({("AtFive", False)}) in states
+
+    def test_int_progress_ne_comparison_becomes_tractable(self):
+        """calc(ticks + 1, ticks) with Rung(ticks != 0) decomposes into ge/gt boundary atoms."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("NeTicks")
+        running = Bool("Running")
+
+        with Program(strict=False) as logic:
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks != 0):
+                out(running)
+
+        states = reachable_states(logic, project=["Running"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Running", True)}) in states
+        assert frozenset({("Running", False)}) in states
+
+    def test_int_progress_eq_and_gt_mixed_becomes_tractable(self):
+        """Progress tag with both == and > comparisons on the same accumulator."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        step = Int("MixedStep")
+        threshold = Int("MixedThreshold", final=True)
+        at_step = Bool("AtStep3")
+        past_threshold = Bool("PastThreshold")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(10, threshold)
+            with Rung(reset_btn):
+                copy(0, step)
+            with Rung(enable):
+                calc(step + 1, step)
+            with Rung(step == 3):
+                out(at_step)
+            with Rung(step > threshold):
+                out(past_threshold)
+
+        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("AtStep3", True), ("PastThreshold", False)}) in states
+        assert frozenset({("AtStep3", False), ("PastThreshold", True)}) in states
+        assert frozenset({("AtStep3", True), ("PastThreshold", True)}) not in states
 
     def test_raw_external_threshold_is_absorbed_when_threshold_only(self):
         enable = Bool("Enable", external=True)

@@ -489,7 +489,8 @@ def _bfs_explore(
                     if len(visited) > max_states:
                         intractable = Intractable(
                             reason="max_states exceeded",
-                            dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
+                            dimensions=len(context.stateful_dims)
+                            + len(context.nondeterministic_dims),
                             estimated_space=len(visited),
                             hints=_build_dimension_hints(context),
                         )

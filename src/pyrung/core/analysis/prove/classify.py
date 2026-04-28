@@ -381,7 +381,9 @@ def _collect_structural_domains(
     """Discover finite domains from structural writes via fixed-point propagation."""
     from pyrung.core.validation._common import walk_instructions
 
-    known_domains = dict(literal_write_domains or _collect_literal_write_domains(program, graph.tags))
+    known_domains = dict(
+        literal_write_domains or _collect_literal_write_domains(program, graph.tags)
+    )
     for tag_name, tag in graph.tags.items():
         if not tag.external and tag_name not in graph.writers_of:
             known_domains.setdefault(tag_name, (tag.default,))

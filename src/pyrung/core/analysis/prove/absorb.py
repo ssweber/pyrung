@@ -434,22 +434,41 @@ def _threshold_atom_for_progress(
     atom: Atom,
     acc_name: str,
     graph: ProgramGraph,
-) -> _ThresholdAtomSpec | None:
-    """Normalize supported Progress/Threshold comparison atoms."""
+) -> list[_ThresholdAtomSpec]:
+    """Normalize supported Progress/Threshold comparison atoms.
+
+    For eq/ne, decomposes into two boundary atoms (ge k, gt k) that
+    partition the accumulator into {<k, =k, >k}.
+    """
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         mode = _threshold_mode(atom.operand, graph)
         if mode is not None:
-            return _ThresholdAtomSpec(acc_name, atom.operand, atom.form, mode)
-        return None
+            return [_ThresholdAtomSpec(acc_name, atom.operand, atom.form, mode)]
+        return []
 
     if atom.operand == acc_name and atom.form in {"lt", "le"}:
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
-            return None
+            return []
         form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
-        return _ThresholdAtomSpec(acc_name, atom.tag, form, mode)
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
 
-    return None
+    if atom.form in {"eq", "ne"}:
+        if atom.tag == acc_name:
+            threshold = atom.operand
+        elif atom.operand == acc_name:
+            threshold = atom.tag
+        else:
+            return []
+        mode = _threshold_mode(threshold, graph)
+        if mode is None:
+            return []
+        return [
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GE, mode),
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GT, mode),
+        ]
+
+    return []
 
 
 def _diagnose_unstable_atom(
@@ -462,16 +481,16 @@ def _diagnose_unstable_atom(
     This diagnoses unsupported comparison structure or unknown threshold
     operands.  Stability is no longer an admission gate.
     """
-    if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+    if atom.tag == acc_name and atom.form in {
+        _THRESHOLD_FORM_GT,
+        _THRESHOLD_FORM_GE,
+        "eq",
+        "ne",
+    }:
         threshold = atom.operand
-    elif atom.operand == acc_name and atom.form in {"lt", "le"}:
+    elif atom.operand == acc_name and atom.form in {"lt", "le", "eq", "ne"}:
         threshold = atom.tag
     else:
-        if atom.form in {"eq", "ne"}:
-            return (
-                f"compared with {atom.form}"
-                " — only monotonic threshold comparisons (>, >=) can be abstracted"
-            )
         return (
             "compared as below-threshold"
             " — only upward-crossing (Acc > T, Acc >= T) can be abstracted"
@@ -715,14 +734,14 @@ def _find_threshold_absorptions(
         atom_reasons: list[str] = []
         blocked = False
         for atom in atoms:
-            spec = _threshold_atom_for_progress(atom, acc_name, graph)
-            if spec is None:
+            specs = _threshold_atom_for_progress(atom, acc_name, graph)
+            if not specs:
                 reason = _diagnose_unstable_atom(atom, acc_name, graph)
                 if reason:
                     atom_reasons.append(reason)
                 blocked = True
             else:
-                normalized.append(spec)
+                normalized.extend(specs)
         if blocked:
             if atom_reasons:
                 seen: set[str] = set()
@@ -808,8 +827,7 @@ def _find_threshold_absorptions(
         for threshold_name in threshold_names:
             threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
             if not all(
-                _threshold_atom_for_progress(atom, acc_name, graph) is not None
-                for atom in threshold_atoms
+                _threshold_atom_for_progress(atom, acc_name, graph) for atom in threshold_atoms
             ):
                 forbidden_reasons.append(
                     f"{threshold_name}: also used in non-threshold comparisons"

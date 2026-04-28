@@ -308,9 +308,8 @@ def _materialize_abstract_threshold_outcome(
     acc_value = kernel.tags.get(spec.acc_name)
     if not _is_numeric_literal(acc_value):
         return None
+    assert isinstance(acc_value, (int, float))
 
-    # Pin the hidden threshold to the current progress boundary, then advance
-    # to the next representative crossing state in one abstract future edge.
     kernel.tags[threshold_name] = acc_value
     scans = _scans_until_threshold_event(spec, before_snap, kernel)
     if scans is None:
