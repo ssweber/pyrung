@@ -770,25 +770,82 @@ def diff_states(
 
 
 def _default_projection(program: Program) -> list[str]:
-    """Choose default projection tags: terminal outputs only."""
+    """Choose default projection tags: terminal Bool outputs only."""
+    from pyrung.core.tag import TagType
+
     dv = program.dataview()
-    return sorted(dv.terminals().tags)
+    graph = dv._graph
+    return sorted(
+        name
+        for name in dv.terminals().tags
+        if (tag := graph.tags.get(name)) is not None and tag.type == TagType.BOOL
+    )
 
 
 def _states_to_json(
     states: frozenset[frozenset[tuple[str, Any]]],
 ) -> list[dict[str, Any]]:
-    """Convert state frozensets to sorted list of dicts."""
-    rows = [dict(sorted(s)) for s in states]
+    """Convert state frozensets to sorted list of dicts.
+
+    Omits tags whose value is False — False is the implied default for
+    Bool projections, keeping each state entry as "what's ON."
+    """
+    rows = [dict(sorted((k, v) for k, v in s if v is not False)) for s in states]
     rows.sort(key=lambda d: tuple(sorted(d.items())))
     return rows
 
 
 def _json_to_states(
     rows: list[dict[str, Any]],
+    projection: list[str] | None = None,
 ) -> frozenset[frozenset[tuple[str, Any]]]:
-    """Convert list of dicts back to state frozensets."""
-    return frozenset(frozenset(d.items()) for d in rows)
+    """Convert list of dicts back to state frozensets.
+
+    When *projection* is given, missing tags are filled with False
+    (the implied default omitted during serialization).
+    """
+    if projection is None:
+        return frozenset(frozenset(d.items()) for d in rows)
+    result: set[frozenset[tuple[str, Any]]] = set()
+    for d in rows:
+        state = {name: d.get(name, False) for name in projection}
+        result.add(frozenset(state.items()))
+    return frozenset(result)
+
+
+def _build_choice_labels(
+    projection: list[str],
+    tags: dict[str, Any] | None,
+) -> dict[str, dict[Any, str]]:
+    """Build {tag_name: {value: label}} for projected tags with choices."""
+    if tags is None:
+        return {}
+    labels: dict[str, dict[Any, str]] = {}
+    for name in projection:
+        tag = tags.get(name)
+        if tag is not None and getattr(tag, "choices", None):
+            labels[name] = {v: lbl for v, lbl in tag.choices.items()}
+    return labels
+
+
+def _apply_choice_labels(
+    rows: list[dict[str, Any]],
+    choice_labels: dict[str, dict[Any, str]],
+) -> list[dict[str, Any]]:
+    """Replace raw int values with choice labels where available."""
+    if not choice_labels:
+        return rows
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        new_row: dict[str, Any] = {}
+        for k, v in row.items():
+            tag_labels = choice_labels.get(k)
+            if tag_labels is not None and v in tag_labels:
+                new_row[k] = tag_labels[v]
+            else:
+                new_row[k] = v
+        result.append(new_row)
+    return result
 
 
 def write_lock(
@@ -797,13 +854,16 @@ def write_lock(
     projection: list[str],
     program_hash: str,
     unreachable_examples: list[dict[str, Any]] | None = None,
+    tags: dict[str, Any] | None = None,
 ) -> None:
     """Write a state-space lock file."""
+    choice_labels = _build_choice_labels(projection, tags)
+    rows = _apply_choice_labels(_states_to_json(states), choice_labels)
     data = {
         "version": 1,
         "program_hash": program_hash,
         "projection": sorted(projection),
-        "reachable": _states_to_json(states),
+        "reachable": rows,
         "unreachable_examples": unreachable_examples or [],
     }
     path.write_text(json.dumps(data, indent=2, default=_json_default) + "\n")
@@ -843,7 +903,7 @@ def check_lock(
     """
     lock_data = read_lock(lock_path)
     projection = lock_data["projection"]
-    old_states = _json_to_states(lock_data["reachable"])
+    old_states = _json_to_states(lock_data["reachable"], projection)
 
     new_states = reachable_states(
         program,

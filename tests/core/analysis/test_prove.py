@@ -827,6 +827,21 @@ class TestDefaultProjection:
         proj = _default_projection(logic)
         assert proj == []
 
+    def test_excludes_non_bool_terminals(self):
+        """Non-Bool terminal tags are excluded from default projection."""
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+        counter_val = Int("CounterVal")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+                copy(1, counter_val)
+
+        proj = _default_projection(logic)
+        assert "Light" in proj
+        assert "CounterVal" not in proj
+
 
 class TestApplyLockConfig:
     """CLI _apply_lock_config include/exclude logic."""
@@ -934,6 +949,78 @@ class TestLockFile:
                 latch(b)
 
         assert program_hash(logic_a) != program_hash(logic_b)
+
+    def test_false_omitted_in_json(self, tmp_path: Path):
+        """Lock file omits False values — states read as 'what is ON'."""
+        import json
+
+        states = frozenset(
+            {
+                frozenset({("A", False), ("B", False)}),
+                frozenset({("A", True), ("B", False)}),
+                frozenset({("A", True), ("B", True)}),
+            }
+        )
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, ["A", "B"], "hash1")
+
+        data = json.loads(lock_path.read_text())
+        reachable = data["reachable"]
+        assert len(reachable) == 3
+        assert {} in reachable
+        assert {"A": True} in reachable
+        assert {"A": True, "B": True} in reachable
+
+    def test_false_omission_roundtrips_via_check(self, tmp_path: Path):
+        """check_lock round-trips correctly with False-omitted lock files."""
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, ["Light"], program_hash(logic))
+
+        d = check_lock(logic, lock_path)
+        assert d is None
+
+    def test_choice_labels_in_lock(self, tmp_path: Path):
+        """Projected tags with choices= serialize labels, not raw ints."""
+        import json
+
+        from pyrung.core.tag import Tag, TagType
+
+        mode_tag = Tag(
+            name="Mode",
+            type=TagType.INT,
+            choices={0: "OFF", 1: "SLOW", 2: "FAST"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Mode", 0), ("Active", True)}),
+                frozenset({("Mode", 1), ("Active", True)}),
+                frozenset({("Mode", 2), ("Active", False)}),
+            }
+        )
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(
+            lock_path,
+            states,
+            ["Active", "Mode"],
+            "hash2",
+            tags={"Mode": mode_tag},
+        )
+
+        data = json.loads(lock_path.read_text())
+        mode_values = {row.get("Mode") for row in data["reachable"]}
+        assert "OFF" in mode_values
+        assert "SLOW" in mode_values
+        assert "FAST" in mode_values
+        assert 0 not in mode_values
 
 
 # ===================================================================
@@ -1942,8 +2029,8 @@ class TestIntractableHints:
         assert any("state space:" in h for h in result.hints)
         assert any("Constrain" in h for h in result.hints)
 
-    def test_hints_mention_readonly(self):
-        """All hint types mention readonly=True as an option."""
+    def test_hints_suggest_choices_or_testing(self):
+        """Unbounded hints suggest choices= or dt= testing."""
         val = Int("Val", external=True)
         other = Int("Other", external=True)
         flag = Bool("Flag")
@@ -1954,7 +2041,7 @@ class TestIntractableHints:
 
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
-        assert all("readonly=True" in h for h in result.hints)
+        assert all("choices=" in h or "dt= testing" in h for h in result.hints)
 
 
 class TestThresholdBlockerHints:

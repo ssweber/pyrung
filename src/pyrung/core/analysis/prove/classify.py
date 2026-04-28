@@ -590,7 +590,8 @@ def _build_infeasible_hints(
             )
         else:
             hints.append(
-                f"  {name}: no domain constraint — add choices=, min=/max=, or readonly=True"
+                f"  {name}: no domain constraint"
+                f" — add choices= for discrete values, or cover with dt= testing"
             )
     return hints
 

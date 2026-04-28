@@ -85,7 +85,8 @@ def _cmd_lock(args: argparse.Namespace) -> None:
             print(hint, file=sys.stderr)
         raise SystemExit(1)
 
-    write_lock(lock_path, states, projection, program_hash(program))
+    graph_tags = program.dataview()._graph.tags
+    write_lock(lock_path, states, projection, program_hash(program), tags=graph_tags)
     print(f"Wrote {lock_path} ({len(states)} reachable states)")
 
 

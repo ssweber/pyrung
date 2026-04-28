@@ -151,11 +151,13 @@ pyrung lock my_program        # compute reachable states, write pyrung.lock
 pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
-The lock projects to terminal tags by default — physical outputs in well-structured ladder. Override with `--project`:
+The lock projects to terminal Bool tags by default — the discrete outputs that define your program's observable behavior. Non-Bool terminals (analog values, step counters) are excluded because they belong in `dt=` tests, not exhaustive proofs. Override with `--project`:
 
 ```bash
 pyrung lock my_program --project Running MotorOut StatusLight
 ```
+
+Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`.
 
 ### `__lock__` — per-module projection override
 
@@ -193,7 +195,7 @@ __lock__ = {
 **Lock everything** — full state space equality. For purely cosmetic refactoring (renaming tags, reordering rungs that don't interact). Any behavioral change is flagged.
 
 ```python
-states = reachable_states(logic)  # default: terminal tags
+states = reachable_states(logic)  # default: terminal Bool tags
 ```
 
 **Lock I/O** — project to inputs and terminals only. For restructuring internal logic where pivots can change freely.
@@ -223,13 +225,13 @@ diff   = diff_states(before, after)
 assert not diff.added and not diff.removed  # behavioral equivalence
 ```
 
-In a PR, the lock file diff tells the story:
+In a PR, the lock file diff tells the story. States omit `false` values — each entry reads as "what's ON":
 
 ```diff
   "reachable": [
-    {"Conv_Motor": false, "Running": false},
-    {"Conv_Motor": true,  "Running": true},
-+   {"Conv_Motor": true,  "Running": false}
+    {},
+    {"Conv_Motor": true, "Running": true},
++   {"Conv_Motor": true}
   ]
 ```
 

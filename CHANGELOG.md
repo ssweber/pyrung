@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Lock file default projection is now terminal Bools only** — `_default_projection` and `pyrung lock` now project to terminal Bool tags only (previously all terminal tags). Non-Bool terminals are excluded — analog values and step counters belong in `dt=` testing, not exhaustive proofs. To include specific non-Bool tags, add them via `__lock__ = {"include": [...]}` or `--project`. Existing lock files will need regeneration with `pyrung lock`.
+- **Lock file omits False values** — reachable state entries now only include tags whose value is True. Each state reads as "what's ON." Empty `{}` means nothing is active. Existing lock files will diff on regeneration but `check_lock` handles both formats transparently.
+
 ### New features
 
+- **Choice labels in lock files** — projected tags with `choices=` metadata now serialize their label (`"FAST"`) instead of the raw integer (`2`). Pass `tags=` to `write_lock()` or use the CLI (which passes them automatically).
 - **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
 - **Prover recognizes `InputBlock` tags as nondeterministic** — tags produced by indexing an `InputBlock` (e.g., `x[1]`) are now automatically treated as nondeterministic inputs by the verifier, without requiring `external=True`. The PDG already classifies these as `TagRole.INPUT`; the classifier now respects that instead of dropping them. `OutputBlock` tags are not affected.
 - **`TagMap` stamps `external=True` on input-mapped tags** — when a `TagMap` maps a semantic tag to an input bank (`x`, `xd`), the tag is automatically marked `external=True` at construction time. This means `prove()` and `pyrung lock` treat input-mapped tags as nondeterministic without the user needing to declare `external=True` manually. Tags that are `readonly` are not stamped (readonly and external are mutually exclusive).
