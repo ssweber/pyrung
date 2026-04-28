@@ -1800,42 +1800,41 @@ def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> N
         kernel.tags[name] = 1
 
 
-_Snapshot = tuple[
-    dict[str, Any],  # tags
-    dict[str, list[Any]],  # blocks
-    dict[str, Any],  # memory
-    dict[str, Any],  # prev
-    int,  # scan_id
-    float,  # timestamp
-]
+@dataclass(frozen=True, slots=True)
+class _KernelSnapshot:
+    tags: dict[str, Any]
+    blocks: dict[str, list[Any]]
+    memory: dict[str, Any]
+    prev: dict[str, Any]
+    scan_id: int
+    timestamp: float
 
 
-def _snapshot_kernel(kernel: ReplayKernel) -> _Snapshot:
+def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
     """Deep-copy kernel state."""
-    return (
-        dict(kernel.tags),
-        {k: list(v) for k, v in kernel.blocks.items()},
-        dict(kernel.memory),
-        dict(kernel.prev),
-        kernel.scan_id,
-        kernel.timestamp,
+    return _KernelSnapshot(
+        tags=dict(kernel.tags),
+        blocks={k: list(v) for k, v in kernel.blocks.items()},
+        memory=dict(kernel.memory),
+        prev=dict(kernel.prev),
+        scan_id=kernel.scan_id,
+        timestamp=kernel.timestamp,
     )
 
 
-def _restore_kernel(kernel: ReplayKernel, snap: _Snapshot) -> None:
+def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
     """Restore kernel state from a snapshot."""
-    tags, blocks, memory, prev, scan_id, timestamp = snap
     kernel.tags.clear()
-    kernel.tags.update(tags)
+    kernel.tags.update(snap.tags)
     for k in list(kernel.blocks):
-        if k in blocks:
-            kernel.blocks[k] = list(blocks[k])
+        if k in snap.blocks:
+            kernel.blocks[k] = list(snap.blocks[k])
     kernel.memory.clear()
-    kernel.memory.update(memory)
+    kernel.memory.update(snap.memory)
     kernel.prev.clear()
-    kernel.prev.update(prev)
-    kernel.scan_id = scan_id
-    kernel.timestamp = timestamp
+    kernel.prev.update(snap.prev)
+    kernel.scan_id = snap.scan_id
+    kernel.timestamp = snap.timestamp
 
 
 class _EdgeCompressor:
@@ -1960,6 +1959,354 @@ def _extract_state_key(
     return tuple(parts)
 
 
+@dataclass
+class _PassContext:
+    """Mutable accumulator built up by pre-BFS passes."""
+
+    program: Program
+    scope: list[str] | None
+    project: tuple[str, ...] | None
+    extra_exprs: list[Expr] | None
+    dt: float
+    compiled: CompiledKernel | None
+
+    graph: ProgramGraph | None = None
+    all_exprs: list[Expr] | None = None
+    intractable: Intractable | None = None
+
+    stateful_dims: dict[str, tuple[Any, ...]] | None = None
+    nondeterministic_dims: dict[str, tuple[Any, ...]] | None = None
+    done_acc: dict[str, str] | None = None
+    done_presets: dict[str, int] | None = None
+    done_kinds: dict[str, str] | None = None
+
+    done_acc_info: _DoneAccInfo | None = None
+    absorptions: _RedundantAccAbsorptions | None = None
+    threshold_absorptions: _ThresholdAbsorptions | None = None
+
+    stateful_names: tuple[str, ...] | None = None
+    edge_tag_names: tuple[str, ...] | None = None
+    state_key_done_specs: tuple[_StateKeyDoneSpec, ...] | None = None
+    done_event_specs: tuple[_DoneEventSpec, ...] | None = None
+    threshold_event_specs: tuple[_ThresholdEventSpec, ...] | None = None
+    edge_tag_exprs: dict[str, list[Expr]] | None = None
+    memory_key_names: tuple[str, ...] | None = None
+    synthetic_preset_tags: tuple[str, ...] | None = None
+
+    def freeze(self) -> _ExploreContext:
+        assert self.compiled is not None
+        assert self.graph is not None
+        assert self.all_exprs is not None
+        assert self.stateful_dims is not None
+        assert self.nondeterministic_dims is not None
+        assert self.stateful_names is not None
+        assert self.edge_tag_names is not None
+        assert self.memory_key_names is not None
+        assert self.state_key_done_specs is not None
+        assert self.done_event_specs is not None
+        assert self.threshold_absorptions is not None
+        assert self.threshold_event_specs is not None
+        return _ExploreContext(
+            compiled=self.compiled,
+            graph=self.graph,
+            all_exprs=self.all_exprs,
+            stateful_dims=self.stateful_dims,
+            nondeterministic_dims=self.nondeterministic_dims,
+            stateful_names=self.stateful_names,
+            edge_tag_names=self.edge_tag_names,
+            memory_key_names=self.memory_key_names,
+            state_key_done_specs=self.state_key_done_specs,
+            done_event_specs=self.done_event_specs,
+            threshold_vector_specs=self.threshold_absorptions.vector_specs,
+            threshold_event_specs=self.threshold_event_specs,
+            block_specs=tuple(self.compiled.block_specs.values()),
+            dt=self.dt,
+            edge_tag_exprs=self.edge_tag_exprs or {},
+            synthetic_preset_tags=self.synthetic_preset_tags or (),
+        )
+
+
+@dataclass(frozen=True)
+class _PreBFSPass:
+    name: str
+    description: str
+    run: Callable[[_PassContext], None]
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class _BFSConfig:
+    """Enable/disable flags for BFS-interleaved optimizations."""
+
+    live_input_pruning: bool = True
+    edge_compression: bool = True
+    hidden_event_jumping: bool = True
+    pending_settlement: bool = True
+
+    @property
+    def active_optimizations(self) -> tuple[str, ...]:
+        names: list[str] = []
+        if self.live_input_pruning:
+            names.append("live_input_pruning")
+        if self.edge_compression:
+            names.append("edge_compression")
+        if self.hidden_event_jumping:
+            names.append("hidden_event_jumping")
+        if self.pending_settlement:
+            names.append("pending_settlement")
+        return tuple(names)
+
+
+_DEFAULT_BFS_CONFIG = _BFSConfig()
+
+# ---------------------------------------------------------------------------
+# Individual pre-BFS passes
+# ---------------------------------------------------------------------------
+
+
+def _pass_build_graph(ctx: _PassContext) -> None:
+    ctx.graph = build_program_graph(ctx.program)
+    ctx.all_exprs = _collect_all_exprs(ctx.program, ctx.graph, scope=ctx.scope)
+    if ctx.extra_exprs:
+        ctx.all_exprs = ctx.all_exprs + ctx.extra_exprs
+
+
+def _pass_classify_dimensions(ctx: _PassContext) -> None:
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    result = _classify_dimensions_from_graph(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        scope=ctx.scope,
+        project=ctx.project,
+    )
+    if isinstance(result, Intractable):
+        ctx.intractable = result
+        return
+    sd, nd, _comb, da, dp, dk = result
+    ctx.stateful_dims = sd
+    ctx.nondeterministic_dims = nd
+    ctx.done_acc = da
+    ctx.done_presets = dp
+    ctx.done_kinds = dk
+
+
+def _pass_pilot_sweep(ctx: _PassContext) -> None:
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+    if ctx.intractable is None or not ctx.intractable.tags:
+        return
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    if ctx.compiled is None:
+        ctx.compiled = _compile_kernel(ctx.program)
+    first_pass_nd: dict[str, tuple[Any, ...]] = {}
+    for tag_name, tag in ctx.graph.tags.items():
+        role = ctx.graph.tag_roles.get(tag_name)
+        is_written = tag_name in ctx.graph.writers_of
+        if not (role == TagRole.INPUT or (tag.external and not is_written)):
+            continue
+        domain = _extract_value_domain(tag_name, tag, ctx.all_exprs, ctx.graph.tags)
+        if not domain:
+            if tag.choices is not None:
+                domain = tuple(sorted(tag.choices.keys()))
+            elif tag.min is not None and tag.max is not None:
+                range_size = int(tag.max - tag.min + 1)
+                if range_size <= 1000:
+                    domain = tuple(range(int(tag.min), int(tag.max) + 1))
+        if domain:
+            first_pass_nd[tag_name] = domain
+    discovered = _pilot_sweep_domains(
+        ctx.compiled,
+        ctx.intractable.tags,
+        first_pass_nd,
+        ctx.graph,
+        dt=ctx.dt,
+    )
+    if discovered:
+        result = _classify_dimensions_from_graph(
+            ctx.program,
+            ctx.graph,
+            ctx.all_exprs,
+            scope=ctx.scope,
+            project=ctx.project,
+            discovered_domains=discovered,
+        )
+        if isinstance(result, Intractable):
+            ctx.intractable = result
+        else:
+            sd, nd, _comb, da, dp, dk = result
+            ctx.stateful_dims = sd
+            ctx.nondeterministic_dims = nd
+            ctx.done_acc = da
+            ctx.done_presets = dp
+            ctx.done_kinds = dk
+            ctx.intractable = None
+
+
+def _pass_compile_kernel(ctx: _PassContext) -> None:
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
+    if ctx.compiled is None:
+        ctx.compiled = _compile_kernel(ctx.program)
+    assert ctx.stateful_dims is not None
+    ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
+    ctx.edge_tag_names = tuple(sorted(ctx.compiled.edge_tags))
+
+
+def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
+    ctx.done_acc_info = _collect_done_acc_pairs(ctx.program)
+
+
+def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    assert ctx.done_acc_info is not None
+    consumed_accs = {
+        acc_name
+        for acc_name in ctx.done_acc_info.pairs.values()
+        if _collect_atoms_for_tag(ctx.all_exprs, acc_name)
+        or _has_forbidden_data_read(ctx.program, acc_name)
+    }
+    ctx.absorptions = _find_redundant_acc_absorptions(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        ctx.done_acc_info,
+        consumed_accs,
+    )
+    ctx.synthetic_preset_tags = tuple(sorted(ctx.absorptions.preset_tags))
+
+
+def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
+    assert ctx.graph is not None and ctx.all_exprs is not None
+    ctx.threshold_absorptions = _find_threshold_absorptions(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        project=ctx.project,
+    )
+
+
+def _pass_build_event_specs(ctx: _PassContext) -> None:
+    assert ctx.stateful_names is not None and ctx.done_acc is not None
+    assert ctx.done_kinds is not None and ctx.done_presets is not None
+    assert ctx.threshold_absorptions is not None
+    sk_done: list[_StateKeyDoneSpec] = []
+    d_events: list[_DoneEventSpec] = []
+    for index, done_name in enumerate(ctx.stateful_names):
+        acc_name = ctx.done_acc.get(done_name)
+        if acc_name is None:
+            continue
+        kind = ctx.done_kinds[done_name]
+        sk_done.append(_StateKeyDoneSpec(index=index, acc_name=acc_name, kind=kind))
+        preset = ctx.done_presets.get(done_name)
+        if preset is not None:
+            d_events.append(
+                _DoneEventSpec(state_index=index, acc_name=acc_name, kind=kind, preset=preset)
+            )
+    ctx.state_key_done_specs = tuple(sk_done)
+    ctx.done_event_specs = tuple(d_events)
+
+    t_events: list[_ThresholdEventSpec] = []
+    for vi, vector in enumerate(ctx.threshold_absorptions.vector_specs):
+        for ai, atom in enumerate(vector.atoms):
+            t_events.append(
+                _ThresholdEventSpec(
+                    vector_index=vi,
+                    atom_index=ai,
+                    acc_name=vector.acc_name,
+                    kind=vector.kind,
+                    threshold=atom.threshold,
+                    form=atom.form,
+                )
+            )
+    ctx.threshold_event_specs = tuple(t_events)
+
+
+def _pass_collect_edge_exprs(ctx: _PassContext) -> None:
+    assert ctx.edge_tag_names is not None
+    ctx.edge_tag_exprs = _collect_edge_tag_exprs(ctx.program, ctx.edge_tag_names)
+
+
+def _pass_discover_memory_keys(ctx: _PassContext) -> None:
+    assert ctx.compiled is not None and ctx.absorptions is not None
+    pilot = ctx.compiled.create_kernel()
+    for name in ctx.absorptions.preset_tags:
+        pilot.tags[name] = 1
+    pilot.memory["_dt"] = ctx.dt
+    for spec in ctx.compiled.block_specs.values():
+        pilot.load_block_from_tags(spec)
+    ctx.compiled.step_fn(pilot.tags, pilot.blocks, pilot.memory, pilot.prev, ctx.dt)
+    excluded_prefixes = ("_dt", "_frac:")
+    ctx.memory_key_names = tuple(
+        sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
+    )
+
+
+_DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
+    _PreBFSPass(
+        "build_graph", "Build program dependency graph and collect expressions", _pass_build_graph
+    ),
+    _PreBFSPass(
+        "classify_dimensions",
+        "Partition tags into stateful/nondeterministic/combinational",
+        _pass_classify_dimensions,
+    ),
+    _PreBFSPass(
+        "pilot_sweep",
+        "Discover finite domains for unbounded tags via kernel execution",
+        _pass_pilot_sweep,
+    ),
+    _PreBFSPass(
+        "compile_kernel",
+        "Compile the replay kernel and derive stateful/edge tag names",
+        _pass_compile_kernel,
+    ),
+    _PreBFSPass(
+        "collect_done_acc_pairs",
+        "Map Done tags to their accumulator partners",
+        _pass_collect_done_acc_pairs,
+    ),
+    _PreBFSPass(
+        "find_redundant_absorptions",
+        "Identify accumulators absorbed into Done bit state",
+        _pass_find_redundant_absorptions,
+    ),
+    _PreBFSPass(
+        "find_threshold_absorptions",
+        "Identify threshold jumping patterns for hidden accumulators",
+        _pass_find_threshold_absorptions,
+    ),
+    _PreBFSPass(
+        "build_event_specs",
+        "Construct Done and threshold event specifications",
+        _pass_build_event_specs,
+    ),
+    _PreBFSPass(
+        "collect_edge_exprs",
+        "Build expression map for edge tag compression",
+        _pass_collect_edge_exprs,
+    ),
+    _PreBFSPass(
+        "discover_memory_keys",
+        "Discover kernel memory keys via pilot scan",
+        _pass_discover_memory_keys,
+    ),
+)
+
+
+def _run_pre_bfs_pipeline(
+    ctx: _PassContext,
+    passes: tuple[_PreBFSPass, ...] = _DEFAULT_PRE_BFS_PASSES,
+) -> _ExploreContext | Intractable:
+    for p in passes:
+        if not p.enabled:
+            continue
+        p.run(ctx)
+        if ctx.intractable is not None and p.name not in {"classify_dimensions"}:
+            return ctx.intractable
+    return ctx.freeze()
+
+
 def _build_explore_context(
     program: Program,
     *,
@@ -1970,147 +2317,15 @@ def _build_explore_context(
     compiled: CompiledKernel | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
-    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-
-    graph = build_program_graph(program)
-    all_exprs = _collect_all_exprs(program, graph, scope=scope)
-    if extra_exprs:
-        all_exprs = all_exprs + extra_exprs
-    result = _classify_dimensions_from_graph(
-        program,
-        graph,
-        all_exprs,
+    ctx = _PassContext(
+        program=program,
         scope=scope,
         project=project,
-    )
-    if isinstance(result, Intractable) and result.tags:
-        if compiled is None:
-            compiled = _compile_kernel(program)
-        first_pass_nd: dict[str, tuple[Any, ...]] = {}
-        for tag_name, tag in graph.tags.items():
-            role = graph.tag_roles.get(tag_name)
-            is_written = tag_name in graph.writers_of
-            if not (role == TagRole.INPUT or (tag.external and not is_written)):
-                continue
-            domain = _extract_value_domain(tag_name, tag, all_exprs, graph.tags)
-            if not domain:
-                if tag.choices is not None:
-                    domain = tuple(sorted(tag.choices.keys()))
-                elif tag.min is not None and tag.max is not None:
-                    range_size = int(tag.max - tag.min + 1)
-                    if range_size <= 1000:
-                        domain = tuple(range(int(tag.min), int(tag.max) + 1))
-            if domain:
-                first_pass_nd[tag_name] = domain
-        discovered = _pilot_sweep_domains(
-            compiled,
-            result.tags,
-            first_pass_nd,
-            graph,
-            dt=dt,
-        )
-        if discovered:
-            result = _classify_dimensions_from_graph(
-                program,
-                graph,
-                all_exprs,
-                scope=scope,
-                project=project,
-                discovered_domains=discovered,
-            )
-    if isinstance(result, Intractable):
-        return result
-    stateful_dims, nondeterministic_dims, _comb, done_acc, done_presets, done_kinds = result
-
-    if compiled is None:
-        compiled = _compile_kernel(program)
-    stateful_names = tuple(sorted(stateful_dims))
-    edge_tag_names = tuple(sorted(compiled.edge_tags))
-    done_acc_info = _collect_done_acc_pairs(program)
-    consumed_accs = {
-        acc_name
-        for acc_name in done_acc_info.pairs.values()
-        if _collect_atoms_for_tag(all_exprs, acc_name)
-        or _has_forbidden_data_read(program, acc_name)
-    }
-    absorptions = _find_redundant_acc_absorptions(
-        program,
-        graph,
-        all_exprs,
-        done_acc_info,
-        consumed_accs,
-    )
-    threshold_absorptions = _find_threshold_absorptions(
-        program,
-        graph,
-        all_exprs,
-        project=project,
-    )
-
-    state_key_done_specs: list[_StateKeyDoneSpec] = []
-    done_event_specs: list[_DoneEventSpec] = []
-    for index, done_name in enumerate(stateful_names):
-        acc_name = done_acc.get(done_name)
-        if acc_name is None:
-            continue
-        kind = done_kinds[done_name]
-        state_key_done_specs.append(_StateKeyDoneSpec(index=index, acc_name=acc_name, kind=kind))
-        preset = done_presets.get(done_name)
-        if preset is not None:
-            done_event_specs.append(
-                _DoneEventSpec(
-                    state_index=index,
-                    acc_name=acc_name,
-                    kind=kind,
-                    preset=preset,
-                )
-            )
-
-    threshold_event_specs: list[_ThresholdEventSpec] = []
-    for vector_index, vector in enumerate(threshold_absorptions.vector_specs):
-        for atom_index, atom in enumerate(vector.atoms):
-            threshold_event_specs.append(
-                _ThresholdEventSpec(
-                    vector_index=vector_index,
-                    atom_index=atom_index,
-                    acc_name=vector.acc_name,
-                    kind=vector.kind,
-                    threshold=atom.threshold,
-                    form=atom.form,
-                )
-            )
-
-    edge_tag_exprs = _collect_edge_tag_exprs(program, edge_tag_names)
-    pilot = compiled.create_kernel()
-    for name in absorptions.preset_tags:
-        pilot.tags[name] = 1
-    pilot.memory["_dt"] = dt
-    for spec in compiled.block_specs.values():
-        pilot.load_block_from_tags(spec)
-    compiled.step_fn(pilot.tags, pilot.blocks, pilot.memory, pilot.prev, dt)
-    excluded_prefixes = ("_dt", "_frac:")
-    memory_key_names = tuple(
-        sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))
-    )
-
-    return _ExploreContext(
-        compiled=compiled,
-        graph=graph,
-        all_exprs=all_exprs,
-        stateful_dims=stateful_dims,
-        nondeterministic_dims=nondeterministic_dims,
-        stateful_names=stateful_names,
-        edge_tag_names=edge_tag_names,
-        memory_key_names=memory_key_names,
-        state_key_done_specs=tuple(state_key_done_specs),
-        done_event_specs=tuple(done_event_specs),
-        threshold_vector_specs=threshold_absorptions.vector_specs,
-        threshold_event_specs=tuple(threshold_event_specs),
-        block_specs=tuple(compiled.block_specs.values()),
+        extra_exprs=extra_exprs,
         dt=dt,
-        edge_tag_exprs=edge_tag_exprs,
-        synthetic_preset_tags=tuple(sorted(absorptions.preset_tags)),
+        compiled=compiled,
     )
+    return _run_pre_bfs_pipeline(ctx)
 
 
 def _projected_tuple(kernel: ReplayKernel, project_names: tuple[str, ...]) -> tuple[Any, ...]:
@@ -2271,16 +2486,15 @@ def _scans_until_done_event(
     kind: str,
     preset: int,
     acc_name: str,
-    before: _Snapshot,
+    before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> int | None:
     """Estimate scans until this pending timer/counter reaches its next Done event."""
-    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
-    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
-        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
         remaining = preset - after_total
@@ -2301,15 +2515,14 @@ def _scans_until_done_event(
 def _progress_delta_and_current(
     kind: str,
     acc_name: str,
-    before: _Snapshot,
+    before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> tuple[float, float] | None:
-    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
-    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
-        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         return after_total - before_total, after_total
 
@@ -2321,7 +2534,7 @@ def _progress_delta_and_current(
 
 def _scans_until_threshold_event(
     spec: _ThresholdEventSpec,
-    before: _Snapshot,
+    before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> int | None:
     """Estimate scans until an uncrossed threshold atom crosses."""
@@ -2351,19 +2564,18 @@ def _advance_hidden_progress(
     kind: str,
     acc_name: str,
     skipped_scans: int,
-    before: _Snapshot,
+    before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> None:
     """Advance a hidden timer/counter through skipped scans before the event scan."""
     if skipped_scans <= 0:
         return
 
-    before_tags, _blocks, before_memory, _prev, _scan_id, _timestamp = before
-    acc_before = int(before_tags.get(acc_name, 0) or 0)
+    acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 
     if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
-        before_total = acc_before + float(before_memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        before_total = acc_before + float(before.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
         after_total = _timer_total(kernel, acc_name)
         delta = after_total - before_total
         target_total = after_total + (skipped_scans * delta)
@@ -2403,7 +2615,7 @@ def _has_pending_hidden_event(context: _ExploreContext, key: tuple[Any, ...]) ->
 def _resolve_nearest_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
-    before_snap: _Snapshot,
+    before_snap: _KernelSnapshot,
     key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
 ) -> tuple[tuple[Any, ...], int] | None:
@@ -2450,7 +2662,7 @@ def _resolve_nearest_hidden_event(
 def _settle_pending(
     context: _ExploreContext,
     kernel: ReplayKernel,
-    before_snap: _Snapshot,
+    before_snap: _KernelSnapshot,
     edge_comp: _EdgeCompressor,
 ) -> tuple[tuple[Any, ...], int]:
     """Resolve all pending timers/counters so the system reaches a stable state.
@@ -2474,7 +2686,7 @@ def _settle_pending(
 def _maybe_jump_hidden_event(
     context: _ExploreContext,
     kernel: ReplayKernel,
-    snap: _Snapshot,
+    snap: _KernelSnapshot,
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
@@ -2493,41 +2705,91 @@ def _maybe_jump_hidden_event(
 def _bfs_explore(
     context: _ExploreContext,
     *,
-    predicate: Callable[[dict[str, Any]], bool] | None = None,
+    predicates: list[Callable[[dict[str, Any]], bool]] | None = None,
     project: tuple[str, ...] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
-) -> Proven | Counterexample | Intractable | frozenset[frozenset[tuple[str, Any]]]:
+    bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
+) -> (
+    list[Proven | Counterexample | Intractable]
+    | frozenset[frozenset[tuple[str, Any]]]
+    | Intractable
+):
     """BFS over the reachable state space."""
     kernel = context.compiled.create_kernel()
     _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
-    initial_key = edge_comp.state_key(kernel)
+
+    def _state_key(k: ReplayKernel) -> tuple[Any, ...]:
+        if bfs_config.edge_compression:
+            return edge_comp.state_key(k)
+        return _extract_state_key(
+            k, context.stateful_names, context.edge_tag_names,
+            context.memory_key_names, context.state_key_done_specs,
+            context.threshold_vector_specs,
+        )
+
+    initial_key = _state_key(kernel)
 
     visited: set[tuple[Any, ...]] = {initial_key}
     parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] | None = (
-        {initial_key: (None, {}, 0)} if predicate is not None else None
+        {initial_key: (None, {}, 0)} if predicates is not None else None
+    )
+
+    results: list[Counterexample | Proven | Intractable | None] | None = (
+        [None] * len(predicates) if predicates is not None else None
     )
     projected_rows: set[tuple[Any, ...]] = set()
-
     if project is not None:
         projected_rows.add(_projected_tuple(kernel, project))
 
-    if predicate is not None and not predicate(kernel.tags):
-        return Counterexample(trace=[TraceStep(inputs={}, scans=0)])
+    def _record_failures(
+        *,
+        state: dict[str, Any],
+        p_key: tuple[Any, ...],
+        input_dict: dict[str, Any],
+        edge_scans: int,
+        initial: bool = False,
+    ) -> None:
+        assert predicates is not None and results is not None and parent_map is not None
+        for i, predicate in enumerate(predicates):
+            if results[i] is not None:
+                continue
+            if predicate(state):
+                continue
+            if initial:
+                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
+                continue
+            trace = _build_trace(parent_map, p_key)
+            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
+            results[i] = Counterexample(trace=trace)
 
-    queue: deque[tuple[_Snapshot, int, tuple[Any, ...]]] = deque()
+    if predicates is not None:
+        _record_failures(
+            state=kernel.tags,
+            p_key=initial_key,
+            input_dict={},
+            edge_scans=0,
+            initial=True,
+        )
+        assert results is not None
+        if all(r is not None for r in results):
+            return [r for r in results if r is not None]
+
+    queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...]]] = deque()
     queue.append((_snapshot_kernel(kernel), 0, initial_key))
 
     while queue:
         snap, depth, parent_key = queue.popleft()
-
         if depth >= max_depth:
             continue
 
         _restore_kernel(kernel, snap)
-        live = _live_inputs(kernel.tags, context.nondeterministic_dims, context.all_exprs)
-
+        live = (
+            _live_inputs(kernel.tags, context.nondeterministic_dims, context.all_exprs)
+            if bfs_config.live_input_pruning
+            else frozenset(context.nondeterministic_dims)
+        )
         if live:
             live_sorted = sorted(live)
             domains = [context.nondeterministic_dims[n] for n in live_sorted]
@@ -2541,7 +2803,6 @@ def _bfs_explore(
         )
         for combo in combos:
             _restore_kernel(kernel, snap)
-
             input_dict: dict[str, Any] = {}
             for i, name in enumerate(live_sorted):
                 kernel.tags[name] = combo[i]
@@ -2550,32 +2811,58 @@ def _bfs_explore(
             _step_kernel(context, kernel)
             edge_scans = 1
 
-            if predicate is not None and not predicate(kernel.tags):
-                new_key = edge_comp.state_key(kernel)
-                if _has_pending_hidden_event(context, new_key):
-                    new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
+            if predicates is not None:
+                assert results is not None
+                any_unsettled = any(
+                    results[i] is None and not predicates[i](kernel.tags)
+                    for i in range(len(predicates))
+                )
+                new_key = _state_key(kernel)
+                if (
+                    bfs_config.pending_settlement
+                    and any_unsettled
+                    and _has_pending_hidden_event(context, new_key)
+                ):
+                    new_key, additional_scans = _settle_pending(
+                        context,
+                        kernel,
+                        snap,
+                        edge_comp,
+                    )
                     edge_scans += additional_scans
-                if not predicate(kernel.tags):
-                    assert parent_map is not None
-                    trace = _build_trace(parent_map, parent_key)
-                    trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
-                    return Counterexample(trace=trace)
-
-            new_key = edge_comp.state_key(kernel)
+                    new_key = _state_key(kernel)
+                _record_failures(
+                    state=kernel.tags,
+                    p_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=edge_scans,
+                )
+            else:
+                new_key = _state_key(kernel)
 
             before_jump_key = new_key
-            new_key, additional_scans = _maybe_jump_hidden_event(
-                context, kernel, snap, visited, new_key, edge_comp
-            )
+            if bfs_config.hidden_event_jumping:
+                _, additional_scans = _maybe_jump_hidden_event(
+                    context,
+                    kernel,
+                    snap,
+                    visited,
+                    new_key,
+                    edge_comp,
+                )
+                new_key = _state_key(kernel)
+            else:
+                additional_scans = 0
             jumped = new_key != before_jump_key or additional_scans > 0
             if additional_scans:
                 edge_scans += additional_scans
-
-            if jumped and predicate is not None and not predicate(kernel.tags):
-                assert parent_map is not None
-                trace = _build_trace(parent_map, parent_key)
-                trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
-                return Counterexample(trace=trace)
+            if jumped and predicates is not None:
+                _record_failures(
+                    state=kernel.tags,
+                    p_key=parent_key,
+                    input_dict=input_dict,
+                    edge_scans=edge_scans,
+                )
 
             if project is not None:
                 projected_row = _projected_tuple(kernel, project)
@@ -2589,152 +2876,29 @@ def _bfs_explore(
             if new_key not in visited:
                 visited.add(new_key)
                 if len(visited) > max_states:
-                    return Intractable(
-                        reason="max_states exceeded",
-                        dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
-                        estimated_space=len(visited),
-                        hints=_build_dimension_hints(context),
-                    )
-                if parent_map is not None:
-                    parent_map[new_key] = (parent_key, input_dict, edge_scans)
-                queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
-
-    if project is not None:
-        return _projected_states(project, projected_rows)
-
-    return Proven(states_explored=len(visited))
-
-
-def _bfs_explore_many(
-    context: _ExploreContext,
-    *,
-    predicates: list[Callable[[dict[str, Any]], bool]],
-    max_depth: int = 50,
-    max_states: int = 100_000,
-) -> list[Proven | Counterexample | Intractable]:
-    """BFS over the reachable state space for multiple properties at once."""
-    kernel = context.compiled.create_kernel()
-    _seed_synthetic_presets(context, kernel)
-    edge_comp = _EdgeCompressor(context)
-    initial_key = edge_comp.state_key(kernel)
-
-    visited: set[tuple[Any, ...]] = {initial_key}
-    parent_map: dict[tuple[Any, ...], tuple[tuple[Any, ...] | None, dict[str, Any], int]] = {
-        initial_key: (None, {}, 0)
-    }
-    results: list[Counterexample | Proven | Intractable | None] = [None] * len(predicates)
-
-    def _record_failures(
-        *,
-        state: dict[str, Any],
-        parent_key: tuple[Any, ...],
-        input_dict: dict[str, Any],
-        edge_scans: int,
-        initial: bool = False,
-    ) -> None:
-        for i, predicate in enumerate(predicates):
-            if results[i] is not None:
-                continue
-            if predicate(state):
-                continue
-            if initial:
-                results[i] = Counterexample(trace=[TraceStep(inputs={}, scans=0)])
-                continue
-            trace = _build_trace(parent_map, parent_key)
-            trace.append(TraceStep(inputs=input_dict, scans=edge_scans))
-            results[i] = Counterexample(trace=trace)
-
-    _record_failures(
-        state=kernel.tags,
-        parent_key=initial_key,
-        input_dict={},
-        edge_scans=0,
-        initial=True,
-    )
-    if all(result is not None for result in results):
-        return [result for result in results if result is not None]
-
-    queue: deque[tuple[_Snapshot, int, tuple[Any, ...]]] = deque()
-    queue.append((_snapshot_kernel(kernel), 0, initial_key))
-
-    while queue:
-        snap, depth, parent_key = queue.popleft()
-
-        if depth >= max_depth:
-            continue
-
-        _restore_kernel(kernel, snap)
-        live = _live_inputs(kernel.tags, context.nondeterministic_dims, context.all_exprs)
-
-        if live:
-            live_sorted = sorted(live)
-            domains = [context.nondeterministic_dims[n] for n in live_sorted]
-            combos: Any = itertools.product(*domains)
-        else:
-            live_sorted = []
-            combos = [()]
-
-        for combo in combos:
-            _restore_kernel(kernel, snap)
-
-            input_dict: dict[str, Any] = {}
-            for i, name in enumerate(live_sorted):
-                kernel.tags[name] = combo[i]
-                input_dict[name] = combo[i]
-
-            _step_kernel(context, kernel)
-            edge_scans = 1
-
-            any_unsettled = any(
-                results[i] is None and not predicates[i](kernel.tags)
-                for i in range(len(predicates))
-            )
-            new_key = edge_comp.state_key(kernel)
-            if any_unsettled and _has_pending_hidden_event(context, new_key):
-                new_key, additional_scans = _settle_pending(context, kernel, snap, edge_comp)
-                edge_scans += additional_scans
-
-            _record_failures(
-                state=kernel.tags,
-                parent_key=parent_key,
-                input_dict=input_dict,
-                edge_scans=edge_scans,
-            )
-
-            before_jump_key = new_key
-            new_key, additional_scans = _maybe_jump_hidden_event(
-                context, kernel, snap, visited, new_key, edge_comp
-            )
-            jumped = new_key != before_jump_key or additional_scans > 0
-            if additional_scans:
-                edge_scans += additional_scans
-            if jumped:
-                _record_failures(
-                    state=kernel.tags,
-                    parent_key=parent_key,
-                    input_dict=input_dict,
-                    edge_scans=edge_scans,
-                )
-
-            if new_key not in visited:
-                visited.add(new_key)
-                if len(visited) > max_states:
                     intractable = Intractable(
                         reason="max_states exceeded",
                         dimensions=len(context.stateful_dims) + len(context.nondeterministic_dims),
                         estimated_space=len(visited),
                         hints=_build_dimension_hints(context),
                     )
-                    return [result if result is not None else intractable for result in results]
-                parent_map[new_key] = (parent_key, input_dict, edge_scans)
+                    if results is not None:
+                        return [r if r is not None else intractable for r in results]
+                    return intractable
+                if parent_map is not None:
+                    parent_map[new_key] = (parent_key, input_dict, edge_scans)
                 queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
-            if all(result is not None for result in results):
-                return [result for result in results if result is not None]
+            if results is not None and all(r is not None for r in results):
+                return [r for r in results if r is not None]
 
-    return [
-        result if result is not None else Proven(states_explored=len(visited)) for result in results
-    ]
+    if project is not None:
+        return _projected_states(project, projected_rows)
+
+    if results is not None:
+        return [r if r is not None else Proven(states_explored=len(visited)) for r in results]
+
+    return [Proven(states_explored=len(visited))]
 
 
 # ---------------------------------------------------------------------------
@@ -2913,12 +3077,12 @@ def prove(
         context = _build_explore_context(program, scope=effective_scope, extra_exprs=extra)
         if isinstance(context, Intractable):
             return context
-        return _bfs_explore(  # ty: ignore[invalid-return-type]
+        return _bfs_explore(
             context,
-            predicate=predicate,
+            predicates=[predicate],
             max_depth=max_depth,
             max_states=max_states,
-        )
+        )[0]
 
     if scope is not None:
         partitions = [(list(range(len(compiled_properties))), scope)]
@@ -2942,23 +3106,15 @@ def prove(
                 results[i] = context
             continue
 
-        if len(indices) == 1:
-            results[indices[0]] = _bfs_explore(
-                context,
-                predicate=compiled_properties[indices[0]][0],
-                max_depth=max_depth,
-                max_states=max_states,
-            )
-        else:
-            group_predicates = [compiled_properties[i][0] for i in indices]
-            group_results = _bfs_explore_many(
-                context,
-                predicates=group_predicates,
-                max_depth=max_depth,
-                max_states=max_states,
-            )
-            for i, r in zip(indices, group_results, strict=True):
-                results[i] = r
+        group_predicates = [compiled_properties[i][0] for i in indices]
+        group_results = _bfs_explore(
+            context,
+            predicates=group_predicates,
+            max_depth=max_depth,
+            max_states=max_states,
+        )
+        for i, r in zip(indices, group_results, strict=True):  # ty: ignore[invalid-argument-type]
+            results[i] = r
 
     return [r if r is not None else Proven(states_explored=0) for r in results]
 
