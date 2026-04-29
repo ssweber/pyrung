@@ -40,6 +40,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `make lint` — codespell, ruff (check + format), ty
 - `make test` — pytest (ALWAYS use this, not `uv run pytest`)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
+- `pyrung lock main --profile out.prof` — cProfile pstats dump; analyze with `pstats.Stats` or `uvx snakeviz out.prof`
 
 ### VS Code Extension (`editors/vscode/pyrung-debug/`)
 
