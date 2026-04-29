@@ -900,6 +900,53 @@ class _StderrProgressReporter:
         prefix = f"{label} | " if label else ""
         self.emit(f"{prefix}{message}")
 
+    def report_dimensions(
+        self,
+        context: _ExploreContext,
+        *,
+        label: str = "",
+    ) -> None:
+        from .absorb import _THRESHOLD_KIND_COMPARISON_ONLY
+
+        if not isinstance(context, _ExploreContext):
+            return
+        stateful = context.stateful_dims
+        nd = context.nondeterministic_dims
+        n_stateful = len(stateful)
+        n_input = len(nd)
+        product = 1
+        for domain in stateful.values():
+            product *= len(domain)
+        for domain in nd.values():
+            product *= len(domain)
+
+        self.info(
+            f"{n_stateful} stateful + {n_input} input dimensions | "
+            f"state space: {product:,}",
+            label=label,
+        )
+
+        dims: list[tuple[str, int]] = []
+        for name, domain in stateful.items():
+            dims.append((name, len(domain)))
+        for name, domain in nd.items():
+            dims.append((name, len(domain)))
+        dims.sort(key=lambda x: x[1], reverse=True)
+
+        top = dims[:8]
+        if top:
+            parts = [f"{name}: {size}" for name, size in top]
+            suffix = f" ... +{len(dims) - 8} more" if len(dims) > 8 else ""
+            self.info(f"  {', '.join(parts)}{suffix}", label=label)
+
+        absorbed: dict[str, int] = {}
+        for vec in context.threshold_vector_specs:
+            kind = "comparison" if vec.kind == _THRESHOLD_KIND_COMPARISON_ONLY else "threshold"
+            absorbed[kind] = absorbed.get(kind, 0) + 1
+        if absorbed:
+            parts = [f"{kind}: {count}" for kind, count in sorted(absorbed.items())]
+            self.info(f"  absorbed: {', '.join(parts)}", label=label)
+
     def bfs_callback(self, label: str = "") -> Callable[[int, int, float], None]:
         bfs_start = time.monotonic()
         prev_queue = [0]
@@ -1017,6 +1064,8 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
+        if stderr_reporter is not None:
+            stderr_reporter.report_dimensions(context)
         bfs_progress = (
             stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
         )
@@ -1046,6 +1095,8 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
+        if stderr_reporter is not None:
+            stderr_reporter.report_dimensions(context)
         bfs_progress = (
             stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
         )
@@ -1082,6 +1133,8 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
+        if stderr_reporter is not None:
+            stderr_reporter.report_dimensions(context, label=label)
         cluster_cb = progress_cb
         if stderr_reporter is not None:
             cluster_cb = stderr_reporter.bfs_callback(label)
