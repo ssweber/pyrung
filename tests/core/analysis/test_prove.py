@@ -1192,6 +1192,171 @@ class TestBatchPartitioning:
         assert isinstance(results[1], Counterexample)
 
 
+class TestReachablePartitioning:
+    """Reachable-state partitioning: independent clusters explored separately."""
+
+    def test_independent_ote_outputs_partitioned(self):
+        """Two OTE outputs with separate inputs are explored independently."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(b):
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", False), ("Y", True)}),
+                frozenset({("X", True), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_independent_latches_partitioned(self):
+        """Two independent latch subsystems produce Cartesian product."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 4
+        x_vals = {dict(s)["X"] for s in states}
+        y_vals = {dict(s)["Y"] for s in states}
+        assert x_vals == {True, False}
+        assert y_vals == {True, False}
+
+    def test_coupled_tags_stay_together(self):
+        """Tags sharing upstream input are not falsely split."""
+        btn = Bool("Btn", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(btn):
+                out(x)
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_three_cluster_partition(self):
+        """Three independent subsystems each explored separately."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+        z = Bool("Z")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+            with Rung(c):
+                latch(z)
+
+        states = reachable_states(logic, project=["X", "Y", "Z"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 8
+
+    def test_explicit_scope_disables_partitioning(self):
+        """Explicit scope= bypasses automatic partitioning."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(b):
+                out(y)
+
+        states = reachable_states(logic, scope=["X", "Y"], project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 4
+
+    def test_simplified_form_refines_partition(self):
+        """Pivot resolution via simplified forms enables finer splitting.
+
+        X and Y share a pivot tag P in the PDG, but P is OTE-resolvable
+        and resolves to different inputs — so simplified forms show they
+        are truly independent.
+        """
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        p = Bool("P")
+        q = Bool("Q")
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(p)
+            with Rung(b):
+                out(q)
+            with Rung(p):
+                out(x)
+            with Rung(q):
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", False), ("Y", True)}),
+                frozenset({("X", True), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_lock_roundtrip_with_partitioned_states(self, tmp_path: Path):
+        """Lock write/check works with partitioned reachable-state computation."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        proj = ["X", "Y"]
+        states = reachable_states(logic, project=proj)
+        assert not isinstance(states, Intractable)
+
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, proj, program_hash(logic))
+
+        diff = check_lock(logic, lock_path)
+        assert diff is None
+
+
 class TestConsumedAccumulator:
     """Item 15: accumulator consumed in a condition stays as separate dimension."""
 

@@ -569,6 +569,70 @@ def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     return frozenset(cone)
 
 
+def _partition_projection(
+    program: Program,
+    projection: list[str],
+) -> list[list[str]]:
+    """Partition projection tags into independent clusters by dependency overlap.
+
+    Uses simplified forms where available (tighter than raw PDG cones) and
+    falls back to PDG upstream cones for non-resolvable terminals.
+    Independent clusters can be explored via separate BFS passes and their
+    reachable sets combined via Cartesian product.
+    """
+    if len(projection) <= 1:
+        return [list(projection)]
+
+    from pyrung.core.analysis.simplified import simplified_forms
+
+    dv = program.dataview()
+    graph = dv._graph
+    forms = simplified_forms(program)
+
+    cones: list[frozenset[str]] = []
+    for tag_name in projection:
+        if tag_name in forms:
+            refs = _referenced_tags(forms[tag_name].expr)
+            cones.append(refs | {tag_name})
+        else:
+            cone = graph.upstream_slice(tag_name)
+            cones.append(cone | {tag_name})
+
+    parent = list(range(len(projection)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(len(projection)):
+        for j in range(i + 1, len(projection)):
+            if cones[i] & cones[j]:
+                union(i, j)
+
+    groups: dict[int, list[str]] = {}
+    for i, tag_name in enumerate(projection):
+        groups.setdefault(find(i), []).append(tag_name)
+    return list(groups.values())
+
+
+def _cartesian_product(
+    cluster_states: list[frozenset[frozenset[tuple[str, Any]]]],
+) -> frozenset[frozenset[tuple[str, Any]]]:
+    """Combine independent cluster reachable sets via Cartesian product."""
+    result: set[frozenset[tuple[str, Any]]] = set()
+    for combo in itertools.product(*cluster_states):
+        merged: frozenset[tuple[str, Any]] = frozenset().union(*combo)
+        result.add(merged)
+    return frozenset(result)
+
+
 def _partition_batch(
     program: Program,
     compiled_properties: list[
@@ -738,12 +802,19 @@ def reachable_states(
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
+    When no explicit *scope* is given, projection tags are partitioned into
+    independent clusters by dependency analysis (PDG upstream cones refined
+    by simplified Boolean forms).  Each cluster is explored via a separate
+    BFS scoped to its own upstream cone, and the results are combined via
+    Cartesian product — turning one 2^N exploration into several 2^k passes.
+
     Parameters
     ----------
     program : Program
         The compiled ladder logic program.
     scope : list of tag names, optional
         If given, restrict input enumeration to the upstream cone.
+        Disables automatic partitioning.
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
     max_depth : int
@@ -751,17 +822,63 @@ def reachable_states(
     max_states : int
         Visited-set cap.
     """
-    project_names = tuple(project) if project is not None else tuple(_default_projection(program))
-    context = _build_explore_context(program, scope=scope, project=project_names)
-    if isinstance(context, Intractable):
-        return context
+    project_list = list(project) if project is not None else _default_projection(program)
+    project_names = tuple(project_list)
 
-    return _bfs_explore(  # ty: ignore[invalid-return-type]
-        context,
-        project=project_names,
-        max_depth=max_depth,
-        max_states=max_states,
-    )
+    if scope is not None:
+        context = _build_explore_context(program, scope=scope, project=project_names)
+        if isinstance(context, Intractable):
+            return context
+        return _bfs_explore(  # ty: ignore[invalid-return-type]
+            context,
+            project=project_names,
+            max_depth=max_depth,
+            max_states=max_states,
+        )
+
+    clusters = _partition_projection(program, project_list)
+
+    if len(clusters) == 1:
+        context = _build_explore_context(
+            program,
+            scope=clusters[0],
+            project=project_names,
+        )
+        if isinstance(context, Intractable):
+            return context
+        return _bfs_explore(  # ty: ignore[invalid-return-type]
+            context,
+            project=project_names,
+            max_depth=max_depth,
+            max_states=max_states,
+        )
+
+    cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
+    from pyrung.circuitpy.codegen import compile_kernel
+
+    compiled_kernel = compile_kernel(program)
+    for cluster in clusters:
+        cluster_project = tuple(cluster)
+        context = _build_explore_context(
+            program,
+            scope=cluster,
+            project=cluster_project,
+            compiled=compiled_kernel,
+        )
+        if isinstance(context, Intractable):
+            return context
+        result = _bfs_explore(
+            context,
+            project=cluster_project,
+            max_depth=max_depth,
+            max_states=max_states,
+        )
+        if isinstance(result, Intractable):
+            return result
+        assert isinstance(result, frozenset)
+        cluster_results.append(result)
+
+    return _cartesian_product(cluster_results)
 
 
 def diff_states(
