@@ -34,6 +34,7 @@ class Tag:
     external: bool
     final: bool
     public: bool
+    lock: bool
     physical: Physical | None
     link: str | None
     min: int | float | None
@@ -57,6 +58,7 @@ class Tag:
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -142,6 +144,7 @@ class _TagTypeBase(LiveTag):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,

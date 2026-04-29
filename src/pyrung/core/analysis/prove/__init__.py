@@ -942,16 +942,9 @@ def diff_states(
 
 
 def _default_projection(program: Program) -> list[str]:
-    """Choose default projection tags: terminal Bool outputs only."""
-    from pyrung.core.tag import TagType
-
-    dv = program.dataview()
-    graph = dv._graph
-    return sorted(
-        name
-        for name in dv.terminals().tags
-        if (tag := graph.tags.get(name)) is not None and tag.type == TagType.BOOL
-    )
+    """Choose default projection tags: tags marked lock=True."""
+    graph = program.dataview()._graph
+    return sorted(name for name, tag in graph.tags.items() if getattr(tag, "lock", False))
 
 
 def _states_to_json(

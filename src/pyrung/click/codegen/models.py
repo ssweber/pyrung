@@ -104,6 +104,7 @@ class _TagMetadata:
     external: bool = False
     final: bool = False
     public: bool = False
+    lock: bool = False
     physical: _PhysicalSpec | None = None
     link: str | None = None
     min: int | float | None = None
@@ -181,6 +182,8 @@ class _BlockSlotDecl:
     final_overridden: bool = False
     public: bool = False
     public_overridden: bool = False
+    lock: bool = False
+    lock_overridden: bool = False
     physical: _PhysicalSpec | None = None
     physical_overridden: bool = False
     link: str | None = None

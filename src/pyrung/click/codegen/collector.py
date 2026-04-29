@@ -212,6 +212,7 @@ def _enrich_with_ownership(
             external=getattr(tag, "external", False),
             final=getattr(tag, "final", False),
             public=getattr(tag, "public", False),
+            lock=getattr(tag, "lock", False),
             physical=_spec_from_physical(getattr(tag, "physical", None)),
             link=getattr(tag, "link", None),
             min=getattr(tag, "min", None),
@@ -226,6 +227,7 @@ def _enrich_with_ownership(
             and not meta.external
             and not meta.final
             and not meta.public
+            and not meta.lock
             and meta.physical is None
             and meta.link is None
             and meta.min is None
@@ -413,6 +415,8 @@ def _enrich_with_ownership(
                 final_overridden=slot.final_overridden,
                 public=metadata.public,
                 public_overridden=slot.public_overridden,
+                lock=metadata.lock,
+                lock_overridden=slot.lock_overridden,
                 physical=metadata.physical,
                 physical_overridden=slot.physical_overridden,
                 link=metadata.link,

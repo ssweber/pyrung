@@ -151,7 +151,7 @@ pyrung lock my_program        # compute reachable states, write pyrung.lock
 pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
-The lock projects to terminal Bool tags by default — the discrete outputs that define your program's observable behavior. Non-Bool terminals (step counters, analog outputs) are not included automatically but can be added via `__lock__` or `--project`:
+The lock projects to tags marked `lock=True` by default — the outputs that define your program's observable behavior. Programs using Click `TagMap` get this automatically (output-mapped tags are stamped `lock=True`). Programs without `TagMap` need explicit `lock=True` on output tags, or use `__lock__` or `--project`:
 
 ```bash
 pyrung lock my_program --project Running MotorOut StatusLight
@@ -161,7 +161,7 @@ Tags with `choices=` metadata get their labels in the lock file instead of raw i
 
 ### `__lock__` — per-module projection override
 
-For programs where the terminal default misses something (a pivot that matters behaviorally) or includes something cosmetic, define `__lock__` at module level:
+For programs where the `lock=True` default misses something (a pivot that matters behaviorally) or includes something cosmetic, define `__lock__` at module level:
 
 ```python
 __lock__ = {
@@ -170,8 +170,8 @@ __lock__ = {
 }
 ```
 
-- `include` adds tags the terminal default misses.
-- `exclude` drops tags the terminal default includes.
+- `include` adds tags the default misses.
+- `exclude` drops tags the default includes.
 - Both keys are optional. Most programs won't need `__lock__` at all.
 - `--project` on the CLI still overrides everything for one-off checks.
 
@@ -195,7 +195,7 @@ __lock__ = {
 **Lock everything** — full state space equality. For purely cosmetic refactoring (renaming tags, reordering rungs that don't interact). Any behavioral change is flagged.
 
 ```python
-states = reachable_states(logic)  # default: terminal Bool tags
+states = reachable_states(logic)  # default: lock=True tags
 ```
 
 **Lock I/O** — project to inputs and terminals only. For restructuring internal logic where pivots can change freely.

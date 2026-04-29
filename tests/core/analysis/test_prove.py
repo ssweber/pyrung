@@ -798,12 +798,12 @@ class TestDiffStates:
 
 
 class TestDefaultProjection:
-    """_default_projection returns terminals, not public tags."""
+    """_default_projection returns tags with lock=True."""
 
-    def test_terminals_not_public(self):
+    def test_lock_flag_selects_projection(self):
         button = Bool("Button", external=True)
         running = Bool("Running", public=True)
-        light = Bool("Light")
+        light = Bool("Light", lock=True)
 
         with Program(strict=False) as logic:
             with Rung(button):
@@ -814,7 +814,7 @@ class TestDefaultProjection:
         proj = _default_projection(logic)
         assert proj == ["Light"]
 
-    def test_empty_when_no_terminals(self):
+    def test_empty_when_no_lock_tags(self):
         button = Bool("Button", external=True)
         internal = Bool("Internal")
 
@@ -827,11 +827,11 @@ class TestDefaultProjection:
         proj = _default_projection(logic)
         assert proj == []
 
-    def test_excludes_non_bool_terminals(self):
-        """Non-Bool terminal tags are excluded from default projection."""
+    def test_non_bool_lock_included(self):
+        """Non-Bool tags with lock=True are included in projection."""
         button = Bool("Button", external=True)
-        light = Bool("Light")
-        counter_val = Int("CounterVal")
+        light = Bool("Light", lock=True)
+        counter_val = Int("CounterVal", lock=True)
 
         with Program(strict=False) as logic:
             with Rung(button):
@@ -840,7 +840,19 @@ class TestDefaultProjection:
 
         proj = _default_projection(logic)
         assert "Light" in proj
-        assert "CounterVal" not in proj
+        assert "CounterVal" in proj
+
+    def test_unlocked_terminals_excluded(self):
+        """Terminal tags without lock=True are not in the default projection."""
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        proj = _default_projection(logic)
+        assert proj == []
 
 
 class TestApplyLockConfig:

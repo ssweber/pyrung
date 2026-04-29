@@ -18,6 +18,7 @@ class _FieldSpec:
     external: bool
     final: bool
     public: bool
+    lock: bool
     physical: Physical | None
     link: str | None
     min: int | float | None
@@ -34,6 +35,7 @@ class _FieldSpec:
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -50,6 +52,7 @@ class _FieldInfo:
     external: bool | None
     final: bool | None
     public: bool | None
+    lock: bool | None
     physical: Physical | None
     link: str | None
     min: int | float | None
@@ -65,6 +68,7 @@ def Field(
     external: bool | None = None,
     final: bool | None = None,
     public: bool | None = None,
+    lock: bool | None = None,
     physical: Physical | None = None,
     link: str | None = None,
     min: int | float | None = None,
@@ -96,6 +100,7 @@ class _StructRuntime:
     external: bool
     final: bool
     public: bool
+    lock: bool
     _structure_kind: Literal["udt", "named_array"]
     _field_specs: dict[str, _FieldSpec]
     _blocks: dict[str, Block]
@@ -111,6 +116,7 @@ class _StructRuntime:
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         kind: Literal["udt", "named_array"] = "udt",
     ) -> None: ...
     def clone(
@@ -122,6 +128,7 @@ class _StructRuntime:
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _StructRuntime: ...
     @property
     def fields(self) -> dict[str, _FieldInfo]: ...
@@ -142,6 +149,7 @@ class _DoneAccRuntime(_StructRuntime):
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _DoneAccRuntime: ...
 
 class _NamedArrayRuntime(_StructRuntime):
@@ -160,6 +168,7 @@ class _NamedArrayRuntime(_StructRuntime):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
     ) -> None: ...
     def clone(
         self,
@@ -171,6 +180,7 @@ class _NamedArrayRuntime(_StructRuntime):
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _NamedArrayRuntime: ...
     def hardware_span(self, hw_start: int) -> tuple[int, int]: ...
     def map_to(self, target: BlockRange) -> list[MappingEntry]: ...
@@ -185,6 +195,7 @@ def udt(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> Callable[[type[Any]], _StructRuntime]: ...
 def named_array(
     base_type: object,
@@ -196,7 +207,5 @@ def named_array(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> Callable[[type[Any]], _NamedArrayRuntime]: ...
-
-Timer: _DoneAccRuntime
-Counter: _DoneAccRuntime

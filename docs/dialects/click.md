@@ -222,7 +222,19 @@ mapping = TagMap({StartButton: x[1]})
 assert StartButton.external                # now True — stamped by TagMap
 ```
 
-Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not affected. Tags that are `readonly` are skipped — `readonly` and `external` are mutually exclusive.
+Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `external`. Tags that are `readonly` are skipped — `readonly` and `external` are mutually exclusive.
+
+### Output inference
+
+When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This includes the tag in the default `pyrung lock` projection, so physical outputs are tracked in the lock file without requiring you to declare `lock=True` yourself.
+
+```python
+MotorOut = Bool("MotorOut")                    # lock=False initially
+mapping = TagMap({MotorOut: y[1]})
+assert MotorOut.lock                           # now True — stamped by TagMap
+```
+
+Tags mapped to input or memory banks (`x`, `c`, `ds`, etc.) are not affected.
 
 ### Type validation at map time
 

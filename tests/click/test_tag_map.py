@@ -2331,3 +2331,52 @@ def test_no_stamp_for_non_input():
     motor = Bool("Motor")
     TagMap({motor: c[1]}, include_system=False)
     assert not motor.external
+
+
+# ===================================================================
+# Output-mapped tags stamped lock
+# ===================================================================
+
+
+def test_stamp_lock_standalone_tags():
+    from pyrung.click import y
+    from pyrung.core import Int
+
+    button = Bool("Button")
+    motor = Bool("Motor")
+    speed = Int("Speed")
+
+    TagMap({button: x[1], motor: y[1], speed: ds[1]})
+
+    assert not button.lock
+    assert motor.lock
+    assert not speed.lock
+
+
+def test_stamp_lock_block_range():
+    from pyrung.click import y
+
+    sensors = Block("Sensor", TagType.BOOL, 1, 4)
+    outputs = Block("Out", TagType.BOOL, 1, 4)
+
+    TagMap(
+        {sensors: x.select(1, 4), outputs: y.select(1, 4)},
+        include_system=False,
+    )
+
+    assert all(not sensors[i].lock for i in range(1, 5))
+    assert all(outputs[i].lock for i in range(1, 5))
+
+
+def test_stamp_lock_noop_when_already_lock():
+    motor = Bool("Motor", lock=True)
+    from pyrung.click import y
+
+    TagMap({motor: y[1]}, include_system=False)
+    assert motor.lock
+
+
+def test_no_lock_stamp_for_non_output():
+    button = Bool("Button")
+    TagMap({button: x[1]}, include_system=False)
+    assert not button.lock

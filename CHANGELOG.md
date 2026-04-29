@@ -4,16 +4,18 @@
 
 ### Breaking changes
 
-- **Lock file default projection is now terminal Bools only** — `_default_projection` and `pyrung lock` now project to terminal Bool tags only (previously all terminal tags). Non-Bool terminals (Int step counters, Real outputs, etc.) can still be included explicitly via `__lock__ = {"include": [...]}` or `--project`. Existing lock files will need regeneration with `pyrung lock`.
+- **Lock file default projection is now `lock=True` tags** — `_default_projection` and `pyrung lock` now project to tags marked `lock=True` (previously terminal Bool tags). `TagMap` auto-stamps `lock=True` on output-mapped tags, so programs using `TagMap` get physical outputs in the projection automatically. Programs without `TagMap` need explicit `lock=True` on output tags or `__lock__ = {"include": [...]}`. Existing lock files will need regeneration with `pyrung lock`.
 - **Lock file omits False values** — reachable state entries now only include tags whose value is True. Each state reads as "what's ON." Empty `{}` means nothing is active. Existing lock files will diff on regeneration but `check_lock` handles both formats transparently.
 
 ### New features
 
-- **`pyrung lock` / `pyrung check` progress reporting** — long-running BFS explorations now print periodic one-line status updates to stderr (every 30 s or 10 k states). Shows visited count, queue size with trend arrow (↑/↓), and throughput. Queue trend is the key signal: shrinking means converging. Enabled automatically in the CLI; programmatic callers can opt in via `reachable_states(..., progress=True)` or pass a custom callback.
+- **`pyrung lock` / `pyrung check` progress reporting** — long-running BFS explorations now print periodic one-line status updates to stderr (every 5 s or 10 k states), starting with an initial "BFS started" line. Shows visited count, queue size with trend arrow (↑/↓), and throughput. Queue trend is the key signal: shrinking means converging. Enabled automatically in the CLI; programmatic callers can opt in via `reachable_states(..., progress=True)` or pass a custom callback.
 - **Choice labels in lock files** — projected tags with `choices=` metadata now serialize their label (`"FAST"`) instead of the raw integer (`2`). Pass `tags=` to `write_lock()` or use the CLI (which passes them automatically).
 - **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
 - **Prover recognizes `InputBlock` tags as nondeterministic** — tags produced by indexing an `InputBlock` (e.g., `x[1]`) are now automatically treated as nondeterministic inputs by the verifier, without requiring `external=True`. The PDG already classifies these as `TagRole.INPUT`; the classifier now respects that instead of dropping them. `OutputBlock` tags are not affected.
 - **`TagMap` stamps `external=True` on input-mapped tags** — when a `TagMap` maps a semantic tag to an input bank (`x`, `xd`), the tag is automatically marked `external=True` at construction time. This means `prove()` and `pyrung lock` treat input-mapped tags as nondeterministic without the user needing to declare `external=True` manually. Tags that are `readonly` are not stamped (readonly and external are mutually exclusive).
+- **`TagMap` stamps `lock=True` on output-mapped tags** — when a `TagMap` maps a semantic tag to an output bank (`y`, `yd`), the tag is automatically marked `lock=True` at construction time. Tags with `lock=True` are included in the default lock file projection, so physical outputs are tracked automatically.
+- **`lock` tag flag** — new metadata flag on tags, blocks, UDT fields, and named arrays. Tags with `lock=True` are included in the default `pyrung lock` projection. Unlike the semantic flags (`readonly`, `external`, `final`), `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Click nickname CSV round-trips as `[lock]`.
 
 ## v0.7.0 (2026-04-26)
 
