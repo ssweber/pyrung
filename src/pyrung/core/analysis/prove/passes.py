@@ -30,7 +30,7 @@ from .classify import (
 )
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import _collect_atoms_for_tag
-from .kernel import _collect_edge_tag_exprs
+from .kernel import _collect_edge_tag_exprs, _compile_inline_step
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -84,6 +84,7 @@ class _PassContext:
         assert self.done_event_specs is not None
         assert self.threshold_absorptions is not None
         assert self.threshold_event_specs is not None
+        block_specs = tuple(self.compiled.block_specs.values())
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -97,8 +98,9 @@ class _PassContext:
             done_event_specs=self.done_event_specs,
             threshold_vector_specs=self.threshold_absorptions.vector_specs,
             threshold_event_specs=self.threshold_event_specs,
-            block_specs=tuple(self.compiled.block_specs.values()),
+            block_specs=block_specs,
             dt=self.dt,
+            step_fn=_compile_inline_step(self.compiled, block_specs),
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
         )

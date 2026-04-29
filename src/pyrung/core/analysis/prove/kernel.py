@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
-from pyrung.core.kernel import ReplayKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel, ReplayKernel
 
 from .absorb import _THRESHOLD_FORM_GT, _done_acc_state
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
@@ -19,6 +20,28 @@ if TYPE_CHECKING:
     from .events import _StateKeyDoneSpec
 
 _EDGE_DEAD: Any = object()
+
+
+def _compile_inline_step(
+    compiled: CompiledKernel,
+    block_specs: tuple[BlockSpec, ...],
+) -> Callable[..., None]:
+    """Compile a step function with block load/flush inlined as straight-line code."""
+    lines = ["def _step(tags, blocks, memory, prev, dt):"]
+    lines.append('    memory["_dt"] = dt')
+    for spec in block_specs:
+        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
+        for i, name in enumerate(spec.tag_names):
+            lines.append(f"    _arr[{i}] = tags.get({name!r}, {spec.default!r})")
+    lines.append("    _inner(tags, blocks, memory, prev, dt)")
+    for spec in block_specs:
+        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
+        for i, name in enumerate(spec.tag_names):
+            lines.append(f"    tags[{name!r}] = _arr[{i}]")
+
+    ns: dict[str, Any] = {"_inner": compiled.step_fn}
+    exec(compile("\n".join(lines), "<block_sync>", "exec"), ns)  # noqa: S102
+    return ns["_step"]
 
 
 def _collect_edge_tag_exprs(
@@ -97,12 +120,16 @@ def _step_kernel(
     kernel: ReplayKernel,
 ) -> None:
     """Execute one scan cycle on the kernel."""
-    kernel.memory["_dt"] = context.dt
-    for spec in context.block_specs:
-        kernel.load_block_from_tags(spec)
-    context.compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, context.dt)
-    for spec in context.block_specs:
-        kernel.flush_block_to_tags(spec)
+    step = context.step_fn
+    if step is not None:
+        step(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, context.dt)
+    else:
+        kernel.memory["_dt"] = context.dt
+        for spec in context.block_specs:
+            kernel.load_block_from_tags(spec)
+        context.compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, context.dt)
+        for spec in context.block_specs:
+            kernel.flush_block_to_tags(spec)
     for name in context.edge_tag_names:
         if name in kernel.tags:
             kernel.prev[name] = kernel.tags[name]

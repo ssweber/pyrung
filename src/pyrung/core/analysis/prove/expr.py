@@ -7,6 +7,24 @@ from typing import Any
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
 
 
+def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
+    """Build a tag-name → atoms index in a single pass over all expressions."""
+    index: dict[str, list[Atom]] = {}
+    for expr in exprs:
+        _index_atoms(expr, index)
+    return index
+
+
+def _index_atoms(expr: Expr, index: dict[str, list[Atom]]) -> None:
+    if isinstance(expr, Atom):
+        index.setdefault(expr.tag, []).append(expr)
+        if isinstance(expr.operand, str):
+            index.setdefault(expr.operand, []).append(expr)
+    elif isinstance(expr, (And, Or)):
+        for t in expr.terms:
+            _index_atoms(t, index)
+
+
 def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
     """Collect all Atom nodes referencing a specific tag from a list of expressions."""
     atoms: list[Atom] = []

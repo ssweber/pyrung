@@ -89,6 +89,7 @@ class _ExploreContext:
     threshold_event_specs: tuple[_ThresholdEventSpec, ...]
     block_specs: tuple[BlockSpec, ...]
     dt: float
+    step_fn: Callable[..., None] | None = None
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
 

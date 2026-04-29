@@ -24,11 +24,12 @@ from .absorb import (
     _has_forbidden_data_read,
     _ThresholdBlocker,
 )
-from .expr import _collect_atoms_for_tag
+from .expr import _build_atom_index, _collect_atoms_for_tag
 from .kernel import _restore_kernel, _snapshot_kernel
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
+    from pyrung.core.analysis.simplified import Atom
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
 
@@ -280,6 +281,7 @@ def _domain_for_source_tag(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Resolve the best current finite domain for a source tag."""
     if tag_name in known_domains:
@@ -302,6 +304,7 @@ def _domain_for_source_tag(
         graph.tags,
         known_domains=known_domains,
         graph=graph,
+        atom_index=atom_index,
     )
     if domain:
         return domain
@@ -314,11 +317,12 @@ def _domain_from_copy_like_value(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a copy/fill-style source operand."""
     source_tag_name = _tag_name_from_value(raw_value)
     if source_tag_name is not None:
-        return _domain_for_source_tag(source_tag_name, graph, all_exprs, known_domains)
+        return _domain_for_source_tag(source_tag_name, graph, all_exprs, known_domains, atom_index)
 
     literal = _literal_value_from_value(raw_value)
     if literal is None:
@@ -335,11 +339,14 @@ def _domain_from_calc_expression(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from a supported calc expression shape."""
     from pyrung.core.expression import BinaryExpr
 
-    direct = _domain_from_copy_like_value(expression, target, graph, all_exprs, known_domains)
+    direct = _domain_from_copy_like_value(
+        expression, target, graph, all_exprs, known_domains, atom_index
+    )
     if direct is not None:
         return direct
 
@@ -358,6 +365,7 @@ def _domain_from_write_instruction(
     graph: ProgramGraph,
     all_exprs: list[Expr],
     known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Infer a target domain from one supported writer instruction."""
     from pyrung.core.instruction.calc import CalcInstruction
@@ -366,10 +374,14 @@ def _domain_from_write_instruction(
     if isinstance(instr, CopyInstruction):
         if instr.convert is not None:
             return None
-        return _domain_from_copy_like_value(instr.source, target, graph, all_exprs, known_domains)
+        return _domain_from_copy_like_value(
+            instr.source, target, graph, all_exprs, known_domains, atom_index
+        )
 
     if isinstance(instr, FillInstruction):
-        return _domain_from_copy_like_value(instr.value, target, graph, all_exprs, known_domains)
+        return _domain_from_copy_like_value(
+            instr.value, target, graph, all_exprs, known_domains, atom_index
+        )
 
     if isinstance(instr, CalcInstruction):
         if instr.dest.name != target_name:
@@ -380,6 +392,7 @@ def _domain_from_write_instruction(
             graph,
             all_exprs,
             known_domains,
+            atom_index,
         )
 
     return None
@@ -410,6 +423,8 @@ def _collect_structural_domains(
         for target_name, _itype in _all_write_targets(instr):
             by_target.setdefault(target_name, []).append(instr)
 
+    atom_idx = _build_atom_index(all_exprs)
+
     changed = True
     while changed:
         changed = False
@@ -427,6 +442,7 @@ def _collect_structural_domains(
                     graph,
                     all_exprs,
                     known_domains,
+                    atom_idx,
                 )
                 if domain is None:
                     candidate_values = set()
@@ -457,6 +473,7 @@ def _extract_value_domain(
     literal_write_domains: dict[str, tuple[Any, ...]] | None = None,
     known_domains: dict[str, tuple[Any, ...]] | None = None,
     graph: ProgramGraph | None = None,
+    atom_index: dict[str, list[Atom]] | None = None,
 ) -> tuple[Any, ...] | None:
     """Determine the finite value domain for a tag, or None if unbounded."""
     if literal_write_domains is not None and tag_name in literal_write_domains:
@@ -464,7 +481,11 @@ def _extract_value_domain(
     if known_domains is not None and tag_name in known_domains:
         return known_domains[tag_name]
 
-    atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+    atoms = (
+        atom_index.get(tag_name, [])
+        if atom_index is not None
+        else _collect_atoms_for_tag(all_exprs, tag_name)
+    )
     if not atoms:
         return ()
 
@@ -672,9 +693,11 @@ def _classify_dimensions_from_graph(
     if discovered_domains is not None:
         known_domains.update(discovered_domains)
 
+    atom_idx = _build_atom_index(all_exprs)
+
     consumed_accs: set[str] = set()
     for acc_name in done_acc_info.pairs.values():
-        if _collect_atoms_for_tag(all_exprs, acc_name) or _has_forbidden_data_read(
+        if atom_idx.get(acc_name) or _has_forbidden_data_read(
             program,
             acc_name,
         ):
@@ -748,6 +771,7 @@ def _classify_dimensions_from_graph(
                 literal_write_domains,
                 known_domains,
                 graph,
+                atom_idx,
             )
             if domain is None:
                 infeasible_tags.append(tag_name)
@@ -776,7 +800,7 @@ def _classify_dimensions_from_graph(
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:
-            if not _collect_atoms_for_tag(all_exprs, tag_name):
+            if not atom_idx.get(tag_name):
                 if tag_name in known_domains:
                     stateful[tag_name] = known_domains[tag_name]
                 else:
@@ -791,6 +815,7 @@ def _classify_dimensions_from_graph(
             literal_write_domains,
             known_domains,
             graph,
+            atom_idx,
         )
         if domain is None:
             if tag_name in known_domains:
