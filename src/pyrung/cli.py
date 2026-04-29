@@ -158,7 +158,10 @@ def _run_with_optional_profile(
 
     import cProfile
 
-    out_path = str(Path(profile_path).absolute())
+    p = Path(profile_path).absolute()
+    if p.suffix != ".prof":
+        p = p.with_suffix(p.suffix + ".prof")
+    out_path = str(p)
     profiler = cProfile.Profile()
     try:
         profiler.enable()
