@@ -333,6 +333,53 @@ def _domain_from_copy_like_value(
     return (stored,)
 
 
+def _interval_bounds(
+    node: Any,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    known_domains: dict[str, tuple[Any, ...]],
+    atom_index: dict[str, list[Atom]] | None = None,
+) -> tuple[float, float] | None:
+    """Resolve min/max interval for an expression node, or None if unbounded."""
+    from pyrung.core.expression import BinaryExpr
+
+    literal = _literal_value_from_value(node)
+    if literal is not None and isinstance(literal, (int, float)):
+        return (literal, literal)
+
+    tag_name = _tag_name_from_value(node)
+    if tag_name is not None:
+        if tag_name in known_domains:
+            vals = known_domains[tag_name]
+            if vals:
+                return (min(vals), max(vals))
+            return None
+        tag = graph.tags.get(tag_name)
+        if tag is not None and tag.min is not None and tag.max is not None:
+            return (tag.min, tag.max)
+        return None
+
+    if not isinstance(node, BinaryExpr):
+        return None
+
+    left = _interval_bounds(node.left, graph, all_exprs, known_domains, atom_index)
+    right = _interval_bounds(node.right, graph, all_exprs, known_domains, atom_index)
+    if left is None or right is None:
+        return None
+
+    a_lo, a_hi = left
+    b_lo, b_hi = right
+
+    if node.symbol == "/" and b_lo <= 0 <= b_hi:
+        return None
+
+    try:
+        corners = [node.op(a, b) for a in (a_lo, a_hi) for b in (b_lo, b_hi)]
+    except (ZeroDivisionError, OverflowError):
+        return None
+    return (min(corners), max(corners))
+
+
 def _domain_from_calc_expression(
     expression: Any,
     target: Tag,
@@ -350,12 +397,24 @@ def _domain_from_calc_expression(
     if direct is not None:
         return direct
 
-    if not isinstance(expression, BinaryExpr) or expression.symbol != "%":
+    if isinstance(expression, BinaryExpr) and expression.symbol == "%":
+        modulus = _literal_value_from_value(expression.right)
+        if isinstance(modulus, int) and not isinstance(modulus, bool) and 0 < modulus <= 1000:
+            return tuple(range(modulus))
+
+    bounds = _interval_bounds(expression, graph, all_exprs, known_domains, atom_index)
+    if bounds is None:
         return None
-    modulus = _literal_value_from_value(expression.right)
-    if not isinstance(modulus, int) or isinstance(modulus, bool) or modulus <= 0 or modulus > 1000:
+    lo, hi = bounds
+    from pyrung.core.instruction.conversions import _truncate_to_tag_type
+
+    lo_t = _truncate_to_tag_type(lo, target)
+    hi_t = _truncate_to_tag_type(hi, target)
+    if not isinstance(lo_t, (int, float)) or not isinstance(hi_t, (int, float)):
         return None
-    return tuple(range(modulus))
+    if isinstance(lo_t, int) and isinstance(hi_t, int):
+        return tuple(range(lo_t, hi_t + 1))
+    return None
 
 
 def _domain_from_write_instruction(
