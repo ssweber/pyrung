@@ -9,6 +9,7 @@
 
 ### New features
 
+- **`pyrung lock` / `pyrung check` progress reporting** — long-running BFS explorations now print periodic one-line status updates to stderr (every 30 s or 10 k states). Shows visited count, queue size with trend arrow (↑/↓), and throughput. Queue trend is the key signal: shrinking means converging. Enabled automatically in the CLI; programmatic callers can opt in via `reachable_states(..., progress=True)` or pass a custom callback.
 - **Choice labels in lock files** — projected tags with `choices=` metadata now serialize their label (`"FAST"`) instead of the raw integer (`2`). Pass `tags=` to `write_lock()` or use the CLI (which passes them automatically).
 - **Click TagMeta boolean choices preset** — Click nickname CSV comments now accept `[choices=Bool]` as shorthand for int-backed boolean dropdowns (`{0: "False", 1: "True"}`). Exports also prefer the shorthand instead of the verbose `[choices=False:0|True:1]` form.
 - **Prover recognizes `InputBlock` tags as nondeterministic** — tags produced by indexing an `InputBlock` (e.g., `x[1]`) are now automatically treated as nondeterministic inputs by the verifier, without requiring `external=True`. The PDG already classifies these as `TagRole.INPUT`; the classifier now respects that instead of dropping them. `OutputBlock` tags are not affected.

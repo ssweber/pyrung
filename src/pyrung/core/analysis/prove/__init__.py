@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -301,6 +302,7 @@ def _bfs_explore(
     max_depth: int = 50,
     max_states: int = 100_000,
     bfs_config: _BFSConfig = _DEFAULT_BFS_CONFIG,
+    progress: Callable[[int, int, float], None] | None = None,
 ) -> (
     list[Proven | Counterexample | Intractable]
     | frozenset[frozenset[tuple[str, Any]]]
@@ -374,7 +376,18 @@ def _bfs_explore(
     queue: deque[tuple[_KernelSnapshot, int, tuple[Any, ...]]] = deque()
     queue.append((_snapshot_kernel(kernel), 0, initial_key))
 
+    _progress_last_time = time.monotonic()
+    _progress_last_visited = 1
+
     while queue:
+        if progress is not None:
+            now = time.monotonic()
+            v = len(visited)
+            if now - _progress_last_time >= 30.0 or v - _progress_last_visited >= 10_000:
+                progress(v, len(queue), now - _progress_last_time)
+                _progress_last_time = now
+                _progress_last_visited = v
+
         snap, depth, parent_key = queue.popleft()
         if depth >= max_depth:
             continue
@@ -793,12 +806,38 @@ def prove(
     return [r if r is not None else Proven(states_explored=0) for r in results]
 
 
+def _stderr_progress(
+    label: str = "",
+) -> Callable[[int, int, float], None]:
+    import sys
+
+    start = time.monotonic()
+    prev_queue = [0]
+    prefix = f"{label} | " if label else ""
+
+    def _emit(visited: int, queue_size: int, _dt: float) -> None:
+        elapsed = time.monotonic() - start
+        h, rem = divmod(int(elapsed), 3600)
+        m, s = divmod(rem, 60)
+        rate = visited / elapsed if elapsed > 0 else 0
+        arrow = "↑" if queue_size > prev_queue[0] else "↓"
+        prev_queue[0] = queue_size
+        print(
+            f"[{h:02d}:{m:02d}:{s:02d}] {prefix}visited={visited:,} | "
+            f"queue={queue_size:,} ({arrow}) | {rate:,.0f} states/sec",
+            file=sys.stderr,
+        )
+
+    return _emit
+
+
 def reachable_states(
     program: Program,
     scope: list[str] | None = None,
     project: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
+    progress: bool | Callable[[int, int, float], None] = False,
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -825,6 +864,12 @@ def reachable_states(
     project_list = list(project) if project is not None else _default_projection(program)
     project_names = tuple(project_list)
 
+    progress_cb: Callable[[int, int, float], None] | None = None
+    if progress is True:
+        progress_cb = _stderr_progress()
+    elif callable(progress):
+        progress_cb = progress
+
     if scope is not None:
         context = _build_explore_context(program, scope=scope, project=project_names)
         if isinstance(context, Intractable):
@@ -834,6 +879,7 @@ def reachable_states(
             project=project_names,
             max_depth=max_depth,
             max_states=max_states,
+            progress=progress_cb,
         )
 
     clusters = _partition_projection(program, project_list)
@@ -851,13 +897,14 @@ def reachable_states(
             project=project_names,
             max_depth=max_depth,
             max_states=max_states,
+            progress=progress_cb,
         )
 
     cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
     from pyrung.circuitpy.codegen import compile_kernel
 
     compiled_kernel = compile_kernel(program)
-    for cluster in clusters:
+    for cluster_idx, cluster in enumerate(clusters):
         cluster_project = tuple(cluster)
         context = _build_explore_context(
             program,
@@ -867,11 +914,15 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
+        cluster_cb = progress_cb
+        if progress_cb is not None and len(clusters) > 1:
+            cluster_cb = _stderr_progress(f"cluster {cluster_idx + 1}/{len(clusters)}")
         result = _bfs_explore(
             context,
             project=cluster_project,
             max_depth=max_depth,
             max_states=max_states,
+            progress=cluster_cb,
         )
         if isinstance(result, Intractable):
             return result
@@ -1016,6 +1067,7 @@ def check_lock(
     lock_path: Path = Path("pyrung.lock"),
     max_depth: int = 50,
     max_states: int = 100_000,
+    progress: bool | Callable[[int, int, float], None] = False,
 ) -> StateDiff | None:
     """Recompute reachable states and diff against a lock file.
 
@@ -1030,6 +1082,7 @@ def check_lock(
         project=projection,
         max_depth=max_depth,
         max_states=max_states,
+        progress=progress,
     )
     if isinstance(new_states, Intractable):
         msg = f"Verification intractable: {new_states.reason}"

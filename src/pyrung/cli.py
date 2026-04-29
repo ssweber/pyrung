@@ -78,6 +78,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         project=projection,
         max_depth=args.max_depth,
         max_states=args.max_states,
+        progress=True,
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
@@ -105,6 +106,7 @@ def _cmd_check(args: argparse.Namespace) -> None:
         lock_path,
         max_depth=args.max_depth,
         max_states=args.max_states,
+        progress=True,
     )
     if diff is None:
         print("OK — program matches lock file")
