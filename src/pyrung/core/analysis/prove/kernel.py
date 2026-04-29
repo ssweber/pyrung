@@ -22,26 +22,65 @@ if TYPE_CHECKING:
 _EDGE_DEAD: Any = object()
 
 
+class _TagBackedArray:
+    """List-like proxy that reads/writes through the tags dict directly.
+
+    Eliminates per-step block load/flush by making block array accesses
+    go straight to ``kernel.tags``.
+    """
+
+    __slots__ = ("_names", "_tags", "_default")
+
+    def __init__(
+        self,
+        tag_names: tuple[str, ...],
+        tags: dict[str, Any],
+        default: Any,
+    ) -> None:
+        self._names = tag_names
+        self._tags = tags
+        self._default = default
+
+    def __getitem__(self, idx: int) -> Any:
+        return self._tags.get(self._names[idx], self._default)
+
+    def __setitem__(self, idx: int, value: Any) -> None:
+        self._tags[self._names[idx]] = value
+
+
+def _install_tag_backed_blocks(
+    kernel: ReplayKernel,
+    block_specs: tuple[BlockSpec, ...],
+) -> None:
+    """Replace kernel block arrays with tag-backed proxies."""
+    for spec in block_specs:
+        kernel.blocks[spec.symbol] = _TagBackedArray(  # type: ignore[assignment]
+            spec.tag_names, kernel.tags, spec.default,
+        )
+
+
 def _compile_inline_step(
     compiled: CompiledKernel,
     block_specs: tuple[BlockSpec, ...],
 ) -> Callable[..., None]:
-    """Compile a step function with block load/flush inlined as straight-line code."""
-    lines = ["def _step(tags, blocks, memory, prev, dt):"]
-    lines.append('    memory["_dt"] = dt')
-    for spec in block_specs:
-        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        for i, name in enumerate(spec.tag_names):
-            lines.append(f"    _arr[{i}] = tags.get({name!r}, {spec.default!r})")
-    lines.append("    _inner(tags, blocks, memory, prev, dt)")
-    for spec in block_specs:
-        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        for i, name in enumerate(spec.tag_names):
-            lines.append(f"    tags[{name!r}] = _arr[{i}]")
+    """Compile a thin step wrapper (dt + kernel call).
 
-    ns: dict[str, Any] = {"_inner": compiled.step_fn}
-    exec(compile("\n".join(lines), "<block_sync>", "exec"), ns)  # noqa: S102
-    return ns["_step"]
+    Block sync is handled by ``_TagBackedArray`` proxies installed on the
+    kernel, so no load/flush code is emitted here.
+    """
+    inner = compiled.step_fn
+
+    def _step(
+        tags: dict[str, Any],
+        blocks: dict[str, Any],
+        memory: dict[str, Any],
+        prev: dict[str, Any],
+        dt: float,
+    ) -> None:
+        memory["_dt"] = dt
+        inner(tags, blocks, memory, prev, dt)
+
+    return _step
 
 
 def _collect_edge_tag_exprs(

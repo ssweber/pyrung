@@ -118,6 +118,7 @@ from .events import (
 from .kernel import (
     _EdgeCompressor,
     _extract_state_key,
+    _install_tag_backed_blocks,
     _KernelSnapshot,
     _LiveInputCache,
     _restore_kernel,
@@ -312,6 +313,7 @@ def _bfs_explore(
 ):
     """BFS over the reachable state space."""
     kernel = context.compiled.create_kernel()
+    _install_tag_backed_blocks(kernel, context.block_specs)
     _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
     live_cache = _LiveInputCache(context)
