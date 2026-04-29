@@ -383,7 +383,7 @@ def _bfs_explore(
         if progress is not None:
             now = time.monotonic()
             v = len(visited)
-            if now - _progress_last_time >= 30.0 or v - _progress_last_visited >= 10_000:
+            if now - _progress_last_time >= 5.0 or v - _progress_last_visited >= 10_000:
                 progress(v, len(queue), now - _progress_last_time)
                 _progress_last_time = now
                 _progress_last_visited = v
@@ -814,6 +814,7 @@ def _stderr_progress(
     start = time.monotonic()
     prev_queue = [0]
     prefix = f"{label} | " if label else ""
+    print(f"[00:00:00] {prefix}BFS started …", file=sys.stderr)
 
     def _emit(visited: int, queue_size: int, _dt: float) -> None:
         elapsed = time.monotonic() - start
