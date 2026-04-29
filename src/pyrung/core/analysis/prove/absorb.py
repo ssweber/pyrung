@@ -571,11 +571,16 @@ def _find_comparison_absorptions(
     progress_sources = set(_collect_progress_source_kinds(program))
     progress_sources.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
 
+    done_acc_info = _collect_done_acc_pairs(program)
+    preset_source_tags = frozenset(done_acc_info.preset_tags.values())
+
     absorbed_tags: set[str] = set()
     vector_specs: list[_ThresholdVectorSpec] = []
 
     for tag_name, tag in sorted(graph.tags.items()):
         if tag_name in projected or tag_name in progress_sources:
+            continue
+        if tag_name in preset_source_tags:
             continue
         if tag.readonly or tag.external or tag.public:
             continue

@@ -694,12 +694,29 @@ def _partition_projection(
 
 def _cartesian_product(
     cluster_states: list[frozenset[frozenset[tuple[str, Any]]]],
+    *,
+    progress: Callable[[int, int, float], None] | None = None,
 ) -> frozenset[frozenset[tuple[str, Any]]]:
     """Combine independent cluster reachable sets via Cartesian product."""
     result: set[frozenset[tuple[str, Any]]] = set()
-    for combo in itertools.product(*cluster_states):
+    total = 1
+    for states in cluster_states:
+        total *= len(states)
+
+    progress_last_time = time.monotonic()
+    progress_last_states = 0
+    combine_start = progress_last_time
+
+    for states_merged, combo in enumerate(itertools.product(*cluster_states), start=1):
         merged: frozenset[tuple[str, Any]] = frozenset().union(*combo)
         result.add(merged)
+        if progress is None:
+            continue
+        now = time.monotonic()
+        if now - progress_last_time >= 5.0 or states_merged - progress_last_states >= 10_000:
+            progress(states_merged, total, now - combine_start)
+            progress_last_time = now
+            progress_last_states = states_merged
     return frozenset(result)
 
 
@@ -863,30 +880,64 @@ def prove(
     return [r if r is not None else Proven(states_explored=0) for r in results]
 
 
+def _format_elapsed(elapsed: float) -> str:
+    h, rem = divmod(int(elapsed), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+@dataclass
+class _StderrProgressReporter:
+    start: float = field(default_factory=time.monotonic)
+
+    def emit(self, message: str) -> None:
+        import sys
+
+        elapsed = time.monotonic() - self.start
+        print(f"[{_format_elapsed(elapsed)}] {message}", file=sys.stderr)
+
+    def info(self, message: str, *, label: str = "") -> None:
+        prefix = f"{label} | " if label else ""
+        self.emit(f"{prefix}{message}")
+
+    def bfs_callback(self, label: str = "") -> Callable[[int, int, float], None]:
+        bfs_start = time.monotonic()
+        prev_queue = [0]
+        self.info("BFS started ...", label=label)
+
+        def _emit(visited: int, queue_size: int, _dt: float) -> None:
+            elapsed = time.monotonic() - bfs_start
+            rate = visited / elapsed if elapsed > 0 else 0
+            if queue_size > prev_queue[0]:
+                arrow = "↑"
+            elif queue_size < prev_queue[0]:
+                arrow = "↓"
+            else:
+                arrow = "="
+            prev_queue[0] = queue_size
+            self.info(
+                f"visited={visited:,} | queue={queue_size:,} ({arrow}) | "
+                f"{rate:,.0f} states/sec",
+                label=label,
+            )
+
+        return _emit
+
+    def combine_callback(self) -> Callable[[int, int, float], None]:
+        def _emit(merged: int, total: int, dt: float) -> None:
+            rate = merged / dt if dt > 0 else 0
+            self.info(
+                f"combining clusters | merged={merged:,}/{total:,} | "
+                f"{rate:,.0f} states/sec"
+            )
+
+        return _emit
+
+
 def _stderr_progress(
     label: str = "",
 ) -> Callable[[int, int, float], None]:
-    import sys
-
-    start = time.monotonic()
-    prev_queue = [0]
-    prefix = f"{label} | " if label else ""
-    print(f"[00:00:00] {prefix}BFS started …", file=sys.stderr)
-
-    def _emit(visited: int, queue_size: int, _dt: float) -> None:
-        elapsed = time.monotonic() - start
-        h, rem = divmod(int(elapsed), 3600)
-        m, s = divmod(rem, 60)
-        rate = visited / elapsed if elapsed > 0 else 0
-        arrow = "↑" if queue_size > prev_queue[0] else "↓"
-        prev_queue[0] = queue_size
-        print(
-            f"[{h:02d}:{m:02d}:{s:02d}] {prefix}visited={visited:,} | "
-            f"queue={queue_size:,} ({arrow}) | {rate:,.0f} states/sec",
-            file=sys.stderr,
-        )
-
-    return _emit
+    return _StderrProgressReporter().bfs_callback(label)
 
 
 def _build_reachable_context(
@@ -946,12 +997,17 @@ def reachable_states(
     project_names = tuple(project_list)
 
     progress_cb: Callable[[int, int, float], None] | None = None
+    stderr_reporter: _StderrProgressReporter | None = None
     if progress is True:
-        progress_cb = _stderr_progress()
+        stderr_reporter = _StderrProgressReporter()
     elif callable(progress):
         progress_cb = progress
 
     if scope is not None:
+        if stderr_reporter is not None:
+            stderr_reporter.info(
+                f"preparing reachability slice for {len(project_names):,} projected tag(s)"
+            )
         effective_scope = sorted(set(scope) | set(project_names))
         context = _build_reachable_context(
             program,
@@ -961,17 +1017,27 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
-        return _bfs_explore(  # ty: ignore[invalid-return-type]
+        bfs_progress = (
+            stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
+        )
+        result = _bfs_explore(  # ty: ignore[assignment]
             context,
             project=project_names,
             max_depth=max_depth,
             max_states=max_states,
-            progress=progress_cb,
+            progress=bfs_progress,
         )
+        if stderr_reporter is not None and not isinstance(result, Intractable):
+            stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+        return result  # ty: ignore[return-value]
 
     clusters = _partition_projection(program, project_list)
 
     if len(clusters) == 1:
+        if stderr_reporter is not None:
+            stderr_reporter.info(
+                f"preparing reachability slice for {len(project_names):,} projected tag(s)"
+            )
         context = _build_reachable_context(
             program,
             scope=clusters[0],
@@ -980,17 +1046,34 @@ def reachable_states(
         )
         if isinstance(context, Intractable):
             return context
-        return _bfs_explore(  # ty: ignore[invalid-return-type]
+        bfs_progress = (
+            stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
+        )
+        result = _bfs_explore(  # ty: ignore[assignment]
             context,
             project=project_names,
             max_depth=max_depth,
             max_states=max_states,
-            progress=progress_cb,
+            progress=bfs_progress,
         )
+        if stderr_reporter is not None and not isinstance(result, Intractable):
+            stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+        return result  # ty: ignore[return-value]
 
     cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
+    combined_so_far = 1
+    if stderr_reporter is not None:
+        stderr_reporter.info(
+            f"partitioned projection into {len(clusters):,} independent cluster(s)"
+        )
     for cluster_idx, cluster in enumerate(clusters):
         cluster_project = tuple(cluster)
+        label = f"cluster {cluster_idx + 1}/{len(clusters)}"
+        if stderr_reporter is not None:
+            stderr_reporter.info(
+                f"preparing {len(cluster_project):,} projected tag(s)",
+                label=label,
+            )
         context = _build_reachable_context(
             program,
             scope=cluster,
@@ -1000,8 +1083,8 @@ def reachable_states(
         if isinstance(context, Intractable):
             return context
         cluster_cb = progress_cb
-        if progress_cb is not None and len(clusters) > 1:
-            cluster_cb = _stderr_progress(f"cluster {cluster_idx + 1}/{len(clusters)}")
+        if stderr_reporter is not None:
+            cluster_cb = stderr_reporter.bfs_callback(label)
         result = _bfs_explore(
             context,
             project=cluster_project,
@@ -1013,8 +1096,25 @@ def reachable_states(
             return result
         assert isinstance(result, frozenset)
         cluster_results.append(result)
+        combined_so_far *= len(result)
+        if stderr_reporter is not None:
+            stderr_reporter.info(
+                f"complete | states={len(result):,} | combined so far={combined_so_far:,}",
+                label=label,
+            )
 
-    return _cartesian_product(cluster_results)
+    combine_progress: Callable[[int, int, float], None] | None = None
+    if stderr_reporter is not None:
+        stderr_reporter.info(
+            f"combining {len(cluster_results):,} cluster state set(s) | "
+            f"expected total={combined_so_far:,}"
+        )
+        combine_progress = stderr_reporter.combine_callback()
+
+    combined = _cartesian_product(cluster_results, progress=combine_progress)
+    if stderr_reporter is not None:
+        stderr_reporter.info(f"reachable states complete | total={len(combined):,}")
+    return combined
 
 
 def diff_states(
