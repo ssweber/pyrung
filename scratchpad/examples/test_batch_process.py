@@ -1,5 +1,7 @@
 import asyncio
+
 from pyclickplc import ClickClient
+
 
 async def test():
     async with ClickClient("127.0.0.1:5020") as plc:

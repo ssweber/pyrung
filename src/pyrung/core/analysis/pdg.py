@@ -5,12 +5,17 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
+from types import BuiltinFunctionType, FunctionType, MethodType
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.condition import Condition
 from pyrung.core.expression import Expression
+from pyrung.core.instruction.base import Instruction
+from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+from pyrung.core.instruction.data_transfer import BlockCopyInstruction, CopyInstruction
+from pyrung.core.instruction.packing import PackTextInstruction
 from pyrung.core.memory_block import (
     Block,
     BlockRange,
@@ -566,6 +571,8 @@ def _extract_rung_node(
             if isinstance(instr, OutInstruction):
                 ote_writes.update(target_writes)
 
+        writes.update(_implicit_fault_writes(instr, tag_refs))
+
         for field_name in getattr(cls, "_conditions", ()):
             condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
@@ -608,6 +615,8 @@ def _extract_instruction_event(
         writes.update(target_writes)
         data_reads.update(target_reads)
 
+    writes.update(_implicit_fault_writes(instr, tag_refs))
+
     for field_name in getattr(cls, "_conditions", ()):
         condition_reads.update(_extract_tag_names(getattr(instr, field_name), tag_refs))
 
@@ -617,6 +626,28 @@ def _extract_instruction_event(
         data_reads=frozenset(data_reads),
         writes=frozenset(writes),
     )
+
+
+def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
+    """Return implicit system fault tags written by *instr*."""
+    from pyrung.core.system_points import system
+
+    writes: set[str] = set()
+    if isinstance(instr, CalcInstruction):
+        _register_tag(system.fault.division_error, tag_refs, writes)
+        _register_tag(system.fault.out_of_range, tag_refs, writes)
+        return writes
+
+    if isinstance(instr, CopyInstruction):
+        _register_tag(system.fault.address_error, tag_refs, writes)
+        _register_tag(system.fault.out_of_range, tag_refs, writes)
+        return writes
+
+    if isinstance(instr, BlockCopyInstruction | PackTextInstruction):
+        _register_tag(system.fault.out_of_range, tag_refs, writes)
+        return writes
+
+    return writes
 
 
 def _rung_condition_reads(
@@ -802,6 +833,10 @@ def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
 
 def build_program_graph(program: Program) -> ProgramGraph:
     """Build the static PDG summary for a Program."""
+    cached_graph = getattr(program, "_cached_graph", None)
+    if cached_graph is not None:
+        return cached_graph
+
     tag_refs: dict[str, Tag] = {}
     rung_nodes: list[RungNode] = []
     node_index_by_rung: dict[int, int] = {}
@@ -870,6 +905,7 @@ def build_program_graph(program: Program) -> ProgramGraph:
         pointer_tags=_collect_pointer_tags(program),
     )
     graph.tag_roles = classify_tags(graph)
+    program._cached_graph = graph
     return graph
 
 
@@ -879,11 +915,12 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
 
     pointers: dict[str, tuple[str, int, int]] = {}
 
-    def _scan(obj: Any, seen: set[int] | None = None) -> None:
-        if obj is None or isinstance(obj, (bool, int, float, str, bytes)):
+    def _scan(obj: Any, seen: set[int]) -> None:
+        if obj is None or isinstance(
+            obj,
+            (bool, int, float, str, bytes, FunctionType, BuiltinFunctionType, MethodType),
+        ):
             return
-        if seen is None:
-            seen = set()
         obj_id = id(obj)
         if obj_id in seen:
             return
@@ -896,7 +933,7 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
             if base is not None:
                 pointers.setdefault(base.name, (obj.block.name, obj.block.start, obj.block.end))
             return
-        if isinstance(obj, (list, tuple)):
+        if isinstance(obj, (list, tuple, set, frozenset)):
             for item in obj:
                 _scan(item, seen)
             return
@@ -904,18 +941,34 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
             for v in obj.values():
                 _scan(v, seen)
             return
+        if isinstance(obj, Instruction):
+            fields = _instruction_fields(obj)
+            if fields is not None:
+                for field_name in fields:
+                    _scan(getattr(obj, field_name, None), seen)
+                return
+        if isinstance(obj, Condition):
+            for _child_name, child_value in _condition_children(obj):
+                _scan(child_value, seen)
+            return
         if hasattr(obj, "__dict__"):
             for v in vars(obj).values():
                 _scan(v, seen)
 
-    for instr in walk_instructions(program):
-        _scan(instr)
-    for rung in program.rungs:
+    def _scan_rung_conditions(rung: Rung) -> None:
         for cond in rung._conditions:
-            _scan(cond)
+            _scan(cond, seen)
         for branch in rung._branches:
-            for cond in branch._conditions:
-                _scan(cond)
+            _scan_rung_conditions(branch)
+
+    seen: set[int] = set()
+    for instr in walk_instructions(program):
+        _scan(instr, seen)
+    for rung in program.rungs:
+        _scan_rung_conditions(rung)
+    for subroutine_rungs in program.subroutines.values():
+        for rung in subroutine_rungs:
+            _scan_rung_conditions(rung)
 
     return pointers
 

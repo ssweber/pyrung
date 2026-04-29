@@ -1369,6 +1369,119 @@ class TestReachablePartitioning:
         assert diff is None
 
 
+class TestReachableStateSlicing:
+    """Whole-rung sliced kernels preserve reachable-state behavior."""
+
+    def test_explicit_scope_slice_seeds_scope_and_projection(self):
+        """Explicit scope= keeps projected writers even when they sit outside scope."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(x):
+                out(y)
+
+        states = reachable_states(logic, scope=["X"], project=["Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Y", False)}),
+                frozenset({("Y", True)}),
+            }
+        )
+
+    def test_reachable_states_tracks_continued_snapshot_across_scans(self):
+        """continued() readers make their source tag part of the reachable state."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(x).continued():
+                out(y)
+
+        states = reachable_states(logic, project=["Y"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Y", False)}),
+                frozenset({("Y", True)}),
+            }
+        )
+
+    def test_reachable_states_subroutine_slice_keeps_callers(self):
+        """Selecting a subroutine writer also keeps the caller path that invokes it."""
+        from pyrung.core import call, subroutine
+
+        go = Bool("Go", external=True)
+        step = Int("Step", external=True, choices={0: "Idle", 1: "Run"})
+        active = Bool("Active")
+
+        @subroutine("Worker", strict=False)
+        def worker():
+            with Rung(step == 1):
+                out(active)
+
+        with Program(strict=False) as logic:
+            with Rung(go):
+                call(worker)
+
+        states = reachable_states(logic, project=["Active"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Active", False)}),
+                frozenset({("Active", True)}),
+            }
+        )
+
+    def test_reachable_states_fault_projection_keeps_implicit_fault_writers(self):
+        """Implicit fault-tag writers stay in the slice when a projection depends on them."""
+        from pyrung.core import system
+
+        enable = Bool("Enable", external=True)
+        divisor = Int("Divisor", external=True, min=0, max=1)
+        result = Int("Result")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                calc(100 / divisor, result)
+            with Rung(system.fault.division_error):
+                out(alarm)
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Alarm", False)}),
+                frozenset({("Alarm", True)}),
+            }
+        )
+
+    def test_slice_noop_returns_original_program_when_everything_is_needed(self):
+        """The slicer falls back to the original program for full-program slices."""
+        from pyrung.core.analysis.prove.slicer import _slice_program_for_reachability
+
+        a = Bool("A", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(x):
+                out(y)
+
+        sliced = _slice_program_for_reachability(logic, ["Y"])
+        assert sliced is logic
+
+
 class TestConsumedAccumulator:
     """Item 15: accumulator consumed in a condition stays as separate dimension."""
 

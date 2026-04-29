@@ -130,6 +130,7 @@ from .passes import (
     _PassContext,
     _run_pre_bfs_pipeline,
 )
+from .slicer import _slice_program_for_reachability
 
 
 def _build_explore_context(
@@ -487,7 +488,7 @@ def _bfs_explore(
             if alt_outcomes is not None:
                 # Slow path: process alternate outcomes from hidden events.
                 # Build input_dict only here (needed for traces / parent_map).
-                input_dict: dict[str, Any] = dict(zip(live_sorted, combo))
+                input_dict: dict[str, Any] = dict(zip(live_sorted, combo, strict=True))
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
                     if branch_key in seen_branch_keys:
@@ -536,7 +537,7 @@ def _bfs_explore(
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
                 if predicates is not None:
-                    input_dict = dict(zip(live_sorted, combo))
+                    input_dict = dict(zip(live_sorted, combo, strict=True))
                     _record_failures(
                         state=kernel.tags,
                         p_key=parent_key,
@@ -567,7 +568,7 @@ def _bfs_explore(
                             return [r if r is not None else intractable for r in results]
                         return intractable
                     if parent_map is not None:
-                        input_dict = dict(zip(live_sorted, combo))
+                        input_dict = dict(zip(live_sorted, combo, strict=True))
                         parent_map[new_key] = (parent_key, input_dict, 1)
                     queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
@@ -628,11 +629,12 @@ def _is_condition_like(obj: Any) -> bool:
 
 def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     """Compute the full upstream dependency cone for a set of tags."""
-    dv = program.dataview()
-    cone: set[str] = set()
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    graph = build_program_graph(program)
+    cone: set[str] = set(tags)
     for tag_name in tags:
-        cone.update(dv.upstream(tag_name).tags)
-    cone.update(tags)
+        cone.update(graph.upstream_slice(tag_name))
     return frozenset(cone)
 
 
@@ -650,10 +652,10 @@ def _partition_projection(
     if len(projection) <= 1:
         return [list(projection)]
 
+    from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.simplified import simplified_forms
 
-    dv = program.dataview()
-    graph = dv._graph
+    graph = build_program_graph(program)
     forms = simplified_forms(program)
 
     cones: list[frozenset[str]] = []
@@ -886,6 +888,29 @@ def _stderr_progress(
     return _emit
 
 
+def _build_reachable_context(
+    program: Program,
+    *,
+    scope: list[str],
+    project: tuple[str, ...],
+    seed_tags: list[str],
+) -> _ExploreContext | Intractable:
+    """Build a reachable-states context using a whole-rung sliced program."""
+    sliced_program = _slice_program_for_reachability(program, seed_tags)
+    from pyrung.circuitpy.codegen import compile_kernel
+
+    compiled_kernel = compile_kernel(sliced_program)
+    return _build_explore_context(
+        sliced_program,
+        # The whole-rung slice is already our cone of interest. Re-applying
+        # scope pruning here can drop call-gate and fault-trigger inputs that
+        # the reduced program still depends on.
+        scope=None,
+        project=project,
+        compiled=compiled_kernel,
+    )
+
+
 def reachable_states(
     program: Program,
     scope: list[str] | None = None,
@@ -926,7 +951,13 @@ def reachable_states(
         progress_cb = progress
 
     if scope is not None:
-        context = _build_explore_context(program, scope=scope, project=project_names)
+        effective_scope = sorted(set(scope) | set(project_names))
+        context = _build_reachable_context(
+            program,
+            scope=effective_scope,
+            project=project_names,
+            seed_tags=effective_scope,
+        )
         if isinstance(context, Intractable):
             return context
         return _bfs_explore(  # ty: ignore[invalid-return-type]
@@ -940,10 +971,11 @@ def reachable_states(
     clusters = _partition_projection(program, project_list)
 
     if len(clusters) == 1:
-        context = _build_explore_context(
+        context = _build_reachable_context(
             program,
             scope=clusters[0],
             project=project_names,
+            seed_tags=clusters[0],
         )
         if isinstance(context, Intractable):
             return context
@@ -956,16 +988,13 @@ def reachable_states(
         )
 
     cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
-    from pyrung.circuitpy.codegen import compile_kernel
-
-    compiled_kernel = compile_kernel(program)
     for cluster_idx, cluster in enumerate(clusters):
         cluster_project = tuple(cluster)
-        context = _build_explore_context(
+        context = _build_reachable_context(
             program,
             scope=cluster,
             project=cluster_project,
-            compiled=compiled_kernel,
+            seed_tags=cluster,
         )
         if isinstance(context, Intractable):
             return context
@@ -997,7 +1026,9 @@ def diff_states(
 
 def _default_projection(program: Program) -> list[str]:
     """Choose default projection tags: tags marked lock=True."""
-    graph = program.dataview()._graph
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    graph = build_program_graph(program)
     return sorted(name for name, tag in graph.tags.items() if getattr(tag, "lock", False))
 
 

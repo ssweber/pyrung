@@ -38,22 +38,76 @@ from pyrung.core.tag import ImmediateRef, Tag
 from pyrung.core.time_mode import TimeUnit
 
 
-def _compile_expression_impl(expr: Expression, ctx: CodegenContext) -> str:
+def _snapshot_tag_symbol(
+    tag: Tag | ImmediateRef,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None = None,
+    block_snapshots: dict[int, str] | None = None,
+) -> str:
+    if isinstance(tag, ImmediateRef):
+        tag = tag.tag
+
+    block_info = ctx.tag_block_addresses.get(tag.name)
+    if block_info is not None and block_snapshots is not None:
+        block_id, addr = block_info
+        block_symbol = block_snapshots.get(block_id)
+        if block_symbol is not None:
+            binding = ctx.block_bindings.get(block_id)
+            if binding is None:
+                raise RuntimeError(f"Missing block binding for condition tag {tag.name!r}")
+            return f"{block_symbol}[{addr - binding.start}]"
+
+    if scalar_snapshots is not None:
+        snapshot_symbol = scalar_snapshots.get(tag.name)
+        if snapshot_symbol is not None:
+            return snapshot_symbol
+
+    return ctx.symbol_for_tag(tag)
+
+
+def _compile_expression_impl(
+    expr: Expression,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None = None,
+    block_snapshots: dict[int, str] | None = None,
+) -> str:
     """Return a Python expression string with explicit parentheses."""
     if isinstance(expr, TagExpr):
-        return ctx.symbol_for_tag(expr.tag)
+        return _snapshot_tag_symbol(
+            expr.tag,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     if isinstance(expr, LiteralExpr):
         return repr(expr.value)
 
     if isinstance(expr, BinaryExpr):
-        left = _compile_expression_impl(expr.left, ctx)
-        right = _compile_expression_impl(expr.right, ctx)
+        left = _compile_expression_impl(
+            expr.left,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
+        right = _compile_expression_impl(
+            expr.right,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         if expr.symbol in _BITWISE_SYMBOLS:
             return f"(int({left}) {expr.symbol} int({right}))"
         return f"({left} {expr.symbol} {right})"
 
     if isinstance(expr, UnaryExpr):
-        inner = _compile_expression_impl(expr.operand, ctx)
+        inner = _compile_expression_impl(
+            expr.operand,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         if expr.symbol == "abs":
             return f"abs({inner})"
         if expr.symbol == "~":
@@ -63,11 +117,25 @@ def _compile_expression_impl(expr: Expression, ctx: CodegenContext) -> str:
     if isinstance(expr, MathFuncExpr):
         if expr.name not in _ALLOWED_MATH_FUNCS:
             raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
-        return f"math.{expr.name}({_compile_expression_impl(expr.operand, ctx)})"
+        return (
+            f"math.{expr.name}("
+            f"{_compile_expression_impl(expr.operand, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            ")"
+        )
 
     if isinstance(expr, ShiftFuncExpr):
-        value = _compile_expression_impl(expr.value, ctx)
-        count = _compile_expression_impl(expr.count, ctx)
+        value = _compile_expression_impl(
+            expr.value,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
+        count = _compile_expression_impl(
+            expr.count,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         if expr.name == "lsh":
             return f"(int({value}) << int({count}))"
         if expr.name == "rsh":
@@ -85,7 +153,15 @@ def _compile_expression_impl(expr: Expression, ctx: CodegenContext) -> str:
         raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
 
     if isinstance(expr, SumExpr):
-        terms = [ctx.symbol_for_tag(tag) for tag in expr.block_range]
+        terms = [
+            _snapshot_tag_symbol(
+                tag,
+                ctx,
+                scalar_snapshots=scalar_snapshots,
+                block_snapshots=block_snapshots,
+            )
+            for tag in expr.block_range
+        ]
         return f"({' + '.join(terms)})"
 
     raise TypeError(f"Unsupported expression type: {type(expr).__name__}")
@@ -495,32 +571,79 @@ def _compile_target_write_lines(
     return lines
 
 
-def _compile_address_expr(addr: int | Tag | Any, ctx: CodegenContext) -> str:
+def _compile_address_expr(
+    addr: int | Tag | Any,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None = None,
+    block_snapshots: dict[int, str] | None = None,
+) -> str:
     if isinstance(addr, int):
         return repr(addr)
     if isinstance(addr, Tag):
-        return ctx.symbol_for_tag(addr)
+        return _snapshot_tag_symbol(
+            addr,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     if isinstance(addr, Expression):
-        return _compile_expression_impl(addr, ctx)
+        return _compile_expression_impl(
+            addr,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     raise TypeError(f"Unsupported indirect address expression type: {type(addr).__name__}")
 
 
-def _compile_indirect_value(indirect_ref: IndirectRef, ctx: CodegenContext) -> str:
+def _compile_indirect_value(
+    indirect_ref: IndirectRef,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None = None,
+    block_snapshots: dict[int, str] | None = None,
+) -> str:
     block_id = id(indirect_ref.block)
     binding = ctx.block_bindings.get(block_id)
     if binding is None:
         raise RuntimeError(f"Missing block binding for indirect ref {indirect_ref.block.name!r}")
-    block_symbol = ctx.symbol_for_block(indirect_ref.block)
+    block_symbol = (
+        block_snapshots.get(block_id)
+        if block_snapshots is not None and block_id in block_snapshots
+        else ctx.symbol_for_block(indirect_ref.block)
+    )
     helper = ctx.use_indirect_block(binding.block_id)
-    ptr = _compile_value(indirect_ref.pointer, ctx)
+    ptr = _compile_value(
+        indirect_ref.pointer,
+        ctx,
+        scalar_snapshots=scalar_snapshots,
+        block_snapshots=block_snapshots,
+    )
     return f"{block_symbol}[{helper}(int({ptr}))]"
 
 
-def _compile_value(value: Any, ctx: CodegenContext) -> str:
+def _compile_value(
+    value: Any,
+    ctx: CodegenContext,
+    *,
+    scalar_snapshots: dict[str, str] | None = None,
+    block_snapshots: dict[int, str] | None = None,
+) -> str:
     if isinstance(value, Tag):
-        return ctx.symbol_for_tag(value)
+        return _snapshot_tag_symbol(
+            value,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     if isinstance(value, IndirectRef):
-        return _compile_indirect_value(value, ctx)
+        return _compile_indirect_value(
+            value,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     if isinstance(value, IndirectExprRef):
         block_id = id(value.block)
         binding = ctx.block_bindings.get(block_id)
@@ -528,10 +651,24 @@ def _compile_value(value: Any, ctx: CodegenContext) -> str:
             raise RuntimeError(
                 f"Missing block binding for indirect expression ref {value.block.name!r}"
             )
-        block_symbol = ctx.symbol_for_block(value.block)
+        block_symbol = (
+            block_snapshots.get(block_id)
+            if block_snapshots is not None and block_id in block_snapshots
+            else ctx.symbol_for_block(value.block)
+        )
         helper = ctx.use_indirect_block(binding.block_id)
-        expr = _compile_expression_impl(value.expr, ctx)
+        expr = _compile_expression_impl(
+            value.expr,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         return f"{block_symbol}[{helper}(int({expr}))]"
     if isinstance(value, Expression):
-        return _compile_expression_impl(value, ctx)
+        return _compile_expression_impl(
+            value,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
     return repr(value)

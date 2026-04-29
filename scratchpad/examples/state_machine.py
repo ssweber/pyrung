@@ -1,4 +1,4 @@
-from clickplc_dsl import Addresses, Conditions, Actions, Td, Th, Tm, Ts, Tms, Rung
+from clickplc_dsl import Actions, Addresses, Conditions, Rung, Th, Tm, Tms
 
 # fmt: off
 # Get address references

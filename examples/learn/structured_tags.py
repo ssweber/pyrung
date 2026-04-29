@@ -19,6 +19,7 @@ CountReset = Bool("CountReset")
 
 from pyrung import copy, named_array
 
+
 @named_array(Int, stride=4, readonly=True)
 class SortState:
     IDLE = 0

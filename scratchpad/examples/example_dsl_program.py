@@ -17,8 +17,8 @@ from pyrung import (
     math_decimal,
     nc,
     out,
-    rise,
     reset,
+    rise,
     subroutine,
 )
 

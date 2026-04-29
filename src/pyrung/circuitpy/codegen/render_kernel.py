@@ -22,7 +22,7 @@ from pyrung.circuitpy.codegen._util import (
     _global_line,
     _subroutine_symbol,
 )
-from pyrung.circuitpy.codegen.compile import compile_rung
+from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.core.kernel import BlockSpec, CompiledKernel
 from pyrung.core.program import Program
@@ -95,9 +95,7 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
         fn_name = _subroutine_symbol(sub_name)
         ctx.function_globals[fn_name] = set()
         ctx.set_current_function(fn_name)
-        body: list[str] = []
-        for rung in ctx.program.subroutines[sub_name]:
-            body.extend(compile_rung(rung, fn_name, ctx, indent=4))
+        body = compile_rungs(ctx.program.subroutines[sub_name], fn_name, ctx, indent=4)
         ctx.set_current_function(None)
         globals_line = _global_line(ctx.globals_for_function(fn_name), indent=4)
         lines.append(f"def {fn_name}():")
@@ -115,9 +113,7 @@ def _compile_main_body(ctx: CodegenContext) -> list[str]:
     fn_name = "_kernel_step"
     ctx.function_globals[fn_name] = set()
     ctx.set_current_function(fn_name)
-    body: list[str] = []
-    for rung in ctx.program.rungs:
-        body.extend(compile_rung(rung, fn_name, ctx, indent=4))
+    body = compile_rungs(ctx.program.rungs, fn_name, ctx, indent=4)
     ctx.set_current_function(None)
     return body
 

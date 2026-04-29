@@ -13,6 +13,7 @@ from pyrung.core import (
     Timer,
     copy,
     on_delay,
+    out,
     run_function,
     system,
 )
@@ -131,6 +132,40 @@ def test_intra_rung_write_not_visible_to_timer_reset_in_compiled_kernel() -> Non
     compiled.step()
     _assert_states_equivalent(plc, compiled)
     assert compiled.current_state.tags["Timer_Acc"] == 0
+
+
+def test_compiled_plc_matches_plc_for_continued_snapshot_chain() -> None:
+    """Regression: compiled kernel must reuse the anchor snapshot for continued()."""
+    Enable = Bool("Enable")
+    Latched = Bool("Latched")
+    Output = Bool("Output")
+
+    with Program(strict=False) as program:
+        with Rung(Enable):
+            out(Latched)
+        with Rung(Latched).continued():
+            out(Output)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    plc.patch({"Enable": True, "Latched": False, "Output": False})
+    compiled.patch({"Enable": True, "Latched": False, "Output": False})
+
+    plc.step()
+    compiled.step()
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["Latched"] is True
+    assert compiled.current_state.tags["Output"] is False
+
+    plc.patch({"Enable": False})
+    compiled.patch({"Enable": False})
+
+    plc.step()
+    compiled.step()
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["Latched"] is False
+    assert compiled.current_state.tags["Output"] is True
 
 
 def test_replay_to_prefers_compiled_path_when_supported() -> None:

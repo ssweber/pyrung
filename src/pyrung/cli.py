@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -147,6 +148,27 @@ def _cmd_live(_args: argparse.Namespace) -> None:
     live_main()
 
 
+def _run_with_optional_profile(
+    args: argparse.Namespace, func: Callable[[argparse.Namespace], None]
+) -> None:
+    profile_path = getattr(args, "profile", None)
+    if not profile_path:
+        func(args)
+        return
+
+    import cProfile
+
+    out_path = str(Path(profile_path).absolute())
+    profiler = cProfile.Profile()
+    try:
+        profiler.enable()
+        func(args)
+    finally:
+        profiler.disable()
+        profiler.dump_stats(out_path)
+        print(f"Wrote profile {out_path}", file=sys.stderr)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="pyrung",
@@ -161,6 +183,10 @@ def main() -> None:
     lock_p.add_argument("--project", nargs="*", help="Tags to project onto")
     lock_p.add_argument("--max-depth", type=int, default=50)
     lock_p.add_argument("--max-states", type=int, default=100_000)
+    lock_p.add_argument(
+        "--profile",
+        help="Write cProfile stats to FILE; dumped even if interrupted",
+    )
     lock_p.set_defaults(func=_cmd_lock)
 
     # -- check --
@@ -169,6 +195,10 @@ def main() -> None:
     check_p.add_argument("--lock", default="pyrung.lock", help="Lock file path")
     check_p.add_argument("--max-depth", type=int, default=50)
     check_p.add_argument("--max-states", type=int, default=100_000)
+    check_p.add_argument(
+        "--profile",
+        help="Write cProfile stats to FILE; dumped even if interrupted",
+    )
     check_p.set_defaults(func=_cmd_check)
 
     # -- dap --
@@ -184,4 +214,4 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         raise SystemExit(1)
-    args.func(args)
+    _run_with_optional_profile(args, args.func)

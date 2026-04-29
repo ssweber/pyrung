@@ -12,12 +12,12 @@ never reaches an alarm.
 """
 
 from pyrung import (
+    PLC,
     Block,
     Bool,
     Harness,
     Int,
     Or,
-    PLC,
     Physical,
     Rung,
     Timer,
@@ -109,7 +109,7 @@ conditions = [
 ]
 results = prove(logic, conditions)
 
-for coupling, result in zip(couplings, results):
+for coupling, result in zip(couplings, results, strict=False):
     if isinstance(result, Proven):
         print(f"  PASS  {coupling.fb_name}: alarm path exists")
         structural_pass.append(coupling.fb_name)

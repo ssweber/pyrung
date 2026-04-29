@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 _EDGE_DEAD: Any = object()
 
 
-
 def _collect_edge_tag_exprs(
     program: Program,
     edge_tag_names: tuple[str, ...],

@@ -1,16 +1,34 @@
 from __future__ import annotations
+
 import asyncio
 from pathlib import Path
 
 from pyclickplc import DataViewFile, DataViewRecord, run_server_tui, write_cdv
 from pyclickplc.server import ClickServer
+
 from pyrung.click import ClickDataProvider, TagMap, c, ds, t, td
 from pyrung.core import (
-    Bool, Int, PLCRunner, Program, Rung, Timer,
-    branch, TimeMode, TimeUnit, any_of, call, copy,
-    latch, calc, on_delay, reset, return_early, subroutine,
+    Bool,
+    Int,
+    PLCRunner,
+    Program,
+    Rung,
+    TimeMode,
+    Timer,
+    TimeUnit,
+    any_of,
+    branch,
+    calc,
+    call,
+    copy,
+    latch,
     named_array,
+    on_delay,
+    reset,
+    return_early,
+    subroutine,
 )
+
 
 @named_array(Int, count=1, stride=20)
 class SubNameDs:

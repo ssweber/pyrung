@@ -28,7 +28,7 @@ from .expr import _collect_atoms_for_tag
 from .kernel import _restore_kernel, _snapshot_kernel
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pdg import ProgramGraph, RungNode
     from pyrung.core.program import Program
     from pyrung.core.tag import Tag
 
@@ -107,15 +107,24 @@ def _collect_all_exprs(
 
     exprs: list[Expr] = [tf.expr for tf in forms.values()]
 
-    from pyrung.core.validation._common import _collect_write_sites
+    from pyrung.core.validation._common import (
+        _build_caller_map,
+        _caller_conditions,
+        _collect_write_sites,
+    )
 
     sites = _collect_write_sites(program, target_extractor=_all_write_targets)
+    caller_map = _build_caller_map(program)
     for site in sites:
         if upstream is not None and site.target_name not in upstream:
             continue
         if site.conditions:
             for cond in site.conditions:
                 exprs.append(_condition_to_expr(cond))
+        if site.scope == "subroutine":
+            for caller_chain in _caller_conditions(site, caller_map):
+                for cond in caller_chain:
+                    exprs.append(_condition_to_expr(cond))
     return exprs
 
 
@@ -541,6 +550,26 @@ def _is_ote_only(tag_name: str, graph: ProgramGraph) -> bool:
     return all(tag_name in graph.rung_nodes[ni].ote_writes for ni in writer_indices)
 
 
+def _uses_prior_snapshot(program: Program, node: RungNode) -> bool:
+    """Return whether a graph node belongs to a continued() top-level rung."""
+    if node.scope == "main":
+        return program.rungs[node.rung_index]._use_prior_snapshot
+    assert node.subroutine is not None
+    return program.subroutines[node.subroutine][node.rung_index]._use_prior_snapshot
+
+
+def _has_continued_reader(
+    program: Program,
+    tag_name: str,
+    graph: ProgramGraph,
+) -> bool:
+    """True if any read of *tag_name* comes from a continued() rung."""
+    return any(
+        _uses_prior_snapshot(program, graph.rung_nodes[reader_idx])
+        for reader_idx in graph.readers_of.get(tag_name, frozenset())
+    )
+
+
 _ClassifyResult = tuple[
     dict[str, tuple[Any, ...]],  # stateful_dims
     dict[str, tuple[Any, ...]],  # nondeterministic_dims
@@ -673,11 +702,16 @@ def _classify_dimensions_from_graph(
 
     scope_input_tags: frozenset[str] | None = None
     if scope is not None:
-        dv = program.dataview()
         upstream_tags: set[str] = set()
         for tag_name in scope:
-            upstream_tags.update(dv.upstream(tag_name).inputs().tags)
-        scope_input_tags = frozenset(upstream_tags | set(scope))
+            if graph.tag_roles.get(tag_name) is TagRole.INPUT:
+                upstream_tags.add(tag_name)
+            upstream_tags.update(
+                tag
+                for tag in graph.upstream_slice(tag_name)
+                if graph.tag_roles.get(tag) is TagRole.INPUT
+            )
+        scope_input_tags = frozenset(upstream_tags)
 
     stateful: dict[str, tuple[Any, ...]] = {}
     nondeterministic: dict[str, tuple[Any, ...]] = {}
@@ -729,7 +763,11 @@ def _classify_dimensions_from_graph(
             combinational.add(tag_name)
             continue
 
-        if _is_ote_only(tag_name, graph):
+        if _is_ote_only(tag_name, graph) and not _has_continued_reader(
+            program,
+            tag_name,
+            graph,
+        ):
             combinational.add(tag_name)
             continue
 
