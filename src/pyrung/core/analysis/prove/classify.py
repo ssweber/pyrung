@@ -515,6 +515,12 @@ def _collect_structural_domains(
 
             merged_values = set(known_domains.get(target_name, ()))
             merged_values.update(candidate_values)
+            if target.choices is not None:
+                merged_values = merged_values & set(target.choices.keys())
+            if target.min is not None:
+                merged_values = {v for v in merged_values if v >= target.min}
+            if target.max is not None:
+                merged_values = {v for v in merged_values if v <= target.max}
             if len(merged_values) > 1000:
                 continue
 
