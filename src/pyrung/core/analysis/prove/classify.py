@@ -19,9 +19,11 @@ from .absorb import (
     _PROGRESS_KIND_INT_UP,
     _all_write_targets,
     _collect_done_acc_pairs,
+    _find_comparison_absorptions,
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
     _has_forbidden_data_read,
+    _merge_threshold_absorptions,
     _ThresholdBlocker,
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag
@@ -576,19 +578,23 @@ def _extract_value_domain(
     unresolved_tag_comparison = False
 
     for atom in atoms:
-        if atom.form in comparison_forms and atom.operand is not None:
-            if isinstance(atom.operand, str):
-                if known_domains is not None and atom.operand in known_domains:
-                    boundary = list(known_domains[atom.operand])
-                else:
-                    other = all_tags.get(atom.operand) if all_tags is not None else None
-                    boundary = _boundary_values_for_tag(other) if other is not None else []
-                if boundary:
-                    literals.update(boundary)
-                else:
-                    unresolved_tag_comparison = True
+        if atom.form not in comparison_forms or atom.operand is None:
+            continue
+        other_ref = atom.operand if atom.tag == tag_name else atom.tag
+        if isinstance(other_ref, str):
+            if other_ref == tag_name:
+                continue
+            if known_domains is not None and other_ref in known_domains:
+                boundary = list(known_domains[other_ref])
             else:
-                literals.add(atom.operand)
+                other = all_tags.get(other_ref) if all_tags is not None else None
+                boundary = _boundary_values_for_tag(other) if other is not None else []
+            if boundary:
+                literals.update(boundary)
+            else:
+                unresolved_tag_comparison = True
+        else:
+            literals.add(other_ref)
 
     if tag.choices is not None:
         return tuple(sorted(tag.choices.keys()))
@@ -794,6 +800,17 @@ def _classify_dimensions_from_graph(
         all_exprs,
         project=project,
     )
+    comparison_absorptions = _find_comparison_absorptions(
+        program,
+        graph,
+        all_exprs,
+        structural_domains,
+        project=project,
+    )
+    threshold_absorptions = _merge_threshold_absorptions(
+        threshold_absorptions,
+        comparison_absorptions,
+    )
     consumed_accs.difference_update(threshold_absorptions.progress_names)
 
     done_acc = {d: a for d, a in done_acc_info.pairs.items() if a not in consumed_accs}
@@ -829,6 +846,8 @@ def _classify_dimensions_from_graph(
             continue
         if tag_name in threshold_absorptions.threshold_tags:
             continue
+        if tag_name in threshold_absorptions.comparison_tags:
+            continue
 
         role = graph.tag_roles.get(tag_name)
         is_written = tag_name in graph.writers_of
@@ -849,6 +868,10 @@ def _classify_dimensions_from_graph(
                 graph,
                 atom_idx,
             )
+            if not domain and _has_non_condition_data_read(tag_name, graph):
+                declared = _declared_domain(tag)
+                if declared is not None:
+                    domain = declared
             if domain is None:
                 infeasible_tags.append(tag_name)
                 continue

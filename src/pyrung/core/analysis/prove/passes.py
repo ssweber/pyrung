@@ -14,10 +14,13 @@ from . import Intractable, _ExploreContext
 from .absorb import (
     _collect_done_acc_pairs,
     _DoneAccInfo,
+    _find_comparison_absorptions,
     _find_redundant_acc_absorptions,
     _find_threshold_absorptions,
     _has_forbidden_data_read,
+    _merge_threshold_absorptions,
     _RedundantAccAbsorptions,
+    _THRESHOLD_KIND_COMPARISON_ONLY,
     _ThresholdAbsorptions,
 )
 from .classify import (
@@ -269,11 +272,30 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
 
 def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
-    ctx.threshold_absorptions = _find_threshold_absorptions(
+    literal_write_domains = _collect_literal_write_domains(ctx.program, ctx.graph.tags)
+    structural_domains = _collect_structural_domains(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        literal_write_domains,
+    )
+
+    threshold_absorptions = _find_threshold_absorptions(
         ctx.program,
         ctx.graph,
         ctx.all_exprs,
         project=ctx.project,
+    )
+    comparison_absorptions = _find_comparison_absorptions(
+        ctx.program,
+        ctx.graph,
+        ctx.all_exprs,
+        structural_domains,
+        project=ctx.project,
+    )
+    ctx.threshold_absorptions = _merge_threshold_absorptions(
+        threshold_absorptions,
+        comparison_absorptions,
     )
 
 
@@ -299,6 +321,8 @@ def _pass_build_event_specs(ctx: _PassContext) -> None:
 
     t_events: list[_ThresholdEventSpec] = []
     for vi, vector in enumerate(ctx.threshold_absorptions.vector_specs):
+        if vector.kind == _THRESHOLD_KIND_COMPARISON_ONLY:
+            continue
         for ai, atom in enumerate(vector.atoms):
             t_events.append(
                 _ThresholdEventSpec(

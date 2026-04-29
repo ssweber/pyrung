@@ -98,6 +98,32 @@ def _live_edge_prevs(
     return frozenset(live)
 
 
+def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
+    """Tags whose concrete values are intentionally hidden from the BFS state."""
+    exact_stateful = set(context.stateful_names)
+    hidden = {name for name in context.synthetic_preset_tags if name not in exact_stateful}
+    hidden.update(
+        spec.acc_name for spec in context.state_key_done_specs if spec.acc_name not in exact_stateful
+    )
+    for vector in context.threshold_vector_specs:
+        if vector.acc_name not in exact_stateful:
+            hidden.add(vector.acc_name)
+        for atom in vector.atoms:
+            if isinstance(atom.threshold, str) and atom.threshold not in exact_stateful:
+                hidden.add(atom.threshold)
+    return frozenset(hidden)
+
+
+def _visible_partial_eval_state(
+    state: dict[str, Any],
+    hidden_tags: frozenset[str],
+) -> dict[str, Any]:
+    """Drop abstracted tags before partial evaluation and liveness analysis."""
+    if not hidden_tags:
+        return state
+    return {name: value for name, value in state.items() if name not in hidden_tags}
+
+
 def _precompute_always_live_edges(
     edge_tag_exprs: dict[str, list[Expr]],
 ) -> frozenset[str]:
@@ -183,7 +209,7 @@ class _EdgeCompressor:
     configuration, not per combo.
     """
 
-    __slots__ = ("_context", "_compressible", "_cache")
+    __slots__ = ("_context", "_compressible", "_cache", "_hidden_tags")
 
     def __init__(self, context: _ExploreContext) -> None:
         self._context = context
@@ -192,6 +218,7 @@ class _EdgeCompressor:
             name: exprs for name, exprs in context.edge_tag_exprs.items() if name not in always_live
         }
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
+        self._hidden_tags = _abstracted_hidden_tags(context)
 
     def live_edges(self, kernel: ReplayKernel) -> frozenset[str] | None:
         """Return the set of live edge tags, or None if no compression."""
@@ -205,7 +232,7 @@ class _EdgeCompressor:
         if cached is not None:
             return cached
         result = _live_edge_prevs(
-            kernel.tags,
+            _visible_partial_eval_state(kernel.tags, self._hidden_tags),
             ctx.nondeterministic_dims,
             self._compressible,
         )
@@ -233,11 +260,17 @@ class _LiveInputCache:
     non-ND tags, yielding the same live-input set.
     """
 
-    __slots__ = ("_context", "_cache")
+    __slots__ = ("_context", "_cache", "_hidden_tags", "_hidden_input_deps")
 
     def __init__(self, context: _ExploreContext) -> None:
         self._context = context
         self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
+        self._hidden_tags = _abstracted_hidden_tags(context)
+        nd_names = frozenset(context.nondeterministic_dims)
+        self._hidden_input_deps = {
+            tag_name: frozenset(context.graph.upstream_slice(tag_name) & nd_names)
+            for tag_name in self._hidden_tags
+        }
 
     def live_inputs(self, kernel: ReplayKernel) -> frozenset[str]:
         ctx = self._context
@@ -247,7 +280,12 @@ class _LiveInputCache:
         cached = self._cache.get(cache_key)
         if cached is not None:
             return cached
-        result = _live_inputs(kernel.tags, ctx.nondeterministic_dims, ctx.all_exprs)
+        result = _live_inputs(
+            _visible_partial_eval_state(kernel.tags, self._hidden_tags),
+            ctx.nondeterministic_dims,
+            ctx.all_exprs,
+            self._hidden_input_deps,
+        )
         self._cache[cache_key] = result
         return result
 

@@ -25,6 +25,12 @@ scan-distance scheduling.  Abstract atoms represent exclusive threshold-only
 tags whose concrete value is hidden from the state key; the BFS materializes
 representative crossed successors when needed instead of requiring a stable
 value up front.
+
+*Comparison-only absorption* (``_find_comparison_absorptions``): hides
+ large or non-enumerable written tags whose value is never used in
+ data-flow.  Their concrete state key slot is replaced with a vector of
+ comparison outcomes, so only the Boolean partition visible to the program
+ remains.
 """
 
 from __future__ import annotations
@@ -53,6 +59,8 @@ _DONE_KIND_COUNT_DOWN = "count_down"
 
 _PROGRESS_KIND_INT_UP = "int_up"
 
+_THRESHOLD_KIND_COMPARISON_ONLY = "comparison_only"
+
 _THRESHOLD_FORM_GT = "gt"
 
 _THRESHOLD_FORM_GE = "ge"
@@ -60,6 +68,8 @@ _THRESHOLD_FORM_GE = "ge"
 _THRESHOLD_MODE_EXACT = "exact"
 
 _THRESHOLD_MODE_ABSTRACT = "abstract"
+
+_COMPARISON_ONLY_ABSORB_MIN_DOMAIN = 16
 
 
 @dataclass(frozen=True)
@@ -471,6 +481,142 @@ def _threshold_atom_for_progress(
     return []
 
 
+def _comparison_atoms_for_tag(
+    atom: Atom,
+    tag_name: str,
+    graph: ProgramGraph,
+) -> list[_ThresholdAtomSpec]:
+    """Normalize comparison-only atoms into vector bits for *tag_name*."""
+    if atom.tag != tag_name and atom.operand != tag_name:
+        return []
+
+    if atom.form in {"xic", "xio", "truthy"}:
+        if atom.tag != tag_name:
+            return []
+        return [
+            _ThresholdAtomSpec(tag_name, 0, _THRESHOLD_FORM_GE, _THRESHOLD_MODE_EXACT),
+            _ThresholdAtomSpec(tag_name, 0, _THRESHOLD_FORM_GT, _THRESHOLD_MODE_EXACT),
+        ]
+
+    if atom.form in {"eq", "ne"}:
+        other = atom.operand if atom.tag == tag_name else atom.tag
+        mode = _threshold_mode(other, graph)
+        if mode is None:
+            return []
+        return [
+            _ThresholdAtomSpec(tag_name, other, _THRESHOLD_FORM_GE, mode),
+            _ThresholdAtomSpec(tag_name, other, _THRESHOLD_FORM_GT, mode),
+        ]
+
+    if atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        if atom.tag == tag_name:
+            mode = _threshold_mode(atom.operand, graph)
+            if mode is None:
+                return []
+            return [_ThresholdAtomSpec(tag_name, atom.operand, atom.form, mode)]
+        mode = _threshold_mode(tag_name, graph)
+        if mode is None:
+            return []
+        return [_ThresholdAtomSpec(atom.tag, tag_name, atom.form, mode)]
+
+    if atom.form in {"lt", "le"}:
+        form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+        if atom.tag == tag_name:
+            mode = _threshold_mode(tag_name, graph)
+            if mode is None:
+                return []
+            return [_ThresholdAtomSpec(atom.operand, tag_name, form, mode)]
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        return [_ThresholdAtomSpec(tag_name, atom.tag, form, mode)]
+
+    return []
+
+
+def _comparison_domain_is_worth_absorbing(
+    tag_name: str,
+    tag: Any,
+    structural_domains: dict[str, tuple[Any, ...]],
+) -> bool:
+    """True when *tag_name* is too large or too open-ended for exact keying."""
+    if tag.type == TagType.BOOL:
+        return False
+
+    domain = structural_domains.get(tag_name)
+    if domain is not None:
+        return len(domain) > _COMPARISON_ONLY_ABSORB_MIN_DOMAIN
+
+    if tag.choices is not None:
+        return len(tag.choices) > _COMPARISON_ONLY_ABSORB_MIN_DOMAIN
+
+    if tag.min is not None and tag.max is not None:
+        if isinstance(tag.min, int) and isinstance(tag.max, int):
+            return (tag.max - tag.min + 1) > _COMPARISON_ONLY_ABSORB_MIN_DOMAIN
+        return True
+
+    return True
+
+
+def _find_comparison_absorptions(
+    program: Program,
+    graph: ProgramGraph,
+    all_exprs: list[Expr],
+    structural_domains: dict[str, tuple[Any, ...]],
+    *,
+    project: tuple[str, ...] | None = None,
+) -> _ThresholdAbsorptions:
+    """Find written tags whose value is only ever observed through comparisons."""
+    projected = frozenset(project or ())
+    progress_sources = set(_collect_progress_source_kinds(program))
+    progress_sources.update(_collect_int_progress_source_kinds(program, graph, all_exprs))
+
+    absorbed_tags: set[str] = set()
+    vector_specs: list[_ThresholdVectorSpec] = []
+
+    for tag_name, tag in sorted(graph.tags.items()):
+        if tag_name in projected or tag_name in progress_sources:
+            continue
+        if tag.readonly or tag.external or tag.public:
+            continue
+        if tag_name not in graph.writers_of:
+            continue
+        if not _comparison_domain_is_worth_absorbing(tag_name, tag, structural_domains):
+            continue
+        if _has_forbidden_data_read(program, tag_name):
+            continue
+
+        atoms = _collect_atoms_for_tag(all_exprs, tag_name)
+        if not atoms:
+            continue
+
+        normalized: list[_ThresholdAtomSpec] = []
+        for atom in atoms:
+            specs = _comparison_atoms_for_tag(atom, tag_name, graph)
+            if not specs:
+                normalized = []
+                break
+            normalized.extend(specs)
+        if not normalized:
+            continue
+
+        absorbed_tags.add(tag_name)
+        vector_specs.append(
+            _ThresholdVectorSpec(
+                acc_name=tag_name,
+                kind=_THRESHOLD_KIND_COMPARISON_ONLY,
+                atoms=tuple(dict.fromkeys(normalized)),
+            )
+        )
+
+    return _ThresholdAbsorptions(
+        progress_names=frozenset(),
+        threshold_tags=frozenset(),
+        comparison_tags=frozenset(absorbed_tags),
+        vector_specs=tuple(vector_specs),
+    )
+
+
 def _diagnose_unstable_atom(
     atom: Atom,
     acc_name: str,
@@ -855,8 +1001,22 @@ def _find_threshold_absorptions(
     return _ThresholdAbsorptions(
         progress_names=frozenset(absorbed_progress),
         threshold_tags=frozenset(absorbed_thresholds),
+        comparison_tags=frozenset(),
         vector_specs=tuple(vector_specs),
         blockers=tuple(blockers),
+    )
+
+
+def _merge_threshold_absorptions(*absorptions: _ThresholdAbsorptions) -> _ThresholdAbsorptions:
+    """Merge multiple threshold/comparison absorption result sets."""
+    return _ThresholdAbsorptions(
+        progress_names=frozenset().union(*(item.progress_names for item in absorptions)),
+        threshold_tags=frozenset().union(*(item.threshold_tags for item in absorptions)),
+        comparison_tags=frozenset().union(*(item.comparison_tags for item in absorptions)),
+        vector_specs=tuple(
+            spec for item in absorptions for spec in item.vector_specs
+        ),
+        blockers=tuple(blocker for item in absorptions for blocker in item.blockers),
     )
 
 
@@ -886,5 +1046,6 @@ class _ThresholdBlocker:
 class _ThresholdAbsorptions:
     progress_names: frozenset[str]
     threshold_tags: frozenset[str]
+    comparison_tags: frozenset[str]
     vector_specs: tuple[_ThresholdVectorSpec, ...]
     blockers: tuple[_ThresholdBlocker, ...] = ()

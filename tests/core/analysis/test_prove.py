@@ -429,6 +429,13 @@ class TestDontCarePruning:
         live = _live_inputs(state, nd_dims, exprs)
         assert live == {"InputA", "InputB"}
 
+    def test_hidden_residual_tag_keeps_upstream_input_live(self):
+        """Residual hidden tags propagate liveness through their ND upstream deps."""
+        exprs = [Atom("Stored", "gt", 150)]
+        nd_dims = {"Source": tuple(range(3))}
+        live = _live_inputs({}, nd_dims, exprs, {"Stored": frozenset({"Source"})})
+        assert live == {"Source"}
+
     def test_eval_atom_xic(self):
         assert _eval_atom(Atom("X", "xic"), True) is True
         assert _eval_atom(Atom("X", "xic"), False) is False
@@ -2510,6 +2517,60 @@ class TestKernelDomainDiscovery:
 
         result = prove(logic, lambda s: True)
         assert isinstance(result, Proven)
+
+    def test_large_comparison_only_calc_tag_is_absorbed(self):
+        """Large written comparison-only tags use vector keying instead of exact state."""
+        source = Int("Source", external=True, min=0, max=300)
+        stored = Int("Stored")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(source, stored)
+            with Rung(stored > 150):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "Stored" not in stateful
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=2)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Alarm", False)}) in states
+        assert frozenset({("Alarm", True)}) in states
+
+    def test_real_operand_side_boundary_uses_comparison_partner(self):
+        """Projected REAL tags resolve operand-side comparison boundaries from the partner tag."""
+        from pyrung.core import Real
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _classify_dimensions_from_graph,
+            _collect_all_exprs,
+        )
+
+        source = Int("Source", external=True, min=0, max=300)
+        stored = Real("Stored")
+        limit = Real("Limit", readonly=True, default=15.0)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(source / 10, stored)
+            with Rung(limit > stored):
+                out(alarm)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        result = _classify_dimensions_from_graph(
+            logic,
+            graph,
+            all_exprs,
+            project=("Stored",),
+        )
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert stateful["Stored"] == (14.0, 15.0, 16.0)
 
     def test_literal_writes_discover_domain(self):
         """Literal writes discover {default, 5, 10}."""

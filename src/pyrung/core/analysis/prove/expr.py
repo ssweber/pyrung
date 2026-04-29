@@ -139,17 +139,22 @@ def _live_inputs(
     state: dict[str, Any],
     nd_dims: dict[str, tuple[Any, ...]],
     all_exprs: list[Expr],
+    hidden_input_deps: dict[str, frozenset[str]] | None = None,
 ) -> frozenset[str]:
     """Determine which nondeterministic inputs are live at a given state."""
     nd_names = frozenset(nd_dims)
     known = {k: v for k, v in state.items() if k not in nd_names}
+    hidden_deps = hidden_input_deps or {}
 
     live: set[str] = set()
     for expr in all_exprs:
         residual = _partial_eval(expr, known)
         if isinstance(residual, Const):
             continue
-        live.update(_referenced_tags(residual) & nd_names)
+        refs = _referenced_tags(residual)
+        live.update(refs & nd_names)
+        for tag_name in refs - nd_names:
+            live.update(hidden_deps.get(tag_name, ()))
 
     return frozenset(live)
 
