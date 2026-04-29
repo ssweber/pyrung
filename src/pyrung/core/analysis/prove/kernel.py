@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from .events import _StateKeyDoneSpec
 
 _EDGE_DEAD: Any = object()
-_EMPTY_BLOCKS: dict[str, list[Any]] = {}
+
 
 
 def _collect_edge_tag_exprs(
@@ -119,7 +119,6 @@ def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> N
 @dataclass(frozen=True, slots=True)
 class _KernelSnapshot:
     tags: dict[str, Any]
-    blocks: dict[str, list[Any]]
     memory: dict[str, Any]
     prev: dict[str, Any]
     scan_id: int
@@ -127,10 +126,9 @@ class _KernelSnapshot:
 
 
 def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
-    """Deep-copy kernel state."""
+    """Deep-copy kernel state (blocks excluded — reloaded from tags each step)."""
     return _KernelSnapshot(
         tags=dict(kernel.tags),
-        blocks={k: list(v) for k, v in kernel.blocks.items()} if kernel.blocks else _EMPTY_BLOCKS,
         memory=dict(kernel.memory),
         prev=dict(kernel.prev),
         scan_id=kernel.scan_id,
@@ -142,10 +140,6 @@ def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
     """Restore kernel state from a snapshot."""
     kernel.tags.clear()
     kernel.tags.update(snap.tags)
-    if snap.blocks:
-        for k in list(kernel.blocks):
-            if k in snap.blocks:
-                kernel.blocks[k] = list(snap.blocks[k])
     kernel.memory.clear()
     kernel.memory.update(snap.memory)
     kernel.prev.clear()

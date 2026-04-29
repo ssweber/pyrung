@@ -406,23 +406,22 @@ def _bfs_explore(
             live_sorted = []
             combos = [()]
 
+        has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
             set() if project is not None else None
         )
         for combo in combos:
             _restore_kernel(kernel, snap)
-            input_dict: dict[str, Any] = {}
             for i, name in enumerate(live_sorted):
                 kernel.tags[name] = combo[i]
-                input_dict[name] = combo[i]
 
             _step_kernel(context, kernel)
-            edge_scans = 1
             new_key = _state_key(kernel)
-            base_snapshot = _snapshot_kernel(kernel)
-            branch_outcomes: list[tuple[_KernelSnapshot, tuple[Any, ...], int]] = [
-                (base_snapshot, new_key, 0)
-            ]
+
+            # Determine if hidden-event branching produces alternate outcomes.
+            # Settlement/jumping functions do their own internal save/restore,
+            # so we never need a speculative snapshot of the base state.
+            alt_outcomes: list[tuple[_KernelSnapshot, tuple[Any, ...], int]] | None = None
 
             if predicates is not None:
                 assert results is not None
@@ -442,11 +441,16 @@ def _bfs_explore(
                         edge_comp,
                     )
                     if settled:
-                        branch_outcomes = [
+                        alt_outcomes = [
                             (outcome.snapshot, outcome.key, outcome.additional_scans)
                             for outcome in settled
                         ]
-                elif bfs_config.hidden_event_jumping:
+                elif (
+                    bfs_config.hidden_event_jumping
+                    and has_hidden_events
+                    and new_key in visited
+                    and _has_pending_hidden_event(context, new_key)
+                ):
                     jumped = _maybe_jump_hidden_event(
                         context,
                         kernel,
@@ -456,11 +460,16 @@ def _bfs_explore(
                         edge_comp,
                     )
                     if jumped:
-                        branch_outcomes = [
+                        alt_outcomes = [
                             (outcome.snapshot, outcome.key, outcome.additional_scans)
                             for outcome in jumped
                         ]
-            elif bfs_config.hidden_event_jumping:
+            elif (
+                bfs_config.hidden_event_jumping
+                and has_hidden_events
+                and new_key in visited
+                and _has_pending_hidden_event(context, new_key)
+            ):
                 jumped = _maybe_jump_hidden_event(
                     context,
                     kernel,
@@ -470,38 +479,82 @@ def _bfs_explore(
                     edge_comp,
                 )
                 if jumped:
-                    branch_outcomes = [
+                    alt_outcomes = [
                         (outcome.snapshot, outcome.key, outcome.additional_scans)
                         for outcome in jumped
                     ]
 
-            seen_branch_keys: set[tuple[Any, ...]] = set()
-            for branch_snapshot, branch_key, branch_additional_scans in branch_outcomes:
-                if branch_key in seen_branch_keys:
-                    continue
-                seen_branch_keys.add(branch_key)
-                _restore_kernel(kernel, branch_snapshot)
-                branch_edge_scans = edge_scans + branch_additional_scans
+            if alt_outcomes is not None:
+                # Slow path: process alternate outcomes from hidden events.
+                # Build input_dict only here (needed for traces / parent_map).
+                input_dict: dict[str, Any] = dict(zip(live_sorted, combo))
+                seen_branch_keys: set[tuple[Any, ...]] = set()
+                for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
+                    if branch_key in seen_branch_keys:
+                        continue
+                    seen_branch_keys.add(branch_key)
+                    _restore_kernel(kernel, branch_snapshot)
+                    branch_edge_scans = 1 + branch_additional_scans
 
+                    if predicates is not None:
+                        _record_failures(
+                            state=kernel.tags,
+                            p_key=parent_key,
+                            input_dict=input_dict,
+                            edge_scans=branch_edge_scans,
+                        )
+
+                    if project is not None:
+                        projected_row = _projected_tuple(kernel, project)
+                        outcome = (branch_key, projected_row)
+                        assert seen_outcomes is not None
+                        if outcome in seen_outcomes:
+                            continue
+                        seen_outcomes.add(outcome)
+                        projected_rows.add(projected_row)
+
+                    if branch_key not in visited:
+                        visited.add(branch_key)
+                        if len(visited) > max_states:
+                            intractable = Intractable(
+                                reason="max_states exceeded",
+                                dimensions=len(context.stateful_dims)
+                                + len(context.nondeterministic_dims),
+                                estimated_space=len(visited),
+                                hints=_build_dimension_hints(context),
+                            )
+                            if results is not None:
+                                return [r if r is not None else intractable for r in results]
+                            return intractable
+                        if parent_map is not None:
+                            parent_map[branch_key] = (parent_key, input_dict, branch_edge_scans)
+                        queue.append((_snapshot_kernel(kernel), depth + 1, branch_key))
+
+                    if results is not None and all(r is not None for r in results):
+                        return [r for r in results if r is not None]
+            else:
+                # Fast path: single base outcome — no snapshot/restore overhead.
+                # The kernel is already in the post-step state.
                 if predicates is not None:
+                    input_dict = dict(zip(live_sorted, combo))
                     _record_failures(
                         state=kernel.tags,
                         p_key=parent_key,
                         input_dict=input_dict,
-                        edge_scans=branch_edge_scans,
+                        edge_scans=1,
                     )
 
                 if project is not None:
                     projected_row = _projected_tuple(kernel, project)
-                    outcome = (branch_key, projected_row)
+                    outcome_pair = (new_key, projected_row)
                     assert seen_outcomes is not None
-                    if outcome in seen_outcomes:
+                    if outcome_pair in seen_outcomes:
                         continue
-                    seen_outcomes.add(outcome)
+                    seen_outcomes.add(outcome_pair)
                     projected_rows.add(projected_row)
 
-                if branch_key not in visited:
-                    visited.add(branch_key)
+                if new_key not in visited:
+                    visited.add(new_key)
                     if len(visited) > max_states:
                         intractable = Intractable(
                             reason="max_states exceeded",
@@ -514,8 +567,9 @@ def _bfs_explore(
                             return [r if r is not None else intractable for r in results]
                         return intractable
                     if parent_map is not None:
-                        parent_map[branch_key] = (parent_key, input_dict, branch_edge_scans)
-                    queue.append((_snapshot_kernel(kernel), depth + 1, branch_key))
+                        input_dict = dict(zip(live_sorted, combo))
+                        parent_map[new_key] = (parent_key, input_dict, 1)
+                    queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 
                 if results is not None and all(r is not None for r in results):
                     return [r for r in results if r is not None]
