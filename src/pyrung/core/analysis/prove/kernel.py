@@ -9,7 +9,7 @@ from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_t
 from pyrung.core.kernel import ReplayKernel
 
 from .absorb import _THRESHOLD_FORM_GT, _done_acc_state
-from .expr import _has_edge_atom, _partial_eval
+from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .events import _StateKeyDoneSpec
 
 _EDGE_DEAD: Any = object()
+_EMPTY_BLOCKS: dict[str, list[Any]] = {}
 
 
 def _collect_edge_tag_exprs(
@@ -129,7 +130,7 @@ def _snapshot_kernel(kernel: ReplayKernel) -> _KernelSnapshot:
     """Deep-copy kernel state."""
     return _KernelSnapshot(
         tags=dict(kernel.tags),
-        blocks={k: list(v) for k, v in kernel.blocks.items()},
+        blocks={k: list(v) for k, v in kernel.blocks.items()} if kernel.blocks else _EMPTY_BLOCKS,
         memory=dict(kernel.memory),
         prev=dict(kernel.prev),
         scan_id=kernel.scan_id,
@@ -141,9 +142,10 @@ def _restore_kernel(kernel: ReplayKernel, snap: _KernelSnapshot) -> None:
     """Restore kernel state from a snapshot."""
     kernel.tags.clear()
     kernel.tags.update(snap.tags)
-    for k in list(kernel.blocks):
-        if k in snap.blocks:
-            kernel.blocks[k] = list(snap.blocks[k])
+    if snap.blocks:
+        for k in list(kernel.blocks):
+            if k in snap.blocks:
+                kernel.blocks[k] = list(snap.blocks[k])
     kernel.memory.clear()
     kernel.memory.update(snap.memory)
     kernel.prev.clear()
@@ -201,6 +203,33 @@ class _EdgeCompressor:
             ctx.threshold_vector_specs,
             self.live_edges(kernel),
         )
+
+
+class _LiveInputCache:
+    """Cached live-input results per stateful-key prefix.
+
+    Same cache-key strategy as _EdgeCompressor: states sharing a stateful
+    prefix + threshold vector produce identical _partial_eval results for
+    non-ND tags, yielding the same live-input set.
+    """
+
+    __slots__ = ("_context", "_cache")
+
+    def __init__(self, context: _ExploreContext) -> None:
+        self._context = context
+        self._cache: dict[tuple[Any, ...], frozenset[str]] = {}
+
+    def live_inputs(self, kernel: ReplayKernel) -> frozenset[str]:
+        ctx = self._context
+        stateful_prefix = tuple(kernel.tags.get(n) for n in ctx.stateful_names)
+        threshold_prefix = _threshold_vector_key(kernel, ctx.threshold_vector_specs)
+        cache_key = stateful_prefix + threshold_prefix
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = _live_inputs(kernel.tags, ctx.nondeterministic_dims, ctx.all_exprs)
+        self._cache[cache_key] = result
+        return result
 
 
 def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:

@@ -25,8 +25,9 @@ if TYPE_CHECKING:
     from pyrung.core.program import Program
 
 from .expr import _eval_atom as _eval_atom
-from .expr import _live_inputs, _referenced_tags
+from .expr import _live_inputs as _live_inputs
 from .expr import _partial_eval as _partial_eval
+from .expr import _referenced_tags
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ from .kernel import (
     _EdgeCompressor,
     _extract_state_key,
     _KernelSnapshot,
+    _LiveInputCache,
     _restore_kernel,
     _seed_synthetic_presets,
     _snapshot_kernel,
@@ -308,6 +310,7 @@ def _bfs_explore(
     kernel = context.compiled.create_kernel()
     _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
+    live_cache = _LiveInputCache(context)
 
     def _state_key(k: ReplayKernel) -> tuple[Any, ...]:
         if bfs_config.edge_compression:
@@ -378,7 +381,7 @@ def _bfs_explore(
 
         _restore_kernel(kernel, snap)
         live = (
-            _live_inputs(kernel.tags, context.nondeterministic_dims, context.all_exprs)
+            live_cache.live_inputs(kernel)
             if bfs_config.live_input_pruning
             else frozenset(context.nondeterministic_dims)
         )
