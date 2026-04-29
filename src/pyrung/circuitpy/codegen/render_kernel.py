@@ -12,6 +12,7 @@ from typing import Any
 from pyrung.circuitpy.codegen._constants import (
     _DINT_MAX,
     _DINT_MIN,
+    _FAULT_ADDRESS_ERROR_TAG,
     _HELPER_ORDER,
     _INT_MAX,
     _INT_MIN,
@@ -362,13 +363,18 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
 
 def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
     lines: list[str] = []
+    fault_sym = ctx.symbol_if_referenced(_FAULT_ADDRESS_ERROR_TAG)
     for binding in sorted(
         (ctx.block_bindings[bid] for bid in ctx.used_indirect_blocks),
         key=lambda b: ctx.index_helper_name(b.block_id),
     ):
         helper_name = ctx.index_helper_name(binding.block_id)
         lines.append(f"def {helper_name}(addr):")
+        if fault_sym is not None:
+            lines.append(f"    global {fault_sym}")
         lines.append(f"    if addr < {binding.start} or addr > {binding.end}:")
+        if fault_sym is not None:
+            lines.append(f"        {fault_sym} = True")
         lines.append(
             f'        raise IndexError(f"Address {{addr}} out of range'
             f" for {binding.logical_name} ({binding.start}-{binding.end})"
@@ -376,6 +382,8 @@ def _render_indirect_helpers(ctx: CodegenContext) -> list[str]:
         )
         if binding.valid_addresses is not None:
             lines.append(f"    if addr not in {binding.valid_addresses!r}:")
+            if fault_sym is not None:
+                lines.append(f"        {fault_sym} = True")
             lines.append(
                 f'        raise IndexError(f"Address {{addr}} out of range'
                 f" for {binding.logical_name} ({binding.start}-{binding.end})"

@@ -287,6 +287,13 @@ def _compile_guarded_instruction(
 ) -> list[str]:
     sp = " " * indent
     lines: list[str] = []
+    if ctx.used_indirect_blocks:
+        enabled_body = [
+            "try:",
+            *[f"    {line}" for line in enabled_body],
+            "except IndexError:",
+            "    pass",
+        ]
     enabled_literal = _bool_literal(enabled_expr)
     if getattr(instr, "oneshot", False):
         key = f"_oneshot:{ctx.state_key_for(instr)}"
