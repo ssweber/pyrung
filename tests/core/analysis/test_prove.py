@@ -2235,25 +2235,21 @@ class TestIntractableHints:
     """Intractable results carry actionable hints for the user."""
 
     def test_pointer_tag_hint(self):
-        """Pointer tag (IndirectRef) gets a hint naming the block and range."""
+        """Pointer into a block > 1000 elements gets a hint naming the block."""
         from pyrung.core import Block, TagType, copy
 
-        blk = Block("Regs", TagType.INT, 1, 50)
+        blk = Block("Regs", TagType.INT, 1, 1500)
         idx = Int("Idx", external=True)
-        other = Int("Other", external=True)
         dest = Int("Out")
 
         with Program(strict=False) as logic:
-            with Rung(idx > other):
+            with Rung():
                 copy(blk[idx], dest)
 
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert any("pointer" in h and "Regs" in h for h in result.hints)
         assert any("Idx" in h for h in result.hints)
-        other_hints = [h for h in result.hints if "Other" in h]
-        assert other_hints
-        assert all("pointer" not in h for h in other_hints)
 
     def test_wide_range_hint(self):
         """Tag with min/max range > 1000 gets a 'too wide' hint."""
@@ -2896,3 +2892,127 @@ class TestInputBlockNondeterministic:
         states = reachable_states(logic, project=["Light"])
         assert not isinstance(states, Intractable)
         assert len(states) == 2
+
+
+class TestPointerDomainInference:
+    """Pointer tags into blocks get auto-bounded from block address range."""
+
+    def test_external_pointer_auto_bounded(self):
+        """External pointer with no annotation gets domain from block bounds."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == tuple(range(0, 11))
+
+    def test_explicit_choices_not_overridden(self):
+        """Pointer with explicit choices= keeps its annotated domain."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True, choices={1: "first", 5: "fifth"})
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == (1, 5)
+
+    def test_explicit_min_max_not_overridden(self):
+        """Pointer with explicit min=/max= keeps its annotated domain."""
+        blk = Block("DS", TagType.INT, 1, 50)
+        idx = Int("Idx", external=True, min=1, max=5)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == tuple(range(1, 6))
+
+    def test_literal_copy_domain_not_overridden(self):
+        """Pointer already inferred by literal copies keeps that tighter domain."""
+        blk = Block("DS", TagType.INT, 1, 50)
+        idx = Int("Idx")
+        dest = Int("Out")
+        sel = Bool("Sel", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(sel):
+                copy(1, idx)
+            with Rung(~sel):
+                copy(3, idx)
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nondeterministic, *_ = result
+        assert "Idx" in stateful
+        assert set(stateful["Idx"]) == {0, 1, 3}
+
+    def test_wide_block_still_intractable(self):
+        """Block with > 1000 addresses leaves the pointer intractable."""
+        blk = Block("Big", TagType.INT, 1, 2000)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "Idx" in result.tags
+
+    def test_internal_pointer_auto_bounded(self):
+        """Internal pointer written by calc gets domain from block bounds."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx")
+        dest = Int("Out")
+        step = Bool("Step", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(step):
+                calc(idx + 1, idx)
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, *_ = result
+        assert "Idx" in stateful
+        assert stateful["Idx"] == tuple(range(0, 11))
+
+    def test_unconditioned_pointer_not_silently_dropped(self):
+        """Pointer used only in instructions (no conditions) must still
+        surface as intractable — not be silently dropped because it has
+        no comparison atoms."""
+        blk = Block("DS", TagType.INT, 1, 2000)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+        flag = Bool("Flag", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(flag):
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "Idx" in result.tags
+        assert any("pointer" in h and "Idx" in h for h in result.hints)

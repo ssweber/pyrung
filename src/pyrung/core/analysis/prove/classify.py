@@ -693,6 +693,23 @@ def _classify_dimensions_from_graph(
     if discovered_domains is not None:
         known_domains.update(discovered_domains)
 
+    for ptr_name, (_block_name, start, end) in graph.pointer_tags.items():
+        if ptr_name in known_domains:
+            continue
+        tag = graph.tags.get(ptr_name)
+        if tag is None or tag.readonly:
+            continue
+        declared = _declared_domain(tag)
+        if declared is not None:
+            known_domains[ptr_name] = declared
+            continue
+        bound_size = end - start + 1
+        if bound_size > 1000:
+            continue
+        values = set(range(start, end + 1))
+        values.add(tag.default)
+        known_domains[ptr_name] = tuple(sorted(values))
+
     atom_idx = _build_atom_index(all_exprs)
 
     consumed_accs: set[str] = set()
@@ -825,6 +842,22 @@ def _classify_dimensions_from_graph(
             continue
         if domain:
             stateful[tag_name] = domain
+
+    for ptr_name in graph.pointer_tags:
+        if (
+            ptr_name in stateful
+            or ptr_name in nondeterministic
+            or ptr_name in combinational
+            or ptr_name in infeasible_tags
+        ):
+            continue
+        tag = graph.tags.get(ptr_name)
+        if tag is None or tag.readonly:
+            continue
+        is_written = ptr_name in graph.writers_of
+        if not tag.external and not is_written and not graph.is_physical_input(ptr_name):
+            continue
+        infeasible_tags.append(ptr_name)
 
     if infeasible_tags:
         total_dims = len(stateful) + len(nondeterministic) + len(infeasible_tags)
