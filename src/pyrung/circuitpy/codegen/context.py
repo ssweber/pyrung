@@ -121,6 +121,7 @@ class CodegenContext:
         ctx._runtime_state_keys = True
         ctx.collect_program_references()
         ctx.assign_symbols()
+        ctx.build_compact_block_maps()
         return ctx
 
     slot_bindings: list[SlotBinding] = field(default_factory=list)
@@ -155,6 +156,7 @@ class CodegenContext:
     modbus_client_specs: list[ModbusClientJobSpec] = field(default_factory=list)
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
+    compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -259,11 +261,13 @@ class CodegenContext:
 
             if isinstance(value, IndirectRef):
                 self._ensure_block_binding(value.block)
+                self.used_indirect_blocks.add(id(value.block))
                 walk_value(value.pointer)
                 return
 
             if isinstance(value, IndirectExprRef):
                 self._ensure_block_binding(value.block)
+                self.used_indirect_blocks.add(id(value.block))
                 walk_value(value.expr)
                 return
 
@@ -277,6 +281,7 @@ class CodegenContext:
 
             if isinstance(value, IndirectBlockRange):
                 self._ensure_block_binding(value.block)
+                self.used_indirect_blocks.add(id(value.block))
                 walk_value(value.start_expr)
                 walk_value(value.end_expr)
                 return
@@ -367,6 +372,25 @@ class CodegenContext:
     def globals_for_function(self, fn_name: str) -> list[str]:
         return sorted(self.function_globals.get(fn_name, set()))
 
+    def build_compact_block_maps(self) -> None:
+        """Build compact index mappings for blocks with only static access."""
+        self.compact_block_map = {}
+        for block_id in self.block_bindings:
+            if block_id in self.used_indirect_blocks:
+                continue
+            addrs = sorted(
+                addr
+                for _tag_name, (bid, addr) in self.tag_block_addresses.items()
+                if bid == block_id
+            )
+            self.compact_block_map[block_id] = {addr: i for i, addr in enumerate(addrs)}
+
+    def block_index(self, block_id: int, addr: int) -> int:
+        compact = self.compact_block_map.get(block_id)
+        if compact is not None:
+            return compact[addr]
+        return addr - self.block_bindings[block_id].start
+
     def symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
         if isinstance(tag, ImmediateRef):
             tag = tag.tag
@@ -377,9 +401,7 @@ class CodegenContext:
             symbol = self.block_symbols.get(block_id)
             if binding is None or symbol is None:
                 raise RuntimeError(f"Missing block binding for tag {tag.name!r}")
-            index = addr - binding.start
-            if index < 0 or index > (binding.end - binding.start):
-                raise RuntimeError(f"Tag address mapping out of range for {tag.name!r}")
+            index = self.block_index(block_id, addr)
             if self._current_function is not None:
                 self.mark_function_global(self._current_function, symbol)
             return f"{symbol}[{index}]"

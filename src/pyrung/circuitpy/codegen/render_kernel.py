@@ -56,14 +56,19 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         symbol = ctx.block_symbols[binding.block_id]
-        size = binding.end - binding.start + 1
-        tag_names: list[str] = []
-        for addr in range(binding.start, binding.end + 1):
-            tag = binding.block._get_tag(addr)
-            tag_names.append(tag.name)
+        compact = ctx.compact_block_map.get(binding.block_id)
+        if compact is not None:
+            referenced_addrs = sorted(compact)
+            tag_names = [binding.block._get_tag(addr).name for addr in referenced_addrs]
+        else:
+            tag_names = [
+                binding.block._get_tag(addr).name for addr in range(binding.start, binding.end + 1)
+            ]
+        if not tag_names:
+            continue
         specs[symbol] = BlockSpec(
             symbol=symbol,
-            size=size,
+            size=len(tag_names),
             default=_TYPE_DEFAULTS[binding.tag_type],
             tag_type=binding.tag_type,
             tag_names=tuple(tag_names),
@@ -404,8 +409,14 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
         ctx.block_bindings.values(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
+        compact = ctx.compact_block_map.get(binding.block_id)
+        if compact is not None:
+            size = len(compact)
+        else:
+            size = binding.end - binding.start + 1
+        if size == 0:
+            continue
         symbol = ctx.block_symbols[binding.block_id]
-        size = binding.end - binding.start + 1
         default = _TYPE_DEFAULTS[binding.tag_type]
         lines.append(f"{symbol} = [{default!r}] * {size}")
 
@@ -416,10 +427,19 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
 def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str]:
     all_symbols: set[str] = set()
     scalar_symbols = sorted(ctx.symbol_table[n] for n in ctx.scalar_tags)
-    block_symbols = sorted(ctx.block_symbols.values())
     all_symbols.update(scalar_symbols)
-    all_symbols.update(block_symbols)
     all_symbols.update({"_mem", "_prev"})
+
+    active_block_bindings = []
+    for binding in sorted(
+        ctx.block_bindings.values(),
+        key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
+    ):
+        compact = ctx.compact_block_map.get(binding.block_id)
+        if compact is not None and len(compact) == 0:
+            continue
+        active_block_bindings.append(binding)
+        all_symbols.add(ctx.block_symbols[binding.block_id])
 
     lines: list[str] = ["def _kernel_step(tags, blocks, memory, prev, dt):"]
     globals_line = _global_line(sorted(all_symbols), indent=4)
@@ -430,10 +450,7 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
         symbol = ctx.symbol_table[tag_name]
         lines.append(f"    {symbol} = tags[{tag_name!r}]")
 
-    for binding in sorted(
-        ctx.block_bindings.values(),
-        key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
-    ):
+    for binding in active_block_bindings:
         symbol = ctx.block_symbols[binding.block_id]
         lines.append(f"    {symbol} = blocks[{symbol!r}]")
 

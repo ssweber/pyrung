@@ -56,7 +56,7 @@ def _snapshot_tag_symbol(
             binding = ctx.block_bindings.get(block_id)
             if binding is None:
                 raise RuntimeError(f"Missing block binding for condition tag {tag.name!r}")
-            return f"{block_symbol}[{addr - binding.start}]"
+            return f"{block_symbol}[{ctx.block_index(block_id, addr)}]"
 
     if scalar_snapshots is not None:
         snapshot_symbol = scalar_snapshots.get(tag.name)
@@ -202,7 +202,7 @@ def _copy_converter_target_info(
         symbol = ctx.symbol_for_block(binding.block)
         start_var = f"_{stem}_start_idx"
         return (
-            [f"{start_var} = {addr - binding.start}"],
+            [f"{start_var} = {ctx.block_index(block_id, addr)}"],
             "block",
             symbol,
             start_var,
@@ -382,7 +382,7 @@ def _compile_range_setup(
         indices_var = f"_{name}_indices"
         addrs_var = f"_{name}_addrs"
         addresses = [int(addr) for addr in range_value.addresses]
-        indices = [addr - binding.start for addr in addresses]
+        indices = [ctx.block_index(binding.block_id, addr) for addr in addresses]
         indices_expr = _sequence_expr(indices)
         lines = [f"{indices_var} = {indices_expr}"]
         if include_addresses:
@@ -535,7 +535,7 @@ def _compile_target_write_lines(
         symbol = ctx.symbol_for_block(target.block)
         lines: list[str] = []
         for addr in target.addresses:
-            index = addr - binding.start
+            index = ctx.block_index(binding.block_id, addr)
             lines.append(f"{sp}{symbol}[{index}] = {value_expr}")
         return lines if lines else [f"{sp}pass"]
 
