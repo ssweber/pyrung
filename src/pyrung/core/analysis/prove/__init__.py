@@ -379,18 +379,26 @@ def _bfs_explore(
     queue.append((_snapshot_kernel(kernel), 0, initial_key))
 
     _progress_last_time = time.monotonic()
-    _progress_last_visited = 1
+    _progress_next_time = _progress_last_time + 5.0
+    _progress_step: Callable[[], None] | None = (
+        getattr(progress, "step", None) if progress is not None else None
+    )
+    _progress_set_depth: Callable[[int], None] | None = (
+        getattr(progress, "set_depth", None) if progress is not None else None
+    )
 
     while queue:
         if progress is not None:
             now = time.monotonic()
-            v = len(visited)
-            if now - _progress_last_time >= 5.0 or v - _progress_last_visited >= 10_000:
-                progress(v, len(queue), now - _progress_last_time)
+            if now >= _progress_next_time:
+                dt = now - _progress_last_time
+                progress(len(visited), len(queue), dt)
                 _progress_last_time = now
-                _progress_last_visited = v
+                _progress_next_time = now + 5.0
 
         snap, depth, parent_key = queue.popleft()
+        if _progress_set_depth is not None:
+            _progress_set_depth(depth)
         if depth >= max_depth:
             continue
 
@@ -413,6 +421,15 @@ def _bfs_explore(
             set() if project is not None else None
         )
         for combo in combos:
+            if _progress_step is not None:
+                _progress_step()
+            if progress is not None:
+                now = time.monotonic()
+                if now >= _progress_next_time:
+                    dt = now - _progress_last_time
+                    progress(len(visited), len(queue), dt)
+                    _progress_last_time = now
+                    _progress_next_time = now + 5.0
             _restore_kernel(kernel, snap)
             for i, name in enumerate(live_sorted):
                 kernel.tags[name] = combo[i]
@@ -946,27 +963,9 @@ class _StderrProgressReporter:
             parts = [f"{kind}: {count}" for kind, count in sorted(absorbed.items())]
             self.info(f"  absorbed: {', '.join(parts)}", label=label)
 
-    def bfs_callback(self, label: str = "") -> Callable[[int, int, float], None]:
-        bfs_start = time.monotonic()
-        prev_queue = [0]
+    def bfs_callback(self, label: str = "") -> _BFSProgress:
         self.info("BFS started ...", label=label)
-
-        def _emit(visited: int, queue_size: int, _dt: float) -> None:
-            elapsed = time.monotonic() - bfs_start
-            rate = visited / elapsed if elapsed > 0 else 0
-            if queue_size > prev_queue[0]:
-                arrow = "↑"
-            elif queue_size < prev_queue[0]:
-                arrow = "↓"
-            else:
-                arrow = "="
-            prev_queue[0] = queue_size
-            self.info(
-                f"visited={visited:,} | queue={queue_size:,} ({arrow}) | {rate:,.0f} states/sec",
-                label=label,
-            )
-
-        return _emit
+        return _BFSProgress(self, label)
 
     def combine_callback(self) -> Callable[[int, int, float], None]:
         def _emit(merged: int, total: int, dt: float) -> None:
@@ -974,6 +973,53 @@ class _StderrProgressReporter:
             self.info(f"combining clusters | merged={merged:,}/{total:,} | {rate:,.0f} states/sec")
 
         return _emit
+
+
+class _BFSProgress:
+    __slots__ = (
+        "_reporter",
+        "_label",
+        "_prev_queue",
+        "_depth",
+        "_prev_visited",
+        "_prev_steps",
+        "_steps",
+    )
+
+    def __init__(self, reporter: _StderrProgressReporter, label: str) -> None:
+        self._reporter = reporter
+        self._label = label
+        self._prev_queue = 0
+        self._prev_visited = 0
+        self._prev_steps = 0
+        self._steps = 0
+        self._depth = 0
+
+    def set_depth(self, depth: int) -> None:
+        self._depth = depth
+
+    def step(self) -> None:
+        self._steps += 1
+
+    def __call__(self, visited: int, queue_size: int, dt: float) -> None:
+        if queue_size > self._prev_queue:
+            arrow = "↑"
+        elif queue_size < self._prev_queue:
+            arrow = "↓"
+        else:
+            arrow = "="
+        self._prev_queue = queue_size
+        new_visited = visited - self._prev_visited
+        interval_steps = self._steps - self._prev_steps
+        self._prev_visited = visited
+        self._prev_steps = self._steps
+        disc_rate = new_visited / dt if dt > 0 else 0
+        step_rate = interval_steps / dt if dt > 0 else 0
+        self._reporter.info(
+            f"depth={self._depth} | visited={visited:,} | queue={queue_size:,} ({arrow})"
+            f" | {disc_rate:,.0f} new/s | {step_rate:,.0f} steps/s",
+            label=self._label,
+        )
 
 
 def _stderr_progress(
