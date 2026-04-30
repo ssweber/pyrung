@@ -18,6 +18,10 @@
 - **`TagMap` stamps `lock=True` on output-mapped tags** — when a `TagMap` maps a semantic tag to an output bank (`y`, `yd`), the tag is automatically marked `lock=True` at construction time. Tags with `lock=True` are included in the default lock file projection, so physical outputs are tracked automatically.
 - **`lock` tag flag** — new metadata flag on tags, blocks, UDT fields, and named arrays. Tags with `lock=True` are included in the default `pyrung lock` projection. Unlike the semantic flags (`readonly`, `external`, `final`), `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Click nickname CSV round-trips as `[lock]`.
 
+### Fixes
+
+- **Build-time validation for undefined string `call()` targets** — `Program` now validates named subroutine calls when program construction finishes, so `call("missing")` fails immediately with a `KeyError` instead of compiling/importing cleanly and only crashing later at scan time. Safe forward references within the same `Program` body still work, and `call(subroutine_func)` keeps its lazy decorator registration behavior.
+
 ## v0.7.0 (2026-04-26)
 
 ### Breaking changes
