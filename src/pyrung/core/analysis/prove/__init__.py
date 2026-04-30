@@ -140,7 +140,6 @@ from .passes import (
     _PassContext,
     _run_pre_bfs_pipeline,
 )
-from .slicer import _slice_program_for_reachability
 
 
 def _build_explore_context(
@@ -1069,17 +1068,18 @@ def _build_reachable_context(
     seed_tags: list[str],
     input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> _ExploreContext | Intractable:
-    """Build a reachable-states context using a whole-rung sliced program."""
-    sliced_program = _slice_program_for_reachability(program, seed_tags)
+    """Build a reachable-states context on the original program.
+
+    ``seed_tags`` is retained for internal call compatibility, but we no longer
+    whole-rung slice the program before running the pre-BFS optimization passes.
+    """
+    del seed_tags
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled_kernel = compile_kernel(sliced_program)
+    compiled_kernel = compile_kernel(program)
     return _build_explore_context(
-        sliced_program,
-        # The whole-rung slice is already our cone of interest. Re-applying
-        # scope pruning here can drop call-gate and fault-trigger inputs that
-        # the reduced program still depends on.
-        scope=None,
+        program,
+        scope=scope,
         project=project,
         compiled=compiled_kernel,
         input_groups=input_groups,

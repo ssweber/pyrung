@@ -1629,22 +1629,36 @@ class TestReachableStateSlicing:
             }
         )
 
-    def test_slice_noop_returns_original_program_when_everything_is_needed(self):
-        """The slicer falls back to the original program for full-program slices."""
-        from pyrung.core.analysis.prove.slicer import _slice_program_for_reachability
-
-        a = Bool("A", external=True)
-        x = Bool("X")
-        y = Bool("Y")
+    def test_reachable_context_keeps_init_backed_indirect_lookup_writers(self):
+        """Reachable-state contexts retain init-backed lookup writers for elision."""
+        init_done = Bool("InitDone")
+        selector = Int("Selector", external=True, choices={1: "A", 2: "B"})
+        idx = Int("Idx")
+        tmp = Int("Tmp")
+        outv = Int("OutV")
+        table = Block("Table", TagType.INT, 1, 2)
 
         with Program(strict=False) as logic:
-            with Rung(a):
-                out(x)
-            with Rung(x):
-                out(y)
+            with Rung(~init_done):
+                copy(10, table[1])
+                copy(20, table[2])
+                copy(1, init_done)
+            with Rung():
+                calc(selector, idx)
+            with Rung():
+                copy(table[idx], tmp)
+            with Rung():
+                copy(tmp, outv)
 
-        sliced = _slice_program_for_reachability(logic, ["Y"])
-        assert sliced is logic
+        context = prove_module._build_reachable_context(
+            logic,
+            scope=["OutV"],
+            project=("OutV",),
+            seed_tags=["OutV"],
+        )
+        assert not isinstance(context, Intractable)
+        assert "Idx" not in context.stateful_dims
+        assert "Tmp" not in context.stateful_dims
 
 
 class TestConsumedAccumulator:

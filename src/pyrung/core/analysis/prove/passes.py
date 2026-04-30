@@ -32,6 +32,7 @@ from .classify import (
     _pilot_sweep_domains,
 )
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
+from .elision import _elide_scan_local_stateful_dims
 from .expr import _collect_atoms_for_tag
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from .kernel import _collect_edge_tag_exprs, _compile_inline_step
@@ -352,6 +353,17 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.intractable = None
 
 
+def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
+    assert ctx.graph is not None
+    assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
+    ctx.stateful_dims = _elide_scan_local_stateful_dims(
+        ctx.program,
+        ctx.graph,
+        ctx.stateful_dims,
+        ctx.nondeterministic_dims,
+    )
+
+
 def _pass_compile_kernel(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
@@ -486,6 +498,11 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "pilot_sweep",
         "Discover finite domains for unbounded tags via kernel execution",
         _pass_pilot_sweep,
+    ),
+    _PreBFSPass(
+        "elide_scan_local_state",
+        "Elide scan-local state that is provably irrelevant across scans",
+        _pass_elide_scan_local_state,
     ),
     _PreBFSPass(
         "compile_kernel",

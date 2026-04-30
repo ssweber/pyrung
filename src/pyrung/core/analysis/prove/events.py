@@ -65,6 +65,107 @@ class _HiddenEventOutcome:
     additional_scans: int
 
 
+class _HiddenEventCache:
+    """Memoize hidden-event outcomes for repeated pending plateaus."""
+
+    __slots__ = (
+        "_jump_cache",
+        "_settle_cache",
+        "_stateful_names",
+        "jump_hits",
+        "jump_misses",
+        "settle_hits",
+        "settle_misses",
+    )
+
+    def __init__(self, context: _ExploreContext) -> None:
+        self._jump_cache: dict[tuple[Any, ...], tuple[_HiddenEventOutcome, ...]] = {}
+        self._settle_cache: dict[tuple[Any, ...], tuple[_HiddenEventOutcome, ...]] = {}
+        self._stateful_names = frozenset(context.stateful_names)
+        self.jump_hits = 0
+        self.jump_misses = 0
+        self.settle_hits = 0
+        self.settle_misses = 0
+
+    def plateau_key(
+        self,
+        context: _ExploreContext,
+        before_snap: _KernelSnapshot,
+        kernel: ReplayKernel,
+        key: tuple[Any, ...],
+    ) -> tuple[Any, ...]:
+        """Build a conservative signature for one hidden pending plateau.
+
+        The visible BFS identity lives in *key*.  The extra payload captures
+        the hidden progress state that drives event scheduling:
+
+        - the current/previous hidden accumulator values (plus timer fractions)
+          for every pending Done/threshold source
+        - the current value of any hidden exact-threshold tag
+
+        This keeps memoization sound for repeated ``PENDING`` plateaus that
+        share a visited-state key but differ in hidden distance-to-event.
+        """
+
+        progress_sources: list[tuple[Any, ...]] = []
+        hidden_thresholds: list[tuple[str, Any]] = []
+        seen_sources: set[tuple[str, str]] = set()
+        seen_thresholds: set[str] = set()
+
+        for spec in context.done_event_specs:
+            if key[spec.state_index] != PENDING:
+                continue
+            source = (spec.kind, spec.acc_name)
+            if source in seen_sources:
+                continue
+            seen_sources.add(source)
+            progress_sources.append(
+                _hidden_progress_signature(spec.kind, spec.acc_name, before_snap, kernel)
+            )
+
+        vector_offset = len(context.stateful_names)
+        for spec in context.threshold_event_specs:
+            vector = key[vector_offset + spec.vector_index]
+            if vector[spec.atom_index]:
+                continue
+            source = (spec.kind, spec.acc_name)
+            if source not in seen_sources:
+                seen_sources.add(source)
+                progress_sources.append(
+                    _hidden_progress_signature(spec.kind, spec.acc_name, before_snap, kernel)
+                )
+            if (
+                spec.mode == _THRESHOLD_MODE_EXACT
+                and isinstance(spec.threshold, str)
+                and spec.threshold not in self._stateful_names
+                and spec.threshold not in seen_thresholds
+            ):
+                seen_thresholds.add(spec.threshold)
+                hidden_thresholds.append((spec.threshold, kernel.tags.get(spec.threshold)))
+
+        return (
+            key,
+            tuple(progress_sources),
+            tuple(hidden_thresholds),
+        )
+
+
+def _hidden_progress_signature(
+    kind: str,
+    acc_name: str,
+    before_snap: _KernelSnapshot,
+    kernel: ReplayKernel,
+) -> tuple[Any, ...]:
+    """Capture the hidden progress data that determines jump scheduling."""
+    before_acc = int(before_snap.tags.get(acc_name, 0) or 0)
+    after_acc = int(kernel.tags.get(acc_name, 0) or 0)
+    if kind in {_DONE_KIND_ON_DELAY, _DONE_KIND_OFF_DELAY}:
+        before_frac = float(before_snap.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        after_frac = float(kernel.memory.get(f"_frac:{acc_name}", 0.0) or 0.0)
+        return (kind, acc_name, before_acc, before_frac, after_acc, after_frac)
+    return (kind, acc_name, before_acc, after_acc)
+
+
 def _timer_total(kernel: ReplayKernel, acc_name: str) -> float:
     """Return timer progress as accumulator plus fractional remainder."""
     frac_key = f"_frac:{acc_name}"
@@ -367,9 +468,21 @@ def _settle_pending(
     kernel: ReplayKernel,
     before_snap: _KernelSnapshot,
     edge_comp: _EdgeCompressor,
+    cache: _HiddenEventCache | None = None,
 ) -> list[_HiddenEventOutcome]:
     """Resolve pending exact events and emit abstract threshold branches."""
     key = edge_comp.state_key(kernel)
+    cache_key = (
+        cache.plateau_key(context, before_snap, kernel, key) if cache is not None else None
+    )
+    active_cache = cache if cache_key is not None else None
+    if active_cache is not None and cache_key is not None:
+        cached = active_cache._settle_cache.get(cache_key)
+        if cached is not None:
+            active_cache.settle_hits += 1
+            return list(cached)
+        active_cache.settle_misses += 1
+
     outcomes: list[_HiddenEventOutcome] = []
     seen_keys: set[tuple[Any, ...]] = set()
 
@@ -384,6 +497,8 @@ def _settle_pending(
         seen_keys.add(outcome.key)
         outcomes.append(outcome)
 
+    if active_cache is not None and cache_key is not None:
+        active_cache._settle_cache[cache_key] = tuple(outcomes)
     return outcomes
 
 
@@ -394,10 +509,18 @@ def _maybe_jump_hidden_event(
     visited: set[tuple[Any, ...]],
     new_key: tuple[Any, ...],
     edge_comp: _EdgeCompressor,
+    cache: _HiddenEventCache | None = None,
 ) -> list[_HiddenEventOutcome]:
     """Jump from a revisited hidden pending plateau to future hidden-event states."""
     if not (context.done_event_specs or context.threshold_event_specs) or new_key not in visited:
         return []
+
+    cache_key = cache.plateau_key(context, snap, kernel, new_key) if cache is not None else None
+    active_cache = cache if cache_key is not None else None
+    if active_cache is not None and cache_key is not None:
+        cached = active_cache._jump_cache.get(cache_key)
+        if cached is not None:
+            return list(cached)
 
     base_snap = _snapshot_kernel(kernel)
     outcomes: list[_HiddenEventOutcome] = []
@@ -418,4 +541,6 @@ def _maybe_jump_hidden_event(
         outcomes.append(outcome)
 
     _restore_kernel(kernel, base_snap)
+    if active_cache is not None and cache_key is not None:
+        active_cache._jump_cache[cache_key] = tuple(outcomes)
     return outcomes

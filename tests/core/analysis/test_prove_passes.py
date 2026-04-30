@@ -13,14 +13,20 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
+    call,
     copy,
+    calc,
     fill,
     latch,
     on_delay,
     out,
+    return_early,
     rise,
+    subroutine,
 )
+from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
+from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.kernel import (
     _EdgeCompressor,
@@ -204,6 +210,7 @@ class TestPassManifest:
             "build_graph",
             "classify_dimensions",
             "pilot_sweep",
+            "elide_scan_local_state",
             "compile_kernel",
             "collect_done_acc_pairs",
             "find_redundant_absorptions",
@@ -438,3 +445,112 @@ class TestIndividualPasses:
 
         assert first_key == second_key
         assert first_jump_key != second_jump_key
+
+
+def _elide_stateful_dims(
+    program: Program,
+    stateful_dims: dict[str, tuple[object, ...]],
+    nondeterministic_dims: dict[str, tuple[object, ...]],
+) -> dict[str, tuple[object, ...]]:
+    return _elide_scan_local_stateful_dims(
+        program,
+        build_program_graph(program),
+        stateful_dims,
+        nondeterministic_dims,
+    )
+
+
+class TestScanLocalStateElision:
+    def test_elides_indirect_pointer_scratch_from_init_backed_table(self) -> None:
+        init_done = Bool("InitDone")
+        selector = Int("Selector", external=True, choices={1: "A", 2: "B"})
+        idx = Int("Idx")
+        tmp = Int("Tmp")
+        table = Block("Table", TagType.INT, 1, 2)
+
+        with Program(strict=False) as logic:
+            with Rung(~init_done):
+                copy(10, table[1])
+                copy(20, table[2])
+                copy(1, init_done)
+            with Rung():
+                calc(selector, idx)
+            with Rung():
+                copy(table[idx], tmp)
+
+        reduced = _elide_stateful_dims(
+            logic,
+            {"Idx": (1, 2), "Tmp": (10, 20)},
+            {"Selector": (1, 2)},
+        )
+
+        assert reduced == {}
+
+    def test_elides_reset_before_self_read_counter(self) -> None:
+        idx = Int("Idx")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, idx)
+            with Rung():
+                calc(idx + 1, idx)
+            with Rung(idx == 1):
+                out(flag)
+
+        reduced = _elide_stateful_dims(logic, {"Idx": (0, 1, 2)}, {})
+
+        assert reduced == {}
+
+    def test_elides_canonical_return_early_pulse_flag(self) -> None:
+        req = Bool("Req", external=True)
+        pulse = Int("Pulse", choices={0: "No", 1: "Yes"})
+
+        @subroutine("worker", strict=False)
+        def worker():
+            with Rung(req):
+                copy(1, pulse)
+            with Rung(pulse == 1):
+                copy(0, pulse)
+                return_early()
+            with Rung():
+                copy(0, pulse)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                call(worker)
+
+        reduced = _elide_stateful_dims(logic, {"Pulse": (0, 1)}, {"Req": (False, True)})
+
+        assert reduced == {}
+
+    def test_keeps_prewrite_input_memory_when_next_scan_entry_matters(self) -> None:
+        inp = Bool("Inp", external=True)
+        tmp = Int("Tmp", choices={0: "No", 1: "Yes"})
+        stored = Int("Stored", choices={0: "No", 1: "Yes"})
+
+        with Program(strict=False) as logic:
+            with Rung(tmp == 1):
+                copy(1, stored)
+            with Rung():
+                copy(inp, tmp)
+
+        reduced = _elide_stateful_dims(
+            logic,
+            {"Tmp": (0, 1), "Stored": (0, 1)},
+            {"Inp": (False, True)},
+        )
+
+        assert reduced == {"Tmp": (0, 1)}
+
+    def test_packml_bench_drops_pointer_scratch_tags_from_state_key(self) -> None:
+        from examples.packml_bench import logic as packml_logic
+
+        context = _build_explore_context(packml_logic, project=("StateCurrent",))
+        assert not isinstance(context, Intractable)
+
+        for name in ("CmdValidIdx", "ModeConfigIdx", "StateMaskIdx", "StateJumpIdx"):
+            assert name not in context.stateful_dims
+
+        for name in ("StateCurrent", "StateRequested", "UnitModeCurrent"):
+            assert name in context.stateful_dims
