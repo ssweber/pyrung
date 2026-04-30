@@ -33,6 +33,7 @@ from .classify import (
 )
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import _collect_atoms_for_tag
+from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from .kernel import _collect_edge_tag_exprs, _compile_inline_step
 
 if TYPE_CHECKING:
@@ -154,6 +155,13 @@ class _PassContext:
             self.nondeterministic_dims,
         )
         block_specs = tuple(block_specs_dict.values())
+        exclusive_input_groups = _detect_exclusive_input_groups(
+            self.program,
+            self.graph,
+            self.nondeterministic_dims,
+            project=self.project,
+            extra_exprs=self.extra_exprs,
+        )
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -172,6 +180,10 @@ class _PassContext:
             step_fn=_compile_inline_step(self.compiled, block_specs),
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
+            exclusive_input_groups=exclusive_input_groups,
+            exclusive_input_group_by_member=_exclusive_input_group_membership(
+                exclusive_input_groups
+            ),
         )
 
 
@@ -188,6 +200,7 @@ class _BFSConfig:
     """Enable/disable flags for BFS-interleaved optimizations."""
 
     live_input_pruning: bool = True
+    exclusive_input_grouping: bool = True
     edge_compression: bool = True
     hidden_event_jumping: bool = True
     pending_settlement: bool = True
@@ -197,6 +210,8 @@ class _BFSConfig:
         names: list[str] = []
         if self.live_input_pruning:
             names.append("live_input_pruning")
+        if self.exclusive_input_grouping:
+            names.append("exclusive_input_grouping")
         if self.edge_compression:
             names.append("edge_compression")
         if self.hidden_event_jumping:

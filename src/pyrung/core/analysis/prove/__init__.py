@@ -24,11 +24,13 @@ from pyrung.core.kernel import BlockSpec, CompiledKernel, ReplayKernel
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+    from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
 from .expr import _live_inputs as _live_inputs
 from .expr import _partial_eval as _partial_eval
 from .expr import _referenced_tags
+from .inputs import _iter_input_assignments
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,8 @@ class _ExploreContext:
     step_fn: Callable[..., None] | None = None
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
+    exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
+    exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
 
 
 from .absorb import _ThresholdVectorSpec
@@ -408,19 +412,18 @@ def _bfs_explore(
             if bfs_config.live_input_pruning
             else frozenset(context.nondeterministic_dims)
         )
-        if live:
-            live_sorted = sorted(live)
-            domains = [context.nondeterministic_dims[n] for n in live_sorted]
-            combos: Any = itertools.product(*domains)
-        else:
-            live_sorted = []
-            combos = [()]
+        assignments = _iter_input_assignments(
+            live,
+            context.nondeterministic_dims,
+            context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
+            context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
+        )
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
             set() if project is not None else None
         )
-        for combo in combos:
+        for input_assignment in assignments:
             if _progress_step is not None:
                 _progress_step()
             if progress is not None:
@@ -431,8 +434,8 @@ def _bfs_explore(
                     _progress_last_time = now
                     _progress_next_time = now + 5.0
             _restore_kernel(kernel, snap)
-            for i, name in enumerate(live_sorted):
-                kernel.tags[name] = combo[i]
+            for name, value in input_assignment:
+                kernel.tags[name] = value
 
             _step_kernel(context, kernel)
             new_key = _state_key(kernel)
@@ -506,7 +509,7 @@ def _bfs_explore(
             if alt_outcomes is not None:
                 # Slow path: process alternate outcomes from hidden events.
                 # Build input_dict only here (needed for traces / parent_map).
-                input_dict: dict[str, Any] = dict(zip(live_sorted, combo, strict=True))
+                input_dict: dict[str, Any] = dict(input_assignment)
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
                     if branch_key in seen_branch_keys:
@@ -555,7 +558,7 @@ def _bfs_explore(
                 # Fast path: single base outcome — no snapshot/restore overhead.
                 # The kernel is already in the post-step state.
                 if predicates is not None:
-                    input_dict = dict(zip(live_sorted, combo, strict=True))
+                    input_dict = dict(input_assignment)
                     _record_failures(
                         state=kernel.tags,
                         p_key=parent_key,
@@ -586,7 +589,7 @@ def _bfs_explore(
                             return [r if r is not None else intractable for r in results]
                         return intractable
                     if parent_map is not None:
-                        input_dict = dict(zip(live_sorted, combo, strict=True))
+                        input_dict = dict(input_assignment)
                         parent_map[new_key] = (parent_key, input_dict, 1)
                     queue.append((_snapshot_kernel(kernel), depth + 1, new_key))
 

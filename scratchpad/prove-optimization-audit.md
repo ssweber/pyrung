@@ -1,50 +1,71 @@
-Profiled `pyrung lock main --profile` on the user program.
+Profiled `pyrung lock examples.packml_bench --profile bench.prof` on the PackML benchmark.
 
-## Profile history
+## Current picture
 
-| Run | Total | BFS steps | Calls | Notes |
-|-----|-------|-----------|-------|-------|
+| Run | Total | Step attempts | Calls | Notes |
+|-----|-------|---------------|-------|-------|
 | Baseline | 253s | 73k | 424M | Pre-optimization |
 | Post-d9bb478 | 682s | 155k | 1.6B | Longer run (inline block sync + pre-index atoms) |
-| Post-TagBackedArray | — | — | — | Pending measurement |
+| Post-TagBackedArray / PackML bench | 113s | 476,837 | 258M | Current `make bench` profile |
 
-## Investigations
+The new benchmark changes the bottleneck shape. The dominant issue is no longer block sync or pre-BFS setup; it is **input branching explosion inside `_bfs_explore`**.
 
-A. **Shrink the BFS state basis.**
-Use def-use / feedback analysis to identify tags whose scan-entry value is dead — recomputed every scan before any read. Drop them from the visited-set key. This reduces the number of distinct states (and therefore BFS steps), which multiplicatively reduces every per-step cost below.
+## New finding: input combo explosion
 
-B. **Shrink snapshots to match the reduced basis.**
-Tags dropped from the state key can also be dropped from `_snapshot_kernel` / `_restore_kernel` dict copies. One analysis pass yields both wins: fewer steps (A) and cheaper per-step snapshots (B). Currently 46s for snapshot/restore across 155k steps (12.6s snapshot + 17s update + 15s clear).
+- Cluster 1 starts with **18 live Bool inputs**, so the root BFS node enumerates `2^18 = 262,144` input combinations.
+- That root expansion produced only **1,008** direct new states, plus **96** additional hidden-event jump states, for **1,105** total visited states.
+- **261,136** root combinations were immediate revisits.
+- Every sampled depth-1 child still had the same **18 live inputs**, so the same `2^18` branching repeats deeper in the search.
+- This explains the bench output: `steps/s` stays healthy while `new/s` repeatedly falls to zero.
 
-## Hot spots (ranked by profile share, post-d9bb478)
+Manual specialization experiment on the root node:
 
-1. **Block sync load/flush — 450s (66%).** Done → TagBackedArray.
-The inline step (`_compile_inline_step`) synced 7,664 block tags per BFS step. Only 309 positions are accessed statically by the kernel; big blocks (DS: 4,500 tags, C: 2,000) have dynamic indexing so sparse-sync isn't viable. Replaced block `list` arrays with `_TagBackedArray` proxies that read/write `kernel.tags` directly. Load/flush eliminated; kernel sees the same `__getitem__`/`__setitem__` interface. ~441 block accesses per step via proxy vs ~15,328 dict.get+set per step for sync.
+- Collapse the 10 command bits to `{none, exactly one command}`
+- Collapse the 3 mode bits to `{none, exactly one mode}`
+- Leave the other 5 Bool inputs independent
 
-2. Pre-index atoms by tag name in domain classification. **~4s.** Done (d9bb478).
-`_build_atom_index()` in `prove/expr.py`. Down from 55s.
+Result:
 
-3. **State keys + threshold vectors — 77s (11%).**
-`_extract_state_key` (35s, 155k calls) + `_threshold_vector_key` (42s, 311k calls). `_threshold_crossed` called 20M times. Consider dense int encoding, caching threshold vectors across steps with same stateful prefix, or bitpacking boolean threshold results.
+- Root branching drops from **262,144** combinations to **1,408**
+- Root runtime drops from about **18.9s** to about **0.10s**
+- The specialized run still reaches **1,041 / 1,105** states from that first expansion, so most of the current work is clearly redundant
 
-4. **Hidden event jumping — 81s (12%).**
-`_maybe_jump_hidden_event` → `_resolve_nearest_exact_hidden_event` + `_abstract_threshold_outcomes`. `_scans_until_threshold_event` 8.6M calls (32s), `_progress_delta_and_current` 8.7M calls (16.6s). Caching across repeated visits to the same plateau could help.
+## Current hotspots (post-TagBackedArray)
 
-5. **Snapshot / restore — 46s (7%).**
-`_snapshot_kernel` (12.6s, 311k) + `_restore_kernel` dict.clear (15s, 1.9M) + dict.update (17s, 1.9M). See Investigation B.
+These are all downstream consequences of the branching explosion above:
 
-6. Compiled kernel step — 31s (5%). Healthy; sub-functions: MaterialInterlock (7s), PLCDateTime (4s), Validation (3s).
+1. **Kernel step + inline wrapper — ~53s.**
+`_step_kernel` / `<block_sync>._step` are no longer copying huge blocks blindly, but we still call them **476,837** times.
 
-## Previous items (re-assessed)
+2. **State key construction — ~34s.**
+`state_key()` / `_extract_state_key()` / `_threshold_vector_key()` are expensive largely because we build them for hundreds of thousands of duplicate successors.
 
-7. Scope-sliced kernel compilation — Done. Kernel step is 31s (5%).
+3. **Hidden-event jumping — ~20s.**
+`_maybe_jump_hidden_event()` is hot because duplicate pending plateaus keep revisiting the same jump logic. It still matters, but it is now clearly a secondary multiplier on top of the input explosion.
 
-8. Shrink the state basis — See Investigation A.
+4. **Edge liveness / threshold helpers — ~19s + ~14s.**
+Useful to tune, but again they are paying per attempted successor, not per newly discovered state.
 
-9. Input-combo specialization — Not hot in this profile.
+## Updated priorities
 
-10. Per-parent memoization — Not hot in this profile.
+1. **Input-group specialization.**
+Detect one-hot encoder families of external Bool tags and enumerate canonical choices instead of the full Cartesian product. This is now the highest-value fix for `make bench`.
 
-11. Bool-only bitslice backend — Not applicable (program has timers/integers).
+2. **Hidden-event jump memoization.**
+Cache jump outcomes for repeated pending plateaus so `_maybe_jump_hidden_event()` does not recompute the same exact/abstract threshold successors over and over.
 
-12. Projection-first storage — Not hot in this profile.
+3. **Shrink the BFS state basis.**
+Still valuable. Def-use / feedback analysis to identify scan-entry values that are dead before any read. Fewer distinct states multiplies every other win.
+
+4. **Shrink snapshots to match the reduced basis.**
+If a tag drops out of the state key, it can also drop out of `_snapshot_kernel` / `_restore_kernel`.
+
+5. **Dense state-key / threshold encoding.**
+Still worth doing after the branching problem is under control.
+
+## No longer current
+
+- **Block sync load/flush** is no longer the main story here. Tag-backed arrays fixed the old 66% wrapper cost.
+- **Pre-index atoms by tag name** is already done and not worth more attention right now.
+- **“Input-combo specialization — not hot in this profile”** is obsolete for the current PackML benchmark.
+- **Projection-first storage** and **bool-only bitslice backend** do not match the present bottleneck profile.

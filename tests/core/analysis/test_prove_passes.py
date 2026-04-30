@@ -20,6 +20,7 @@ from pyrung.core import (
     rise,
 )
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
+from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
@@ -123,6 +124,50 @@ def _edge_masked_rise_program() -> Program:
     return logic
 
 
+def _exclusive_input_encoder_program() -> Program:
+    cmd_a = Bool("CmdA", external=True)
+    cmd_b = Bool("CmdB", external=True)
+    cmd_c = Bool("CmdC", external=True)
+    cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B", 3: "C"})
+    flag = Bool("Flag")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(0, cmd)
+        with Rung(cmd_a):
+            copy(1, cmd)
+        with Rung(cmd_b):
+            copy(2, cmd)
+        with Rung(cmd_c):
+            copy(3, cmd)
+        with Rung(cmd == 1):
+            out(flag)
+
+    return logic
+
+
+def _nonexclusive_input_program() -> Program:
+    cmd_a = Bool("CmdA", external=True)
+    cmd_b = Bool("CmdB", external=True)
+    cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B"})
+    mirror = Bool("Mirror")
+    flag = Bool("Flag")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(0, cmd)
+        with Rung(cmd_a):
+            copy(1, cmd)
+        with Rung(cmd_b):
+            copy(2, cmd)
+        with Rung(cmd_a):
+            out(mirror)
+        with Rung(cmd == 1):
+            out(flag)
+
+    return logic
+
+
 class TestPassManifest:
     def test_default_pre_bfs_passes_manifest(self) -> None:
         assert [p.name for p in _DEFAULT_PRE_BFS_PASSES] == [
@@ -141,6 +186,7 @@ class TestPassManifest:
     def test_bfs_config_manifest(self) -> None:
         assert _BFSConfig().active_optimizations == (
             "live_input_pruning",
+            "exclusive_input_grouping",
             "edge_compression",
             "hidden_event_jumping",
             "pending_settlement",
@@ -237,3 +283,46 @@ class TestIndividualPasses:
         assert ctx.graph is not None
         assert ctx.all_exprs is not None
         assert ctx.all_exprs
+
+    def test_detects_exclusive_input_encoder_groups(self) -> None:
+        context = _build_explore_context(
+            _exclusive_input_encoder_program(),
+            project=("Flag",),
+        )
+        assert not isinstance(context, Intractable)
+        assert len(context.exclusive_input_groups) == 1
+        group = context.exclusive_input_groups[0]
+        assert group.target_name == "Cmd"
+        assert set(group.members) == {"CmdA", "CmdB", "CmdC"}
+
+    def test_skips_encoder_group_when_raw_input_is_observed_elsewhere(self) -> None:
+        context = _build_explore_context(
+            _nonexclusive_input_program(),
+            project=("Flag",),
+        )
+        assert not isinstance(context, Intractable)
+        assert context.exclusive_input_groups == ()
+
+    def test_specialized_assignments_collapse_one_hot_encoder_family(self) -> None:
+        context = _build_explore_context(
+            _exclusive_input_encoder_program(),
+            project=("Flag",),
+        )
+        assert not isinstance(context, Intractable)
+
+        assignments = list(
+            _iter_input_assignments(
+                frozenset({"CmdA", "CmdB", "CmdC"}),
+                context.nondeterministic_dims,
+                context.exclusive_input_groups,
+                context.exclusive_input_group_by_member,
+            )
+        )
+
+        assert len(assignments) == 4
+        assert {tuple(sorted(a)) for a in assignments} == {
+            (("CmdA", False), ("CmdB", False), ("CmdC", False)),
+            (("CmdA", True), ("CmdB", False), ("CmdC", False)),
+            (("CmdA", False), ("CmdB", True), ("CmdC", False)),
+            (("CmdA", False), ("CmdB", False), ("CmdC", True)),
+        }

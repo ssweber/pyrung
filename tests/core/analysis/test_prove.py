@@ -39,6 +39,7 @@ from pyrung.core.analysis.prove import (
     Proven,
     StateDiff,
     TraceStep,
+    _bfs_explore,
     _classify_dimensions,
     _default_projection,
     _eval_atom,
@@ -53,6 +54,7 @@ from pyrung.core.analysis.prove import (
     reachable_states,
     write_lock,
 )
+from pyrung.core.analysis.prove.passes import _BFSConfig
 from pyrung.core.analysis.simplified import And as ExprAnd
 from pyrung.core.analysis.simplified import Atom, Const
 from pyrung.core.analysis.simplified import Or as ExprOr
@@ -783,6 +785,62 @@ class TestReachableStates:
             keys = {k for k, _v in s}
             assert "Running" in keys
             assert "Internal" not in keys
+
+    def test_projected_raw_inputs_disable_exclusive_grouping(self):
+        cmd_a = Bool("CmdA", external=True)
+        cmd_b = Bool("CmdB", external=True)
+        cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B"})
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, cmd)
+            with Rung(cmd_a):
+                copy(1, cmd)
+            with Rung(cmd_b):
+                copy(2, cmd)
+
+        states = reachable_states(logic, project=["CmdA", "CmdB", "Cmd"])
+        assert frozenset({("CmdA", True), ("CmdB", True), ("Cmd", 2)}) in states
+
+    def test_exclusive_input_grouping_preserves_reachable_states(self):
+        cmd_a = Bool("CmdA", external=True)
+        cmd_b = Bool("CmdB", external=True)
+        cmd_c = Bool("CmdC", external=True)
+        cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B", 3: "C"}, lock=True)
+        flag = Bool("Flag", lock=True)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, cmd)
+            with Rung(cmd_a):
+                copy(1, cmd)
+            with Rung(cmd_b):
+                copy(2, cmd)
+            with Rung(cmd_c):
+                copy(3, cmd)
+            with Rung(cmd == 1):
+                out(flag)
+
+        context = prove_module._build_reachable_context(
+            logic,
+            scope=["Flag", "Cmd"],
+            project=("Flag", "Cmd"),
+            seed_tags=["Flag", "Cmd"],
+        )
+        assert not isinstance(context, Intractable)
+
+        grouped = _bfs_explore(
+            context,
+            project=("Flag", "Cmd"),
+            bfs_config=_BFSConfig(),
+        )
+        ungrouped = _bfs_explore(
+            context,
+            project=("Flag", "Cmd"),
+            bfs_config=_BFSConfig(exclusive_input_grouping=False),
+        )
+
+        assert grouped == ungrouped
 
 
 class TestDiffStates:
