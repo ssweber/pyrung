@@ -4,7 +4,7 @@
 
 .DEFAULT_GOAL := default
 
-.PHONY: default install lint test test-hypothesis test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check
+.PHONY: default install lint test test-hypothesis test-integration verify upgrade build clean docs-clean docs-serve docs-build docs-check bench
 
 default: install verify
 
@@ -31,6 +31,9 @@ upgrade:
 
 build:
 	uv build
+
+bench:
+	uv run pyrung lock examples.packml_bench --profile bench.prof
 
 # Improved Windows detection
 ifeq ($(OS),Windows_NT)
