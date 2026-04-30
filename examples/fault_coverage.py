@@ -109,7 +109,7 @@ conditions = [
 ]
 results = prove(logic, conditions)
 
-for coupling, result in zip(couplings, results, strict=False):
+for coupling, result in zip(couplings, results, strict=True):
     if isinstance(result, Proven):
         print(f"  PASS  {coupling.fb_name}: alarm path exists")
         structural_pass.append(coupling.fb_name)
