@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import CompiledKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel
 
 from . import Intractable, _ExploreContext
 from .absorb import (
+    _THRESHOLD_KIND_COMPARISON_ONLY,
     _collect_done_acc_pairs,
     _DoneAccInfo,
     _find_comparison_absorptions,
@@ -20,7 +21,6 @@ from .absorb import (
     _has_forbidden_data_read,
     _merge_threshold_absorptions,
     _RedundantAccAbsorptions,
-    _THRESHOLD_KIND_COMPARISON_ONLY,
     _ThresholdAbsorptions,
 )
 from .classify import (
@@ -38,6 +38,65 @@ from .kernel import _collect_edge_tag_exprs, _compile_inline_step
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
+
+def _narrow_indirect_block_specs(
+    specs: dict[str, BlockSpec],
+    compiled: CompiledKernel,
+    graph: ProgramGraph,
+    stateful_dims: dict[str, tuple[Any, ...]],
+    nondeterministic_dims: dict[str, tuple[Any, ...]],
+) -> dict[str, BlockSpec]:
+    """Narrow block specs for indirect blocks using known pointer domains.
+
+    For each indirect block, only sync the tags reachable through the pointer
+    domain plus any statically accessed addresses.  The array layout is
+    unchanged — ``tag_indices`` maps each narrowed tag to its original
+    ``addr - start`` position.
+    """
+    if not compiled.indirect_block_info:
+        return specs
+
+    all_domains: dict[str, tuple[Any, ...]] = dict(stateful_dims)
+    all_domains.update(nondeterministic_dims)
+
+    block_domains: dict[tuple[str, int, int], set[int]] = {}
+    for ptr_name, (block_name, start, end) in graph.pointer_tags.items():
+        domain = all_domains.get(ptr_name)
+        if domain is None:
+            continue
+        key = (block_name, start, end)
+        block_domains.setdefault(key, set()).update(
+            int(v) for v in domain if isinstance(v, (int, float)) and start <= int(v) <= end
+        )
+
+    result = dict(specs)
+
+    for symbol, (block_name, start, end, static_addrs) in compiled.indirect_block_info.items():
+        spec = specs.get(symbol)
+        if spec is None:
+            continue
+        domain = block_domains.get((block_name, start, end))
+        if domain is None:
+            continue
+
+        needed_addrs = sorted(domain | set(static_addrs))
+        if len(needed_addrs) >= spec.size:
+            continue
+
+        narrowed_tag_names = tuple(spec.tag_names[addr - start] for addr in needed_addrs)
+        narrowed_tag_indices = tuple(addr - start for addr in needed_addrs)
+
+        result[symbol] = BlockSpec(
+            symbol=symbol,
+            size=spec.size,
+            default=spec.default,
+            tag_type=spec.tag_type,
+            tag_names=narrowed_tag_names,
+            tag_indices=narrowed_tag_indices,
+        )
+
+    return result
 
 
 @dataclass
@@ -87,7 +146,14 @@ class _PassContext:
         assert self.done_event_specs is not None
         assert self.threshold_absorptions is not None
         assert self.threshold_event_specs is not None
-        block_specs = tuple(self.compiled.block_specs.values())
+        block_specs_dict = _narrow_indirect_block_specs(
+            dict(self.compiled.block_specs),
+            self.compiled,
+            self.graph,
+            self.stateful_dims,
+            self.nondeterministic_dims,
+        )
+        block_specs = tuple(block_specs_dict.values())
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,

@@ -38,6 +38,20 @@ def compile_kernel(program: Program) -> CompiledKernel:
     exec(compile(source, "<kernel>", "exec"), namespace)  # noqa: S102
     step_fn = namespace["_kernel_step"]
 
+    indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = {}
+    for block_id in ctx.used_indirect_blocks:
+        symbol = ctx.block_symbols[block_id]
+        binding = ctx.block_bindings[block_id]
+        static_addrs = frozenset(
+            addr for _name, (bid, addr) in ctx.tag_block_addresses.items() if bid == block_id
+        )
+        indirect_block_info[symbol] = (
+            binding.block.name,
+            binding.start,
+            binding.end,
+            static_addrs,
+        )
+
     block_specs = _build_block_specs(ctx)
 
     return CompiledKernel(
@@ -47,6 +61,7 @@ def compile_kernel(program: Program) -> CompiledKernel:
         edge_tags=set(ctx.edge_prev_tags),
         source=source,
         has_io_gaps=ctx.has_io_gaps,
+        indirect_block_info=indirect_block_info,
     )
 
 

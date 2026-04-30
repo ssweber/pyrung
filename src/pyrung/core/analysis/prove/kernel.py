@@ -31,13 +31,15 @@ def _compile_inline_step(
     lines.append('    memory["_dt"] = dt')
     for spec in block_specs:
         lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        for i, name in enumerate(spec.tag_names):
-            lines.append(f"    _arr[{i}] = tags.get({name!r}, {spec.default!r})")
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
+            lines.append(f"    _arr[{idx}] = tags.get({name!r}, {spec.default!r})")
     lines.append("    _inner(tags, blocks, memory, prev, dt)")
     for spec in block_specs:
         lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        for i, name in enumerate(spec.tag_names):
-            lines.append(f"    tags[{name!r}] = _arr[{i}]")
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
+            lines.append(f"    tags[{name!r}] = _arr[{idx}]")
 
     ns: dict[str, Any] = {"_inner": compiled.step_fn}
     exec(compile("\n".join(lines), "<block_sync>", "exec"), ns)  # noqa: S102
@@ -103,7 +105,9 @@ def _abstracted_hidden_tags(context: _ExploreContext) -> frozenset[str]:
     exact_stateful = set(context.stateful_names)
     hidden = {name for name in context.synthetic_preset_tags if name not in exact_stateful}
     hidden.update(
-        spec.acc_name for spec in context.state_key_done_specs if spec.acc_name not in exact_stateful
+        spec.acc_name
+        for spec in context.state_key_done_specs
+        if spec.acc_name not in exact_stateful
     )
     for vector in context.threshold_vector_specs:
         if vector.acc_name not in exact_stateful:

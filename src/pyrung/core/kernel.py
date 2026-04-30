@@ -33,6 +33,7 @@ class BlockSpec:
     default: bool | int | float | str
     tag_type: TagType
     tag_names: tuple[str, ...]
+    tag_indices: tuple[int, ...] | None = None
 
 
 class ReplayKernel:
@@ -72,15 +73,17 @@ class ReplayKernel:
     def load_block_from_tags(self, spec: BlockSpec) -> None:
         """Populate a block array from the corresponding tag values."""
         arr = self.blocks[spec.symbol]
-        for i, name in enumerate(spec.tag_names):
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
             if name in self.tags:
-                arr[i] = self.tags[name]
+                arr[idx] = self.tags[name]
 
     def flush_block_to_tags(self, spec: BlockSpec) -> None:
         """Write block array values back to the tag dict."""
         arr = self.blocks[spec.symbol]
-        for i, name in enumerate(spec.tag_names):
-            self.tags[name] = arr[i]
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
+            self.tags[name] = arr[idx]
 
     def capture_prev(self, edge_tags: set[str]) -> None:
         """Snapshot current tag values into prev for edge detection."""
@@ -117,6 +120,9 @@ class CompiledKernel:
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
     has_io_gaps: bool = False
+    indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
+        default_factory=dict
+    )
 
     def create_kernel(self) -> ReplayKernel:
         """Create a fresh ReplayKernel initialized from this compiled program."""

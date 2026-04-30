@@ -921,8 +921,7 @@ class _StderrProgressReporter:
             product *= len(domain)
 
         self.info(
-            f"{n_stateful} stateful + {n_input} input dimensions | "
-            f"state space: {product:,}",
+            f"{n_stateful} stateful + {n_input} input dimensions | state space: {product:,}",
             label=label,
         )
 
@@ -963,8 +962,7 @@ class _StderrProgressReporter:
                 arrow = "="
             prev_queue[0] = queue_size
             self.info(
-                f"visited={visited:,} | queue={queue_size:,} ({arrow}) | "
-                f"{rate:,.0f} states/sec",
+                f"visited={visited:,} | queue={queue_size:,} ({arrow}) | {rate:,.0f} states/sec",
                 label=label,
             )
 
@@ -973,10 +971,7 @@ class _StderrProgressReporter:
     def combine_callback(self) -> Callable[[int, int, float], None]:
         def _emit(merged: int, total: int, dt: float) -> None:
             rate = merged / dt if dt > 0 else 0
-            self.info(
-                f"combining clusters | merged={merged:,}/{total:,} | "
-                f"{rate:,.0f} states/sec"
-            )
+            self.info(f"combining clusters | merged={merged:,}/{total:,} | {rate:,.0f} states/sec")
 
         return _emit
 
@@ -1078,7 +1073,7 @@ def reachable_states(
         )
         if stderr_reporter is not None and not isinstance(result, Intractable):
             stderr_reporter.info(f"reachable states complete | total={len(result):,}")
-        return result  # ty: ignore[return-value]
+        return result  # ty: ignore[invalid-return-type]
 
     clusters = _partition_projection(program, project_list)
 
@@ -1109,7 +1104,7 @@ def reachable_states(
         )
         if stderr_reporter is not None and not isinstance(result, Intractable):
             stderr_reporter.info(f"reachable states complete | total={len(result):,}")
-        return result  # ty: ignore[return-value]
+        return result  # ty: ignore[invalid-return-type]
 
     cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
     combined_so_far = 1

@@ -2662,9 +2662,7 @@ class TestKernelDomainDiscovery:
         all_exprs = _collect_all_exprs(logic, graph)
         structural_domains = _collect_structural_domains(logic, graph, all_exprs)
 
-        comparison = _find_comparison_absorptions(
-            logic, graph, all_exprs, structural_domains
-        )
+        comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
         assert "H1" not in comparison.comparison_tags
         assert "H2" not in comparison.comparison_tags
 
@@ -3205,3 +3203,115 @@ class TestPointerDomainInference:
         assert isinstance(result, Intractable)
         assert "Idx" in result.tags
         assert any("pointer" in h and "Idx" in h for h in result.hints)
+
+
+class TestIndirectBlockNarrowing:
+    """Sparse-sync narrowing of indirect block specs in prove."""
+
+    def test_indirect_only_block_narrowed(self):
+        """Block accessed only via pointer gets narrowed BlockSpec."""
+        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
+
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=5)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        ctx = _PassContext(
+            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
+        )
+        _run_pre_bfs_pipeline(ctx)
+        context = ctx.freeze()
+
+        narrowed = [s for s in context.block_specs if s.tag_indices is not None]
+        assert len(narrowed) == 1
+        spec = narrowed[0]
+        assert len(spec.tag_names) == 5
+        assert spec.tag_indices == (0, 1, 2, 3, 4)
+        assert spec.tag_names[0] == "DS1"
+        assert spec.tag_names[4] == "DS5"
+
+    def test_mixed_static_indirect_includes_static(self):
+        """Block with both static and indirect access includes static addresses."""
+        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
+
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=5)
+        dest = Int("Out")
+        dest2 = Int("Out2")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+            with Rung():
+                copy(blk[50], dest2)
+
+        ctx = _PassContext(
+            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
+        )
+        _run_pre_bfs_pipeline(ctx)
+        context = ctx.freeze()
+
+        narrowed = [s for s in context.block_specs if s.tag_indices is not None]
+        assert len(narrowed) == 1
+        spec = narrowed[0]
+        assert "DS50" in spec.tag_names
+        assert 49 in spec.tag_indices  # addr 50, start 1 → index 49
+        assert len(spec.tag_names) == 6  # 5 from domain + 1 static
+
+    def test_full_domain_not_narrowed(self):
+        """Block where domain covers full range is not narrowed."""
+        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
+
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True, min=1, max=10)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        ctx = _PassContext(
+            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
+        )
+        _run_pre_bfs_pipeline(ctx)
+        context = ctx.freeze()
+
+        for spec in context.block_specs:
+            if "DS1" in spec.tag_names:
+                assert spec.tag_indices is None
+                break
+        else:
+            raise AssertionError("DS block spec not found")
+
+    def test_prove_correct_with_narrowed_block(self):
+        """Prove still produces correct results with narrowed indirect blocks."""
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=3)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = prove(logic, dest >= 0)
+        assert isinstance(result, Proven)
+
+    def test_mixed_access_prove_correct(self):
+        """Prove works with mixed static + indirect access on same block."""
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=3)
+        dest = Int("Out")
+        dest2 = Int("Out2")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+            with Rung():
+                copy(blk[50], dest2)
+
+        result = prove(logic, dest >= 0)
+        assert isinstance(result, Proven)
