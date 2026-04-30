@@ -647,40 +647,24 @@ def logic():
         latch(AlarmCoil[4])
         copy(1, AlarmStatus[4])
 
-    with Rung(rise(AlarmCoil[1])):
+    with Rung(Or(rise(AlarmCoil[1]), fall(AlarmCoil[1]))):
         copy(1, HistorianId)
         out(HistorianBit)
         call(alm_historian)
-    with Rung(fall(AlarmCoil[1])):
-        copy(1, HistorianId)
-        reset(HistorianBit)
-        call(alm_historian)
 
-    with Rung(rise(AlarmCoil[2])):
+    with Rung(Or(rise(AlarmCoil[2]), fall(AlarmCoil[2]))):
         copy(2, HistorianId)
         out(HistorianBit)
         call(alm_historian)
-    with Rung(fall(AlarmCoil[2])):
-        copy(2, HistorianId)
-        reset(HistorianBit)
-        call(alm_historian)
 
-    with Rung(rise(AlarmCoil[3])):
+    with Rung(Or(rise(AlarmCoil[3]), fall(AlarmCoil[3]))):
         copy(3, HistorianId)
         out(HistorianBit)
         call(alm_historian)
-    with Rung(fall(AlarmCoil[3])):
-        copy(3, HistorianId)
-        reset(HistorianBit)
-        call(alm_historian)
 
-    with Rung(rise(AlarmCoil[4])):
+    with Rung(Or(rise(AlarmCoil[4]), fall(AlarmCoil[4]))):
         copy(4, HistorianId)
         out(HistorianBit)
-        call(alm_historian)
-    with Rung(fall(AlarmCoil[4])):
-        copy(4, HistorianId)
-        reset(HistorianBit)
         call(alm_historian)
 
     with Rung():
