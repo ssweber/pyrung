@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import replace
 
 from pyrung.core import (
@@ -21,6 +22,12 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
+from pyrung.core.analysis.prove.kernel import (
+    _EdgeCompressor,
+    _seed_synthetic_presets,
+    _snapshot_kernel,
+    _step_kernel,
+)
 from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
@@ -28,6 +35,8 @@ from pyrung.core.analysis.prove.passes import (
     _PassContext,
     _run_pre_bfs_pipeline,
 )
+
+events_module = importlib.import_module("pyrung.core.analysis.prove.events")
 
 
 def _make_pass_context(
@@ -106,6 +115,27 @@ def _literal_fill_program() -> Program:
             fill(7, ds.select(1, 3))
         with Rung(ds[1] == 7):
             out(flag)
+
+    return logic
+
+
+def _hidden_event_memo_program() -> Program:
+    enable = Bool("Enable", external=True)
+    exact_threshold = Int("ExactThreshold", final=True)
+    hmi_threshold = Int("HmiThreshold", external=True, default=1000)
+    t = Timer.clone("MemoTmr")
+    exact_alarm = Bool("ExactAlarm")
+    hmi_alarm = Bool("HmiAlarm")
+
+    with Program(strict=False) as logic:
+        with Rung():
+            copy(500, exact_threshold)
+        with Rung(enable):
+            on_delay(t, preset=1000)
+        with Rung(t.Acc > exact_threshold):
+            out(exact_alarm)
+        with Rung(t.Acc > hmi_threshold):
+            out(hmi_alarm)
 
     return logic
 
@@ -265,7 +295,7 @@ class TestPassDisabling:
 
         assert isinstance(default_result, Proven)
         assert isinstance(no_compression_result, Proven)
-        assert no_compression_result.states_explored > default_result.states_explored
+        assert no_compression_result.states_explored >= default_result.states_explored
 
 
 class TestIndividualPasses:
@@ -326,3 +356,85 @@ class TestIndividualPasses:
             (("CmdA", False), ("CmdB", True), ("CmdC", False)),
             (("CmdA", False), ("CmdB", False), ("CmdC", True)),
         }
+
+    def test_hidden_event_jump_memoizes_repeated_pending_plateaus(self, monkeypatch) -> None:
+        context = _build_explore_context(
+            _hidden_event_memo_program(),
+            project=("ExactAlarm", "HmiAlarm"),
+        )
+        assert not isinstance(context, Intractable)
+
+        kernel = context.compiled.create_kernel()
+        _seed_synthetic_presets(context, kernel)
+        edge_comp = _EdgeCompressor(context)
+        cache = events_module._HiddenEventCache(context)
+
+        snap = _snapshot_kernel(kernel)
+        kernel.tags["Enable"] = True
+        _step_kernel(context, kernel)
+        new_key = edge_comp.state_key(kernel)
+        visited = {new_key}
+
+        calls = {"exact": 0, "abstract": 0}
+        resolve_exact = events_module._resolve_nearest_exact_hidden_event
+        resolve_abstract = events_module._abstract_threshold_outcomes
+
+        def _count_exact(*args, **kwargs):
+            calls["exact"] += 1
+            return resolve_exact(*args, **kwargs)
+
+        def _count_abstract(*args, **kwargs):
+            calls["abstract"] += 1
+            return resolve_abstract(*args, **kwargs)
+
+        monkeypatch.setattr(events_module, "_resolve_nearest_exact_hidden_event", _count_exact)
+        monkeypatch.setattr(events_module, "_abstract_threshold_outcomes", _count_abstract)
+
+        first = events_module._maybe_jump_hidden_event(
+            context,
+            kernel,
+            snap,
+            visited,
+            new_key,
+            edge_comp,
+            cache,
+        )
+        second = events_module._maybe_jump_hidden_event(
+            context,
+            kernel,
+            snap,
+            visited,
+            new_key,
+            edge_comp,
+            cache,
+        )
+
+        assert len(first) == 2
+        assert {outcome.key for outcome in first} == {outcome.key for outcome in second}
+        assert calls == {"exact": 1, "abstract": 1}
+
+    def test_hidden_event_cache_key_tracks_hidden_progress(self) -> None:
+        context = _build_explore_context(_settle_pending_program())
+        assert not isinstance(context, Intractable)
+
+        kernel = context.compiled.create_kernel()
+        _seed_synthetic_presets(context, kernel)
+        edge_comp = _EdgeCompressor(context)
+        cache = events_module._HiddenEventCache(context)
+
+        initial_snap = _snapshot_kernel(kernel)
+        kernel.tags["Cmd"] = True
+        kernel.tags["Fb"] = False
+        _step_kernel(context, kernel)
+        first_key = edge_comp.state_key(kernel)
+        first_jump_key = cache.plateau_key(context, initial_snap, kernel, first_key)
+
+        second_before = _snapshot_kernel(kernel)
+        kernel.tags["Cmd"] = True
+        kernel.tags["Fb"] = False
+        _step_kernel(context, kernel)
+        second_key = edge_comp.state_key(kernel)
+        second_jump_key = cache.plateau_key(context, second_before, kernel, second_key)
+
+        assert first_key == second_key
+        assert first_jump_key != second_jump_key

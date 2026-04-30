@@ -166,3 +166,27 @@ def _has_edge_atom(expr: Expr, tag_name: str) -> bool:
     if isinstance(expr, (And, Or)):
         return any(_has_edge_atom(t, tag_name) for t in expr.terms)
     return False
+
+
+def _collect_edge_input_tags(
+    exprs: list[Expr],
+    nd_dims: dict[str, Any],
+) -> frozenset[str]:
+    """Return ND tag names that appear in rise()/fall() atoms."""
+    result: set[str] = set()
+    for expr in exprs:
+        _collect_edge_atoms(expr, nd_dims, result)
+    return frozenset(result)
+
+
+def _collect_edge_atoms(
+    expr: Expr,
+    nd_dims: dict[str, Any],
+    out: set[str],
+) -> None:
+    if isinstance(expr, Atom):
+        if expr.form in ("rise", "fall") and expr.tag in nd_dims:
+            out.add(expr.tag)
+    elif isinstance(expr, (And, Or)):
+        for t in expr.terms:
+            _collect_edge_atoms(t, nd_dims, out)

@@ -36,9 +36,34 @@ from .expr import _collect_atoms_for_tag
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from .kernel import _collect_edge_tag_exprs, _compile_inline_step
 
+from .expr import _collect_edge_input_tags
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
+
+def _detect_edge_caveats(
+    all_exprs: list[Expr],
+    nondeterministic_dims: dict[str, tuple[Any, ...]],
+    input_groups: tuple[tuple[str, ...], ...],
+) -> tuple[str, ...]:
+    """Detect external inputs used in rise()/fall() not covered by a group."""
+    edge_inputs = _collect_edge_input_tags(all_exprs, nondeterministic_dims)
+    if not edge_inputs:
+        return ()
+    grouped: set[str] = set()
+    for g in input_groups:
+        grouped.update(g)
+    uncovered = sorted(edge_inputs - grouped)
+    if not uncovered:
+        return ()
+    names = ", ".join(uncovered)
+    return (
+        f"Simultaneous edge combinations on external inputs [{names}] "
+        f"were not explored. These inputs use rise()/fall() but are not "
+        f"covered by an input group declaration.",
+    )
 
 
 def _narrow_indirect_block_specs(
@@ -110,6 +135,7 @@ class _PassContext:
     extra_exprs: list[Expr] | None
     dt: float
     compiled: CompiledKernel | None
+    input_groups: tuple[tuple[str, ...], ...] = ()
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -162,6 +188,11 @@ class _PassContext:
             project=self.project,
             extra_exprs=self.extra_exprs,
         )
+        caveats = _detect_edge_caveats(
+            self.all_exprs,
+            self.nondeterministic_dims,
+            self.input_groups,
+        )
         return _ExploreContext(
             compiled=self.compiled,
             graph=self.graph,
@@ -180,10 +211,13 @@ class _PassContext:
             step_fn=_compile_inline_step(self.compiled, block_specs),
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
+            nondeterministic_names=tuple(sorted(self.nondeterministic_dims)),
             exclusive_input_groups=exclusive_input_groups,
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups
             ),
+            input_groups=self.input_groups,
+            caveats=caveats,
         )
 
 

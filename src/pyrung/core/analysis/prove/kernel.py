@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .events import _StateKeyDoneSpec
 
 _EDGE_DEAD: Any = object()
+_INPUT_DEAD: Any = object()
 
 
 def _compile_inline_step(
@@ -243,7 +244,11 @@ class _EdgeCompressor:
         self._cache[stateful_prefix] = result
         return result
 
-    def state_key(self, kernel: ReplayKernel) -> tuple[Any, ...]:
+    def state_key(
+        self,
+        kernel: ReplayKernel,
+        live_inputs: frozenset[str] | None = None,
+    ) -> tuple[Any, ...]:
         ctx = self._context
         return _extract_state_key(
             kernel,
@@ -253,6 +258,8 @@ class _EdgeCompressor:
             ctx.state_key_done_specs,
             ctx.threshold_vector_specs,
             self.live_edges(kernel),
+            nondeterministic_names=ctx.nondeterministic_names,
+            live_inputs=live_inputs,
         )
 
 
@@ -338,8 +345,15 @@ def _extract_state_key(
     done_specs: tuple[_StateKeyDoneSpec, ...] = (),
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...] = (),
     live_edges: frozenset[str] | None = None,
+    nondeterministic_names: tuple[str, ...] = (),
+    live_inputs: frozenset[str] | None = None,
 ) -> tuple[Any, ...]:
-    """Hash key for the visited set — stateful dims + edge prev values.
+    """Hash key for the visited set — stateful + input + edge prev values.
+
+    Inputs are included so the BFS can interleave single-dimension flips
+    from each distinct input baseline.  Dead inputs (not live in the
+    current stateful configuration) are masked to a sentinel, collapsing
+    states that differ only in irrelevant input values.
 
     Timer/counter Done bits use three-valued abstraction
     ``(False, PENDING, True)`` derived from Done + Acc.
@@ -355,6 +369,11 @@ def _extract_state_key(
             kernel.tags.get(spec.acc_name),
         )
     parts.extend(_threshold_vector_key(kernel, threshold_vector_specs))
+    for n in nondeterministic_names:
+        if live_inputs is not None and n not in live_inputs:
+            parts.append(_INPUT_DEAD)
+        else:
+            parts.append(kernel.tags.get(n))
     for n in edge_tag_names:
         if live_edges is not None and n not in live_edges:
             parts.append(_EDGE_DEAD)

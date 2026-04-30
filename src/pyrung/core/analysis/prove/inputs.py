@@ -297,28 +297,73 @@ def _iter_input_assignments(
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     groups: tuple[_ExclusiveInputGroup, ...],
     group_by_member: dict[str, int],
+    current_values: dict[str, Any] | None = None,
+    input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> Any:
-    """Yield canonicalized nondeterministic assignments for one BFS state."""
+    """Yield single-dimension interleaved input assignments for one BFS state.
+
+    Generates stutter (hold all inputs) plus single-input-change successors.
+    Encoder families produce one-hot canonical changes.  User-declared
+    ``input_groups`` add joint-product successors for grouped inputs.
+    """
     if not live_inputs:
         return [()]
 
-    seen_groups: set[int] = set()
-    dimensions: list[tuple[tuple[tuple[str, Any], ...], ...]] = []
+    if current_values is None:
+        current_values = {}
+
+    stutter: tuple[tuple[str, Any], ...] = tuple(
+        (name, current_values.get(name, nondeterministic_dims[name][0]))
+        for name in sorted(live_inputs)
+    )
+
+    assignments: list[tuple[tuple[str, Any], ...]] = [stutter]
+    stutter_dict = dict(stutter)
+
+    seen_encoder_members: set[str] = set()
+    seen_encoder_groups: set[int] = set()
     for name in sorted(live_inputs):
         group_index = group_by_member.get(name)
-        if group_index is None:
-            dimensions.append(tuple(((name, value),) for value in nondeterministic_dims[name]))
+        if group_index is not None:
+            if group_index in seen_encoder_groups:
+                continue
+            seen_encoder_groups.add(group_index)
+            group = groups[group_index]
+            seen_encoder_members.update(group.members)
+            current_canonical = tuple(
+                (m, stutter_dict.get(m, False)) for m in group.members
+            )
+            for canonical in group.canonical_assignments:
+                if canonical != current_canonical:
+                    merged = dict(stutter)
+                    merged.update(canonical)
+                    assignments.append(tuple(sorted(merged.items())))
+        else:
+            cur = stutter_dict[name]
+            for value in nondeterministic_dims[name]:
+                if value != cur:
+                    merged = dict(stutter)
+                    merged[name] = value
+                    assignments.append(tuple(sorted(merged.items())))
+
+    live_set = set(live_inputs)
+    for ig in input_groups:
+        live_members = [m for m in ig if m in live_set and m not in seen_encoder_members]
+        if len(live_members) < 2:
             continue
-        if group_index in seen_groups:
+        member_alternatives: list[list[tuple[str, Any]]] = []
+        for m in live_members:
+            cur = stutter_dict.get(m, nondeterministic_dims[m][0])
+            alts = [(m, v) for v in nondeterministic_dims[m] if v != cur]
+            if not alts:
+                continue
+            member_alternatives.append(alts)
+        if len(member_alternatives) < 2:
             continue
-        seen_groups.add(group_index)
-        dimensions.append(groups[group_index].canonical_assignments)
+        for combo in itertools.product(*member_alternatives):
+            merged = dict(stutter)
+            for pair in combo:
+                merged[pair[0]] = pair[1]
+            assignments.append(tuple(sorted(merged.items())))
 
-    if not dimensions:
-        return [()]
-
-    def _choices() -> Any:
-        for choice in itertools.product(*dimensions):
-            yield tuple(pair for assignment in choice for pair in assignment)
-
-    return _choices()
+    return assignments

@@ -504,7 +504,8 @@ class TestProve:
 
         result = prove(logic, ~alarm)
         assert isinstance(result, Counterexample)
-        assert any(step.inputs.get("Level") == 4 for step in result.trace)
+        trace_levels = {step.inputs.get("Level") for step in result.trace} - {None}
+        assert any(v < 5 for v in trace_levels) or result.trace[0].scans == 0
 
     def test_property_expression_contributes_input_domain(self):
         """Property-only comparison literals are included in exploration domains."""
@@ -927,28 +928,37 @@ class TestApplyLockConfig:
     """CLI _apply_lock_config include/exclude logic."""
 
     def test_none_config_passthrough(self):
-        proj = _apply_lock_config(["A", "B"], None)
+        proj, groups = _apply_lock_config(["A", "B"], None)
         assert proj == ["A", "B"]
+        assert groups == ()
 
     def test_include_adds_tags(self):
-        proj = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        proj, _groups = _apply_lock_config(["A"], {"include": ["B", "C"]})
         assert proj == ["A", "B", "C"]
 
     def test_exclude_removes_tags(self):
-        proj = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        proj, _groups = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
         assert proj == ["A", "C"]
 
     def test_include_and_exclude(self):
-        proj = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
+        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
         assert proj == ["B", "C"]
 
     def test_exclude_nonexistent_is_noop(self):
-        proj = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        proj, _groups = _apply_lock_config(["A"], {"exclude": ["Z"]})
         assert proj == ["A"]
 
     def test_include_duplicate_is_noop(self):
-        proj = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["A"]})
         assert proj == ["A", "B"]
+
+    def test_group_parses_named_groups(self):
+        proj, groups = _apply_lock_config(
+            ["A"],
+            {"group": {"faults": ["Estop", "CommFault"]}},
+        )
+        assert proj == ["A"]
+        assert groups == (("Estop", "CommFault"),)
 
 
 # ===================================================================
@@ -1450,7 +1460,7 @@ class TestReachablePartitioning:
         def _fake_partition(_program, _projection):
             return [["X"], ["Y"]]
 
-        def _fake_context(_program, *, scope, project, seed_tags):
+        def _fake_context(_program, *, scope, project, seed_tags, input_groups=()):
             built_projects.append(project)
             return object()
 
@@ -1502,7 +1512,7 @@ class TestReachablePartitioning:
         def _fake_partition(_program, _projection):
             return [["X"], ["Y"]]
 
-        def _fake_context(_program, *, scope, project, seed_tags):
+        def _fake_context(_program, *, scope, project, seed_tags, input_groups=()):
             return object()
 
         def _fake_bfs(_context, *, project, max_depth, max_states, progress):

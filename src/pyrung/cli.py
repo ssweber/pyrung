@@ -69,9 +69,12 @@ def _cmd_lock(args: argparse.Namespace) -> None:
 
     if args.project:
         projection = args.project
+        input_groups: tuple[tuple[str, ...], ...] = ()
     else:
         lock_config = getattr(mod, "__lock__", None)
-        projection = _apply_lock_config(_default_projection_names(program), lock_config)
+        projection, input_groups = _apply_lock_config(
+            _default_projection_names(program), lock_config
+        )
         print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
 
     states = reachable_states(
@@ -80,6 +83,7 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         max_depth=args.max_depth,
         max_states=args.max_states,
         progress=True,
+        input_groups=input_groups,
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
@@ -126,13 +130,21 @@ def _default_projection_names(program) -> list[str]:
     return _default_projection(program)
 
 
-def _apply_lock_config(projection: list[str], lock_config: dict | None) -> list[str]:
+def _apply_lock_config(
+    projection: list[str], lock_config: dict | None
+) -> tuple[list[str], tuple[tuple[str, ...], ...]]:
     if lock_config is None:
-        return projection
+        return projection, ()
     tags = set(projection)
     tags.update(lock_config.get("include", ()))
     tags -= set(lock_config.get("exclude", ()))
-    return sorted(tags)
+    raw_groups = lock_config.get("group", {})
+    input_groups: list[tuple[str, ...]] = []
+    if isinstance(raw_groups, dict):
+        for members in raw_groups.values():
+            if isinstance(members, (list, tuple)) and len(members) >= 2:
+                input_groups.append(tuple(members))
+    return sorted(tags), tuple(input_groups)
 
 
 def _cmd_dap(_args: argparse.Namespace) -> None:

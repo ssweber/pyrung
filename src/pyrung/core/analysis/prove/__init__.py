@@ -38,6 +38,7 @@ class Proven:
     """Invariant holds across all reachable states."""
 
     states_explored: int
+    caveats: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -94,8 +95,11 @@ class _ExploreContext:
     step_fn: Callable[..., None] | None = None
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
+    nondeterministic_names: tuple[str, ...] = ()
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
+    input_groups: tuple[tuple[str, ...], ...] = ()
+    caveats: tuple[str, ...] = ()
 
 
 from .absorb import _ThresholdVectorSpec
@@ -113,6 +117,7 @@ from .classify import (
 )
 from .events import (
     _DoneEventSpec,
+    _HiddenEventCache,
     _has_pending_hidden_event,
     _maybe_jump_hidden_event,
     _settle_pending,
@@ -146,6 +151,7 @@ def _build_explore_context(
     extra_exprs: list[Expr] | None = None,
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
+    input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -155,6 +161,7 @@ def _build_explore_context(
         extra_exprs=extra_exprs,
         dt=dt,
         compiled=compiled,
+        input_groups=input_groups,
     )
     return _run_pre_bfs_pipeline(ctx)
 
@@ -318,11 +325,15 @@ def _bfs_explore(
     kernel = context.compiled.create_kernel()
     _seed_synthetic_presets(context, kernel)
     edge_comp = _EdgeCompressor(context)
+    hidden_event_cache = _HiddenEventCache(context)
     live_cache = _LiveInputCache(context)
 
-    def _state_key(k: ReplayKernel) -> tuple[Any, ...]:
+    def _state_key(
+        k: ReplayKernel,
+        live: frozenset[str] | None = None,
+    ) -> tuple[Any, ...]:
         if bfs_config.edge_compression:
-            return edge_comp.state_key(k)
+            return edge_comp.state_key(k, live_inputs=live)
         return _extract_state_key(
             k,
             context.stateful_names,
@@ -330,6 +341,8 @@ def _bfs_explore(
             context.memory_key_names,
             context.state_key_done_specs,
             context.threshold_vector_specs,
+            nondeterministic_names=context.nondeterministic_names,
+            live_inputs=live,
         )
 
     initial_key = _state_key(kernel)
@@ -412,11 +425,17 @@ def _bfs_explore(
             if bfs_config.live_input_pruning
             else frozenset(context.nondeterministic_dims)
         )
+        current_values = {
+            name: kernel.tags.get(name, context.nondeterministic_dims[name][0])
+            for name in live
+        }
         assignments = _iter_input_assignments(
             live,
             context.nondeterministic_dims,
             context.exclusive_input_groups if bfs_config.exclusive_input_grouping else (),
             context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
+            current_values=current_values,
+            input_groups=context.input_groups,
         )
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
@@ -438,7 +457,12 @@ def _bfs_explore(
                 kernel.tags[name] = value
 
             _step_kernel(context, kernel)
-            new_key = _state_key(kernel)
+            post_step_live = (
+                live_cache.live_inputs(kernel)
+                if bfs_config.live_input_pruning
+                else None
+            )
+            new_key = _state_key(kernel, live=post_step_live)
 
             # Determine if hidden-event branching produces alternate outcomes.
             # Settlement/jumping functions do their own internal save/restore,
@@ -461,6 +485,7 @@ def _bfs_explore(
                         kernel,
                         snap,
                         edge_comp,
+                        hidden_event_cache,
                     )
                     if settled:
                         alt_outcomes = [
@@ -480,6 +505,7 @@ def _bfs_explore(
                         visited,
                         new_key,
                         edge_comp,
+                        hidden_event_cache,
                     )
                     if jumped:
                         alt_outcomes = [
@@ -499,6 +525,7 @@ def _bfs_explore(
                     visited,
                     new_key,
                     edge_comp,
+                    hidden_event_cache,
                 )
                 if jumped:
                     alt_outcomes = [
@@ -599,10 +626,11 @@ def _bfs_explore(
     if project is not None:
         return _projected_states(project, projected_rows)
 
+    caveats = context.caveats
     if results is not None:
-        return [r if r is not None else Proven(states_explored=len(visited)) for r in results]
+        return [r if r is not None else Proven(states_explored=len(visited), caveats=caveats) for r in results]
 
-    return [Proven(states_explored=len(visited))]
+    return [Proven(states_explored=len(visited), caveats=caveats)]
 
 
 def _compile_property(
@@ -816,6 +844,7 @@ def prove(
     scope: list[str] | None = None,
     max_depth: int = 50,
     max_states: int = 100_000,
+    input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> Proven | Counterexample | Intractable | list[Proven | Counterexample | Intractable]:
     """Exhaustively prove a property over all reachable states.
 
@@ -855,7 +884,7 @@ def prove(
         predicate, auto_scope, expr = compiled_properties[0]
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
-        context = _build_explore_context(program, scope=effective_scope, extra_exprs=extra)
+        context = _build_explore_context(program, scope=effective_scope, extra_exprs=extra, input_groups=input_groups)
         if isinstance(context, Intractable):
             return context
         return _bfs_explore(
@@ -881,6 +910,7 @@ def prove(
             scope=group_scope,
             extra_exprs=group_exprs,
             compiled=compiled_kernel,
+            input_groups=input_groups,
         )
         if isinstance(context, Intractable):
             for i in indices:
@@ -1037,6 +1067,7 @@ def _build_reachable_context(
     scope: list[str],
     project: tuple[str, ...],
     seed_tags: list[str],
+    input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context using a whole-rung sliced program."""
     sliced_program = _slice_program_for_reachability(program, seed_tags)
@@ -1051,6 +1082,7 @@ def _build_reachable_context(
         scope=None,
         project=project,
         compiled=compiled_kernel,
+        input_groups=input_groups,
     )
 
 
@@ -1061,6 +1093,7 @@ def reachable_states(
     max_depth: int = 50,
     max_states: int = 100_000,
     progress: bool | Callable[[int, int, float], None] = False,
+    input_groups: tuple[tuple[str, ...], ...] = (),
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
@@ -1105,6 +1138,7 @@ def reachable_states(
             scope=effective_scope,
             project=project_names,
             seed_tags=effective_scope,
+            input_groups=input_groups,
         )
         if isinstance(context, Intractable):
             return context
@@ -1136,6 +1170,7 @@ def reachable_states(
             scope=clusters[0],
             project=project_names,
             seed_tags=clusters[0],
+            input_groups=input_groups,
         )
         if isinstance(context, Intractable):
             return context
@@ -1174,6 +1209,7 @@ def reachable_states(
             scope=cluster,
             project=cluster_project,
             seed_tags=cluster,
+            input_groups=input_groups,
         )
         if isinstance(context, Intractable):
             return context
