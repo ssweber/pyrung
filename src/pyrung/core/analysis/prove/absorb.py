@@ -1018,9 +1018,7 @@ def _merge_threshold_absorptions(*absorptions: _ThresholdAbsorptions) -> _Thresh
         progress_names=frozenset().union(*(item.progress_names for item in absorptions)),
         threshold_tags=frozenset().union(*(item.threshold_tags for item in absorptions)),
         comparison_tags=frozenset().union(*(item.comparison_tags for item in absorptions)),
-        vector_specs=tuple(
-            spec for item in absorptions for spec in item.vector_specs
-        ),
+        vector_specs=tuple(spec for item in absorptions for spec in item.vector_specs),
         blockers=tuple(blocker for item in absorptions for blocker in item.blockers),
     )
 

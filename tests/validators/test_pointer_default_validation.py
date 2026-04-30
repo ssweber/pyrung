@@ -120,6 +120,4 @@ class TestPointerDefaultValidator:
 
         assert len(selected.findings) == 1
         assert all(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in selected.findings)
-        assert not any(
-            f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings
-        )
+        assert not any(f.code == CORE_POINTER_DEFAULT_BEFORE_BLOCK_START for f in ignored.findings)
