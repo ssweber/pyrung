@@ -41,7 +41,7 @@ with PLC(logic) as plc:
 - **`plc.cause()` / `plc.effect()`** — causal chain analysis. What caused a transition, what it caused downstream, and what-if projections with `assume=`.
 - **`plc.query`** — test coverage surveys. Cold rungs, hot rungs, stranded bits with blocker diagnostics. Merge across a test suite with the pytest plugin.
 
-Static validators run at build time via `logic.validate()` — conflicting outputs, stuck bits, readonly writes, choices violations, and physical realism checks.
+Static validators run at build time via `logic.validate()` — conflicting outputs, stuck bits, readonly writes, pointer defaults below block starts, choices violations, and physical realism checks.
 
 See [Analysis](analysis.md) for the full guide.
 

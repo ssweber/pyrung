@@ -10,6 +10,8 @@ Stage 3: Stuck-bit detection for latch/reset imbalances.
 
 Stage 4: Tag-flag validators (readonly writes, choices violations, final
 multiple-writers).
+
+Stage 5: Pointer default validation for indirect block dereferences.
 """
 
 from pyrung.core.validation.choices_violation import (
@@ -38,6 +40,12 @@ from pyrung.core.validation.physical_realism import (
     PhysicalRealismFinding,
     PhysicalRealismReport,
     validate_physical_realism,
+)
+from pyrung.core.validation.pointer_default import (
+    CORE_POINTER_DEFAULT_BEFORE_BLOCK_START,
+    PointerDefaultFinding,
+    PointerDefaultReport,
+    validate_pointer_defaults,
 )
 from pyrung.core.validation.readonly_write import (
     CORE_READONLY_WRITE,
@@ -74,6 +82,7 @@ __all__ = [
     "CORE_CONFLICTING_OUTPUT",
     "CORE_FINAL_MULTIPLE_WRITERS",
     "CORE_MISSING_PROFILE",
+    "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
     "CORE_RANGE_VIOLATION",
     "CORE_READONLY_WRITE",
     "CORE_STUCK_HIGH",
@@ -90,6 +99,8 @@ __all__ = [
     "OutputSite",
     "PhysicalRealismFinding",
     "PhysicalRealismReport",
+    "PointerDefaultFinding",
+    "PointerDefaultReport",
     "ProgramFacts",
     "ProgramLocation",
     "ReadonlyWriteFinding",
@@ -103,6 +114,7 @@ __all__ = [
     "validate_conflicting_outputs",
     "validate_final_writers",
     "validate_physical_realism",
+    "validate_pointer_defaults",
     "validate_readonly_writes",
     "validate_stuck_bits",
     "walk_program",
