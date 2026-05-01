@@ -28,6 +28,7 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from . import PENDING
 from .absorb import _all_write_targets
+from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from .kernel import _compile_inline_step
 
 if TYPE_CHECKING:
@@ -1300,6 +1301,7 @@ class _ConcreteStateElider:
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
         *,
+        state_basis: frozenset[str] | None = None,
         compiled: CompiledKernel | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> None:
@@ -1308,6 +1310,11 @@ class _ConcreteStateElider:
         self._program = program
         self._graph = graph
         self._stateful_dims = dict(stateful_dims)
+        self._state_basis = (
+            frozenset(self._stateful_dims)
+            if state_basis is None
+            else frozenset(state_basis) & frozenset(self._stateful_dims)
+        )
         self._nondeterministic_dims = dict(nondeterministic_dims)
         self._progress = progress
         self._compiled = compiled or compile_kernel(program)
@@ -1321,6 +1328,16 @@ class _ConcreteStateElider:
             graph,
             stateful_dims,
             nondeterministic_dims,
+        )
+        self._exclusive_input_groups = _detect_exclusive_input_groups(
+            program,
+            graph,
+            self._nondeterministic_dims,
+            project=tuple(self._stateful_dims),
+            extra_exprs=None,
+        )
+        self._exclusive_input_group_by_member = _exclusive_input_group_membership(
+            self._exclusive_input_groups
         )
         static_writers = set(graph.writers_of) & set(self._stateful_dims)
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
@@ -1377,6 +1394,7 @@ class _ConcreteStateElider:
             f" | stateful={len(self._stateful_dims):,}"
             f" | candidates={len(self._candidate_names()):,}"
             f" | forced-true={'truncated' if self._coverage.truncated else 'complete'}"
+            f" | input-groups={len(self._exclusive_input_groups)}"
             f" | memory_keys={len(mem_keys)}"
         )
 
@@ -1418,6 +1436,8 @@ class _ConcreteStateElider:
 
     def _is_concrete_candidate(self, name: str) -> bool:
         """True when the tag is eligible for concrete elision proofs."""
+        if name not in self._state_basis:
+            return False
         if name not in self._written_tags:
             return False
         if getattr(self._graph.tags.get(name), "lock", False):
@@ -1458,6 +1478,43 @@ class _ConcreteStateElider:
         if self._progress is not None:
             self._progress(message)
 
+    def _input_assignment_dimensions(
+        self,
+        input_names: tuple[str, ...],
+    ) -> tuple[tuple[tuple[tuple[str, Any], ...], ...], ...]:
+        dimensions: list[tuple[tuple[tuple[str, Any], ...], ...]] = []
+        live_inputs = set(input_names)
+        seen_groups: set[int] = set()
+
+        for name in sorted(input_names):
+            group_index = self._exclusive_input_group_by_member.get(name)
+            if group_index is not None:
+                if group_index in seen_groups:
+                    continue
+                seen_groups.add(group_index)
+                group = self._exclusive_input_groups[group_index]
+                options: list[tuple[tuple[str, Any], ...]] = []
+                seen_options: set[tuple[tuple[str, Any], ...]] = set()
+                for canonical in group.canonical_assignments:
+                    filtered = tuple(
+                        (member, value)
+                        for member, value in canonical
+                        if member in live_inputs
+                    )
+                    if filtered in seen_options:
+                        continue
+                    seen_options.add(filtered)
+                    options.append(filtered)
+                if options:
+                    dimensions.append(tuple(options))
+                continue
+
+            dimensions.append(
+                tuple(((name, value),) for value in self._nondeterministic_dims[name])
+            )
+
+        return tuple(dimensions)
+
     def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
         observed, fallback_hidden = self._reachable_stateful_frontier(candidate, retained)
         if not observed:
@@ -1474,36 +1531,45 @@ class _ConcreteStateElider:
             retained,
         )
 
-        group_domains = tuple(self._stateful_dims[name] for name in retained_names) + tuple(
-            self._nondeterministic_dims[name] for name in input_names
-        )
+        retained_domains = tuple(self._stateful_dims[name] for name in retained_names)
+        input_assignment_dimensions = self._input_assignment_dimensions(input_names)
+        input_combo_count = 1
+        for dimension in input_assignment_dimensions:
+            input_combo_count *= len(dimension)
+        group_product = _product_size(retained_domains) * input_combo_count
         vary_names = hidden_stateful + (candidate,)
         vary_domains = tuple(self._stateful_dims[name] for name in hidden_stateful) + (
             self._stateful_dims[candidate],
         )
         proof_limit = min(_ELISION_ENUM_LIMIT, _ELISION_PROOF_BUDGET)
-        if _product_size(group_domains + vary_domains) > proof_limit:
+        if group_product * _product_size(vary_domains) > proof_limit:
             return False
 
-        group_iter = product(*group_domains) if group_domains else [()]
-        vary_iter_values = product(*vary_domains) if vary_domains else [()]
-        for group_values in group_iter:
-            entry_values = dict(
-                zip(retained_names + input_names, group_values, strict=True)
+        retained_iter = product(*retained_domains) if retained_domains else [()]
+        for retained_values in retained_iter:
+            retained_entry = dict(zip(retained_names, retained_values, strict=True))
+            input_iter = (
+                product(*input_assignment_dimensions)
+                if input_assignment_dimensions
+                else [()]
             )
-            expected: tuple[Any, ...] | None = None
-            for vary_values in vary_iter_values:
-                full_entry = dict(entry_values)
-                full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
-                outcome = self._scan(full_entry, observed)
-                if outcome is None:
-                    return False
-                if expected is None:
-                    expected = outcome
-                    continue
-                if outcome != expected:
-                    return False
-            vary_iter_values = product(*vary_domains) if vary_domains else [()]
+            for input_assignments in input_iter:
+                entry_values = dict(retained_entry)
+                for partial_assignment in input_assignments:
+                    entry_values.update(partial_assignment)
+                expected: tuple[Any, ...] | None = None
+                vary_iter_values = product(*vary_domains) if vary_domains else [()]
+                for vary_values in vary_iter_values:
+                    full_entry = dict(entry_values)
+                    full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
+                    outcome = self._scan(full_entry, observed)
+                    if outcome is None:
+                        return False
+                    if expected is None:
+                        expected = outcome
+                        continue
+                    if outcome != expected:
+                        return False
         return True
 
     def _reachable_stateful_frontier(
@@ -1622,7 +1688,11 @@ class _ConcreteStateElider:
                     if src in retained_set and self._is_retained_anchor(src):
                         retained_names.add(src)
                         continue
-                    if src in self._stateful_dims and src not in retained_set and src != candidate:
+                    if (
+                        src in self._state_basis
+                        and src not in retained_set
+                        and src != candidate
+                    ):
                         hidden_stateful.add(src)
                     if src in visited:
                         continue
@@ -1712,13 +1782,15 @@ def _elide_scan_local_stateful_dims(
         return {}
 
     # Phase 2: concrete kernel proofs on what abstract couldn't resolve.
-    # Pass the full stateful_dims so the concrete pass sees all observers,
-    # but restrict candidates to what abstract retained.
+    # Abstract-removed tags can still act as same-scan observers, so keep the
+    # full observer set.  Only the abstract-retained tags remain as concrete
+    # state dimensions that the proof may need to vary.
     concrete_elider = _ConcreteStateElider(
         program,
         graph,
         stateful_dims,
         nondeterministic_dims,
+        state_basis=frozenset(abstract_reduced),
         compiled=compiled,
         progress=progress,
     )
