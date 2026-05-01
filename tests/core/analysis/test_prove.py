@@ -1460,7 +1460,15 @@ class TestReachablePartitioning:
         def _fake_partition(_program, _projection):
             return [["X"], ["Y"]]
 
-        def _fake_context(_program, *, scope, project, seed_tags, input_groups=()):
+        def _fake_context(
+            _program,
+            *,
+            scope,
+            project,
+            seed_tags,
+            input_groups=(),
+            progress_info=None,
+        ):
             built_projects.append(project)
             return object()
 
@@ -1512,7 +1520,15 @@ class TestReachablePartitioning:
         def _fake_partition(_program, _projection):
             return [["X"], ["Y"]]
 
-        def _fake_context(_program, *, scope, project, seed_tags, input_groups=()):
+        def _fake_context(
+            _program,
+            *,
+            scope,
+            project,
+            seed_tags,
+            input_groups=(),
+            progress_info=None,
+        ):
             return object()
 
         def _fake_bfs(_context, *, project, max_depth, max_states, progress):

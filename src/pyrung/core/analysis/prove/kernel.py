@@ -297,6 +297,8 @@ class _LiveInputCache:
             ctx.all_exprs,
             self._hidden_input_deps,
         )
+        if ctx.always_live_input_names:
+            result = frozenset(set(result) | set(ctx.always_live_input_names))
         self._cache[cache_key] = result
         return result
 

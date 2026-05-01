@@ -1,13 +1,18 @@
-"""State-key elision via path-sensitive abstract scan interpretation.
+"""Two-phase state-key elision: abstract pre-filter then concrete kernel proofs.
 
-This pass proves when a written tag's scan-entry value is irrelevant to all
-future behavior. The analysis is conservative by design: unsupported or
-imprecise cases stay stateful.
+Phase 1 (abstract): A fast O(program-size) provenance analysis that tracks
+whether each tag's exit value depends on its entry value, retained state,
+inputs, or is unknown.  Handles most cases instantly.
+
+Phase 2 (concrete): For tags the abstract pass could not resolve, uses the
+compiled replay kernel to enumerate domain combinations and prove elision.
+Strictly more powerful but combinatorially bounded.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any
@@ -17,19 +22,31 @@ from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction, ReturnInstruction
 from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
+from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
+from . import PENDING
 from .absorb import _all_write_targets
+from .kernel import _compile_inline_step
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
 
+_ELISION_ENUM_LIMIT = 200_000
+_EXPR_ENUM_LIMIT = 128
+_FORCED_TRUE_COMBO_LIMIT = 4_096
+_DEFAULT_DT = 0.010
+_MEMORY_EXCLUDED_PREFIXES = ("_dt", "_frac:")
+# Batch removal proves candidates against one retained snapshot per round.
+# Lower _ELISION_PROOF_BUDGET to skip medium-cost proofs when tuning startup time.
+_ELISION_BATCH_REMOVE = True
+_ELISION_PROOF_BUDGET = _ELISION_ENUM_LIMIT
+
 
 _NO_CONST = object()
-_EXPR_ENUM_LIMIT = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,6 +469,12 @@ class _TagElisionCheck:
 
         if not enabled and getattr(instr, "is_inert_when_disabled", lambda: True)():
             return _ExecutionResult(state)
+
+        if getattr(instr, "oneshot", False):
+            next_state = state.copy()
+            self._apply_unknown_writes(next_state, instr, enabled=enabled)
+            self._apply_implicit_faults(next_state, instr, enabled=enabled)
+            return _ExecutionResult(next_state)
 
         if isinstance(instr, OutInstruction):
             value = _CONST_TRUE if enabled else _CONST_FALSE
@@ -949,7 +972,7 @@ class _TagElisionCheck:
 
 
 class _ScanLocalStateElider:
-    """Fixed-point driver for scan-local state-key elision."""
+    """Fixed-point driver for abstract scan-local state-key elision."""
 
     def __init__(
         self,
@@ -1083,13 +1106,640 @@ class _ScanLocalStateElider:
         return known
 
 
+# ---------------------------------------------------------------------------
+# Phase 2: Concrete kernel elision
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _ForcedTrueCoverage:
+    written_tags: frozenset[str]
+    varied_tags: tuple[str, ...]
+    truncated: bool = False
+
+
+def _domain_from_tag_metadata(tag: Tag) -> tuple[Any, ...] | None:
+    if tag.type == TagType.BOOL:
+        return (False, True)
+    if tag.choices is not None:
+        return tuple(sorted(tag.choices.keys()))
+    if tag.min is None or tag.max is None:
+        return None
+    try:
+        size = int(tag.max - tag.min + 1)
+    except Exception:
+        return None
+    if 0 < size <= 256:
+        return tuple(range(int(tag.min), int(tag.max) + 1))
+    return None
+
+
+def _product_size(domains: tuple[tuple[Any, ...], ...]) -> int:
+    total = 1
+    for domain in domains:
+        total *= len(domain)
+    return total
+
+
+def _is_fault_tag(tag_name: str) -> bool:
+    return tag_name.startswith("fault.")
+
+
+def _step_compiled_kernel(
+    step_fn: Any,
+    compiled: CompiledKernel,
+    kernel: ReplayKernel,
+    *,
+    dt: float,
+) -> None:
+    step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+    for name in compiled.edge_tags:
+        if name in kernel.tags:
+            kernel.prev[name] = kernel.tags[name]
+    kernel.advance(dt)
+
+
+def _alternate_seed_value(tag: Tag) -> Any:
+    default = tag.default
+    if tag.type == TagType.BOOL:
+        return not bool(default)
+    if tag.choices is not None:
+        for value in sorted(tag.choices.keys()):
+            if value != default:
+                return value
+    if tag.min is not None and tag.max is not None:
+        try:
+            min_value = int(tag.min)
+            max_value = int(tag.max)
+            if default != min_value:
+                return min_value
+            if default != max_value:
+                return max_value
+        except Exception:
+            pass
+    if tag.type in {TagType.INT, TagType.DINT, TagType.WORD}:
+        return 1 if default != 1 else 0
+    if tag.type == TagType.REAL:
+        return 1.0 if default != 1.0 else 0.0
+    if tag.type == TagType.CHAR:
+        return "__alt__" if default != "__alt__" else ""
+    return default
+
+
+def _seed_profile(compiled: CompiledKernel, *, alternate: bool) -> dict[str, Any]:
+    seeded: dict[str, Any] = {}
+    for name, tag in compiled.referenced_tags.items():
+        seeded[name] = _alternate_seed_value(tag) if alternate else tag.default
+    return seeded
+
+
+def _coverage_domain_items(
+    graph: ProgramGraph,
+    stateful_dims: Mapping[str, tuple[Any, ...]],
+    nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+    *,
+    combo_limit: int,
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    known_domains = dict(stateful_dims)
+    known_domains.update(nondeterministic_dims)
+    if not known_domains:
+        return ()
+
+    all_items = tuple(sorted(known_domains.items()))
+    if _product_size(tuple(domain for _name, domain in all_items)) <= combo_limit:
+        return all_items
+
+    selected: set[str] = set(nondeterministic_dims)
+    for pointer_name in graph.pointer_tags:
+        if pointer_name in known_domains:
+            selected.add(pointer_name)
+        selected.update(graph.upstream_slice(pointer_name) & set(known_domains))
+
+    if not selected:
+        return ()
+
+    items = tuple(sorted((name, known_domains[name]) for name in selected))
+    if _product_size(tuple(domain for _name, domain in items)) <= combo_limit:
+        return items
+
+    reduced = tuple(sorted((name, known_domains[name]) for name in nondeterministic_dims))
+    return reduced
+
+
+def _collect_forced_true_coverage(
+    program: Program,
+    graph: ProgramGraph,
+    stateful_dims: Mapping[str, tuple[Any, ...]],
+    nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+    *,
+    compiled: CompiledKernel | None = None,
+    combo_limit: int = _FORCED_TRUE_COMBO_LIMIT,
+) -> _ForcedTrueCoverage:
+    from pyrung.circuitpy.codegen import compile_kernel
+
+    forced_compiled = compiled or compile_kernel(program, force_rung_enable=True)
+    forced_step = _compile_inline_step(forced_compiled, tuple(forced_compiled.block_specs.values()))
+    domain_items = _coverage_domain_items(
+        graph,
+        stateful_dims,
+        nondeterministic_dims,
+        combo_limit=combo_limit,
+    )
+    varied_tags = tuple(name for name, _domain in domain_items)
+    combo_space = _product_size(tuple(domain for _name, domain in domain_items)) if domain_items else 1
+    truncated = (combo_space * 2) > combo_limit
+
+    written_tags: set[str] = set()
+    domain_values = [domain for _name, domain in domain_items]
+    seed_profiles = (False, True)
+    remaining_budget = combo_limit
+    for seed_index, alternate in enumerate(seed_profiles):
+        if remaining_budget <= 0:
+            break
+        seeds_left = len(seed_profiles) - seed_index
+        combo_budget = (
+            remaining_budget
+            if combo_space <= remaining_budget
+            else max(1, (remaining_budget + seeds_left - 1) // seeds_left)
+        )
+        seed = _seed_profile(forced_compiled, alternate=alternate)
+        processed = 0
+        combo_iter = product(*domain_values) if domain_values else [()]
+        for combo in combo_iter:
+            if processed >= combo_budget or remaining_budget <= 0:
+                break
+            kernel = forced_compiled.create_kernel()
+            kernel.tags.update(seed)
+            entry_values = dict(zip(varied_tags, combo, strict=True))
+            kernel.tags.update(entry_values)
+            before = {name: kernel.tags.get(name) for name in forced_compiled.referenced_tags}
+            _step_compiled_kernel(
+                forced_step,
+                forced_compiled,
+                kernel,
+                dt=_DEFAULT_DT,
+            )
+            for name in forced_compiled.referenced_tags:
+                if kernel.tags.get(name) != before.get(name):
+                    written_tags.add(name)
+            processed += 1
+            remaining_budget -= 1
+
+    return _ForcedTrueCoverage(
+        written_tags=frozenset(written_tags),
+        varied_tags=varied_tags,
+        truncated=truncated,
+    )
+
+
+class _ConcreteStateElider:
+    def __init__(
+        self,
+        program: Program,
+        graph: ProgramGraph,
+        stateful_dims: Mapping[str, tuple[Any, ...]],
+        nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+        *,
+        compiled: CompiledKernel | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        from pyrung.circuitpy.codegen import compile_kernel
+
+        self._program = program
+        self._graph = graph
+        self._stateful_dims = dict(stateful_dims)
+        self._nondeterministic_dims = dict(nondeterministic_dims)
+        self._progress = progress
+        self._compiled = compiled or compile_kernel(program)
+        self._step_fn = _compile_inline_step(
+            self._compiled,
+            tuple(self._compiled.block_specs.values()),
+        )
+        self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
+        self._coverage = _collect_forced_true_coverage(
+            program,
+            graph,
+            stateful_dims,
+            nondeterministic_dims,
+        )
+        static_writers = set(graph.writers_of) & set(self._stateful_dims)
+        dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
+        self._written_tags = frozenset(static_writers | dynamic_writers)
+
+        # Discover kernel memory keys via pilot scans.  Instructions like
+        # oneshot OTE store hidden state in kernel.memory that fresh kernels
+        # do not reproduce.  We sweep ND input combinations (using both
+        # default and alternate seeds) to find a memory snapshot where at
+        # least one key differs from the fresh-kernel default.
+        self._warm_memory: dict[str, Any] | None = None
+        mem_keys: list[str] = []
+        nd_names = sorted(self._nondeterministic_dims)
+        nd_domains = [self._nondeterministic_dims[n] for n in nd_names]
+        nd_product_size = _product_size(tuple(nd_domains)) if nd_domains else 1
+        combo_iter = product(*nd_domains) if nd_domains else [()]
+        fresh_memory: dict[str, Any] = {}
+        warm_found = False
+        pilot_budget = _FORCED_TRUE_COMBO_LIMIT
+        pilots_run = 0
+        for combo in combo_iter:
+            if pilots_run >= pilot_budget:
+                break
+            for alt in (False, True):
+                pilot = self._compiled.create_kernel()
+                if alt:
+                    pilot.tags.update(_seed_profile(self._compiled, alternate=True))
+                for name, val in zip(nd_names, combo, strict=True):
+                    pilot.tags[name] = val
+                pilot.memory["_dt"] = _DEFAULT_DT
+                for spec in self._compiled.block_specs.values():
+                    pilot.load_block_from_tags(spec)
+                _step_compiled_kernel(self._step_fn, self._compiled, pilot, dt=_DEFAULT_DT)
+                pilots_run += 1
+                found = [
+                    k
+                    for k in pilot.memory
+                    if not any(k.startswith(p) for p in _MEMORY_EXCLUDED_PREFIXES)
+                ]
+                if found and not mem_keys:
+                    mem_keys = found
+                    fresh_memory = {k: pilot.memory.get(k) for k in found}
+                if found and not warm_found:
+                    for k in found:
+                        if pilot.memory.get(k) != fresh_memory.get(k):
+                            self._warm_memory = dict(pilot.memory)
+                            warm_found = True
+                            break
+            if warm_found:
+                break
+
+        self._emit(
+            "elision | setup complete"
+            f" | stateful={len(self._stateful_dims):,}"
+            f" | candidates={len(self._candidate_names()):,}"
+            f" | forced-true={'truncated' if self._coverage.truncated else 'complete'}"
+            f" | memory_keys={len(mem_keys)}"
+        )
+
+    def elide(self) -> dict[str, tuple[Any, ...]]:
+        retained = set(self._stateful_dims)
+        changed = True
+        round_num = 0
+        while changed:
+            changed = False
+            round_num += 1
+            snapshot = set(retained)
+            candidates = self._ordered_candidates(snapshot)
+            self._emit(
+                f"elision round {round_num} | checking {len(candidates):,} candidate tag(s)"
+            )
+            removable: list[str] = []
+            for index, tag_name in enumerate(candidates, start=1):
+                self._emit(f"elision | checking {tag_name} ({index}/{len(candidates)})")
+                compare_retained = frozenset(snapshot - {tag_name})
+                if not self._can_elide(tag_name, compare_retained):
+                    self._emit(f"elision | keeping {tag_name}")
+                    continue
+                if _ELISION_BATCH_REMOVE:
+                    removable.append(tag_name)
+                    self._emit(f"elision | can drop {tag_name}")
+                    continue
+                retained.remove(tag_name)
+                changed = True
+                self._emit(f"elision | dropped {tag_name}")
+            if _ELISION_BATCH_REMOVE and removable:
+                retained.difference_update(removable)
+                changed = True
+        self._emit(
+            "elision complete"
+            f" | removed={len(self._stateful_dims) - len(retained):,}"
+            f" | retained={len(retained):,}"
+        )
+        return {name: domain for name, domain in self._stateful_dims.items() if name in retained}
+
+    def _is_concrete_candidate(self, name: str) -> bool:
+        """True when the tag is eligible for concrete elision proofs."""
+        if name not in self._written_tags:
+            return False
+        if getattr(self._graph.tags.get(name), "lock", False):
+            return False
+        # Tags with PENDING in their domain use abstract three-valued logic
+        # (timer/counter Done bits).  The concrete kernel cannot execute with
+        # the PENDING sentinel, so these tags must be retained unconditionally.
+        if PENDING in self._stateful_dims.get(name, ()):
+            return False
+        return True
+
+    def _candidate_names(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                name
+                for name in self._stateful_dims
+                if self._is_concrete_candidate(name)
+            )
+        )
+
+    def _ordered_candidates(self, retained: set[str]) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                (
+                    name
+                    for name in retained
+                    if self._is_concrete_candidate(name)
+                ),
+                key=lambda name: (
+                    len(self._graph.downstream_slice(name) & retained),
+                    len(self._stateful_dims[name]),
+                    name,
+                ),
+            )
+        )
+
+    def _emit(self, message: str) -> None:
+        if self._progress is not None:
+            self._progress(message)
+
+    def _can_elide(self, candidate: str, retained: frozenset[str]) -> bool:
+        observed, fallback_hidden = self._reachable_stateful_frontier(candidate, retained)
+        if not observed:
+            sticky_hidden = tuple(
+                name for name in fallback_hidden if self._hidden_entry_matters(name, retained)
+            )
+            if not sticky_hidden:
+                return True
+            observed = sticky_hidden
+
+        retained_names, input_names, hidden_stateful = self._scoped_dependencies(
+            candidate,
+            observed,
+            retained,
+        )
+
+        group_domains = tuple(self._stateful_dims[name] for name in retained_names) + tuple(
+            self._nondeterministic_dims[name] for name in input_names
+        )
+        vary_names = hidden_stateful + (candidate,)
+        vary_domains = tuple(self._stateful_dims[name] for name in hidden_stateful) + (
+            self._stateful_dims[candidate],
+        )
+        proof_limit = min(_ELISION_ENUM_LIMIT, _ELISION_PROOF_BUDGET)
+        if _product_size(group_domains + vary_domains) > proof_limit:
+            return False
+
+        group_iter = product(*group_domains) if group_domains else [()]
+        vary_iter_values = product(*vary_domains) if vary_domains else [()]
+        for group_values in group_iter:
+            entry_values = dict(
+                zip(retained_names + input_names, group_values, strict=True)
+            )
+            expected: tuple[Any, ...] | None = None
+            for vary_values in vary_iter_values:
+                full_entry = dict(entry_values)
+                full_entry.update(dict(zip(vary_names, vary_values, strict=True)))
+                outcome = self._scan(full_entry, observed)
+                if outcome is None:
+                    return False
+                if expected is None:
+                    expected = outcome
+                    continue
+                if outcome != expected:
+                    return False
+            vary_iter_values = product(*vary_domains) if vary_domains else [()]
+        return True
+
+    def _reachable_stateful_frontier(
+        self,
+        candidate: str,
+        retained: frozenset[str],
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        reachable_retained: set[str] = set()
+        reachable_hidden: set[str] = set()
+        retained_set = set(retained)
+        stateful_names = set(self._stateful_dims)
+        visited: set[str] = {candidate}
+        queue: deque[str] = deque([candidate])
+
+        while queue:
+            current = queue.popleft()
+            if _is_fault_tag(current):
+                continue
+            for rung_idx in self._graph.readers_of.get(current, frozenset()):
+                node = self._graph.rung_nodes[rung_idx]
+                for written_tag in node.writes:
+                    if _is_fault_tag(written_tag):
+                        continue
+                    if written_tag in retained_set:
+                        reachable_retained.add(written_tag)
+                        continue
+                    if written_tag in stateful_names and written_tag != candidate:
+                        reachable_hidden.add(written_tag)
+                    if written_tag in visited:
+                        continue
+                    visited.add(written_tag)
+                    queue.append(written_tag)
+
+        return tuple(sorted(reachable_retained)), tuple(sorted(reachable_hidden))
+
+    def _hidden_entry_matters(self, tag_name: str, retained: frozenset[str]) -> bool:
+        cache_key = (tag_name, retained)
+        cached = self._entry_sensitive_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        upstream = set(self._graph.upstream_slice(tag_name))
+        cone = upstream | {tag_name}
+        retained_names = tuple(sorted(set(retained) & upstream))
+        input_names = tuple(sorted(upstream & set(self._nondeterministic_dims)))
+        hidden_names = tuple(
+            sorted((cone & set(self._stateful_dims)) - set(retained_names) - {tag_name})
+        )
+
+        fixed_domains = (
+            tuple(self._stateful_dims[name] for name in retained_names)
+            + tuple(self._nondeterministic_dims[name] for name in input_names)
+            + tuple(self._stateful_dims[name] for name in hidden_names)
+        )
+        tag_domain = self._stateful_dims[tag_name]
+        if _product_size(fixed_domains + (tag_domain,)) > _ELISION_ENUM_LIMIT:
+            self._entry_sensitive_cache[cache_key] = True
+            return True
+
+        fixed_names = retained_names + input_names + hidden_names
+        fixed_iter = product(*fixed_domains) if fixed_domains else [()]
+        for fixed_values in fixed_iter:
+            base_entry = dict(zip(fixed_names, fixed_values, strict=True))
+            expected: tuple[Any, ...] | None = None
+            for tag_value in tag_domain:
+                full_entry = dict(base_entry)
+                full_entry[tag_name] = tag_value
+                outcome = self._scan(full_entry, (tag_name,))
+                if outcome is None:
+                    self._entry_sensitive_cache[cache_key] = True
+                    return True
+                if expected is None:
+                    expected = outcome
+                    continue
+                if outcome != expected:
+                    self._entry_sensitive_cache[cache_key] = True
+                    return True
+
+        self._entry_sensitive_cache[cache_key] = False
+        return False
+
+    def _is_retained_anchor(self, tag_name: str) -> bool:
+        tag = self._graph.tags.get(tag_name)
+        if tag is None:
+            return False
+        if tag_name not in self._written_tags:
+            return True
+        return bool(tag.external or tag.final)
+
+    def _scoped_dependencies(
+        self,
+        candidate: str,
+        observed: tuple[str, ...],
+        retained: frozenset[str],
+    ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+        retained_set = set(retained)
+        observed_set = set(observed)
+        retained_names = set(observed_set & retained_set)
+        input_names: set[str] = set()
+        hidden_stateful = set(observed_set - retained_set)
+        queue: deque[str] = deque([candidate, *observed])
+        visited: set[str] = set(queue)
+
+        while queue:
+            current = queue.popleft()
+            if _is_fault_tag(current):
+                continue
+            for rung_idx in self._graph.writers_of.get(current, frozenset()):
+                node = self._graph.rung_nodes[rung_idx]
+                for src in node.condition_reads | node.data_reads:
+                    if _is_fault_tag(src):
+                        continue
+                    if src in self._nondeterministic_dims:
+                        input_names.add(src)
+                        continue
+                    if src in retained_set and self._is_retained_anchor(src):
+                        retained_names.add(src)
+                        continue
+                    if src in self._stateful_dims and src not in retained_set and src != candidate:
+                        hidden_stateful.add(src)
+                    if src in visited:
+                        continue
+                    visited.add(src)
+                    queue.append(src)
+
+        return (
+            tuple(sorted(retained_names)),
+            tuple(sorted(input_names)),
+            tuple(sorted(hidden_stateful)),
+        )
+
+    def _scan(
+        self,
+        entry_values: Mapping[str, Any],
+        observed: tuple[str, ...],
+    ) -> tuple[Any, ...] | None:
+        kernel = self._compiled.create_kernel()
+        kernel.tags.update(entry_values)
+        _step_compiled_kernel(
+            self._step_fn,
+            self._compiled,
+            kernel,
+            dt=_DEFAULT_DT,
+        )
+        result = tuple(kernel.tags.get(name) for name in observed)
+
+        if self._warm_memory is not None:
+            # Re-run with warm memory to detect hidden memory-dependent
+            # behaviour (e.g. oneshot instructions).  If outcomes differ
+            # the caller must treat the configuration as non-elidable.
+            warm_kernel = self._compiled.create_kernel()
+            warm_kernel.tags.update(entry_values)
+            warm_kernel.memory.update(self._warm_memory)
+            _step_compiled_kernel(
+                self._step_fn,
+                self._compiled,
+                warm_kernel,
+                dt=_DEFAULT_DT,
+            )
+            warm_result = tuple(warm_kernel.tags.get(name) for name in observed)
+            if warm_result != result:
+                return None
+
+        return result
+
+
 def _elide_scan_local_stateful_dims(
     program: Program,
     graph: ProgramGraph,
     stateful_dims: Mapping[str, tuple[Any, ...]],
     nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+    *,
+    compiled: CompiledKernel | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, tuple[Any, ...]]:
-    """Return a reduced stateful-dimension map after conservative elision."""
-    elider = _ScanLocalStateElider(program, graph, stateful_dims, nondeterministic_dims)
-    reduced, _accepted = elider.elide()
-    return reduced
+    """Return a reduced stateful-dimension map after conservative elision.
+
+    Two-phase hybrid: abstract provenance analysis first (fast, handles most
+    cases), then concrete kernel proofs on whatever abstract retained.
+    """
+    if not stateful_dims:
+        return {}
+
+    def _emit(msg: str) -> None:
+        if progress is not None:
+            progress(msg)
+
+    _emit(
+        "elision | starting scan-local state elision"
+        f" | stateful={len(stateful_dims):,}"
+        f" | inputs={len(nondeterministic_dims):,}"
+    )
+
+    # Phase 1: abstract provenance analysis
+    abstract_elider = _ScanLocalStateElider(program, graph, stateful_dims, nondeterministic_dims)
+    abstract_reduced, _accepted = abstract_elider.elide()
+    abstract_removed = len(stateful_dims) - len(abstract_reduced)
+    _emit(
+        f"elision | abstract phase complete"
+        f" | removed={abstract_removed:,}"
+        f" | retained={len(abstract_reduced):,}"
+    )
+
+    if not abstract_reduced:
+        _emit("elision complete | removed={:,} | retained=0".format(len(stateful_dims)))
+        return {}
+
+    # Phase 2: concrete kernel proofs on what abstract couldn't resolve.
+    # Pass the full stateful_dims so the concrete pass sees all observers,
+    # but restrict candidates to what abstract retained.
+    concrete_elider = _ConcreteStateElider(
+        program,
+        graph,
+        stateful_dims,
+        nondeterministic_dims,
+        compiled=compiled,
+        progress=progress,
+    )
+    abstract_retained_names = frozenset(abstract_reduced)
+    concrete_retained = set(abstract_retained_names)
+    changed = True
+    while changed:
+        changed = False
+        snapshot = set(concrete_retained)
+        for tag_name in sorted(snapshot):
+            if not concrete_elider._is_concrete_candidate(tag_name):
+                continue
+            if tag_name not in abstract_retained_names:
+                continue
+            compare_retained = frozenset(snapshot - {tag_name})
+            if concrete_elider._can_elide(tag_name, compare_retained):
+                concrete_retained.discard(tag_name)
+                changed = True
+    concrete_elider._emit(
+        "elision complete"
+        f" | removed={len(stateful_dims) - len(concrete_retained):,}"
+        f" | retained={len(concrete_retained):,}"
+    )
+    return {name: domain for name, domain in stateful_dims.items() if name in concrete_retained}

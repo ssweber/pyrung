@@ -96,6 +96,7 @@ class _ExploreContext:
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
+    always_live_input_names: tuple[str, ...] = ()
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
     input_groups: tuple[tuple[str, ...], ...] = ()
@@ -151,6 +152,7 @@ def _build_explore_context(
     dt: float = 0.010,
     compiled: CompiledKernel | None = None,
     input_groups: tuple[tuple[str, ...], ...] = (),
+    progress_info: Callable[[str], None] | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -161,6 +163,7 @@ def _build_explore_context(
         dt=dt,
         compiled=compiled,
         input_groups=input_groups,
+        progress_info=progress_info,
     )
     return _run_pre_bfs_pipeline(ctx)
 
@@ -700,10 +703,20 @@ def _partition_projection(
     if len(projection) <= 1:
         return [list(projection)]
 
-    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pdg import TagRole, build_program_graph
     from pyrung.core.analysis.simplified import simplified_forms
 
     graph = build_program_graph(program)
+    if any(
+        graph.tag_roles.get(tag_name) == TagRole.INPUT
+        or (
+            (tag := graph.tags.get(tag_name)) is not None
+            and tag.external
+            and tag_name not in graph.writers_of
+        )
+        for tag_name in projection
+    ):
+        return [list(projection)]
     forms = simplified_forms(program)
 
     cones: list[frozenset[str]] = []
@@ -1067,6 +1080,7 @@ def _build_reachable_context(
     project: tuple[str, ...],
     seed_tags: list[str],
     input_groups: tuple[tuple[str, ...], ...] = (),
+    progress_info: Callable[[str], None] | None = None,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program.
 
@@ -1083,6 +1097,7 @@ def _build_reachable_context(
         project=project,
         compiled=compiled_kernel,
         input_groups=input_groups,
+        progress_info=progress_info,
     )
 
 
@@ -1139,6 +1154,7 @@ def reachable_states(
             project=project_names,
             seed_tags=effective_scope,
             input_groups=input_groups,
+            progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         )
         if isinstance(context, Intractable):
             return context
@@ -1171,6 +1187,7 @@ def reachable_states(
             project=project_names,
             seed_tags=clusters[0],
             input_groups=input_groups,
+            progress_info=stderr_reporter.info if stderr_reporter is not None else None,
         )
         if isinstance(context, Intractable):
             return context
@@ -1210,6 +1227,11 @@ def reachable_states(
             project=cluster_project,
             seed_tags=cluster,
             input_groups=input_groups,
+            progress_info=(
+                (lambda message, *, _label=label: stderr_reporter.info(message, label=_label))
+                if stderr_reporter is not None
+                else None
+            ),
         )
         if isinstance(context, Intractable):
             return context

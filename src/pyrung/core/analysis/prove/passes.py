@@ -137,6 +137,7 @@ class _PassContext:
     dt: float
     compiled: CompiledKernel | None
     input_groups: tuple[tuple[str, ...], ...] = ()
+    progress_info: Callable[[str], None] | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -213,6 +214,9 @@ class _PassContext:
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(self.nondeterministic_dims)),
+            always_live_input_names=tuple(
+                sorted(set(self.project or ()) & set(self.nondeterministic_dims))
+            ),
             exclusive_input_groups=exclusive_input_groups,
             exclusive_input_group_by_member=_exclusive_input_group_membership(
                 exclusive_input_groups
@@ -354,13 +358,19 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
 
 
 def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
+    from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
+
     assert ctx.graph is not None
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
+    if ctx.compiled is None:
+        ctx.compiled = _compile_kernel(ctx.program)
     ctx.stateful_dims = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
         ctx.stateful_dims,
         ctx.nondeterministic_dims,
+        compiled=ctx.compiled,
+        progress=ctx.progress_info,
     )
 
 

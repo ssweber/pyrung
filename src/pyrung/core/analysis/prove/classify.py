@@ -26,7 +26,7 @@ from .absorb import (
     _merge_threshold_absorptions,
     _ThresholdBlocker,
 )
-from .expr import _build_atom_index, _collect_atoms_for_tag
+from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
 from .kernel import _restore_kernel, _snapshot_kernel
 
 if TYPE_CHECKING:
@@ -115,8 +115,18 @@ def _collect_all_exprs(
         _caller_conditions,
         _collect_write_sites,
     )
+    from pyrung.core.analysis.pdg import _implicit_fault_writes
 
-    sites = _collect_write_sites(program, target_extractor=_all_write_targets)
+    tag_refs = dict(graph.tags)
+
+    def _write_targets_with_faults(instr: Any) -> list[tuple[str, str]]:
+        seen: set[tuple[str, str]] = set(_all_write_targets(instr))
+        instr_type = type(instr).__name__
+        for fault_name in sorted(_implicit_fault_writes(instr, tag_refs)):
+            seen.add((fault_name, instr_type))
+        return sorted(seen)
+
+    sites = _collect_write_sites(program, target_extractor=_write_targets_with_faults)
     caller_map = _build_caller_map(program)
     for site in sites:
         if upstream is not None and site.target_name not in upstream:
@@ -833,6 +843,12 @@ def _classify_dimensions_from_graph(
                 for tag in graph.upstream_slice(tag_name)
                 if graph.tag_roles.get(tag) is TagRole.INPUT
             )
+        for expr in all_exprs:
+            upstream_tags.update(
+                tag_name
+                for tag_name in _referenced_tags(expr)
+                if graph.tag_roles.get(tag_name) is TagRole.INPUT
+            )
         scope_input_tags = frozenset(upstream_tags)
 
     stateful: dict[str, tuple[Any, ...]] = {}
@@ -874,6 +890,10 @@ def _classify_dimensions_from_graph(
                 graph,
                 atom_idx,
             )
+            if not domain:
+                declared = _declared_domain(tag)
+                if declared is not None:
+                    domain = declared
             if not domain and _has_non_condition_data_read(tag_name, graph):
                 declared = _declared_domain(tag)
                 if declared is not None:

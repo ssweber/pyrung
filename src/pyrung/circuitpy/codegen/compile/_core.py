@@ -612,10 +612,14 @@ def compile_rung(
     try:
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
-        cond_expr = _compile_condition_group(
-            rung._conditions,
-            ctx,
-            condition_snapshot=condition_snapshot,
+        cond_expr = (
+            "True"
+            if ctx.force_rung_enable
+            else _compile_condition_group(
+                rung._conditions,
+                ctx,
+                condition_snapshot=condition_snapshot,
+            )
         )
         lines = [f"{' ' * indent}{enabled_var} = {cond_expr}"]
 
@@ -672,10 +676,14 @@ def _compile_rung_items(
         if not isinstance(item, LogicRung):
             continue
         local_conditions = item._conditions[item._branch_condition_start :]
-        local_expr = _compile_condition_group(
-            local_conditions,
-            ctx,
-            condition_snapshot=condition_snapshot,
+        local_expr = (
+            "True"
+            if ctx.force_rung_enable
+            else _compile_condition_group(
+                local_conditions,
+                ctx,
+                condition_snapshot=condition_snapshot,
+            )
         )
         branch_var = f"_{scope_key}_branch_{branch_idx}"
         branch_idx += 1

@@ -26,7 +26,11 @@ from pyrung.core import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
-from pyrung.core.analysis.prove.elision import _elide_scan_local_stateful_dims
+from pyrung.core.analysis.prove.elision import (
+    _ConcreteStateElider,
+    _collect_forced_true_coverage,
+    _elide_scan_local_stateful_dims,
+)
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments
 from pyrung.core.analysis.prove.kernel import (
     _EdgeCompressor,
@@ -43,6 +47,7 @@ from pyrung.core.analysis.prove.passes import (
 )
 
 events_module = importlib.import_module("pyrung.core.analysis.prove.events")
+elision_module = importlib.import_module("pyrung.core.analysis.prove.elision")
 
 
 def _make_pass_context(
@@ -460,7 +465,107 @@ def _elide_stateful_dims(
     )
 
 
+class TestForcedTrueCoverage:
+    def test_collect_forced_true_coverage_caps_total_seeded_combos(
+        self,
+        monkeypatch,
+    ) -> None:
+        inp = Bool("Inp", external=True)
+        stored = Bool("Stored")
+
+        with Program(strict=False) as logic:
+            with Rung(inp):
+                out(stored)
+
+        graph = build_program_graph(logic)
+        calls = 0
+        real_step = elision_module._step_compiled_kernel
+
+        def _count_step(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return real_step(*args, **kwargs)
+
+        monkeypatch.setattr(elision_module, "_step_compiled_kernel", _count_step)
+
+        _collect_forced_true_coverage(
+            logic,
+            graph,
+            {"Stored": (False, True)},
+            {"Inp": (False, True)},
+            combo_limit=3,
+        )
+
+        assert calls == 3
+
+
 class TestScanLocalStateElision:
+    def test_elision_progress_reports_candidate_checks(self) -> None:
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+        messages: list[str] = []
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(False, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        reduced = _elide_scan_local_stateful_dims(
+            logic,
+            build_program_graph(logic),
+            {"Tmp": (False, True), "Seen": (False, True)},
+            {},
+            progress=messages.append,
+        )
+
+        assert reduced == {}
+        assert any("abstract phase complete" in message for message in messages)
+        assert any("elision complete" in message for message in messages)
+
+    def test_can_elide_scopes_observation_to_relevant_retained_tags(self) -> None:
+        tmp = Bool("Tmp")
+        seen = Bool("Seen")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(False, tmp)
+            with Rung(tmp):
+                out(seen)
+
+        stateful_dims: dict[str, tuple[object, ...]] = {
+            "Tmp": (False, True),
+            "Seen": (False, True),
+        }
+        for idx in range(18):
+            stateful_dims[f"Unrelated{idx}"] = (False, True)
+
+        elider = _ConcreteStateElider(logic, build_program_graph(logic), stateful_dims, {})
+
+        assert elider._can_elide(
+            "Tmp",
+            frozenset(name for name in stateful_dims if name != "Tmp"),
+        )
+
+    def test_can_elide_still_groups_observed_retained_entry_values(self) -> None:
+        tmp = Bool("Tmp")
+        stored = Bool("Stored")
+
+        with Program(strict=False) as logic:
+            with Rung(tmp):
+                copy(False, stored)
+            with Rung():
+                copy(False, tmp)
+
+        elider = _ConcreteStateElider(
+            logic,
+            build_program_graph(logic),
+            {"Tmp": (False, True), "Stored": (False, True)},
+            {},
+        )
+
+        assert not elider._can_elide("Tmp", frozenset({"Stored"}))
+
     def test_elides_indirect_pointer_scratch_from_init_backed_table(self) -> None:
         init_done = Bool("InitDone")
         selector = Int("Selector", external=True, choices={1: "A", 2: "B"})
@@ -524,6 +629,56 @@ class TestScanLocalStateElision:
 
         assert reduced == {}
 
+    def test_elides_canonical_branch_reset_flag(self) -> None:
+        req_a = Bool("ReqA", external=True)
+        req_b = Bool("ReqB", external=True)
+        pulse = Int("Pulse", choices={0: "No", 1: "Yes"})
+        seen = Int("Seen", choices={0: "No", 1: "Yes"})
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, seen)
+            with Rung(req_a):
+                copy(1, pulse)
+            with Rung(req_b):
+                copy(1, pulse)
+            with Rung(pulse == 1):
+                copy(1, seen)
+                copy(0, pulse)
+
+        reduced = _elide_stateful_dims(
+            logic,
+            {"Pulse": (0, 1), "Seen": (0, 1)},
+            {"ReqA": (False, True), "ReqB": (False, True)},
+        )
+
+        assert reduced == {}
+
+    def test_elides_indirect_scratch_with_unmapped_default_slot(self) -> None:
+        selector = Int("Selector", external=True, choices={10: "None", 11: "Go"})
+        tmp = Int("Tmp", choices={0: "None", 7: "Go"})
+        outv = Int("Out", choices={0: "None", 7: "Go"})
+        table = Block("Table", TagType.INT, 10, 11)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, outv)
+            with Rung():
+                copy(7, table[11])
+            with Rung():
+                copy(table[selector], tmp)
+            with Rung(tmp != 0):
+                copy(tmp, outv)
+                copy(0, tmp)
+
+        reduced = _elide_stateful_dims(
+            logic,
+            {"Tmp": (0, 7), "Out": (0, 7)},
+            {"Selector": (10, 11)},
+        )
+
+        assert reduced == {}
+
     def test_keeps_prewrite_input_memory_when_next_scan_entry_matters(self) -> None:
         inp = Bool("Inp", external=True)
         tmp = Int("Tmp", choices={0: "No", 1: "Yes"})
@@ -549,7 +704,14 @@ class TestScanLocalStateElision:
         context = _build_explore_context(packml_logic, project=("StateCurrent",))
         assert not isinstance(context, Intractable)
 
-        for name in ("CmdValidIdx", "ModeConfigIdx", "StateMaskIdx", "StateJumpIdx"):
+        for name in (
+            "CmdValidIdx",
+            "ModeConfigIdx",
+            "StateMaskIdx",
+            "StateJumpIdx",
+            "StateJumpTarget",
+            "StateEnableYes",
+        ):
             assert name not in context.stateful_dims
 
         for name in ("StateCurrent", "StateRequested", "UnitModeCurrent"):

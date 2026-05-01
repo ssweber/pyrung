@@ -29,9 +29,13 @@ from pyrung.core.kernel import BlockSpec, CompiledKernel
 from pyrung.core.program import Program
 
 
-def compile_kernel(program: Program) -> CompiledKernel:
+def compile_kernel(
+    program: Program,
+    *,
+    force_rung_enable: bool = False,
+) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel."""
-    ctx = CodegenContext.for_kernel(program)
+    ctx = CodegenContext.for_kernel(program, force_rung_enable=force_rung_enable)
     source = _render_kernel_source(ctx)
 
     namespace: dict[str, Any] = {}
