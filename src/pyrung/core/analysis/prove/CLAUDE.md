@@ -41,7 +41,8 @@ events.py    — Hidden-event scheduling. Settles pending timers/counters withou
 kernel.py    — Kernel integration. Snapshot/restore, state key extraction, edge
                compression, live input caching, inline step compilation.
 expr.py      — Expression tree helpers. Partial evaluation, tag reference collection,
-               atom indexing, live-input analysis.
+               atom indexing, live-input analysis. Edge-bearing input partition
+               (_partition_edge_bearing_inputs) for free-input elision.
 slicer.py    — Whole-rung program slicing. Builds a reduced program containing only
                rungs in the upstream cone of seed tags.
 ```
@@ -54,6 +55,7 @@ Program
     → build_graph: ProgramGraph + all condition/write-site expressions
     → classify_dimensions: stateful/ND/combinational + value domains
     → pilot_sweep: fallback domain discovery via kernel execution (if classify returned Intractable)
+    → elide_scan_local_state: abstract + concrete proof that tags are WBR
     → compile_kernel: CompiledKernel + stateful/edge tag name tuples
     → collect_done_acc_pairs: Done→Acc mapping from timer/counter instructions
     → find_redundant_absorptions: Acc tags absorbed into 3-valued Done bits
@@ -61,9 +63,11 @@ Program
     → build_event_specs: DoneEventSpec + ThresholdEventSpec for hidden-event scheduling
     → collect_edge_exprs: rise/fall expression map for edge compression
     → discover_memory_keys: kernel memory keys via pilot scan
+  → freeze() (passes.py)
+    → partition ND inputs: edge-bearing (state key) vs free (enumerated only)
   → _ExploreContext (frozen, immutable)
     → _bfs_explore (__init__.py)
-      → per-state: enumerate live inputs, step kernel, extract state key
+      → per-state: enumerate live inputs (free jointly, others single-flip), step kernel, extract state key
       → hidden events: settle pending timers, jump to threshold crossings
       → property check: evaluate predicates, build counterexample traces
   → Proven | Counterexample | Intractable
@@ -73,7 +77,9 @@ Program
 
 ### State key (`_extract_state_key` in kernel.py)
 
-The BFS visited set uses a tuple key: `(stateful_tag_values..., threshold_vectors..., edge_prevs..., memory_keys...)`. This is the identity of a state — two kernel snapshots with the same key are treated as equivalent.
+The BFS visited set uses a tuple key: `(stateful_tag_values..., threshold_vectors..., nd_input_values..., edge_prevs..., memory_keys...)`. This is the identity of a state — two kernel snapshots with the same key are treated as equivalent.
+
+Only **edge-bearing** ND inputs appear in the key (`nondeterministic_names`). Free inputs — those without rise()/fall() or implicit-edge usage (shift clock, drum jog/jump/events) — are excluded (`free_input_names`). Their current value doesn't constrain future behavior, so states differing only in free inputs are equivalent. Free inputs are still fully enumerated (Cartesian product) at each BFS state to explore all successor combinations.
 
 Done bits use three-valued abstraction: `False` / `PENDING` / `True` (derived from Done + Acc via `_done_acc_state`). Threshold vectors replace concrete accumulator values with a tuple of crossed/uncrossed booleans per comparison threshold.
 
