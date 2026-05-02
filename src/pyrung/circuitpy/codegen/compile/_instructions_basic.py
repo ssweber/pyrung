@@ -34,8 +34,8 @@ from pyrung.core.instruction import (
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
-    _compile_lvalue,
     _compile_guarded_instruction,
+    _compile_lvalue,
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
     _compile_value,
@@ -143,7 +143,6 @@ def _compile_on_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done_read = _compile_value(instr.done_bit, ctx)
     done_write = _compile_lvalue(instr.done_bit, ctx)
     acc_read = _compile_value(instr.accumulator, ctx)
     acc_write = _compile_lvalue(instr.accumulator, ctx)

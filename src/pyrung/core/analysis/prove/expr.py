@@ -190,3 +190,75 @@ def _collect_edge_atoms(
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
             _collect_edge_atoms(t, nd_dims, out)
+
+
+def _walk_implicit_edge_inputs(
+    program: Any,
+    nd_dims: dict[str, Any],
+) -> frozenset[str]:
+    """Return ND tags referenced in implicit-edge instruction conditions.
+
+    ShiftInstruction clock, drum jog/jump, and EventDrum per-step events
+    use manual rising-edge detection via memory keys rather than rise()/fall()
+    atoms.  ND inputs feeding those conditions are edge-bearing.
+    """
+    from pyrung.core.analysis.simplified import _condition_to_expr
+    from pyrung.core.instruction.advanced import ShiftInstruction
+    from pyrung.core.instruction.control import ForLoopInstruction
+    from pyrung.core.instruction.drums import EventDrumInstruction, TimeDrumInstruction
+
+    result: set[str] = set()
+    nd_keys = frozenset(nd_dims)
+
+    def _check(cond: Any) -> None:
+        if cond is None:
+            return
+        refs = _referenced_tags(_condition_to_expr(cond))
+        result.update(refs & nd_keys)
+
+    def _walk(instructions: list[Any]) -> None:
+        for instr in instructions:
+            if isinstance(instr, ShiftInstruction):
+                _check(instr.clock_condition)
+            elif isinstance(instr, (EventDrumInstruction, TimeDrumInstruction)):
+                _check(instr.jog_condition)
+                _check(instr.jump_condition)
+                if isinstance(instr, EventDrumInstruction):
+                    for event_cond in instr.events:
+                        _check(event_cond)
+            if isinstance(instr, ForLoopInstruction) and hasattr(instr, "instructions"):
+                _walk(instr.instructions)
+
+    def _walk_rung(rung: Any) -> None:
+        _walk(rung._instructions)
+        for branch in rung._branches:
+            _walk_rung(branch)
+
+    for rung in program.rungs:
+        _walk_rung(rung)
+    for sub_name in program.subroutines:
+        for rung in program.subroutines[sub_name]:
+            _walk_rung(rung)
+
+    return frozenset(result)
+
+
+def _partition_edge_bearing_inputs(
+    all_exprs: list[Expr],
+    nd_dims: dict[str, tuple[Any, ...]],
+    program: Any,
+) -> frozenset[str]:
+    """Partition ND inputs into edge-bearing (returned) and free (remainder).
+
+    Edge-bearing inputs appear in rise()/fall() atoms or in implicit-edge
+    instruction conditions (shift clock, drum jog/jump/events).  Their
+    previous-scan value affects successor behaviour, so they must remain
+    in the BFS state key.
+
+    Free inputs can take any value on any scan — their current value does
+    not constrain future behaviour, so omitting them from the state key
+    merges equivalent states without under-approximation.
+    """
+    explicit = _collect_edge_input_tags(all_exprs, nd_dims)
+    implicit = _walk_implicit_edge_inputs(program, nd_dims)
+    return explicit | implicit

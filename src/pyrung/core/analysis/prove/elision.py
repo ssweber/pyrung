@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import ProgramGraph, _extract_tag_names, _implicit_fault_writes
 from pyrung.core.instruction.calc import CalcInstruction
-from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction, ReturnInstruction
 from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
+from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction, ReturnInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
-from pyrung.core.kernel import CompiledKernel, ReplayKernel
+from pyrung.core.kernel import CompiledKernel
 from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.tag import ImmediateRef, Tag, TagType
 
@@ -259,9 +259,11 @@ class _TagElisionCheck:
                 base[name] = self._accepted[name].entry_value
             elif name in self._retained:
                 base[name] = _RETAINED_VALUE
-            elif name in self._nondeterministic_names or (
-                tag.external and name not in written
-            ) or self._graph.is_physical_input(name):
+            elif (
+                name in self._nondeterministic_names
+                or (tag.external and name not in written)
+                or self._graph.is_physical_input(name)
+            ):
                 base[name] = _INPUT_VALUE
             elif name in written:
                 base[name] = _ENTRY_VALUE
@@ -275,13 +277,19 @@ class _TagElisionCheck:
         state: _AbstractState,
     ) -> _ExecutionResult:
         current_state: _AbstractState | None = state
+        prev_snapshot: _AbstractState = state
         returned_state: _AbstractState | None = None
         returned_dep: _AbsValue | None = None
 
         for rung in rungs:
             if current_state is None:
                 break
-            rung_result = self._execute_rung(rung, current_state, current_state, enabled=None)
+            if getattr(rung, "_use_prior_snapshot", False):
+                snapshot = prev_snapshot
+            else:
+                snapshot = current_state
+            prev_snapshot = current_state
+            rung_result = self._execute_rung(rung, current_state, snapshot, enabled=None)
             returned_state, returned_dep = _merge_return_paths(
                 returned_state,
                 returned_dep,
@@ -499,7 +507,11 @@ class _TagElisionCheck:
 
         if isinstance(instr, CopyInstruction):
             next_state = state.copy()
-            value = _UNKNOWN_VALUE if instr.convert is not None else self._eval_value(instr.source, state)
+            value = (
+                _UNKNOWN_VALUE
+                if instr.convert is not None
+                else self._eval_value(instr.source, state)
+            )
             self._apply_copy_like_write(next_state, instr.dest, value)
             self._apply_implicit_faults(next_state, instr, enabled=enabled)
             return _ExecutionResult(next_state)
@@ -513,7 +525,9 @@ class _TagElisionCheck:
         if isinstance(instr, CalcInstruction):
             next_state = state.copy()
             value = self._eval_value(instr.expression, state)
-            self._apply_calc_write(next_state, instr.dest, value, mode=getattr(instr, "mode", "decimal"))
+            self._apply_calc_write(
+                next_state, instr.dest, value, mode=getattr(instr, "mode", "decimal")
+            )
             self._apply_implicit_faults(next_state, instr, enabled=enabled)
             return _ExecutionResult(next_state)
 
@@ -617,7 +631,9 @@ class _TagElisionCheck:
             merged = _merge_values(self._coerce_value(name, value), state.get(name), selection_dep)
             state.set(name, merged)
 
-    def _apply_calc_write(self, state: _AbstractState, target: Any, value: _AbsValue, mode: str) -> None:
+    def _apply_calc_write(
+        self, state: _AbstractState, target: Any, value: _AbsValue, mode: str
+    ) -> None:
         names, selection_dep = self._target_names(target, state)
         if not names:
             return
@@ -626,7 +642,9 @@ class _TagElisionCheck:
                 state.set(name, self._coerce_math_value(name, value, mode))
             return
         for name in names:
-            merged = _merge_values(self._coerce_math_value(name, value, mode), state.get(name), selection_dep)
+            merged = _merge_values(
+                self._coerce_math_value(name, value, mode), state.get(name), selection_dep
+            )
             state.set(name, merged)
 
     def _apply_unknown_writes(self, state: _AbstractState, instr: Any, *, enabled: bool) -> None:
@@ -692,7 +710,12 @@ class _TagElisionCheck:
             deps.append(self._read_tag_value(name, state))
         merged = _dep_union(*deps)
 
-        if merged.depends_on_entry or merged.depends_on_inputs or merged.depends_on_retained or merged.unknown:
+        if (
+            merged.depends_on_entry
+            or merged.depends_on_inputs
+            or merged.depends_on_retained
+            or merged.unknown
+        ):
             exact = self._try_exact_eval(raw, state)
             if exact is not _NO_CONST:
                 return _AbsValue(const=exact)
@@ -733,7 +756,9 @@ class _TagElisionCheck:
             return _dep_union(selector, _UNKNOWN_VALUE)
         return merged
 
-    def _eval_conditions(self, conditions: tuple[Condition, ...] | list[Condition], state: _AbstractState) -> _AbsValue:
+    def _eval_conditions(
+        self, conditions: tuple[Condition, ...] | list[Condition], state: _AbstractState
+    ) -> _AbsValue:
         if not conditions:
             return _CONST_TRUE
         result = _CONST_TRUE
@@ -827,7 +852,9 @@ class _TagElisionCheck:
             return _NO_CONST
         return _NO_CONST
 
-    def _target_names(self, target: Any, state: _AbstractState) -> tuple[tuple[str, ...], _AbsValue | None]:
+    def _target_names(
+        self, target: Any, state: _AbstractState
+    ) -> tuple[tuple[str, ...], _AbsValue | None]:
         raw = target.value if isinstance(target, ImmediateRef) else target
         if isinstance(raw, Tag):
             return (raw.name,), None
@@ -893,7 +920,9 @@ class _TagElisionCheck:
             return tuple(sorted(names)), deps
         return (), _UNKNOWN_VALUE
 
-    def _domain_for_expr(self, value: Any, state: _AbstractState | None = None) -> tuple[Any, ...] | None:
+    def _domain_for_expr(
+        self, value: Any, state: _AbstractState | None = None
+    ) -> tuple[Any, ...] | None:
         raw = value.value if isinstance(value, ImmediateRef) else value
         if isinstance(raw, bool | int | float):
             return (raw,)
@@ -1236,7 +1265,9 @@ def _collect_forced_true_coverage(
         combo_limit=combo_limit,
     )
     varied_tags = tuple(name for name, _domain in domain_items)
-    combo_space = _product_size(tuple(domain for _name, domain in domain_items)) if domain_items else 1
+    combo_space = (
+        _product_size(tuple(domain for _name, domain in domain_items)) if domain_items else 1
+    )
     truncated = (combo_space * 2) > combo_limit
 
     written_tags: set[str] = set()
@@ -1322,6 +1353,7 @@ class _ConcreteStateElider:
         static_writers = set(graph.writers_of) & set(self._stateful_dims)
         dynamic_writers = set(self._coverage.written_tags) & set(self._stateful_dims)
         self._written_tags = frozenset(static_writers | dynamic_writers)
+        self._continued_source_tags = self._find_continued_source_tags()
 
         # Discover kernel memory keys via pilot scans.  Instructions like
         # oneshot OTE store hidden state in kernel.memory that fresh kernels
@@ -1332,7 +1364,6 @@ class _ConcreteStateElider:
         mem_keys: list[str] = []
         nd_names = sorted(self._nondeterministic_dims)
         nd_domains = [self._nondeterministic_dims[n] for n in nd_names]
-        nd_product_size = _product_size(tuple(nd_domains)) if nd_domains else 1
         combo_iter = product(*nd_domains) if nd_domains else [()]
         fresh_memory: dict[str, Any] = {}
         warm_found = False
@@ -1384,9 +1415,7 @@ class _ConcreteStateElider:
             round_num += 1
             snapshot = set(retained)
             candidates = self._ordered_candidates(snapshot)
-            self._emit(
-                f"elision round {round_num} | checking {len(candidates):,} candidate tag(s)"
-            )
+            self._emit(f"elision round {round_num} | checking {len(candidates):,} candidate tag(s)")
             removable: list[str] = []
             for index, tag_name in enumerate(candidates, start=1):
                 self._emit(f"elision | checking {tag_name} ({index}/{len(candidates)})")
@@ -1411,6 +1440,22 @@ class _ConcreteStateElider:
         )
         return {name: domain for name, domain in self._stateful_dims.items() if name in retained}
 
+    def _find_continued_source_tags(self) -> frozenset[str]:
+        """Tags read via continued() rungs — their cross-scan value is observable."""
+        sources: set[str] = set()
+        for node in self._graph.rung_nodes:
+            if node.scope == "main":
+                rung = self._program.rungs[node.rung_index]
+            else:
+                assert node.subroutine is not None
+                rung = self._program.subroutines[node.subroutine][node.rung_index]
+            if not getattr(rung, "_use_prior_snapshot", False):
+                continue
+            for read_tag in node.condition_reads | node.data_reads:
+                if read_tag in self._stateful_dims:
+                    sources.add(read_tag)
+        return frozenset(sources)
+
     def _is_concrete_candidate(self, name: str) -> bool:
         """True when the tag is eligible for concrete elision proofs."""
         if name not in self._state_basis:
@@ -1424,25 +1469,23 @@ class _ConcreteStateElider:
         # the PENDING sentinel, so these tags must be retained unconditionally.
         if PENDING in self._stateful_dims.get(name, ()):
             return False
+        # Tags read via continued() have observable cross-scan state — their
+        # previous-scan value flows into the current scan's outputs.  The
+        # concrete frontier traversal misses combinational observers, so
+        # retain unconditionally.
+        if name in self._continued_source_tags:
+            return False
         return True
 
     def _candidate_names(self) -> tuple[str, ...]:
         return tuple(
-            sorted(
-                name
-                for name in self._stateful_dims
-                if self._is_concrete_candidate(name)
-            )
+            sorted(name for name in self._stateful_dims if self._is_concrete_candidate(name))
         )
 
     def _ordered_candidates(self, retained: set[str]) -> tuple[str, ...]:
         return tuple(
             sorted(
-                (
-                    name
-                    for name in retained
-                    if self._is_concrete_candidate(name)
-                ),
+                (name for name in retained if self._is_concrete_candidate(name)),
                 key=lambda name: (
                     len(self._graph.downstream_slice(name) & retained),
                     len(self._stateful_dims[name]),
@@ -1474,9 +1517,7 @@ class _ConcreteStateElider:
                 seen_options: set[tuple[tuple[str, Any], ...]] = set()
                 for canonical in group.canonical_assignments:
                     filtered = tuple(
-                        (member, value)
-                        for member, value in canonical
-                        if member in live_inputs
+                        (member, value) for member, value in canonical if member in live_inputs
                     )
                     if filtered in seen_options:
                         continue
@@ -1526,9 +1567,7 @@ class _ConcreteStateElider:
         for retained_values in retained_iter:
             retained_entry = dict(zip(retained_names, retained_values, strict=True))
             input_iter = (
-                product(*input_assignment_dimensions)
-                if input_assignment_dimensions
-                else [()]
+                product(*input_assignment_dimensions) if input_assignment_dimensions else [()]
             )
             for input_assignments in input_iter:
                 entry_values = dict(retained_entry)
@@ -1665,11 +1704,7 @@ class _ConcreteStateElider:
                     if src in retained_set and self._is_retained_anchor(src):
                         retained_names.add(src)
                         continue
-                    if (
-                        src in self._state_basis
-                        and src not in retained_set
-                        and src != candidate
-                    ):
+                    if src in self._state_basis and src not in retained_set and src != candidate:
                         hidden_stateful.add(src)
                     if src in visited:
                         continue
@@ -1745,7 +1780,7 @@ def _elide_scan_local_stateful_dims(
     )
 
     if not abstract_reduced:
-        _emit("elision complete | removed={:,} | retained=0".format(len(stateful_dims)))
+        _emit(f"elision complete | removed={len(stateful_dims):,} | retained=0")
         return {}
 
     # Phase 2: concrete kernel proofs on what abstract couldn't resolve.

@@ -24,6 +24,7 @@ from pyrung.core.kernel import CompiledKernel, ReplayKernel
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.program import Program
+
     from .inputs import _ExclusiveInputGroup
 
 from .expr import _eval_atom as _eval_atom
@@ -94,6 +95,7 @@ class _ExploreContext:
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
+    free_input_names: frozenset[str] = field(default_factory=frozenset)
     always_live_input_names: tuple[str, ...] = ()
     exclusive_input_groups: tuple[_ExclusiveInputGroup, ...] = ()
     exclusive_input_group_by_member: dict[str, int] = field(default_factory=dict)
@@ -116,8 +118,8 @@ from .classify import (
 )
 from .events import (
     _DoneEventSpec,
-    _HiddenEventCache,
     _has_pending_hidden_event,
+    _HiddenEventCache,
     _maybe_jump_hidden_event,
     _settle_pending,
     _StateKeyDoneSpec,
@@ -426,8 +428,7 @@ def _bfs_explore(
             else frozenset(context.nondeterministic_dims)
         )
         current_values = {
-            name: kernel.tags.get(name, context.nondeterministic_dims[name][0])
-            for name in live
+            name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
         }
         assignments = _iter_input_assignments(
             live,
@@ -436,6 +437,7 @@ def _bfs_explore(
             context.exclusive_input_group_by_member if bfs_config.exclusive_input_grouping else {},
             current_values=current_values,
             input_groups=context.input_groups,
+            free_inputs=context.free_input_names,
         )
 
         has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
@@ -458,9 +460,7 @@ def _bfs_explore(
 
             _step_kernel(context, kernel)
             post_step_live = (
-                live_cache.live_inputs(kernel)
-                if bfs_config.live_input_pruning
-                else None
+                live_cache.live_inputs(kernel) if bfs_config.live_input_pruning else None
             )
             new_key = _state_key(kernel, live=post_step_live)
 
@@ -628,7 +628,10 @@ def _bfs_explore(
 
     caveats = context.caveats
     if results is not None:
-        return [r if r is not None else Proven(states_explored=len(visited), caveats=caveats) for r in results]
+        return [
+            r if r is not None else Proven(states_explored=len(visited), caveats=caveats)
+            for r in results
+        ]
 
     return [Proven(states_explored=len(visited), caveats=caveats)]
 
@@ -894,7 +897,9 @@ def prove(
         predicate, auto_scope, expr = compiled_properties[0]
         effective_scope = scope if scope is not None else auto_scope
         extra = [expr] if expr is not None else []
-        context = _build_explore_context(program, scope=effective_scope, extra_exprs=extra, input_groups=input_groups)
+        context = _build_explore_context(
+            program, scope=effective_scope, extra_exprs=extra, input_groups=input_groups
+        )
         if isinstance(context, Intractable):
             return context
         return _bfs_explore(

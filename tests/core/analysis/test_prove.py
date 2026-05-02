@@ -597,7 +597,7 @@ class TestProve:
 
         with Program(strict=False) as logic:
             for inp, flag in zip(inputs, flags, strict=True):
-                with Rung(inp):
+                with Rung(rise(inp)):
                     latch(flag)
             with Rung(*flags):
                 out(output)
@@ -2499,7 +2499,7 @@ class TestIntractableHints:
 
         with Program(strict=False) as logic:
             for inp, flag in zip(inputs, flags, strict=True):
-                with Rung(inp):
+                with Rung(rise(inp)):
                     latch(flag)
             with Rung(*flags):
                 out(output)
@@ -3345,9 +3345,6 @@ class TestBlocklessProveKernel:
         assert isinstance(program_hash(logic), str)
         assert calls
         assert all(call.get("blockless") is True for call in calls)
-        return
-        assert 49 in spec.tag_indices  # addr 50, start 1 → index 49
-        assert len(spec.tag_names) == 6  # 5 from domain + 1 static
 
     def test_reachable_states_still_work_for_full_pointer_domain(self):
         """Full pointer domains still prove and enumerate correctly."""
@@ -3390,3 +3387,149 @@ class TestBlocklessProveKernel:
 
         result = prove(logic, dest >= 0)
         assert isinstance(result, Proven)
+
+
+# ===================================================================
+# Group: Free input elision
+# ===================================================================
+
+
+class TestFreeInputElision:
+    """Verify the free-input state key elision optimization."""
+
+    def test_free_input_reduces_states(self):
+        """Free input (xic only) is not in nondeterministic_names; state count halved."""
+        free = Bool("Free", external=True)
+        edge = Bool("Edge", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(free):
+                latch(x)
+            with Rung(rise(edge)):
+                reset(x)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Free" in context.free_input_names
+        assert "Free" not in context.nondeterministic_names
+        assert "Edge" not in context.free_input_names
+        assert "Edge" in context.nondeterministic_names
+
+    def test_shift_clock_is_edge_bearing(self):
+        """ShiftInstruction clock ND input stays in nondeterministic_names."""
+        from pyrung.core import Block, TagType, shift
+
+        clk = Bool("Clk", external=True)
+        data = Bool("Data", external=True)
+        rst = Bool("Rst", external=True)
+        bits = Block("SR", TagType.BOOL, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(data):
+                shift(bits.select(1, 4)).clock(clk).reset(rst)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Clk" not in context.free_input_names
+        assert "Clk" in context.nondeterministic_names
+
+    def test_drum_jog_is_edge_bearing(self):
+        """Drum jog ND input stays in nondeterministic_names."""
+        from pyrung.core import event_drum
+
+        enable = Bool("Enable", external=True)
+        jog = Bool("Jog", external=True)
+        reset_sig = Bool("Rst", external=True)
+        e1 = Bool("E1", external=True)
+        step = Int("Step")
+        done = Bool("Done")
+        y1 = Bool("Y1")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                event_drum(
+                    outputs=[y1],
+                    events=[e1],
+                    pattern=[[1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset_sig).jog(jog)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Jog" not in context.free_input_names
+        assert "Jog" in context.nondeterministic_names
+
+    def test_drum_event_is_edge_bearing(self):
+        """EventDrum per-step event ND input stays in nondeterministic_names."""
+        from pyrung.core import event_drum
+
+        enable = Bool("Enable", external=True)
+        reset_sig = Bool("Rst", external=True)
+        e1 = Bool("E1", external=True)
+        step = Int("Step")
+        done = Bool("Done")
+        y1 = Bool("Y1")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                event_drum(
+                    outputs=[y1],
+                    events=[e1],
+                    pattern=[[1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset_sig)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "E1" not in context.free_input_names
+        assert "E1" in context.nondeterministic_names
+
+    def test_projected_free_input_kept(self):
+        """Free input in project stays in nondeterministic_names."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+
+        context = prove_module._build_explore_context(logic, project=("A",))
+        assert not isinstance(context, Intractable)
+        assert "A" in context.nondeterministic_names
+
+    def test_all_edge_bearing_no_reduction(self):
+        """All ND inputs use rise() — no free inputs, names unchanged."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a)):
+                latch(x)
+            with Rung(rise(b)):
+                latch(y)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert context.free_input_names == frozenset()
+        assert "A" in context.nondeterministic_names
+        assert "B" in context.nondeterministic_names
+
+    def test_soundness_preserved(self):
+        """Latch controlled by free input: prove() result is sound."""
+        free = Bool("Free", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(free):
+                latch(x)
+
+        result = prove(logic, ~x)
+        assert isinstance(result, Counterexample)
+
+        result2 = prove(logic, Or(x, ~x))
+        assert isinstance(result2, Proven)

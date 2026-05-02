@@ -266,7 +266,8 @@ def _detect_exclusive_input_groups(
 
         candidate_nodes = frozenset(candidate.node_index for candidate in candidates)
         if any(
-            not graph.readers_of.get(member, frozenset()).issubset(candidate_nodes) for member in members
+            not graph.readers_of.get(member, frozenset()).issubset(candidate_nodes)
+            for member in members
         ):
             continue
 
@@ -299,12 +300,19 @@ def _iter_input_assignments(
     group_by_member: dict[str, int],
     current_values: dict[str, Any] | None = None,
     input_groups: tuple[tuple[str, ...], ...] = (),
+    free_inputs: frozenset[str] = frozenset(),
 ) -> Any:
     """Yield single-dimension interleaved input assignments for one BFS state.
 
     Generates stutter (hold all inputs) plus single-input-change successors.
     Encoder families produce one-hot canonical changes.  User-declared
     ``input_groups`` add joint-product successors for grouped inputs.
+
+    *free_inputs* are ND inputs elided from the state key.  Because their
+    intermediate states are merged, single-dimension flips cannot chain
+    through intermediate baselines.  Free inputs are therefore enumerated
+    jointly (Cartesian product of all domain values) so that every
+    combination is explored from the current BFS state.
     """
     if not live_inputs:
         return [()]
@@ -330,14 +338,14 @@ def _iter_input_assignments(
             seen_encoder_groups.add(group_index)
             group = groups[group_index]
             seen_encoder_members.update(group.members)
-            current_canonical = tuple(
-                (m, stutter_dict.get(m, False)) for m in group.members
-            )
+            current_canonical = tuple((m, stutter_dict.get(m, False)) for m in group.members)
             for canonical in group.canonical_assignments:
                 if canonical != current_canonical:
                     merged = dict(stutter)
                     merged.update(canonical)
                     assignments.append(tuple(sorted(merged.items())))
+        elif name in free_inputs:
+            pass
         else:
             cur = stutter_dict[name]
             for value in nondeterministic_dims[name]:
@@ -345,6 +353,17 @@ def _iter_input_assignments(
                     merged = dict(stutter)
                     merged[name] = value
                     assignments.append(tuple(sorted(merged.items())))
+
+    live_free = sorted(n for n in free_inputs if n in live_inputs and n not in seen_encoder_members)
+    if live_free:
+        free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
+        for combo in itertools.product(*free_domains):
+            merged = dict(stutter)
+            for pair in combo:
+                merged[pair[0]] = pair[1]
+            entry = tuple(sorted(merged.items()))
+            if entry != stutter:
+                assignments.append(entry)
 
     live_set = set(live_inputs)
     for ig in input_groups:

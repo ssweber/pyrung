@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import CompiledKernel
+from pyrung.core.kernel import BlockSpec, CompiledKernel
 
 from . import Intractable, _ExploreContext
 from .absorb import (
@@ -31,13 +31,11 @@ from .classify import (
     _extract_value_domain,
     _pilot_sweep_domains,
 )
-from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .elision import _elide_scan_local_stateful_dims
-from .expr import _collect_atoms_for_tag
+from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
+from .expr import _collect_atoms_for_tag, _collect_edge_input_tags, _partition_edge_bearing_inputs
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
 from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
-
-from .expr import _collect_edge_input_tags
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -48,9 +46,13 @@ def _detect_edge_caveats(
     all_exprs: list[Expr],
     nondeterministic_dims: dict[str, tuple[Any, ...]],
     input_groups: tuple[tuple[str, ...], ...],
+    program: Any = None,
 ) -> tuple[str, ...]:
-    """Detect external inputs used in rise()/fall() not covered by a group."""
-    edge_inputs = _collect_edge_input_tags(all_exprs, nondeterministic_dims)
+    """Detect external inputs used in edge detection not covered by a group."""
+    if program is not None:
+        edge_inputs = _partition_edge_bearing_inputs(all_exprs, nondeterministic_dims, program)
+    else:
+        edge_inputs = _collect_edge_input_tags(all_exprs, nondeterministic_dims)
     if not edge_inputs:
         return ()
     grouped: set[str] = set()
@@ -182,10 +184,17 @@ class _PassContext:
             project=self.project,
             extra_exprs=self.extra_exprs,
         )
+        edge_bearing = _partition_edge_bearing_inputs(
+            self.all_exprs, self.nondeterministic_dims, self.program
+        )
+        projected_nd = frozenset(self.project or ()) & frozenset(self.nondeterministic_dims)
+        nd_in_key = edge_bearing | projected_nd
+        free = frozenset(self.nondeterministic_dims) - nd_in_key
         caveats = _detect_edge_caveats(
             self.all_exprs,
             self.nondeterministic_dims,
             self.input_groups,
+            program=self.program,
         )
         return _ExploreContext(
             compiled=self.compiled,
@@ -203,7 +212,8 @@ class _PassContext:
             dt=self.dt,
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
-            nondeterministic_names=tuple(sorted(self.nondeterministic_dims)),
+            nondeterministic_names=tuple(sorted(nd_in_key)),
+            free_input_names=free,
             always_live_input_names=tuple(
                 sorted(set(self.project or ()) & set(self.nondeterministic_dims))
             ),
