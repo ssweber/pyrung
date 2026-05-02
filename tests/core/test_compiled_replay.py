@@ -20,10 +20,10 @@ from pyrung.core import (
     fill,
     on_delay,
     out,
-    search,
-    shift,
     rise,
     run_function,
+    search,
+    shift,
     subroutine,
     system,
 )

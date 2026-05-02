@@ -13,9 +13,9 @@ from pyrung.core import (
     Rung,
     TagType,
     Timer,
+    calc,
     call,
     copy,
-    calc,
     fill,
     latch,
     on_delay,
@@ -27,8 +27,8 @@ from pyrung.core import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.prove import Intractable, Proven, _bfs_explore, _build_explore_context
 from pyrung.core.analysis.prove.elision import (
-    _ConcreteStateElider,
     _collect_forced_true_coverage,
+    _ConcreteStateElider,
     _elide_scan_local_stateful_dims,
 )
 from pyrung.core.analysis.prove.inputs import _iter_input_assignments

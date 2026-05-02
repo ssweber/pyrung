@@ -28,8 +28,8 @@ from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
-    _compile_lvalue,
     _compile_guarded_instruction,
+    _compile_lvalue,
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
     _compile_value,

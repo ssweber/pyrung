@@ -110,12 +110,12 @@ def _collect_all_exprs(
 
     exprs: list[Expr] = [tf.expr for tf in forms.values()]
 
+    from pyrung.core.analysis.pdg import _implicit_fault_writes
     from pyrung.core.validation._common import (
         _build_caller_map,
         _caller_conditions,
         _collect_write_sites,
     )
-    from pyrung.core.analysis.pdg import _implicit_fault_writes
 
     tag_refs = dict(graph.tags)
 

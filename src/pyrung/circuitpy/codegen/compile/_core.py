@@ -329,7 +329,9 @@ def _collect_rung_snapshot_bindings(
         if ctx.blockless:
             name_symbol = ctx.block_name_tuple_symbol(block_id)
             default = binding.block._get_tag(binding.start).default
-            lines.append(f"{sp}{snap_var} = [tags.get(_name, {default!r}) for _name in {name_symbol}]")
+            lines.append(
+                f"{sp}{snap_var} = [tags.get(_name, {default!r}) for _name in {name_symbol}]"
+            )
         else:
             lines.append(f"{sp}{snap_var} = list({ctx.symbol_for_block(binding.block)})")
 

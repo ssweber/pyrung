@@ -472,9 +472,7 @@ def _settle_pending(
 ) -> list[_HiddenEventOutcome]:
     """Resolve pending exact events and emit abstract threshold branches."""
     key = edge_comp.state_key(kernel)
-    cache_key = (
-        cache.plateau_key(context, before_snap, kernel, key) if cache is not None else None
-    )
+    cache_key = cache.plateau_key(context, before_snap, kernel, key) if cache is not None else None
     active_cache = cache if cache_key is not None else None
     if active_cache is not None and cache_key is not None:
         cached = active_cache._settle_cache.get(cache_key)
