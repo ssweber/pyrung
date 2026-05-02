@@ -106,6 +106,7 @@ class CodegenContext:
     target_scan_ms: float
     watchdog_ms: int | None
     force_rung_enable: bool = False
+    blockless: bool = False
     modbus_server: ModbusServerConfig | None = None
     modbus_client: ModbusClientConfig | None = None
     tag_map: Any = None
@@ -116,6 +117,7 @@ class CodegenContext:
         program: Program,
         *,
         force_rung_enable: bool = False,
+        blockless: bool = False,
     ) -> CodegenContext:
         """Create a hardware-free context for kernel compilation."""
         ctx = cls(
@@ -124,6 +126,7 @@ class CodegenContext:
             target_scan_ms=0.0,
             watchdog_ms=None,
             force_rung_enable=force_rung_enable,
+            blockless=blockless,
         )
         ctx._runtime_state_keys = True
         ctx.collect_program_references()
@@ -398,6 +401,22 @@ class CodegenContext:
             return compact[addr]
         return addr - self.block_bindings[block_id].start
 
+    def global_symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
+        if isinstance(tag, ImmediateRef):
+            tag = tag.tag
+        block_info = self.tag_block_addresses.get(tag.name)
+        if block_info is not None:
+            block_id, _addr = block_info
+            symbol = self.block_symbols.get(block_id)
+            if symbol is None:
+                raise RuntimeError(f"Missing block symbol for tag {tag.name!r}")
+            return symbol
+
+        symbol = self.symbol_table.get(tag.name)
+        if symbol is None:
+            raise RuntimeError(f"Missing scalar symbol for tag {tag.name!r}")
+        return symbol
+
     def symbol_for_tag(self, tag: Tag | ImmediateRef) -> str:
         if isinstance(tag, ImmediateRef):
             tag = tag.tag
@@ -433,6 +452,26 @@ class CodegenContext:
         self._current_function = fn_name
         if fn_name is not None:
             self.function_globals.setdefault(fn_name, set())
+
+    def block_layout_tag_names(self, block_id: int) -> tuple[str, ...]:
+        binding = self.block_bindings.get(block_id)
+        if binding is None:
+            raise RuntimeError(f"Missing block binding for block id {block_id}")
+        compact = self.compact_block_map.get(block_id)
+        if compact is not None:
+            addresses = sorted(compact)
+        else:
+            addresses = list(range(binding.start, binding.end + 1))
+        return tuple(binding.block._get_tag(addr).name for addr in addresses)
+
+    def block_name_tuple_symbol(self, block_id: int) -> str:
+        symbol = self.block_symbols.get(block_id)
+        if symbol is None:
+            raise RuntimeError(f"Missing block symbol for block id {block_id}")
+        name = f"{symbol}_names"
+        if self._current_function is not None:
+            self.mark_function_global(self._current_function, name)
+        return name
 
     def next_name(self, prefix: str) -> str:
         n = self._name_counters.get(prefix, 0) + 1
@@ -537,6 +576,14 @@ class CodegenContext:
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
         if tag.name in self.tag_block_addresses:
             return
+        if self.blockless:
+            annotated_block = getattr(tag, "_pyrung_block", None)
+            annotated_addr = getattr(tag, "_pyrung_block_addr", None)
+            if annotated_block is not None and isinstance(annotated_addr, int):
+                block_id = self._ensure_block_binding(annotated_block)
+                if block_id is not None:
+                    self.tag_block_addresses[tag.name] = (block_id, annotated_addr)
+                    return
         for binding in sorted(
             self.block_bindings.values(), key=lambda b: (b.logical_name, b.block_id)
         ):

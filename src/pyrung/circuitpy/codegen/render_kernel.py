@@ -33,9 +33,14 @@ def compile_kernel(
     program: Program,
     *,
     force_rung_enable: bool = False,
+    blockless: bool = False,
 ) -> CompiledKernel:
     """Compile a Program into a fast in-process replay kernel."""
-    ctx = CodegenContext.for_kernel(program, force_rung_enable=force_rung_enable)
+    ctx = CodegenContext.for_kernel(
+        program,
+        force_rung_enable=force_rung_enable,
+        blockless=blockless,
+    )
     source = _render_kernel_source(ctx)
 
     namespace: dict[str, Any] = {}
@@ -64,6 +69,7 @@ def compile_kernel(
         block_specs=block_specs,
         edge_tags=set(ctx.edge_prev_tags),
         source=source,
+        blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
     )
@@ -76,14 +82,7 @@ def _build_block_specs(ctx: CodegenContext) -> dict[str, BlockSpec]:
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
         symbol = ctx.block_symbols[binding.block_id]
-        compact = ctx.compact_block_map.get(binding.block_id)
-        if compact is not None:
-            referenced_addrs = sorted(compact)
-            tag_names = [binding.block._get_tag(addr).name for addr in referenced_addrs]
-        else:
-            tag_names = [
-                binding.block._get_tag(addr).name for addr in range(binding.start, binding.end + 1)
-            ]
+        tag_names = list(ctx.block_layout_tag_names(binding.block_id))
         if not tag_names:
             continue
         specs[symbol] = BlockSpec(
@@ -122,8 +121,14 @@ def _compile_subroutines(ctx: CodegenContext) -> list[str]:
         ctx.set_current_function(fn_name)
         body = compile_rungs(ctx.program.subroutines[sub_name], fn_name, ctx, indent=4)
         ctx.set_current_function(None)
-        globals_line = _global_line(ctx.globals_for_function(fn_name), indent=4)
-        lines.append(f"def {fn_name}():")
+        globals_needed = ctx.globals_for_function(fn_name)
+        if ctx.blockless:
+            globals_needed = [name for name in globals_needed if name not in {"_mem", "_prev"}]
+        globals_line = _global_line(globals_needed, indent=4)
+        if ctx.blockless:
+            lines.append(f"def {fn_name}(tags, _mem, _prev, dt):")
+        else:
+            lines.append(f"def {fn_name}():")
         if globals_line is not None:
             lines.append(globals_line)
         if body:
@@ -432,20 +437,30 @@ def _render_declarations(ctx: CodegenContext) -> list[str]:
         symbol = ctx.symbol_table[tag_name]
         lines.append(f"{symbol} = {tag.default!r}")
 
-    for binding in sorted(
-        ctx.block_bindings.values(),
-        key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
-    ):
-        compact = ctx.compact_block_map.get(binding.block_id)
-        if compact is not None:
-            size = len(compact)
-        else:
-            size = binding.end - binding.start + 1
-        if size == 0:
-            continue
-        symbol = ctx.block_symbols[binding.block_id]
-        default = _TYPE_DEFAULTS[binding.tag_type]
-        lines.append(f"{symbol} = [{default!r}] * {size}")
+    if ctx.blockless:
+        for binding in sorted(
+            ctx.block_bindings.values(),
+            key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
+        ):
+            tag_names = ctx.block_layout_tag_names(binding.block_id)
+            if not tag_names:
+                continue
+            lines.append(f"{ctx.block_name_tuple_symbol(binding.block_id)} = {tag_names!r}")
+    else:
+        for binding in sorted(
+            ctx.block_bindings.values(),
+            key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
+        ):
+            compact = ctx.compact_block_map.get(binding.block_id)
+            if compact is not None:
+                size = len(compact)
+            else:
+                size = binding.end - binding.start + 1
+            if size == 0:
+                continue
+            symbol = ctx.block_symbols[binding.block_id]
+            default = _TYPE_DEFAULTS[binding.tag_type]
+            lines.append(f"{symbol} = [{default!r}] * {size}")
 
     lines.extend(["_mem = {}", "_prev = {}", ""])
     return lines
@@ -462,6 +477,11 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
         ctx.block_bindings.values(),
         key=lambda b: (ctx.block_symbols[b.block_id], b.block_id),
     ):
+        if ctx.blockless:
+            tag_names = ctx.block_layout_tag_names(binding.block_id)
+            if tag_names:
+                all_symbols.add(ctx.block_name_tuple_symbol(binding.block_id))
+            continue
         compact = ctx.compact_block_map.get(binding.block_id)
         if compact is not None and len(compact) == 0:
             continue
@@ -477,9 +497,10 @@ def _render_step_function(ctx: CodegenContext, main_body: list[str]) -> list[str
         symbol = ctx.symbol_table[tag_name]
         lines.append(f"    {symbol} = tags[{tag_name!r}]")
 
-    for binding in active_block_bindings:
-        symbol = ctx.block_symbols[binding.block_id]
-        lines.append(f"    {symbol} = blocks[{symbol!r}]")
+    if not ctx.blockless:
+        for binding in active_block_bindings:
+            symbol = ctx.block_symbols[binding.block_id]
+            lines.append(f"    {symbol} = blocks[{symbol!r}]")
 
     lines.extend(
         [

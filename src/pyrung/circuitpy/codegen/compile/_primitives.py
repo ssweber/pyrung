@@ -10,6 +10,7 @@ from pyrung.circuitpy.codegen._constants import (
     _FAULT_OUT_OF_RANGE_TAG,
     _INT_MAX,
     _INT_MIN,
+    _TYPE_DEFAULTS,
 )
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
@@ -63,7 +64,35 @@ def _snapshot_tag_symbol(
         if snapshot_symbol is not None:
             return snapshot_symbol
 
+    if block_info is not None and ctx.blockless:
+        return f"tags.get({tag.name!r}, {tag.default!r})"
+
     return ctx.symbol_for_tag(tag)
+
+
+def _block_name_expr(
+    block_id: int,
+    index_expr: str,
+    ctx: CodegenContext,
+) -> str:
+    return f"{ctx.block_name_tuple_symbol(block_id)}[{index_expr}]"
+
+
+def _range_item_read_expr(
+    range_value: BlockRange | IndirectBlockRange,
+    symbol: str,
+    key_expr: str,
+    ctx: CodegenContext,
+) -> str:
+    if not ctx.blockless:
+        return f"{symbol}[{key_expr}]"
+    binding = ctx.block_bindings[id(range_value.block)]
+    default = _TYPE_DEFAULTS[binding.tag_type]
+    return f"{symbol}.get({key_expr}, {default!r})"
+
+
+def _range_item_write_expr(symbol: str, key_expr: str, value_expr: str) -> str:
+    return f"{symbol}[{key_expr}] = {value_expr}"
 
 
 def _compile_expression_impl(
@@ -193,8 +222,8 @@ def _copy_converter_target_info(
 ) -> tuple[list[str], str, str, str | None, str]:
     if isinstance(target, Tag):
         block_info = ctx.tag_block_addresses.get(target.name)
-        if block_info is None:
-            return [], "scalar", ctx.symbol_for_tag(target), None, target.type.name
+        if block_info is None or ctx.blockless:
+            return [], "scalar", _compile_lvalue(target, ctx), None, target.type.name
         block_id, addr = block_info
         binding = ctx.block_bindings.get(block_id)
         if binding is None:
@@ -217,6 +246,14 @@ def _copy_converter_target_info(
         helper = ctx.use_indirect_block(binding.block_id)
         start_var = f"_{stem}_start_idx"
         ptr = _compile_value(target.pointer, ctx)
+        if ctx.blockless:
+            return (
+                [f"{start_var} = {helper}(int({ptr}))"],
+                "blockless_dynamic",
+                ctx.block_name_tuple_symbol(binding.block_id),
+                start_var,
+                binding.tag_type.name,
+            )
         return (
             [f"{start_var} = {helper}(int({ptr}))"],
             "block",
@@ -235,6 +272,14 @@ def _copy_converter_target_info(
         helper = ctx.use_indirect_block(binding.block_id)
         start_var = f"_{stem}_start_idx"
         expr = _compile_expression_impl(target.expr, ctx)
+        if ctx.blockless:
+            return (
+                [f"{start_var} = {helper}(int({expr}))"],
+                "blockless_dynamic",
+                ctx.block_name_tuple_symbol(binding.block_id),
+                start_var,
+                binding.tag_type.name,
+            )
         return (
             [f"{start_var} = {helper}(int({expr}))"],
             "block",
@@ -260,6 +305,20 @@ def _copy_converter_write_lines(
             *_indent_body(fault_body, 4),
             f"elif len({values_var}) == 1:",
             f"    {target_symbol} = {values_var}[0]",
+        ]
+
+    if target_kind == "blockless_dynamic":
+        if target_start_var is None:
+            raise RuntimeError("blockless dynamic target is missing start index")
+        return [
+            f"_copy_count = len({values_var})",
+            "if _copy_count == 0:",
+            "    pass",
+            f"elif ({target_start_var} < 0) or (({target_start_var} + _copy_count) > len({target_symbol})):",
+            *_indent_body(fault_body, 4),
+            "else:",
+            f"    for _copy_offset, _copy_value in enumerate({values_var}):",
+            f"        tags[{target_symbol}[{target_start_var} + _copy_offset]] = _copy_value",
         ]
 
     if target_start_var is None:
@@ -347,16 +406,21 @@ def _compile_assignment_lines(
 
 def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
     if isinstance(target, Tag):
+        if ctx.blockless and target.name in ctx.tag_block_addresses:
+            return f"tags[{target.name!r}]"
         return ctx.symbol_for_tag(target)
     if isinstance(target, IndirectRef):
         block_id = id(target.block)
         binding = ctx.block_bindings.get(block_id)
         if binding is None:
             raise RuntimeError(f"Missing block binding for indirect target {target.block.name!r}")
-        block_symbol = ctx.symbol_for_block(target.block)
         helper = ctx.use_indirect_block(binding.block_id)
         ptr = _compile_value(target.pointer, ctx)
-        return f"{block_symbol}[{helper}(int({ptr}))]"
+        index_expr = f"{helper}(int({ptr}))"
+        if ctx.blockless:
+            return f"tags[{_block_name_expr(binding.block_id, index_expr, ctx)}]"
+        block_symbol = ctx.symbol_for_block(target.block)
+        return f"{block_symbol}[{index_expr}]"
     if isinstance(target, IndirectExprRef):
         block_id = id(target.block)
         binding = ctx.block_bindings.get(block_id)
@@ -364,10 +428,13 @@ def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenCon
             raise RuntimeError(
                 f"Missing block binding for indirect expression target {target.block.name!r}"
             )
-        block_symbol = ctx.symbol_for_block(target.block)
         helper = ctx.use_indirect_block(binding.block_id)
         expr = _compile_expression_impl(target.expr, ctx)
-        return f"{block_symbol}[{helper}(int({expr}))]"
+        index_expr = f"{helper}(int({expr}))"
+        if ctx.blockless:
+            return f"tags[{_block_name_expr(binding.block_id, index_expr, ctx)}]"
+        block_symbol = ctx.symbol_for_block(target.block)
+        return f"{block_symbol}[{index_expr}]"
     raise TypeError(f"Unsupported assignment target: {type(target).__name__}")
 
 
@@ -383,14 +450,17 @@ def _compile_range_setup(
             f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
         )
     binding = ctx.block_bindings[id(range_value.block)]
-    symbol = ctx.symbol_for_block(range_value.block)
+    symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
     if isinstance(range_value, BlockRange):
         name = ctx.next_name(stem)
-        indices_var = f"_{name}_indices"
+        indices_var = f"_{name}_{'names' if ctx.blockless else 'indices'}"
         addrs_var = f"_{name}_addrs"
         addresses = [int(addr) for addr in range_value.addresses]
-        indices = [ctx.block_index(binding.block_id, addr) for addr in addresses]
-        indices_expr = _sequence_expr(indices)
+        if ctx.blockless:
+            indices_expr = repr(tuple(binding.block._get_tag(addr).name for addr in addresses))
+        else:
+            indices = [ctx.block_index(binding.block_id, addr) for addr in addresses]
+            indices_expr = _sequence_expr(indices)
         lines = [f"{indices_var} = {indices_expr}"]
         if include_addresses:
             lines.append(f"{addrs_var} = {_sequence_expr(addresses)}")
@@ -403,8 +473,8 @@ def _compile_range_setup(
     start_var = f"_{name}_start"
     end_var = f"_{name}_end"
     addr_var = f"_{name}_addr"
-    idx_var = f"_{name}_idx"
-    indices_var = f"_{name}_indices"
+    idx_var = f"_{name}_{'name' if ctx.blockless else 'idx'}"
+    indices_var = f"_{name}_{'names' if ctx.blockless else 'indices'}"
     addrs_var = f"_{name}_addrs"
     start_expr = _compile_address_expr(range_value.start_expr, ctx)
     end_expr = _compile_address_expr(range_value.end_expr, ctx)
@@ -414,14 +484,25 @@ def _compile_range_setup(
         f"if {start_var} > {end_var}:",
         '    raise ValueError("Indirect range start must be <= end")',
         f"{indices_var} = []",
-        f"{addrs_var} = []",
         f"for {addr_var} in range({start_var}, {end_var} + 1):",
-        f"    {idx_var} = {helper}(int({addr_var}))",
-        f"    {indices_var}.append({idx_var})",
-        f"    {addrs_var}.append(int({addr_var}))",
     ]
+    if include_addresses:
+        lines.append(f"{addrs_var} = []")
+    else:
+        addrs_var = "[]"
+    resolved_expr = f"{helper}(int({addr_var}))"
+    if ctx.blockless:
+        name_expr = _block_name_expr(binding.block_id, resolved_expr, ctx)
+        lines.append(f"    {idx_var} = {name_expr}")
+    else:
+        lines.append(f"    {idx_var} = {resolved_expr}")
+    lines.append(f"    {indices_var}.append({idx_var})")
+    if include_addresses:
+        lines.append(f"    {addrs_var}.append(int({addr_var}))")
     if range_value.reverse_order:
-        lines.extend([f"{indices_var}.reverse()", f"{addrs_var}.reverse()"])
+        lines.append(f"{indices_var}.reverse()")
+        if include_addresses:
+            lines.append(f"{addrs_var}.reverse()")
     return lines, symbol, indices_var, addrs_var
 
 
@@ -535,7 +616,23 @@ def _compile_target_write_lines(
     if isinstance(target, ImmediateRef):
         return _compile_target_write_lines(target.value, value_expr, ctx, indent)
     if isinstance(target, Tag):
-        return [f"{sp}{ctx.symbol_for_tag(target)} = {value_expr}"]
+        return [f"{sp}{_compile_lvalue(target, ctx)} = {value_expr}"]
+
+    if ctx.blockless:
+        setup, symbol, indices_var, _ = _compile_range_setup(
+            target,
+            ctx,
+            stem="targetwrite",
+            include_addresses=False,
+        )
+        lines = [f"{sp}{line}" for line in setup]
+        lines.extend(
+            [
+                f"{sp}for _target_name in {indices_var}:",
+                f"{sp}    {_range_item_write_expr(symbol, '_target_name', value_expr)}",
+            ]
+        )
+        return lines
 
     if isinstance(target, BlockRange):
         binding = ctx.block_bindings[id(target.block)]
@@ -615,11 +712,6 @@ def _compile_indirect_value(
     binding = ctx.block_bindings.get(block_id)
     if binding is None:
         raise RuntimeError(f"Missing block binding for indirect ref {indirect_ref.block.name!r}")
-    block_symbol = (
-        block_snapshots.get(block_id)
-        if block_snapshots is not None and block_id in block_snapshots
-        else ctx.symbol_for_block(indirect_ref.block)
-    )
     helper = ctx.use_indirect_block(binding.block_id)
     ptr = _compile_value(
         indirect_ref.pointer,
@@ -627,7 +719,16 @@ def _compile_indirect_value(
         scalar_snapshots=scalar_snapshots,
         block_snapshots=block_snapshots,
     )
-    return f"{block_symbol}[{helper}(int({ptr}))]"
+    index_expr = f"{helper}(int({ptr}))"
+    if block_snapshots is not None and block_id in block_snapshots:
+        block_symbol = block_snapshots[block_id]
+        return f"{block_symbol}[{index_expr}]"
+    if ctx.blockless:
+        name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
+        default = _TYPE_DEFAULTS[binding.tag_type]
+        return f"tags.get({name_expr}, {default!r})"
+    block_symbol = ctx.symbol_for_block(indirect_ref.block)
+    return f"{block_symbol}[{index_expr}]"
 
 
 def _compile_value(
@@ -658,11 +759,6 @@ def _compile_value(
             raise RuntimeError(
                 f"Missing block binding for indirect expression ref {value.block.name!r}"
             )
-        block_symbol = (
-            block_snapshots.get(block_id)
-            if block_snapshots is not None and block_id in block_snapshots
-            else ctx.symbol_for_block(value.block)
-        )
         helper = ctx.use_indirect_block(binding.block_id)
         expr = _compile_expression_impl(
             value.expr,
@@ -670,7 +766,16 @@ def _compile_value(
             scalar_snapshots=scalar_snapshots,
             block_snapshots=block_snapshots,
         )
-        return f"{block_symbol}[{helper}(int({expr}))]"
+        index_expr = f"{helper}(int({expr}))"
+        if block_snapshots is not None and block_id in block_snapshots:
+            block_symbol = block_snapshots[block_id]
+            return f"{block_symbol}[{index_expr}]"
+        if ctx.blockless:
+            name_expr = _block_name_expr(binding.block_id, index_expr, ctx)
+            default = _TYPE_DEFAULTS[binding.tag_type]
+            return f"tags.get({name_expr}, {default!r})"
+        block_symbol = ctx.symbol_for_block(value.block)
+        return f"{block_symbol}[{index_expr}]"
     if isinstance(value, Expression):
         return _compile_expression_impl(
             value,

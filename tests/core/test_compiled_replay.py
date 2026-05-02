@@ -6,17 +6,28 @@ from datetime import datetime
 from pyrung.circuitpy.codegen import compile_kernel
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     CompiledPLC,
+    Int,
     Program,
     Rung,
+    TagType,
     Timer,
+    blockcopy,
+    call,
     copy,
+    fill,
     on_delay,
     out,
+    search,
+    shift,
+    rise,
     run_function,
+    subroutine,
     system,
 )
+from pyrung.core.analysis.prove.kernel import _step_compiled_kernel
 
 
 def _assert_states_equivalent(left: PLC | CompiledPLC, right: PLC | CompiledPLC) -> None:
@@ -26,6 +37,28 @@ def _assert_states_equivalent(left: PLC | CompiledPLC, right: PLC | CompiledPLC)
     assert left_state.timestamp == right_state.timestamp
     assert dict(left_state.tags) == dict(right_state.tags)
     assert dict(left_state.memory) == dict(right_state.memory)
+
+
+def _assert_compiled_kernels_match(
+    legacy,
+    blockless,
+    *,
+    steps: list[dict[str, bool | int | float | str]],
+    dt: float = 0.010,
+) -> None:
+    legacy_kernel = legacy.create_kernel()
+    blockless_kernel = blockless.create_kernel()
+
+    for patch in steps:
+        legacy_kernel.tags.update(patch)
+        blockless_kernel.tags.update(patch)
+        _step_compiled_kernel(legacy, legacy_kernel, dt=dt)
+        _step_compiled_kernel(blockless, blockless_kernel, dt=dt)
+        assert legacy_kernel.tags == blockless_kernel.tags
+        assert legacy_kernel.memory == blockless_kernel.memory
+        assert legacy_kernel.prev == blockless_kernel.prev
+        assert legacy_kernel.scan_id == blockless_kernel.scan_id
+        assert legacy_kernel.timestamp == blockless_kernel.timestamp
 
 
 def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
@@ -45,6 +78,112 @@ def test_compile_kernel_export_and_replay_kernel_bootstrap() -> None:
     assert kernel.tags["Light"] is False
     assert kernel.memory == {}
     assert kernel.prev == {}
+
+
+def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
+    ds = Block("DS", TagType.INT, 1, 6)
+    dd = Block("DD", TagType.INT, 1, 6)
+    idx = Int("Idx", external=True, min=1, max=6)
+    fill_cmd = Bool("FillCmd", external=True)
+    copy_cmd = Bool("CopyCmd", external=True)
+    out_tag = Int("Out")
+    found_addr = Int("FoundAddr")
+    found = Bool("Found")
+
+    with Program(strict=False) as program:
+        with Rung(fill_cmd):
+            fill(3, ds.select(2, 4))
+        with Rung(copy_cmd):
+            copy(ds[idx], out_tag)
+            copy(7, dd[idx])
+        with Rung():
+            blockcopy(ds.select(1, 3), dd.select(4, 6))
+            search(dd.select(1, 6) >= 3, result=found_addr, found=found)
+
+    legacy = compile_kernel(program)
+    blockless = compile_kernel(program, blockless=True)
+
+    _assert_compiled_kernels_match(
+        legacy,
+        blockless,
+        steps=[
+            {"Idx": 2, "FillCmd": True, "CopyCmd": True},
+            {"Idx": 4, "FillCmd": False, "CopyCmd": True},
+        ],
+    )
+
+
+def test_blockless_kernel_matches_legacy_for_shift_edge_and_oneshot() -> None:
+    bits = Block("C", TagType.BOOL, 1, 4)
+    clock = Bool("Clock", external=True)
+    reset_cmd = Bool("Reset", external=True)
+    pulse = Bool("Pulse")
+    fired = Bool("Fired")
+
+    with Program(strict=False) as program:
+        with Rung():
+            shift(bits.select(1, 4)).clock(clock).reset(reset_cmd)
+        with Rung(rise(bits[4])):
+            out(pulse)
+        with Rung(bits[1]):
+            out(fired, oneshot=True)
+
+    legacy = compile_kernel(program)
+    blockless = compile_kernel(program, blockless=True)
+
+    _assert_compiled_kernels_match(
+        legacy,
+        blockless,
+        steps=[
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": True},
+        ],
+    )
+
+
+def test_blockless_kernel_subroutine_matches_legacy_for_block_edge_and_oneshot() -> None:
+    bits = Block("C", TagType.BOOL, 1, 4)
+    clock = Bool("Clock", external=True)
+    reset_cmd = Bool("Reset", external=True)
+    pulse = Bool("Pulse")
+    fired = Bool("Fired")
+
+    with Program(strict=False) as program:
+        with subroutine("worker"):
+            with Rung(rise(bits[4])):
+                out(pulse)
+            with Rung(bits[1]):
+                out(fired, oneshot=True)
+        with Rung():
+            shift(bits.select(1, 4)).clock(clock).reset(reset_cmd)
+        with Rung():
+            call("worker")
+
+    legacy = compile_kernel(program)
+    blockless = compile_kernel(program, blockless=True)
+
+    _assert_compiled_kernels_match(
+        legacy,
+        blockless,
+        steps=[
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": False},
+            {"Clock": True, "Reset": False},
+            {"Clock": False, "Reset": True},
+        ],
+    )
 
 
 def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defaults() -> None:

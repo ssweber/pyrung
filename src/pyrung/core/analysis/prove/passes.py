@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
 from pyrung.core.analysis.simplified import Expr
-from pyrung.core.kernel import BlockSpec, CompiledKernel
+from pyrung.core.kernel import CompiledKernel
 
 from . import Intractable, _ExploreContext
 from .absorb import (
@@ -35,7 +35,7 @@ from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .elision import _elide_scan_local_stateful_dims
 from .expr import _collect_atoms_for_tag
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
-from .kernel import _collect_edge_tag_exprs, _compile_inline_step
+from .kernel import _collect_edge_tag_exprs, _step_compiled_kernel
 
 from .expr import _collect_edge_input_tags
 
@@ -175,14 +175,6 @@ class _PassContext:
         assert self.done_event_specs is not None
         assert self.threshold_absorptions is not None
         assert self.threshold_event_specs is not None
-        block_specs_dict = _narrow_indirect_block_specs(
-            dict(self.compiled.block_specs),
-            self.compiled,
-            self.graph,
-            self.stateful_dims,
-            self.nondeterministic_dims,
-        )
-        block_specs = tuple(block_specs_dict.values())
         exclusive_input_groups = _detect_exclusive_input_groups(
             self.program,
             self.graph,
@@ -208,9 +200,7 @@ class _PassContext:
             done_event_specs=self.done_event_specs,
             threshold_vector_specs=self.threshold_absorptions.vector_specs,
             threshold_event_specs=self.threshold_event_specs,
-            block_specs=block_specs,
             dt=self.dt,
-            step_fn=_compile_inline_step(self.compiled, block_specs),
             edge_tag_exprs=self.edge_tag_exprs or {},
             synthetic_preset_tags=self.synthetic_preset_tags or (),
             nondeterministic_names=tuple(sorted(self.nondeterministic_dims)),
@@ -304,7 +294,7 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
         literal_write_domains,
     )
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
     first_pass_nd: dict[str, tuple[Any, ...]] = {}
     for tag_name, tag in ctx.graph.tags.items():
         role = ctx.graph.tag_roles.get(tag_name)
@@ -363,7 +353,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     assert ctx.graph is not None
     assert ctx.stateful_dims is not None and ctx.nondeterministic_dims is not None
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
     ctx.stateful_dims = _elide_scan_local_stateful_dims(
         ctx.program,
         ctx.graph,
@@ -378,7 +368,7 @@ def _pass_compile_kernel(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
     if ctx.compiled is None:
-        ctx.compiled = _compile_kernel(ctx.program)
+        ctx.compiled = _compile_kernel(ctx.program, blockless=True)
     assert ctx.stateful_dims is not None
     ctx.stateful_names = tuple(sorted(ctx.stateful_dims))
     ctx.edge_tag_names = tuple(sorted(ctx.compiled.edge_tags))
@@ -485,10 +475,7 @@ def _pass_discover_memory_keys(ctx: _PassContext) -> None:
     pilot = ctx.compiled.create_kernel()
     for name in ctx.absorptions.preset_tags:
         pilot.tags[name] = 1
-    pilot.memory["_dt"] = ctx.dt
-    for spec in ctx.compiled.block_specs.values():
-        pilot.load_block_from_tags(spec)
-    ctx.compiled.step_fn(pilot.tags, pilot.blocks, pilot.memory, pilot.prev, ctx.dt)
+    _step_compiled_kernel(ctx.compiled, pilot, dt=ctx.dt)
     excluded_prefixes = ("_dt", "_frac:")
     ctx.memory_key_names = tuple(
         sorted(k for k in pilot.memory if not any(k.startswith(p) for p in excluded_prefixes))

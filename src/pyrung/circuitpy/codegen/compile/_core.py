@@ -318,7 +318,7 @@ def _collect_rung_snapshot_bindings(
             continue
         snap_var = f"_{ctx.next_name('cond_snap')}"
         scalar_symbols[tag_name] = snap_var
-        lines.append(f"{sp}{snap_var} = {ctx.symbol_for_tag(tag)}")
+        lines.append(f"{sp}{snap_var} = {_snapshot_tag_symbol(tag, ctx)}")
 
     for block_id in sorted(block_ids, key=lambda bid: ctx.block_symbols.get(bid, "")):
         binding = ctx.block_bindings.get(block_id)
@@ -326,7 +326,12 @@ def _collect_rung_snapshot_bindings(
             continue
         snap_var = f"_{ctx.next_name('cond_block_snap')}"
         block_symbols[block_id] = snap_var
-        lines.append(f"{sp}{snap_var} = list({ctx.symbol_for_block(binding.block)})")
+        if ctx.blockless:
+            name_symbol = ctx.block_name_tuple_symbol(block_id)
+            default = binding.block._get_tag(binding.start).default
+            lines.append(f"{sp}{snap_var} = [tags.get(_name, {default!r}) for _name in {name_symbol}]")
+        else:
+            lines.append(f"{sp}{snap_var} = list({ctx.symbol_for_block(binding.block)})")
 
     return lines, _ConditionSnapshotBindings(
         scalar_symbols=scalar_symbols,
@@ -798,7 +803,7 @@ def _compile_calc_instruction(
     if range_cond and fault_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in fault_body)
-    enabled_body.append(f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}")
+    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -885,13 +890,12 @@ def _compile_for_loop_instruction(
     indent: int,
 ) -> list[str]:
     count_expr = _compile_value(instr.count, ctx)
-    idx_symbol = ctx.symbol_for_tag(instr.idx_tag)
     disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
     enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
     body = [
         f"_iterations = max(0, int({count_expr}))",
         "for _for_i in range(_iterations):",
-        f"    {idx_symbol} = _for_i",
+        *_indent_body(_compile_assignment_lines(instr.idx_tag, "_for_i", ctx, indent=0), 4),
         *_indent_body(enabled_children, 4),
     ]
     return _compile_guarded_instruction(

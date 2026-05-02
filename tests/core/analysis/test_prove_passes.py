@@ -498,6 +498,50 @@ class TestForcedTrueCoverage:
 
         assert calls == 3
 
+    def test_elision_compile_sites_use_blockless_kernels(self, monkeypatch) -> None:
+        from pyrung.circuitpy import codegen as codegen_module
+
+        inp = Bool("Inp", external=True)
+        stored = Bool("Stored")
+
+        with Program(strict=False) as logic:
+            with Rung(inp):
+                out(stored)
+
+        graph = build_program_graph(logic)
+        real_compile = codegen_module.compile_kernel
+        calls: list[dict[str, object]] = []
+
+        def _record(*args, **kwargs):
+            calls.append(dict(kwargs))
+            return real_compile(*args, **kwargs)
+
+        monkeypatch.setattr(codegen_module, "compile_kernel", _record)
+
+        _collect_forced_true_coverage(
+            logic,
+            graph,
+            {"Stored": (False, True)},
+            {"Inp": (False, True)},
+            compiled=None,
+            combo_limit=2,
+        )
+        _ConcreteStateElider(
+            logic,
+            graph,
+            {"Stored": (False, True)},
+            {"Inp": (False, True)},
+            compiled=None,
+        )
+
+        assert calls
+        assert all(call.get("blockless") is True for call in calls)
+        assert any(call.get("force_rung_enable") is True for call in calls)
+
+    def test_inline_step_wrapper_removed(self) -> None:
+        kernel_module = importlib.import_module("pyrung.core.analysis.prove.kernel")
+        assert not hasattr(kernel_module, "_compile_inline_step")
+
 
 class TestScanLocalStateElision:
     def test_elision_progress_reports_candidate_checks(self) -> None:

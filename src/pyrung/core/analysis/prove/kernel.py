@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
-from pyrung.core.kernel import BlockSpec, CompiledKernel, ReplayKernel
+from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
 from .absorb import _THRESHOLD_FORM_GT, _done_acc_state
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
@@ -23,28 +22,24 @@ _EDGE_DEAD: Any = object()
 _INPUT_DEAD: Any = object()
 
 
-def _compile_inline_step(
+def _step_compiled_kernel(
     compiled: CompiledKernel,
-    block_specs: tuple[BlockSpec, ...],
-) -> Callable[..., None]:
-    """Compile a step function with block load/flush inlined as straight-line code."""
-    lines = ["def _step(tags, blocks, memory, prev, dt):"]
-    lines.append('    memory["_dt"] = dt')
-    for spec in block_specs:
-        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        indices = spec.tag_indices or range(len(spec.tag_names))
-        for idx, name in zip(indices, spec.tag_names, strict=True):
-            lines.append(f"    _arr[{idx}] = tags.get({name!r}, {spec.default!r})")
-    lines.append("    _inner(tags, blocks, memory, prev, dt)")
-    for spec in block_specs:
-        lines.append(f"    _arr = blocks[{spec.symbol!r}]")
-        indices = spec.tag_indices or range(len(spec.tag_names))
-        for idx, name in zip(indices, spec.tag_names, strict=True):
-            lines.append(f"    tags[{name!r}] = _arr[{idx}]")
-
-    ns: dict[str, Any] = {"_inner": compiled.step_fn}
-    exec(compile("\n".join(lines), "<block_sync>", "exec"), ns)  # noqa: S102
-    return ns["_step"]
+    kernel: ReplayKernel,
+    *,
+    dt: float,
+) -> None:
+    """Execute one compiled scan, syncing legacy block arrays only when needed."""
+    if not compiled.blockless:
+        for spec in compiled.block_specs.values():
+            kernel.load_block_from_tags(spec)
+    compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
+    if not compiled.blockless:
+        for spec in compiled.block_specs.values():
+            kernel.flush_block_to_tags(spec)
+    for name in compiled.edge_tags:
+        if name in kernel.tags:
+            kernel.prev[name] = kernel.tags[name]
+    kernel.advance(dt)
 
 
 def _collect_edge_tag_exprs(
@@ -151,20 +146,7 @@ def _step_kernel(
     kernel: ReplayKernel,
 ) -> None:
     """Execute one scan cycle on the kernel."""
-    step = context.step_fn
-    if step is not None:
-        step(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, context.dt)
-    else:
-        kernel.memory["_dt"] = context.dt
-        for spec in context.block_specs:
-            kernel.load_block_from_tags(spec)
-        context.compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, context.dt)
-        for spec in context.block_specs:
-            kernel.flush_block_to_tags(spec)
-    for name in context.edge_tag_names:
-        if name in kernel.tags:
-            kernel.prev[name] = kernel.tags[name]
-    kernel.advance(context.dt)
+    _step_compiled_kernel(context.compiled, kernel, dt=context.dt)
 
 
 def _seed_synthetic_presets(context: _ExploreContext, kernel: ReplayKernel) -> None:

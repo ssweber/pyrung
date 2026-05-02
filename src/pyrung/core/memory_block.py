@@ -470,6 +470,8 @@ class Block:
         return self._annotate_tag(tag, addr)
 
     def _annotate_tag(self, tag: LiveTag, addr: int) -> LiveTag:
+        object.__setattr__(tag, "_pyrung_block", self)
+        object.__setattr__(tag, "_pyrung_block_addr", addr)
         runtime = self._pyrung_structure_runtime
         if runtime is None:
             return tag

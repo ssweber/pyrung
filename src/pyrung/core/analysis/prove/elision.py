@@ -29,7 +29,7 @@ from pyrung.core.tag import ImmediateRef, Tag, TagType
 from . import PENDING
 from .absorb import _all_write_targets
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
-from .kernel import _compile_inline_step
+from .kernel import _step_compiled_kernel
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -1146,20 +1146,6 @@ def _is_fault_tag(tag_name: str) -> bool:
     return tag_name.startswith("fault.")
 
 
-def _step_compiled_kernel(
-    step_fn: Any,
-    compiled: CompiledKernel,
-    kernel: ReplayKernel,
-    *,
-    dt: float,
-) -> None:
-    step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
-    for name in compiled.edge_tags:
-        if name in kernel.tags:
-            kernel.prev[name] = kernel.tags[name]
-    kernel.advance(dt)
-
-
 def _alternate_seed_value(tag: Tag) -> Any:
     default = tag.default
     if tag.type == TagType.BOOL:
@@ -1238,8 +1224,11 @@ def _collect_forced_true_coverage(
 ) -> _ForcedTrueCoverage:
     from pyrung.circuitpy.codegen import compile_kernel
 
-    forced_compiled = compiled or compile_kernel(program, force_rung_enable=True)
-    forced_step = _compile_inline_step(forced_compiled, tuple(forced_compiled.block_specs.values()))
+    forced_compiled = compiled or compile_kernel(
+        program,
+        force_rung_enable=True,
+        blockless=True,
+    )
     domain_items = _coverage_domain_items(
         graph,
         stateful_dims,
@@ -1274,12 +1263,7 @@ def _collect_forced_true_coverage(
             entry_values = dict(zip(varied_tags, combo, strict=True))
             kernel.tags.update(entry_values)
             before = {name: kernel.tags.get(name) for name in forced_compiled.referenced_tags}
-            _step_compiled_kernel(
-                forced_step,
-                forced_compiled,
-                kernel,
-                dt=_DEFAULT_DT,
-            )
+            _step_compiled_kernel(forced_compiled, kernel, dt=_DEFAULT_DT)
             for name in forced_compiled.referenced_tags:
                 if kernel.tags.get(name) != before.get(name):
                     written_tags.add(name)
@@ -1317,11 +1301,7 @@ class _ConcreteStateElider:
         )
         self._nondeterministic_dims = dict(nondeterministic_dims)
         self._progress = progress
-        self._compiled = compiled or compile_kernel(program)
-        self._step_fn = _compile_inline_step(
-            self._compiled,
-            tuple(self._compiled.block_specs.values()),
-        )
+        self._compiled = compiled or compile_kernel(program, blockless=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._coverage = _collect_forced_true_coverage(
             program,
@@ -1367,10 +1347,7 @@ class _ConcreteStateElider:
                     pilot.tags.update(_seed_profile(self._compiled, alternate=True))
                 for name, val in zip(nd_names, combo, strict=True):
                     pilot.tags[name] = val
-                pilot.memory["_dt"] = _DEFAULT_DT
-                for spec in self._compiled.block_specs.values():
-                    pilot.load_block_from_tags(spec)
-                _step_compiled_kernel(self._step_fn, self._compiled, pilot, dt=_DEFAULT_DT)
+                _step_compiled_kernel(self._compiled, pilot, dt=_DEFAULT_DT)
                 pilots_run += 1
                 found = [
                     k
@@ -1712,12 +1689,7 @@ class _ConcreteStateElider:
     ) -> tuple[Any, ...] | None:
         kernel = self._compiled.create_kernel()
         kernel.tags.update(entry_values)
-        _step_compiled_kernel(
-            self._step_fn,
-            self._compiled,
-            kernel,
-            dt=_DEFAULT_DT,
-        )
+        _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
         result = tuple(kernel.tags.get(name) for name in observed)
 
         if self._warm_memory is not None:
@@ -1727,12 +1699,7 @@ class _ConcreteStateElider:
             warm_kernel = self._compiled.create_kernel()
             warm_kernel.tags.update(entry_values)
             warm_kernel.memory.update(self._warm_memory)
-            _step_compiled_kernel(
-                self._step_fn,
-                self._compiled,
-                warm_kernel,
-                dt=_DEFAULT_DT,
-            )
+            _step_compiled_kernel(self._compiled, warm_kernel, dt=_DEFAULT_DT)
             warm_result = tuple(warm_kernel.tags.get(name) for name in observed)
             if warm_result != result:
                 return None

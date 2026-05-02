@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
-from pyrung.core.kernel import BlockSpec, CompiledKernel, ReplayKernel
+from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -90,9 +90,7 @@ class _ExploreContext:
     done_event_specs: tuple[_DoneEventSpec, ...]
     threshold_vector_specs: tuple[_ThresholdVectorSpec, ...]
     threshold_event_specs: tuple[_ThresholdEventSpec, ...]
-    block_specs: tuple[BlockSpec, ...]
     dt: float
-    step_fn: Callable[..., None] | None = None
     edge_tag_exprs: dict[str, list[Expr]] = field(default_factory=dict)
     synthetic_preset_tags: tuple[str, ...] = ()
     nondeterministic_names: tuple[str, ...] = ()
@@ -911,7 +909,7 @@ def prove(
     else:
         partitions = _partition_batch(program, compiled_properties)
 
-    compiled_kernel = compile_kernel(program)
+    compiled_kernel = compile_kernel(program, blockless=True)
     results: list[Proven | Counterexample | Intractable | None] = [None] * len(compiled_properties)
     for indices, group_scope in partitions:
         group_exprs: list[Expr] = [
@@ -1090,7 +1088,7 @@ def _build_reachable_context(
     del seed_tags
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled_kernel = compile_kernel(program)
+    compiled_kernel = compile_kernel(program, blockless=True)
     return _build_explore_context(
         program,
         scope=scope,
@@ -1393,7 +1391,7 @@ def program_hash(program: Program) -> str:
     """Compute a hash of the program's compiled kernel source."""
     from pyrung.circuitpy.codegen import compile_kernel
 
-    compiled = compile_kernel(program)
+    compiled = compile_kernel(program, blockless=True)
     return hashlib.sha256(compiled.source.encode()).hexdigest()[:16]
 
 

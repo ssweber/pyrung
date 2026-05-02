@@ -55,6 +55,9 @@ class ReplayKernel:
         self.tags: dict[str, bool | int | float | str] = {
             name: tag.default for name, tag in referenced_tags.items()
         }
+        for spec in block_specs.values():
+            for name in spec.tag_names:
+                self.tags.setdefault(name, spec.default)
         self.blocks: dict[str, list[bool | int | float | str]] = {
             spec.symbol: [spec.default] * spec.size for spec in block_specs.values()
         }
@@ -119,6 +122,7 @@ class CompiledKernel:
     block_specs: dict[str, BlockSpec] = field(default_factory=dict)
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
+    blockless: bool = False
     has_io_gaps: bool = False
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict

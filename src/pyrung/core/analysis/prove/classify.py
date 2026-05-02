@@ -27,7 +27,7 @@ from .absorb import (
     _ThresholdBlocker,
 )
 from .expr import _build_atom_index, _collect_atoms_for_tag, _referenced_tags
-from .kernel import _restore_kernel, _snapshot_kernel
+from .kernel import _restore_kernel, _snapshot_kernel, _step_compiled_kernel
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph, RungNode
@@ -1137,14 +1137,10 @@ def _pilot_sweep_domains(
         tag = graph.tags[c]
         observed[c].add(tag.default)
 
-    edge_tag_names = tuple(compiled.edge_tags)
     nd_names = sorted(relevant_nd)
     nd_domains = [relevant_nd[n] for n in nd_names]
 
     initial_kernel = compiled.create_kernel()
-    initial_kernel.memory["_dt"] = dt
-    for spec in compiled.block_specs.values():
-        initial_kernel.load_block_from_tags(spec)
     initial_snap = _snapshot_kernel(initial_kernel)
 
     kernel = initial_kernel
@@ -1152,21 +1148,12 @@ def _pilot_sweep_domains(
         _restore_kernel(kernel, initial_snap)
         for name, val in zip(nd_names, combo, strict=True):
             kernel.tags[name] = val
-        kernel.memory["_dt"] = dt
-        for spec in compiled.block_specs.values():
-            kernel.load_block_from_tags(spec)
 
         for _scan in range(max_scans):
             prev_sizes = tuple(len(observed[c]) for c in candidates)
-            compiled.step_fn(kernel.tags, kernel.blocks, kernel.memory, kernel.prev, dt)
-            for spec in compiled.block_specs.values():
-                kernel.flush_block_to_tags(spec)
+            _step_compiled_kernel(compiled, kernel, dt=dt)
             for c in candidates:
                 observed[c].add(kernel.tags.get(c, graph.tags[c].default))
-            for name in edge_tag_names:
-                if name in kernel.tags:
-                    kernel.prev[name] = kernel.tags[name]
-            kernel.advance(dt)
             new_sizes = tuple(len(observed[c]) for c in candidates)
             if new_sizes == prev_sizes:
                 break

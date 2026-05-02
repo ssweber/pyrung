@@ -3303,13 +3303,10 @@ class TestPointerDomainInference:
         assert any("pointer" in h and "Idx" in h for h in result.hints)
 
 
-class TestIndirectBlockNarrowing:
-    """Sparse-sync narrowing of indirect block specs in prove."""
+class TestBlocklessProveKernel:
+    """prove defaults to blockless compiled kernels."""
 
-    def test_indirect_only_block_narrowed(self):
-        """Block accessed only via pointer gets narrowed BlockSpec."""
-        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
-
+    def test_build_explore_context_uses_blockless_kernel(self):
         blk = Block("DS", TagType.INT, 1, 100)
         idx = Int("Idx", external=True, min=1, max=5)
         dest = Int("Out")
@@ -3318,52 +3315,42 @@ class TestIndirectBlockNarrowing:
             with Rung():
                 copy(blk[idx], dest)
 
-        ctx = _PassContext(
-            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
-        )
-        _run_pre_bfs_pipeline(ctx)
-        context = ctx.freeze()
+        context = prove_module._build_explore_context(logic)
 
-        narrowed = [s for s in context.block_specs if s.tag_indices is not None]
-        assert len(narrowed) == 1
-        spec = narrowed[0]
-        assert len(spec.tag_names) == 5
-        assert spec.tag_indices == (0, 1, 2, 3, 4)
-        assert spec.tag_names[0] == "DS1"
-        assert spec.tag_names[4] == "DS5"
+        assert not isinstance(context, Intractable)
+        assert context.compiled.blockless is True
 
-    def test_mixed_static_indirect_includes_static(self):
-        """Block with both static and indirect access includes static addresses."""
-        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
+    def test_public_compile_sites_use_blockless_kernel(self, monkeypatch):
+        from pyrung.circuitpy import codegen as codegen_module
 
-        blk = Block("DS", TagType.INT, 1, 100)
-        idx = Int("Idx", external=True, min=1, max=5)
-        dest = Int("Out")
-        dest2 = Int("Out2")
+        cmd = Bool("Cmd", external=True)
+        light = Bool("Light")
 
         with Program(strict=False) as logic:
-            with Rung():
-                copy(blk[idx], dest)
-            with Rung():
-                copy(blk[50], dest2)
+            with Rung(cmd):
+                out(light)
 
-        ctx = _PassContext(
-            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
-        )
-        _run_pre_bfs_pipeline(ctx)
-        context = ctx.freeze()
+        real_compile = codegen_module.compile_kernel
+        calls: list[dict[str, object]] = []
 
-        narrowed = [s for s in context.block_specs if s.tag_indices is not None]
-        assert len(narrowed) == 1
-        spec = narrowed[0]
-        assert "DS50" in spec.tag_names
+        def _record(*args, **kwargs):
+            calls.append(dict(kwargs))
+            return real_compile(*args, **kwargs)
+
+        monkeypatch.setattr(codegen_module, "compile_kernel", _record)
+
+        assert isinstance(prove(logic, lambda _state: True), Proven)
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert isinstance(program_hash(logic), str)
+        assert calls
+        assert all(call.get("blockless") is True for call in calls)
+        return
         assert 49 in spec.tag_indices  # addr 50, start 1 → index 49
         assert len(spec.tag_names) == 6  # 5 from domain + 1 static
 
-    def test_full_domain_not_narrowed(self):
-        """Block where domain covers full range is not narrowed."""
-        from pyrung.core.analysis.prove.passes import _PassContext, _run_pre_bfs_pipeline
-
+    def test_reachable_states_still_work_for_full_pointer_domain(self):
+        """Full pointer domains still prove and enumerate correctly."""
         blk = Block("DS", TagType.INT, 1, 10)
         idx = Int("Idx", external=True, min=1, max=10)
         dest = Int("Out")
@@ -3372,18 +3359,8 @@ class TestIndirectBlockNarrowing:
             with Rung():
                 copy(blk[idx], dest)
 
-        ctx = _PassContext(
-            program=logic, scope=None, project=None, extra_exprs=None, dt=0.010, compiled=None
-        )
-        _run_pre_bfs_pipeline(ctx)
-        context = ctx.freeze()
-
-        for spec in context.block_specs:
-            if "DS1" in spec.tag_names:
-                assert spec.tag_indices is None
-                break
-        else:
-            raise AssertionError("DS block spec not found")
+        states = reachable_states(logic, project=["Out"])
+        assert not isinstance(states, Intractable)
 
     def test_prove_correct_with_narrowed_block(self):
         """Prove still produces correct results with narrowed indirect blocks."""

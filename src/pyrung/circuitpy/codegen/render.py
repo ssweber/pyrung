@@ -373,7 +373,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
 
     # 7) SD mount + load memory startup call
     lines.append(_section("Retentive memory (SD card)"))
-    ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
+    ret_globals = sorted(
+        {ctx.global_symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())}
+    )
     snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
     load_globals = ", ".join(
         ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals

@@ -28,10 +28,13 @@ from pyrung.core.tag import TagType
 
 from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
+    _compile_lvalue,
     _compile_guarded_instruction,
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
     _compile_value,
+    _range_item_read_expr,
+    _range_item_write_expr,
     _search_compare_expr,
     _timer_dt_to_units_expr,
 )
@@ -47,6 +50,7 @@ def _compile_blockcopy_instruction(
         return _compile_blockcopy_converter_instruction(instr, enabled_expr, ctx, indent)
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("blockcopy")
+    store_expr = f'_store_copy_value_to_type(_raw, "{_range_type_name(instr.dest)}")'
     src_setup, src_symbol, src_indices, _ = _compile_range_setup(
         instr.source, ctx, stem=f"{stem}_src", include_addresses=False
     )
@@ -59,8 +63,8 @@ def _compile_blockcopy_instruction(
         f"if len({src_indices}) != len({dst_indices}):",
         f'    raise ValueError(f"BlockCopy length mismatch: source has {{len({src_indices})}} elements, dest has {{len({dst_indices})}} elements")',
         f"for _src_idx, _dst_idx in zip({src_indices}, {dst_indices}):",
-        f"    _raw = {src_symbol}[_src_idx]",
-        f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_raw, "{_range_type_name(instr.dest)}")',
+        f"    _raw = {_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)}",
+        f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -101,13 +105,13 @@ def _compile_blockcopy_converter_instruction(
                 "try:",
                 "    _converted = []",
                 f"    for _src_idx in {src_indices}:",
-                f"        _raw_char = _text_from_source_value({src_symbol}[_src_idx])",
+                f"        _raw_char = _text_from_source_value({_range_item_read_expr(instr.source, src_symbol, '_src_idx', ctx)})",
                 "        if len(_raw_char) != 1:",
                 '            raise ValueError("BlockCopy text->numeric conversion requires single CHAR values")',
                 f'        _numeric = _store_numeric_text_digit(_raw_char, "{mode}")',
                 f'        _converted.append(_store_copy_value_to_type(_numeric, "{dst_type}"))',
                 f"    for _dst_idx, _converted_value in zip({dst_indices}, _converted):",
-                f"        {dst_symbol}[_dst_idx] = _converted_value",
+                f"        {_range_item_write_expr(dst_symbol, '_dst_idx', '_converted_value')}",
                 "except (IndexError, TypeError, ValueError, OverflowError):",
                 *_indent_body(fault_body, 4),
             ]
@@ -125,6 +129,7 @@ def _compile_fill_instruction(
 ) -> list[str]:
     ctx.mark_helper("_store_copy_value_to_type")
     stem = ctx.next_name("fill")
+    store_expr = f'_store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")'
     dst_setup, dst_symbol, dst_indices, _ = _compile_range_setup(
         instr.dest, ctx, stem=f"{stem}_dst", include_addresses=False
     )
@@ -133,7 +138,7 @@ def _compile_fill_instruction(
         *dst_setup,
         f"_fill_value = {value_expr}",
         f"for _dst_idx in {dst_indices}:",
-        f'    {dst_symbol}[_dst_idx] = _store_copy_value_to_type(_fill_value, "{_range_type_name(instr.dest)}")',
+        f"    {_range_item_write_expr(dst_symbol, '_dst_idx', store_expr)}",
     ]
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
@@ -151,13 +156,14 @@ def _compile_search_instruction(
         stem=f"{stem}_rng",
         include_addresses=True,
     )
-    result_symbol = ctx.symbol_for_tag(instr.result)
-    found_symbol = ctx.symbol_for_tag(instr.found)
+    result_read = _compile_value(instr.result, ctx)
+    result_write = _compile_lvalue(instr.result, ctx)
+    found_write = _compile_lvalue(instr.found, ctx)
     value_expr = _compile_value(instr.value, ctx)
     range_type = _range_type_name(instr.search_range)
     compare_expr = _search_compare_expr(instr.condition, "_candidate", "_rhs")
     static_len = _static_range_length(instr.search_range)
-    miss_body = [f"{result_symbol} = -1", f"{found_symbol} = False"]
+    miss_body = [f"{result_write} = -1", f"{found_write} = False"]
 
     text_path = range_type == "CHAR"
     if text_path and instr.condition not in {"==", "!="}:
@@ -167,7 +173,7 @@ def _compile_search_instruction(
     if instr.continuous:
         cursor_body.extend(
             [
-                f"_current_result = int({result_symbol})",
+                f"_current_result = int({result_read})",
                 "if _current_result == 0:",
                 "    _cursor_index = 0",
                 "elif _current_result == -1:",
@@ -233,15 +239,15 @@ def _compile_search_instruction(
             "    _matched = None",
             "    for _start in range(_cursor_index, _last_start + 1):",
             "        _candidate = ''.join(str("
-            f"{range_symbol}[{range_indices}[_start + _off]]) for _off in range(_window_len))",
+            f"{_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_start + _off]', ctx)}) for _off in range(_window_len))",
             f"        if ({'(_candidate == _rhs)' if instr.condition == '==' else '(_candidate != _rhs)'}):",
             "            _matched = _start",
             "            break",
             "    if _matched is None:",
             *[f"        {line}" for line in miss_body],
             "    else:",
-            f"        {result_symbol} = {range_addrs}[_matched]",
-            f"        {found_symbol} = True",
+            f"        {result_write} = {range_addrs}[_matched]",
+            f"        {found_write} = True",
         ]
         enabled_body.extend(
             [
@@ -280,15 +286,15 @@ def _compile_search_instruction(
                 f"    _rhs = {value_expr}",
                 "    _matched = None",
                 f"    for _idx in range(_cursor_index, {len_expr}):",
-                f"        _candidate = {range_symbol}[{range_indices}[_idx]]",
+                f"        _candidate = {_range_item_read_expr(instr.search_range, range_symbol, f'{range_indices}[_idx]', ctx)}",
                 f"        if {compare_expr}:",
                 "            _matched = _idx",
                 "            break",
                 "    if _matched is None:",
                 *[f"        {line}" for line in miss_body],
                 "    else:",
-                f"        {result_symbol} = {range_addrs}[_matched]",
-                f"        {found_symbol} = True",
+                f"        {result_write} = {range_addrs}[_matched]",
+                f"        {found_write} = True",
             ]
         )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -325,13 +331,13 @@ def _compile_shift_instruction(
         f"_clock_prev = bool(_mem.get({key!r}, False))",
         "_rising_edge = _clock_curr and not _clock_prev",
         "if _rising_edge:",
-        f"    _prev_values = [bool({range_symbol}[_idx]) for _idx in {range_indices}]",
-        f"    {range_symbol}[{range_indices}[0]] = bool({enabled_expr})",
+        f"    _prev_values = [bool({_range_item_read_expr(instr.bit_range, range_symbol, '_idx', ctx)}) for _idx in {range_indices}]",
+        f"    {_range_item_write_expr(range_symbol, f'{range_indices}[0]', f'bool({enabled_expr})')}",
         f"    for _pos in range(1, {shift_len_expr}):",
-        f"        {range_symbol}[{range_indices}[_pos]] = _prev_values[_pos - 1]",
+        f"        {_range_item_write_expr(range_symbol, f'{range_indices}[_pos]', '_prev_values[_pos - 1]')}",
         f"if {reset_expr}:",
         f"    for _idx in {range_indices}:",
-        f"        {range_symbol}[_idx] = False",
+        f"        {_range_item_write_expr(range_symbol, '_idx', 'False')}",
         f"_mem[{key!r}] = _clock_curr",
     ]
     return [" " * indent + line for line in lines]
@@ -360,9 +366,10 @@ def _compile_event_drum_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
 
-    step_symbol = ctx.symbol_for_tag(instr.current_step)
-    completion_symbol = ctx.symbol_for_tag(instr.completion_flag)
-    output_symbols = [ctx.symbol_for_tag(tag) for tag in instr.outputs]
+    step_read = _compile_value(instr.current_step, ctx)
+    step_write = _compile_lvalue(instr.current_step, ctx)
+    completion_write = _compile_lvalue(instr.completion_flag, ctx)
+    output_symbols = [_compile_lvalue(tag, ctx) for tag in instr.outputs]
     pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
     step_count = len(instr.pattern)
     key_base = ctx.state_key_for(instr)
@@ -384,12 +391,12 @@ def _compile_event_drum_instruction(
 
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
-        f"_step_raw = int({step_symbol})",
+        f"_step_raw = int({step_read})",
         "_step = _step_raw",
         "_step_changed = False",
         f"if _enabled and ((_step < 1) or (_step > {step_count})):",
         "    _step = 1",
-        f"    {step_symbol} = 1",
+        f"    {step_write} = 1",
         "    _step_changed = True",
         f"elif (_step < 1) or (_step > {step_count}):",
         "    _step = 1",
@@ -444,10 +451,10 @@ def _compile_event_drum_instruction(
                 "if _event_ready and _event_curr and (not _event_prev):",
                 f"    if _step < {step_count}:",
                 "        _step += 1",
-                f"        {step_symbol} = _step",
+                f"        {step_write} = _step",
                 "        _step_changed = True",
                 "    else:",
-                f"        {completion_symbol} = True",
+                f"        {completion_write} = True",
             ],
             4,
         )
@@ -458,8 +465,8 @@ def _compile_event_drum_instruction(
             "if _reset_active:",
             "    _step = 1",
             "    _step_changed = True",
-            f"    {step_symbol} = 1",
-            f"    {completion_symbol} = False",
+            f"    {step_write} = 1",
+            f"    {completion_write} = False",
         ]
     )
 
@@ -472,7 +479,7 @@ def _compile_event_drum_instruction(
                 f"    if 1 <= _target <= {step_count}:",
                 "        _step_changed = _step_changed or (_step != _target)",
                 "        _step = _target",
-                f"        {step_symbol} = _step",
+                f"        {step_write} = _step",
             ]
         )
 
@@ -482,7 +489,7 @@ def _compile_event_drum_instruction(
                 f"if _enabled and _jog_edge and (_step < {step_count}):",
                 "    _step += 1",
                 "    _step_changed = True",
-                f"    {step_symbol} = _step",
+                f"    {step_write} = _step",
             ]
         )
 
@@ -529,10 +536,12 @@ def _compile_time_drum_instruction(
     if ctx._current_function is not None:
         ctx.mark_function_global(ctx._current_function, "_mem")
 
-    step_symbol = ctx.symbol_for_tag(instr.current_step)
-    completion_symbol = ctx.symbol_for_tag(instr.completion_flag)
-    accumulator_symbol = ctx.symbol_for_tag(instr.accumulator)
-    output_symbols = [ctx.symbol_for_tag(tag) for tag in instr.outputs]
+    step_read = _compile_value(instr.current_step, ctx)
+    step_write = _compile_lvalue(instr.current_step, ctx)
+    completion_write = _compile_lvalue(instr.completion_flag, ctx)
+    accumulator_read = _compile_value(instr.accumulator, ctx)
+    accumulator_write = _compile_lvalue(instr.accumulator, ctx)
+    output_symbols = [_compile_lvalue(tag, ctx) for tag in instr.outputs]
     pattern_literal = repr(tuple(tuple(bool(cell) for cell in row) for row in instr.pattern))
     step_count = len(instr.pattern)
     key_base = ctx.state_key_for(instr)
@@ -549,7 +558,7 @@ def _compile_time_drum_instruction(
 
     lines: list[str] = [
         f"_enabled = bool({enabled_expr})",
-        f"_step_raw = int({step_symbol})",
+        f"_step_raw = int({step_read})",
         "_step = _step_raw",
         "_step_changed = False",
         "_reset_step_data = False",
@@ -557,10 +566,10 @@ def _compile_time_drum_instruction(
         "    _step = 1",
         "    _step_changed = True",
         "    _reset_step_data = True",
-        f"    {step_symbol} = 1",
+        f"    {step_write} = 1",
         f"elif (_step < 1) or (_step > {step_count}):",
         "    _step = 1",
-        f"_acc = int({accumulator_symbol})",
+        f"_acc = int({accumulator_read})",
         f"_frac = float(_mem.get({frac_key!r}, 0.0))",
     ]
 
@@ -612,9 +621,9 @@ def _compile_time_drum_instruction(
                 "        _step += 1",
                 "        _step_changed = True",
                 "        _reset_step_data = True",
-                f"        {step_symbol} = _step",
+                f"        {step_write} = _step",
                 "    else:",
-                f"        {completion_symbol} = True",
+                f"        {completion_write} = True",
             ],
             4,
         )
@@ -626,8 +635,8 @@ def _compile_time_drum_instruction(
             "    _step = 1",
             "    _step_changed = True",
             "    _reset_step_data = True",
-            f"    {step_symbol} = 1",
-            f"    {completion_symbol} = False",
+            f"    {step_write} = 1",
+            f"    {completion_write} = False",
         ]
     )
 
@@ -641,7 +650,7 @@ def _compile_time_drum_instruction(
                 "        _step_changed = _step_changed or (_step != _target)",
                 "        _step = _target",
                 "        _reset_step_data = True",
-                f"        {step_symbol} = _step",
+                f"        {step_write} = _step",
             ]
         )
 
@@ -652,7 +661,7 @@ def _compile_time_drum_instruction(
                 "    _step += 1",
                 "    _step_changed = True",
                 "    _reset_step_data = True",
-                f"    {step_symbol} = _step",
+                f"    {step_write} = _step",
             ]
         )
 
@@ -671,7 +680,7 @@ def _compile_time_drum_instruction(
     lines.extend(
         [
             "if _enabled or _reset_active or _step_changed or _reset_step_data:",
-            f"    {accumulator_symbol} = _acc",
+            f"    {accumulator_write} = _acc",
             f"    _mem[{frac_key!r}] = _frac",
         ]
     )
