@@ -1462,8 +1462,6 @@ class _ConcreteStateElider:
             return False
         if name not in self._written_tags:
             return False
-        if getattr(self._graph.tags.get(name), "lock", False):
-            return False
         # Tags with PENDING in their domain use abstract three-valued logic
         # (timer/counter Done bits).  The concrete kernel cannot execute with
         # the PENDING sentinel, so these tags must be retained unconditionally.

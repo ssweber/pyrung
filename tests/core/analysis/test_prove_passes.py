@@ -755,8 +755,9 @@ class TestScanLocalStateElision:
             "StateJumpIdx",
             "StateJumpTarget",
             "StateEnableYes",
+            "UnitModeCurrent",
         ):
             assert name not in context.stateful_dims
 
-        for name in ("StateCurrent", "StateRequested", "UnitModeCurrent"):
+        for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
