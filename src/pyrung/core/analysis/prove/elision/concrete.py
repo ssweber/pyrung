@@ -309,6 +309,10 @@ class _ConcreteStateElider:
 
     def elide(self) -> dict[str, tuple[Any, ...]]:
         retained = set(self._stateful_dims)
+        never_written = self._never_written_elidable(retained)
+        if never_written:
+            retained.difference_update(never_written)
+            self._emit(f"elision | fast-path: {len(never_written)} never-written tag(s) elided")
         changed = True
         round_num = 0
         while changed:
@@ -375,6 +379,21 @@ class _ConcreteStateElider:
         if name in self._continued_source_tags:
             return False
         return True
+
+    def _never_written_elidable(self, retained: set[str]) -> list[str]:
+        """Tags that are never written — their value is always default, trivially elidable."""
+        result: list[str] = []
+        for name in sorted(retained):
+            if name not in self._state_basis:
+                continue
+            if name in self._written_tags:
+                continue
+            if PENDING in self._stateful_dims.get(name, ()):
+                continue
+            if name in self._continued_source_tags:
+                continue
+            result.append(name)
+        return result
 
     def _candidate_names(self) -> tuple[str, ...]:
         return tuple(
@@ -662,6 +681,14 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
     )
     abstract_retained = frozenset(ctx.stateful_dims)
     retained = set(abstract_retained)
+    never_written = concrete_elider._never_written_elidable(retained)
+    if never_written:
+        retained.difference_update(never_written)
+        for tag_name in never_written:
+            ctx.elided[tag_name] = "concrete_never_written"
+        concrete_elider._emit(
+            f"elision | fast-path: {len(never_written)} never-written tag(s) elided"
+        )
     changed = True
     while changed:
         changed = False
