@@ -36,6 +36,9 @@ _ELISION_BATCH_REMOVE = True
 
 _ELISION_PROOF_BUDGET = _ELISION_ENUM_LIMIT
 
+_SCAN_CACHE_LIMIT = 500_000
+_SCAN_CACHE_MISS: object = object()
+
 
 # ---------------------------------------------------------------------------
 # Phase 2: Concrete kernel elision
@@ -235,6 +238,13 @@ class _ConcreteStateElider:
         self._progress = progress
         self._compiled = compiled or compile_kernel(program, blockless=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
+        self._scan_cache: dict[
+            tuple[tuple[tuple[str, Any], ...], tuple[str, ...]], tuple[Any, ...] | None
+        ] = {}
+        self._baseline_registry: dict[
+            tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+            dict[tuple[tuple[str, Any], ...], tuple[Any, ...]],
+        ] = {}
         self._coverage = _collect_forced_true_coverage(
             program,
             graph,
@@ -481,6 +491,12 @@ class _ConcreteStateElider:
         if group_product * _product_size(vary_domains) > proof_limit:
             return False
 
+        scope_key = (retained_names, input_names, observed, hidden_stateful)
+        registered_baselines = self._baseline_registry.get(scope_key)
+        new_baselines: dict[tuple[tuple[str, Any], ...], tuple[Any, ...]] | None = (
+            None if registered_baselines is not None else {}
+        )
+
         retained_iter = product(*retained_domains) if retained_domains else [()]
         for retained_values in retained_iter:
             retained_entry = dict(zip(retained_names, retained_values, strict=True))
@@ -491,7 +507,12 @@ class _ConcreteStateElider:
                 entry_values = dict(retained_entry)
                 for partial_assignment in input_assignments:
                     entry_values.update(partial_assignment)
+
+                baseline_key = tuple(sorted(entry_values.items()))
                 expected: tuple[Any, ...] | None = None
+                if registered_baselines is not None:
+                    expected = registered_baselines.get(baseline_key)
+
                 vary_iter_values = product(*vary_domains) if vary_domains else [()]
                 for vary_values in vary_iter_values:
                     full_entry = dict(entry_values)
@@ -501,9 +522,14 @@ class _ConcreteStateElider:
                         return False
                     if expected is None:
                         expected = outcome
+                        if new_baselines is not None:
+                            new_baselines[baseline_key] = outcome
                         continue
                     if outcome != expected:
                         return False
+
+        if new_baselines is not None and new_baselines:
+            self._baseline_registry[scope_key] = new_baselines
         return True
 
     def _reachable_stateful_frontier(
@@ -640,23 +666,29 @@ class _ConcreteStateElider:
         entry_values: Mapping[str, Any],
         observed: tuple[str, ...],
     ) -> tuple[Any, ...] | None:
+        cache_key = (tuple(sorted(entry_values.items())), observed)
+        cached = self._scan_cache.get(cache_key, _SCAN_CACHE_MISS)
+        if cached is not _SCAN_CACHE_MISS:
+            return cached  # type: ignore[return-value]
+
         kernel = self._compiled.create_kernel()
         kernel.tags.update(entry_values)
         _step_compiled_kernel(self._compiled, kernel, dt=_DEFAULT_DT)
         result = tuple(kernel.tags.get(name) for name in observed)
 
         if self._warm_memory is not None:
-            # Re-run with warm memory to detect hidden memory-dependent
-            # behaviour (e.g. oneshot instructions).  If outcomes differ
-            # the caller must treat the configuration as non-elidable.
             warm_kernel = self._compiled.create_kernel()
             warm_kernel.tags.update(entry_values)
             warm_kernel.memory.update(self._warm_memory)
             _step_compiled_kernel(self._compiled, warm_kernel, dt=_DEFAULT_DT)
             warm_result = tuple(warm_kernel.tags.get(name) for name in observed)
             if warm_result != result:
+                if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
+                    self._scan_cache[cache_key] = None
                 return None
 
+        if len(self._scan_cache) < _SCAN_CACHE_LIMIT:
+            self._scan_cache[cache_key] = result
         return result
 
 
@@ -710,4 +742,6 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         f"elision | concrete phase complete"
         f" | removed={len(removed_names):,}"
         f" | retained={len(retained):,}"
+        f" | scan_cache={len(concrete_elider._scan_cache):,}"
+        f" | baseline_groups={len(concrete_elider._baseline_registry):,}"
     )
