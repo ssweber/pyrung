@@ -15,10 +15,6 @@ make test          # always use this, never uv run pytest
 make lint          # codespell + ruff + ty
 ```
 
-Test files:
-- `tests/core/analysis/test_prove.py` — integration tests (28 test classes, ~3200 lines)
-- `tests/core/analysis/test_prove_passes.py` — pre-BFS pass pipeline unit tests
-
 ## Module map
 
 ```
@@ -171,6 +167,27 @@ The pre-BFS pipeline itself costs ~45s on a large program, dominated by threshol
 - **Settle-pending termination**: bounded by event count + 1. Accumulators must not decrement during settling.
 - **Edge compression correctness**: dead edge prevs use a sentinel `_EDGE_DEAD`. An edge is dead only when partial eval proves all containing expressions constant — false negatives (marking a live edge dead) would lose states.
 - **State key completeness**: every tag whose cross-scan value affects reachability must appear in the state key. Missing a dimension silently merges distinguishable states.
+
+## Testing
+
+Test files:
+- `tests/core/analysis/test_prove.py` — integration tests (28 test classes, ~3200 lines)
+- `tests/core/analysis/test_prove_passes.py` — pre-BFS pass pipeline unit tests
+- `tests/core/analysis/test_elision_agreement.py` — three-way agreement harness for elision
+
+### Three-way elision agreement (`test_elision_agreement.py`)
+
+Runs three oracles on every elision candidate and checks consistency:
+1. **Interpreted** — `ScanContext` + `Program._evaluate` (the PLC scan path)
+2. **Compiled kernel** — `_step_compiled_kernel` (same path `prove()` uses)
+3. **Abstract prediction** — `_ScanLocalStateElider.elide()` (provenance analysis)
+
+Contracts verified:
+- **(a) Interpreted == Compiled** on every (state, input) pair — catches compiler bugs
+- **(b) Abstract ⊇ Concrete** — if abstract says elidable, concrete must agree (catches abstract unsoundness)
+- **(c) Pipeline consistency** — elided tags are valid against the final retained set
+
+To add a new test program: define a builder function returning `(Program, stateful_dims, nd_dims)` and add it to `_UNIT_PROGRAMS`, or add a `test_*` method in `TestExampleProgramAgreement` that imports from `examples/`.
 
 ## External integration
 
