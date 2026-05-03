@@ -19,6 +19,8 @@ from ..kernel import _step_compiled_kernel
 if TYPE_CHECKING:
     from pyrung.core.program import Program
 
+    from . import _ElisionContext
+
 
 _ELISION_ENUM_LIMIT = 200_000
 
@@ -637,3 +639,48 @@ class _ConcreteStateElider:
                 return None
 
         return result
+
+
+# ---------------------------------------------------------------------------
+# Elision pass pipeline component
+# ---------------------------------------------------------------------------
+
+
+def _pass_concrete_batch(ctx: _ElisionContext) -> None:
+    if not ctx.stateful_dims:
+        return
+    # Use the original full stateful_dims for observer coverage —
+    # abstract-removed tags still act as same-scan observers.
+    concrete_elider = _ConcreteStateElider(
+        ctx.program,
+        ctx.graph,
+        ctx._original_stateful_dims,
+        ctx.nondeterministic_dims,
+        state_basis=frozenset(ctx.stateful_dims),
+        compiled=ctx.compiled,
+        progress=ctx.progress,
+    )
+    abstract_retained = frozenset(ctx.stateful_dims)
+    retained = set(abstract_retained)
+    changed = True
+    while changed:
+        changed = False
+        snapshot = set(retained)
+        for tag_name in sorted(snapshot):
+            if not concrete_elider._is_concrete_candidate(tag_name):
+                continue
+            if tag_name not in abstract_retained:
+                continue
+            compare_retained = frozenset(snapshot - {tag_name})
+            if concrete_elider._can_elide(tag_name, compare_retained):
+                retained.discard(tag_name)
+                ctx.elided[tag_name] = "concrete_batch"
+                changed = True
+    removed_names = set(ctx.stateful_dims) - retained
+    for tag_name in removed_names:
+        del ctx.stateful_dims[tag_name]
+    concrete_elider._emit(
+        f"elision | concrete phase complete"
+        f" | removed={len(removed_names):,}"
+        f" | retained={len(retained):,}"
+    )

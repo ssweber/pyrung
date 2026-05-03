@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import product
 from typing import TYPE_CHECKING, Any
@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
+
+    from . import _ElisionContext
 
 _EXPR_ENUM_LIMIT = 128
 
@@ -1118,3 +1120,48 @@ class _ScanLocalStateElider:
             if 0 < size <= _EXPR_ENUM_LIMIT:
                 known[name] = tuple(range(int(tag.min), int(tag.max) + 1))
         return known
+
+
+# ---------------------------------------------------------------------------
+# Elision pass/rule pipeline components
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _AbstractRule:
+    name: str
+    description: str
+    fn: Callable[[dict[str, tuple[Any, ...]], _ElisionContext], None]
+    enabled: bool = True
+
+
+def _rule_provenance(abstract_reduced: dict[str, tuple[Any, ...]], ctx: _ElisionContext) -> None:
+    removed = set(ctx.stateful_dims) - set(abstract_reduced)
+    for tag_name in removed:
+        del ctx.stateful_dims[tag_name]
+        ctx.elided[tag_name] = "provenance"
+
+
+def _pass_abstract(ctx: _ElisionContext) -> None:
+    elider = _ScanLocalStateElider(
+        ctx.program, ctx.graph, ctx.stateful_dims, ctx.nondeterministic_dims
+    )
+    abstract_reduced, _accepted = elider.elide()
+    ctx.emit(
+        f"elision | abstract phase complete"
+        f" | removed={len(ctx.stateful_dims) - len(abstract_reduced):,}"
+        f" | retained={len(abstract_reduced):,}"
+    )
+    for rule in _DEFAULT_ABSTRACT_RULES:
+        if rule.enabled:
+            rule.fn(abstract_reduced, ctx)
+
+
+_DEFAULT_ABSTRACT_RULES: tuple[_AbstractRule, ...] = (
+    _AbstractRule(
+        "provenance",
+        "Per-tag dependency lattice — WBR, unconditional writes,"
+        " deterministic projections, canonical entry convergence",
+        _rule_provenance,
+    ),
+)
