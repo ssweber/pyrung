@@ -48,6 +48,7 @@ from pyrung.core.analysis.prove.passes import (
 
 events_module = importlib.import_module("pyrung.core.analysis.prove.events")
 elision_module = importlib.import_module("pyrung.core.analysis.prove.elision")
+concrete_elision_module = importlib.import_module("pyrung.core.analysis.prove.elision.concrete")
 
 
 def _make_pass_context(
@@ -479,14 +480,14 @@ class TestForcedTrueCoverage:
 
         graph = build_program_graph(logic)
         calls = 0
-        real_step = elision_module._step_compiled_kernel
+        real_step = concrete_elision_module._step_compiled_kernel
 
         def _count_step(*args, **kwargs):
             nonlocal calls
             calls += 1
             return real_step(*args, **kwargs)
 
-        monkeypatch.setattr(elision_module, "_step_compiled_kernel", _count_step)
+        monkeypatch.setattr(concrete_elision_module, "_step_compiled_kernel", _count_step)
 
         _collect_forced_true_coverage(
             logic,
