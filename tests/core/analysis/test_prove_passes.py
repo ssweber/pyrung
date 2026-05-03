@@ -42,6 +42,7 @@ from pyrung.core.analysis.prove.passes import (
     _DEFAULT_PRE_BFS_PASSES,
     _BFSConfig,
     _pass_build_graph,
+    _pass_diagnose_unwritten_tags,
     _PassContext,
     _run_pre_bfs_pipeline,
 )
@@ -216,6 +217,7 @@ class TestPassManifest:
             "build_graph",
             "classify_dimensions",
             "pilot_sweep",
+            "diagnose_unwritten_tags",
             "elide_scan_local_state",
             "compile_kernel",
             "collect_done_acc_pairs",
@@ -762,3 +764,86 @@ class TestScanLocalStateElision:
 
         for name in ("StateCurrent", "StateRequested"):
             assert name in context.stateful_dims
+
+
+class TestDiagnoseUnwrittenTags:
+    def test_fires_for_unwritten_tag(self) -> None:
+        threshold = Int("Threshold")
+        value = Int("Value", external=True, choices={0: "Lo", 1: "Hi"})
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(value > threshold):
+                out(alarm)
+
+        ctx = _make_pass_context(logic)
+        _pass_build_graph(ctx)
+        ctx.stateful_dims = {}
+        ctx.nondeterministic_dims = {"Value": (0, 1)}
+
+        messages: list[str] = []
+        ctx.progress_info = messages.append
+
+        _pass_diagnose_unwritten_tags(ctx)
+
+        assert any("never written" in m and "Threshold" in m for m in messages)
+        assert any("external=True" in m for m in messages)
+        assert any("readonly=True" in m for m in messages)
+
+    def test_silent_when_all_tags_written(self) -> None:
+        sensor = Bool("Sensor", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(sensor):
+                out(alarm)
+
+        ctx = _make_pass_context(logic)
+        _pass_build_graph(ctx)
+        ctx.stateful_dims = {"Alarm": (False, True)}
+        ctx.nondeterministic_dims = {"Sensor": (False, True)}
+
+        messages: list[str] = []
+        ctx.progress_info = messages.append
+
+        _pass_diagnose_unwritten_tags(ctx)
+
+        assert not any("never written" in m for m in messages)
+
+    def test_excludes_external_and_readonly_tags(self) -> None:
+        ext_input = Int("ExtInput", external=True, choices={0: "Off", 1: "On"})
+        config = Int("Config", readonly=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(ext_input > config):
+                out(alarm)
+
+        ctx = _make_pass_context(logic)
+        _pass_build_graph(ctx)
+        ctx.stateful_dims = {}
+        ctx.nondeterministic_dims = {"ExtInput": (0, 1)}
+
+        messages: list[str] = []
+        ctx.progress_info = messages.append
+
+        _pass_diagnose_unwritten_tags(ctx)
+
+        assert not any("never written" in m for m in messages)
+
+    def test_diagnostic_appears_in_full_pipeline(self) -> None:
+        threshold = Int("Threshold")
+        value = Bool("Value", external=True)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(value, threshold > 0):
+                out(alarm)
+
+        messages: list[str] = []
+        ctx = _make_pass_context(logic)
+        ctx.progress_info = messages.append
+
+        _run_pre_bfs_pipeline(ctx)
+
+        assert any("never written" in m and "Threshold" in m for m in messages)

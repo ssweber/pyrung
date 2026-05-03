@@ -31,7 +31,7 @@ from .classify import (
     _extract_value_domain,
     _pilot_sweep_domains,
 )
-from .elision import _elide_scan_local_stateful_dims
+from .elision import ElisionCache, _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import _collect_atoms_for_tag, _collect_edge_input_tags, _partition_edge_bearing_inputs
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
@@ -140,6 +140,7 @@ class _PassContext:
     compiled: CompiledKernel | None
     input_groups: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
+    elision_cache: ElisionCache | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -357,6 +358,63 @@ def _pass_pilot_sweep(ctx: _PassContext) -> None:
             ctx.intractable = None
 
 
+def _collect_receive_dest_names(program: Program) -> set[str]:
+    from pyrung.core.instruction.send_receive._core import ModbusReceiveInstruction
+    from pyrung.core.validation._common import walk_instructions
+
+    names: set[str] = set()
+    for instr in walk_instructions(program):
+        if not isinstance(instr, ModbusReceiveInstruction):
+            continue
+        dest = instr.dest
+        if hasattr(dest, "name"):
+            names.add(dest.name)
+        elif hasattr(dest, "tags"):
+            for tag in dest.tags():
+                names.add(tag.name)
+    return names
+
+
+def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
+    assert ctx.graph is not None
+    if ctx.stateful_dims is None or ctx.nondeterministic_dims is None:
+        return
+
+    never_written: list[str] = []
+    for tag_name, tag in sorted(ctx.graph.tags.items()):
+        if tag_name in ctx.graph.writers_of:
+            continue
+        if tag.external or tag.readonly:
+            continue
+        if tag_name.startswith("fault."):
+            continue
+        never_written.append(tag_name)
+
+    if never_written and ctx.progress_info is not None:
+        names = ", ".join(never_written)
+        ctx.progress_info(
+            f"diagnostic | {len(never_written)} tag(s) are never written: [{names}]. "
+            f"Each is either: (1) an external input — add external=True, "
+            f"(2) a configuration constant — add readonly=True, "
+            f"or (3) a bug — the tag is declared but never wired to any instruction."
+        )
+
+    receive_dests = _collect_receive_dest_names(ctx.program)
+    missing_external = sorted(
+        name for name in receive_dests
+        if name in ctx.graph.tags and not ctx.graph.tags[name].external
+    )
+
+    if missing_external and ctx.progress_info is not None:
+        names = ", ".join(missing_external)
+        ctx.progress_info(
+            f"diagnostic | {len(missing_external)} receive() destination tag(s) "
+            f"missing external=True: [{names}]. "
+            f"Receive destinations hold data from outside the program; "
+            f"consider adding external=True to their declarations."
+        )
+
+
 def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
 
@@ -371,6 +429,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         progress=ctx.progress_info,
+        elision_cache=ctx.elision_cache,
     )
 
 
@@ -505,6 +564,11 @@ _DEFAULT_PRE_BFS_PASSES: tuple[_PreBFSPass, ...] = (
         "pilot_sweep",
         "Discover finite domains for unbounded tags via kernel execution",
         _pass_pilot_sweep,
+    ),
+    _PreBFSPass(
+        "diagnose_unwritten_tags",
+        "Surface never-written tags as user diagnostics",
+        _pass_diagnose_unwritten_tags,
     ),
     _PreBFSPass(
         "elide_scan_local_state",
