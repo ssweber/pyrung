@@ -150,15 +150,15 @@ See `scratchpad/prove-formal-foundations.md` for the citation map. Key results:
 
 ## Performance profile
 
-The dominant costs on a real program (see `scratchpad/prove-lock-profile-hotspots.md`):
+Benchmark: `make bench` (PackML example, 5 clusters, 128 reachable states, ~221s wall / ~171s CPU).
 
-1. Block sync in compiled kernel wrapper (~66% pre-optimization, addressed by inline step compilation)
-2. State key + threshold vector construction (~11%)
-3. Hidden-event jumping (~12%)
-4. Snapshot/restore (~7%)
-5. Kernel step execution (~5%)
+The pipeline is dominated by the **elision sub-pipeline** (~99% of wall time). BFS itself is negligible (<1s total) thanks to aggressive state-space reduction. Elision cache hits (clusters sharing identical dimensions) skip the pipeline entirely, saving ~73s per hit.
 
-The pre-BFS pipeline itself costs ~45s on a large program, dominated by threshold absorption discovery and dimension classification.
+Within elision (~219s for 3 non-cached clusters):
+
+1. **Concrete kernel proofs** (~110s, 50%) — `_can_elide` enumerates (state, input) pairs per candidate, calling `_step_compiled_kernel` for each. Compiled `_kernel_step` self-time: 26s. Kernel context allocation (`ScanContext.__init__`): 7s.
+2. **Abstract interpreter** (~108s, 49%) — `_pass_abstract` runs provenance analysis per candidate. Hot paths: `_eval_conditions` (35s), `_merge_states` (34s), `_read_names` via `pdg.walk` (29s).
+3. **Cross-cutting interpreter overhead** — `dict.get` 19s (110M calls), `isinstance` 15s (78M calls), abstract value get/set/merge ~15s combined.
 
 ## Invariants to preserve
 
