@@ -123,18 +123,6 @@ If the elision pass operated on the abstract timer domain rather than the raw ta
 
 **Difficulty:** Medium.
 
-### 2.3 Remove Lock Exclusion from Concrete Phase
-
-`_is_concrete_candidate` rejects `lock=True` tags from concrete proofs. But `lock` is a reporting concern ("show this tag's value in all reachable states"), not a state key concern. A locked tag whose exit value is a function of retained state + inputs doesn't need to be in the key. Its report values are reconstructed by replaying one scan per reachable state after BFS.
-
-Bool physics outputs are locked by default. Without this fix, any that survive the abstract phase are permanently retained.
-
-**Fix:** Delete the lock check. Locked tags are concrete elision candidates like everything else.
-
-**Difficulty:** Trivial.
-
-*See `remove-lock-exclusion.md` for the Claude Code prompt.*
-
 ### 2.4 Init-Guard Constant Detection
 
 Tags written under `~InitDone` guards (where `InitDone` is set unconditionally on the first scan and never cleared) are effectively constants after scan 1. The abstract phase sees both paths and merges, contaminating them with entry-dependency. This propagates through indirect reads of block slots written during init (`dh[]`, `ds[]` in the PackML benchmark).
