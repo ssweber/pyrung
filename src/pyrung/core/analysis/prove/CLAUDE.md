@@ -45,6 +45,14 @@ expr.py      — Expression tree helpers. Partial evaluation, tag reference coll
                (_partition_edge_bearing_inputs) for free-input elision.
 slicer.py    — Whole-rung program slicing. Builds a reduced program containing only
                rungs in the upstream cone of seed tags.
+elision/     — Two-phase state-key elision sub-pipeline.
+  __init__.py  — Pipeline orchestration: _ElisionContext, _ElisionPass, _AbstractRule,
+                 _run_elision_pipeline, _elide_scan_local_stateful_dims entry point.
+  abstract.py  — Abstract provenance analysis. _TagElisionCheck (abstract interpreter),
+                 _ScanLocalStateElider (fixed-point driver), _pass_abstract,
+                 _rule_provenance, _DEFAULT_ABSTRACT_RULES tuple.
+  concrete.py  — Concrete kernel proofs. _ConcreteStateElider (enumeration-based proofs),
+                 _collect_forced_true_coverage, _pass_concrete_batch.
 ```
 
 ## Data flow through the pipeline
