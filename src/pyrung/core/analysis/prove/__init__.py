@@ -135,6 +135,7 @@ from .kernel import (
     _snapshot_kernel,
     _step_kernel,
 )
+from .elision import ElisionCache
 from .passes import (
     _DEFAULT_BFS_CONFIG,
     _BFSConfig,
@@ -153,6 +154,7 @@ def _build_explore_context(
     compiled: CompiledKernel | None = None,
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
+    elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -164,6 +166,7 @@ def _build_explore_context(
         compiled=compiled,
         input_groups=input_groups,
         progress_info=progress_info,
+        elision_cache=elision_cache,
     )
     return _run_pre_bfs_pipeline(ctx)
 
@@ -1084,6 +1087,7 @@ def _build_reachable_context(
     seed_tags: list[str],
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
+    elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program.
 
@@ -1101,6 +1105,7 @@ def _build_reachable_context(
         compiled=compiled_kernel,
         input_groups=input_groups,
         progress_info=progress_info,
+        elision_cache=elision_cache,
     )
 
 
@@ -1212,6 +1217,7 @@ def reachable_states(
 
     cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
     combined_so_far = 1
+    elision_cache: ElisionCache = {}
     if stderr_reporter is not None:
         stderr_reporter.info(
             f"partitioned projection into {len(clusters):,} independent cluster(s)"
@@ -1235,6 +1241,7 @@ def reachable_states(
                 if stderr_reporter is not None
                 else None
             ),
+            elision_cache=elision_cache,
         )
         if isinstance(context, Intractable):
             return context
