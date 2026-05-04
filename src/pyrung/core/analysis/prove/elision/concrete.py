@@ -223,6 +223,7 @@ class _ConcreteStateElider:
         state_basis: frozenset[str] | None = None,
         compiled: CompiledKernel | None = None,
         progress: Callable[[str], None] | None = None,
+        progress_prefix: Callable[[], str] | None = None,
     ) -> None:
         from pyrung.circuitpy.codegen import compile_kernel
 
@@ -236,6 +237,7 @@ class _ConcreteStateElider:
         )
         self._nondeterministic_dims = dict(nondeterministic_dims)
         self._progress = progress
+        self._progress_prefix = progress_prefix
         self._compiled = compiled or compile_kernel(program, blockless=True)
         self._entry_sensitive_cache: dict[tuple[str, frozenset[str]], bool] = {}
         self._scan_cache: dict[
@@ -318,41 +320,62 @@ class _ConcreteStateElider:
         )
 
     def elide(self) -> dict[str, tuple[Any, ...]]:
-        retained = set(self._stateful_dims)
+        import sys
+
+        retained = set(self._state_basis)
         never_written = self._never_written_elidable(retained)
         if never_written:
             retained.difference_update(never_written)
             self._emit(f"elision | fast-path: {len(never_written)} never-written tag(s) elided")
+
+        use_dots = self._progress_prefix is not None
+        dots: list[str] = []
+        n_candidates = len(self._ordered_candidates(retained))
+
+        if use_dots:
+            assert self._progress_prefix is not None
+            header = f"{self._progress_prefix()}elision | concrete {n_candidates} tags "
+            print(header, end="", file=sys.stderr, flush=True)
+
         changed = True
-        round_num = 0
         while changed:
             changed = False
-            round_num += 1
             snapshot = set(retained)
             candidates = self._ordered_candidates(snapshot)
-            self._emit(f"elision round {round_num} | checking {len(candidates):,} candidate tag(s)")
             removable: list[str] = []
-            for index, tag_name in enumerate(candidates, start=1):
-                self._emit(f"elision | checking {tag_name} ({index}/{len(candidates)})")
+            for tag_name in candidates:
                 compare_retained = frozenset(snapshot - {tag_name})
                 if not self._can_elide(tag_name, compare_retained):
-                    self._emit(f"elision | keeping {tag_name}")
+                    if use_dots:
+                        print(".", end="", file=sys.stderr, flush=True)
+                        dots.append(".")
                     continue
                 if _ELISION_BATCH_REMOVE:
                     removable.append(tag_name)
-                    self._emit(f"elision | can drop {tag_name}")
+                    if use_dots:
+                        print("x", end="", file=sys.stderr, flush=True)
+                        dots.append("x")
                     continue
                 retained.remove(tag_name)
                 changed = True
-                self._emit(f"elision | dropped {tag_name}")
+                if use_dots:
+                    print("x", end="", file=sys.stderr, flush=True)
+                    dots.append("x")
             if _ELISION_BATCH_REMOVE and removable:
                 retained.difference_update(removable)
                 changed = True
-        self._emit(
-            "elision complete"
-            f" | removed={len(self._stateful_dims) - len(retained):,}"
-            f" | retained={len(retained):,}"
-        )
+
+        removed = len(self._state_basis) - len(retained)
+        if use_dots:
+            print(f"  removed={removed}", file=sys.stderr)
+        else:
+            self._emit(
+                "elision | concrete phase complete"
+                f" | removed={removed:,}"
+                f" | retained={len(retained):,}"
+                f" | scan_cache={len(self._scan_cache):,}"
+                f" | baseline_groups={len(self._baseline_registry):,}"
+            )
         return {name: domain for name, domain in self._stateful_dims.items() if name in retained}
 
     def _find_continued_source_tags(self) -> frozenset[str]:
@@ -710,38 +733,10 @@ def _pass_concrete_batch(ctx: _ElisionContext) -> None:
         state_basis=frozenset(ctx.stateful_dims),
         compiled=ctx.compiled,
         progress=ctx.progress,
+        progress_prefix=ctx.progress_prefix,
     )
-    abstract_retained = frozenset(ctx.stateful_dims)
-    retained = set(abstract_retained)
-    never_written = concrete_elider._never_written_elidable(retained)
-    if never_written:
-        retained.difference_update(never_written)
-        for tag_name in never_written:
-            ctx.elided[tag_name] = "concrete_never_written"
-        concrete_elider._emit(
-            f"elision | fast-path: {len(never_written)} never-written tag(s) elided"
-        )
-    changed = True
-    while changed:
-        changed = False
-        snapshot = set(retained)
-        for tag_name in sorted(snapshot):
-            if not concrete_elider._is_concrete_candidate(tag_name):
-                continue
-            if tag_name not in abstract_retained:
-                continue
-            compare_retained = frozenset(snapshot - {tag_name})
-            if concrete_elider._can_elide(tag_name, compare_retained):
-                retained.discard(tag_name)
-                ctx.elided[tag_name] = "concrete_batch"
-                changed = True
-    removed_names = set(ctx.stateful_dims) - retained
-    for tag_name in removed_names:
-        del ctx.stateful_dims[tag_name]
-    concrete_elider._emit(
-        f"elision | concrete phase complete"
-        f" | removed={len(removed_names):,}"
-        f" | retained={len(retained):,}"
-        f" | scan_cache={len(concrete_elider._scan_cache):,}"
-        f" | baseline_groups={len(concrete_elider._baseline_registry):,}"
-    )
+    result = concrete_elider.elide()
+    for tag_name in list(ctx.stateful_dims):
+        if tag_name not in result:
+            del ctx.stateful_dims[tag_name]
+            ctx.elided[tag_name] = "concrete"

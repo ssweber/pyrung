@@ -1468,6 +1468,7 @@ class TestReachablePartitioning:
             seed_tags,
             input_groups=(),
             progress_info=None,
+            progress_prefix=None,
             elision_cache=None,
         ):
             built_projects.append(project)
@@ -1529,6 +1530,7 @@ class TestReachablePartitioning:
             seed_tags,
             input_groups=(),
             progress_info=None,
+            progress_prefix=None,
             elision_cache=None,
         ):
             return object()

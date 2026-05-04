@@ -140,6 +140,7 @@ class _PassContext:
     compiled: CompiledKernel | None
     input_groups: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
+    progress_prefix: Callable[[], str] | None = None
     elision_cache: ElisionCache | None = None
 
     graph: ProgramGraph | None = None
@@ -430,6 +431,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         ctx.nondeterministic_dims,
         compiled=ctx.compiled,
         progress=ctx.progress_info,
+        progress_prefix=ctx.progress_prefix,
         elision_cache=ctx.elision_cache,
     )
 

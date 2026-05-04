@@ -154,6 +154,7 @@ def _build_explore_context(
     compiled: CompiledKernel | None = None,
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
+    progress_prefix: Callable[[], str] | None = None,
     elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
@@ -166,6 +167,7 @@ def _build_explore_context(
         compiled=compiled,
         input_groups=input_groups,
         progress_info=progress_info,
+        progress_prefix=progress_prefix,
         elision_cache=elision_cache,
     )
     return _run_pre_bfs_pipeline(ctx)
@@ -1014,6 +1016,14 @@ class _StderrProgressReporter:
             parts = [f"{kind}: {count}" for kind, count in sorted(absorbed.items())]
             self.info(f"  absorbed: {', '.join(parts)}", label=label)
 
+    def prefix_builder(self, label: str = "") -> Callable[[], str]:
+        def _build() -> str:
+            elapsed = time.monotonic() - self.start
+            prefix = f"{label} | " if label else ""
+            return f"[{_format_elapsed(elapsed)}] {prefix}"
+
+        return _build
+
     def bfs_callback(self, label: str = "") -> _BFSProgress:
         self.info("BFS started ...", label=label)
         return _BFSProgress(self, label)
@@ -1087,6 +1097,7 @@ def _build_reachable_context(
     seed_tags: list[str],
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
+    progress_prefix: Callable[[], str] | None = None,
     elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build a reachable-states context on the original program.
@@ -1105,6 +1116,7 @@ def _build_reachable_context(
         compiled=compiled_kernel,
         input_groups=input_groups,
         progress_info=progress_info,
+        progress_prefix=progress_prefix,
         elision_cache=elision_cache,
     )
 
@@ -1163,6 +1175,7 @@ def reachable_states(
             seed_tags=effective_scope,
             input_groups=input_groups,
             progress_info=stderr_reporter.info if stderr_reporter is not None else None,
+            progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         )
         if isinstance(context, Intractable):
             return context
@@ -1196,6 +1209,7 @@ def reachable_states(
             seed_tags=clusters[0],
             input_groups=input_groups,
             progress_info=stderr_reporter.info if stderr_reporter is not None else None,
+            progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
         )
         if isinstance(context, Intractable):
             return context
@@ -1238,6 +1252,11 @@ def reachable_states(
             input_groups=input_groups,
             progress_info=(
                 (lambda message, *, _label=label: stderr_reporter.info(message, label=_label))
+                if stderr_reporter is not None
+                else None
+            ),
+            progress_prefix=(
+                stderr_reporter.prefix_builder(label)
                 if stderr_reporter is not None
                 else None
             ),

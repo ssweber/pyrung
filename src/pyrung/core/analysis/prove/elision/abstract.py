@@ -996,6 +996,9 @@ class _ScanLocalStateElider:
         graph: ProgramGraph,
         stateful_dims: Mapping[str, tuple[Any, ...]],
         nondeterministic_dims: Mapping[str, tuple[Any, ...]],
+        *,
+        progress: Callable[[str], None] | None = None,
+        progress_prefix: Callable[[], str] | None = None,
     ) -> None:
         self._program = program
         self._graph = graph
@@ -1004,11 +1007,26 @@ class _ScanLocalStateElider:
         self._nondeterministic_names = frozenset(nondeterministic_dims)
         self._known_domains = self._build_known_domains()
         self._written_tags = frozenset(graph.writers_of)
+        self._progress = progress
+        self._progress_prefix = progress_prefix
+
+    def _emit(self, message: str) -> None:
+        if self._progress is not None:
+            self._progress(message)
 
     def elide(self) -> tuple[dict[str, tuple[Any, ...]], dict[str, _ElidedSummary]]:
+        import sys
+
         retained = set(self._stateful_dims)
         changed = True
         accepted: dict[str, _ElidedSummary] = {}
+        dots: list[str] = []
+        use_dots = self._progress_prefix is not None
+
+        if use_dots:
+            assert self._progress_prefix is not None
+            header = f"{self._progress_prefix()}elision | abstract {len(retained)} tags "
+            print(header, end="", file=sys.stderr, flush=True)
 
         while changed:
             changed = False
@@ -1016,10 +1034,26 @@ class _ScanLocalStateElider:
             for tag_name in sorted(list(retained)):
                 summary = self._prove_tag(tag_name, frozenset(retained - {tag_name}), accepted)
                 if summary is None:
+                    if use_dots:
+                        print(".", end="", file=sys.stderr, flush=True)
+                        dots.append(".")
                     continue
                 retained.remove(tag_name)
                 accepted[tag_name] = summary
                 changed = True
+                if use_dots:
+                    print("x", end="", file=sys.stderr, flush=True)
+                    dots.append("x")
+
+        removed = len(self._stateful_dims) - len(retained)
+        if use_dots:
+            print(f"  removed={removed}", file=sys.stderr)
+        else:
+            self._emit(
+                f"elision | abstract phase complete"
+                f" | removed={removed:,}"
+                f" | retained={len(retained):,}"
+            )
 
         return (
             {name: domain for name, domain in self._stateful_dims.items() if name in retained},
@@ -1144,14 +1178,11 @@ def _rule_provenance(abstract_reduced: dict[str, tuple[Any, ...]], ctx: _Elision
 
 def _pass_abstract(ctx: _ElisionContext) -> None:
     elider = _ScanLocalStateElider(
-        ctx.program, ctx.graph, ctx.stateful_dims, ctx.nondeterministic_dims
+        ctx.program, ctx.graph, ctx.stateful_dims, ctx.nondeterministic_dims,
+        progress=ctx.progress,
+        progress_prefix=ctx.progress_prefix,
     )
     abstract_reduced, _accepted = elider.elide()
-    ctx.emit(
-        f"elision | abstract phase complete"
-        f" | removed={len(ctx.stateful_dims) - len(abstract_reduced):,}"
-        f" | retained={len(abstract_reduced):,}"
-    )
     for rule in _DEFAULT_ABSTRACT_RULES:
         if rule.enabled:
             rule.fn(abstract_reduced, ctx)

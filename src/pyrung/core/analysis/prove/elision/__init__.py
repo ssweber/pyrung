@@ -34,6 +34,7 @@ class _ElisionContext:
     compiled: CompiledKernel | None
     elided: dict[str, str]
     progress: Callable[[str], None] | None
+    progress_prefix: Callable[[], str] | None
     _original_stateful_dims: dict[str, tuple[Any, ...]]
 
     def emit(self, msg: str) -> None:
@@ -104,6 +105,7 @@ def _elide_scan_local_stateful_dims(
     *,
     compiled: CompiledKernel | None = None,
     progress: Callable[[str], None] | None = None,
+    progress_prefix: Callable[[], str] | None = None,
     elision_cache: ElisionCache | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Return a reduced stateful-dimension map after conservative elision."""
@@ -131,6 +133,7 @@ def _elide_scan_local_stateful_dims(
         compiled=compiled,
         elided={},
         progress=progress,
+        progress_prefix=progress_prefix,
         _original_stateful_dims=dict(stateful_dims),
     )
     ctx.emit(
