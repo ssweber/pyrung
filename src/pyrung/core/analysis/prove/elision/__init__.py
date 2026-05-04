@@ -84,19 +84,6 @@ def _run_elision_pipeline(
 # ---------------------------------------------------------------------------
 
 
-_ElisionCacheKey = tuple[
-    frozenset[tuple[str, tuple[Any, ...]]], frozenset[tuple[str, tuple[Any, ...]]]
-]
-ElisionCache = dict[_ElisionCacheKey, dict[str, tuple[Any, ...]]]
-
-
-def _elision_cache_key(
-    stateful_dims: Mapping[str, tuple[Any, ...]],
-    nondeterministic_dims: Mapping[str, tuple[Any, ...]],
-) -> _ElisionCacheKey:
-    return (frozenset(stateful_dims.items()), frozenset(nondeterministic_dims.items()))
-
-
 def _elide_scan_local_stateful_dims(
     program: Program,
     graph: ProgramGraph,
@@ -106,24 +93,10 @@ def _elide_scan_local_stateful_dims(
     compiled: CompiledKernel | None = None,
     progress: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-    elision_cache: ElisionCache | None = None,
 ) -> dict[str, tuple[Any, ...]]:
     """Return a reduced stateful-dimension map after conservative elision."""
     if not stateful_dims:
         return {}
-
-    cache_key = _elision_cache_key(stateful_dims, nondeterministic_dims)
-    if elision_cache is not None and cache_key in elision_cache:
-        cached = elision_cache[cache_key]
-        if progress is not None:
-            removed = len(stateful_dims) - len(cached)
-            progress(
-                "elision | cache hit"
-                f" | stateful={len(stateful_dims):,}"
-                f" | inputs={len(nondeterministic_dims):,}"
-                f" | removed={removed:,} | retained={len(cached):,}"
-            )
-        return dict(cached)
 
     ctx = _ElisionContext(
         program=program,
@@ -147,8 +120,5 @@ def _elide_scan_local_stateful_dims(
         f" | removed={len(stateful_dims) - len(ctx.stateful_dims):,}"
         f" | retained={len(ctx.stateful_dims):,}"
     )
-
-    if elision_cache is not None:
-        elision_cache[cache_key] = dict(ctx.stateful_dims)
 
     return ctx.stateful_dims

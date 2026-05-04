@@ -453,7 +453,7 @@ class TestEncoderGroupEdgeCrossProduct:
                 latch(output)
 
         context = prove_module._build_reachable_context(
-            logic, scope=["Output"], project=("Output",), seed_tags=["Output"]
+            logic, scope=["Output"], project=("Output",)
         )
         assert not isinstance(context, Intractable)
         assert context.exclusive_input_groups, (

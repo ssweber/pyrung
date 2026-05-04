@@ -826,7 +826,6 @@ class TestReachableStates:
             logic,
             scope=["Flag", "Cmd"],
             project=("Flag", "Cmd"),
-            seed_tags=["Flag", "Cmd"],
         )
         assert not isinstance(context, Intractable)
 
@@ -1446,113 +1445,6 @@ class TestReachablePartitioning:
         diff = check_lock(logic, lock_path)
         assert diff is None
 
-    def test_clustered_progress_reports_preparation_and_completion(
-        self,
-        capsys,
-        monkeypatch,
-    ):
-        cluster_states = [
-            frozenset({frozenset({("X", False)}), frozenset({("X", True)})}),
-            frozenset({frozenset({("Y", False)}), frozenset({("Y", True)})}),
-        ]
-        built_projects: list[tuple[str, ...]] = []
-
-        def _fake_partition(_program, _projection):
-            return [["X"], ["Y"]]
-
-        def _fake_context(
-            _program,
-            *,
-            scope,
-            project,
-            seed_tags,
-            input_groups=(),
-            progress_info=None,
-            progress_prefix=None,
-            elision_cache=None,
-        ):
-            built_projects.append(project)
-            return object()
-
-        def _fake_bfs(_context, *, project, max_depth, max_states, progress):
-            assert max_depth == 7
-            assert max_states == 99
-            assert progress is not None
-            progress(2, 1, 0.25)
-            return cluster_states[len(built_projects) - 1]
-
-        monkeypatch.setattr(prove_module, "_partition_projection", _fake_partition)
-        monkeypatch.setattr(prove_module, "_build_reachable_context", _fake_context)
-        monkeypatch.setattr(prove_module, "_bfs_explore", _fake_bfs)
-
-        states = reachable_states(
-            object(),
-            project=["X", "Y"],
-            max_depth=7,
-            max_states=99,
-            progress=True,
-        )
-
-        assert states == frozenset(
-            {
-                frozenset({("X", False), ("Y", False)}),
-                frozenset({("X", False), ("Y", True)}),
-                frozenset({("X", True), ("Y", False)}),
-                frozenset({("X", True), ("Y", True)}),
-            }
-        )
-        assert built_projects == [("X",), ("Y",)]
-
-        stderr = capsys.readouterr().err
-        assert "partitioned projection into 2 independent cluster(s)" in stderr
-        assert "cluster 1/2 | preparing 1 projected tag(s)" in stderr
-        assert "cluster 1/2 | BFS started ..." in stderr
-        assert "cluster 1/2 | complete | states=2 | combined so far=2" in stderr
-        assert "cluster 2/2 | complete | states=2 | combined so far=4" in stderr
-        assert "combining 2 cluster state set(s) | expected total=4" in stderr
-        assert "reachable states complete | total=4" in stderr
-
-    def test_clustered_custom_progress_callback_is_preserved(
-        self,
-        capsys,
-        monkeypatch,
-    ):
-        progress_calls: list[tuple[int, int, float]] = []
-
-        def _fake_partition(_program, _projection):
-            return [["X"], ["Y"]]
-
-        def _fake_context(
-            _program,
-            *,
-            scope,
-            project,
-            seed_tags,
-            input_groups=(),
-            progress_info=None,
-            progress_prefix=None,
-            elision_cache=None,
-        ):
-            return object()
-
-        def _fake_bfs(_context, *, project, max_depth, max_states, progress):
-            assert progress is not None
-            progress(3, 1, 0.5)
-            return frozenset({frozenset({(project[0], False)})})
-
-        monkeypatch.setattr(prove_module, "_partition_projection", _fake_partition)
-        monkeypatch.setattr(prove_module, "_build_reachable_context", _fake_context)
-        monkeypatch.setattr(prove_module, "_bfs_explore", _fake_bfs)
-
-        def _progress(visited: int, queue_size: int, dt: float) -> None:
-            progress_calls.append((visited, queue_size, dt))
-
-        states = reachable_states(object(), project=["X", "Y"], progress=_progress)
-
-        assert states == frozenset({frozenset({("X", False), ("Y", False)})})
-        assert progress_calls == [(3, 1, 0.5), (3, 1, 0.5)]
-        assert capsys.readouterr().err == ""
-
 
 class TestReachableStateSlicing:
     """Whole-rung sliced kernels preserve reachable-state behavior."""
@@ -1674,7 +1566,6 @@ class TestReachableStateSlicing:
             logic,
             scope=["OutV"],
             project=("OutV",),
-            seed_tags=["OutV"],
         )
         assert not isinstance(context, Intractable)
         assert "Idx" not in context.stateful_dims

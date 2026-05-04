@@ -19,8 +19,7 @@ make lint          # codespell + ruff + ty
 
 ```
 __init__.py  — Public API (prove, reachable_states, write_lock, check_lock, diff_states)
-               BFS loop (_bfs_explore), property compilation, batch partitioning,
-               cluster projection with Cartesian product
+               BFS loop (_bfs_explore), property compilation, batch partitioning
 passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passes that
                build the _ExploreContext. Mutable _PassContext accumulates intermediate
                state; freeze() produces the immutable _ExploreContext for BFS.
@@ -47,7 +46,7 @@ inputs.py    — Input-group detection and successor enumeration. _ExclusiveInpu
                is explored.
 elision/     — Two-phase state-key elision sub-pipeline.
   __init__.py  — Pipeline orchestration: _ElisionContext, _ElisionPass, _AbstractRule,
-                 _run_elision_pipeline, _elide_scan_local_stateful_dims entry point.
+                 _run_elision_pipeline, _elide_scan_local_stateful_dims.
   abstract.py  — Abstract provenance analysis. _TagElisionCheck (abstract interpreter),
                  _ScanLocalStateElider (fixed-point driver), _pass_abstract,
                  _rule_provenance, _DEFAULT_ABSTRACT_RULES tuple.
@@ -156,15 +155,15 @@ See `scratchpad/prove-formal-foundations.md` for the citation map. Key results:
 
 ## Performance profile
 
-Benchmark: `make bench` (PackML example, 5 clusters, 128 reachable states, ~221s wall / ~171s CPU).
+Benchmark: `make bench` (PackML example, 128 reachable states, ~82s wall).
 
-The pipeline is dominated by the **elision sub-pipeline** (~99% of wall time). BFS itself is negligible (<1s total) thanks to aggressive state-space reduction. Elision cache hits (clusters sharing identical dimensions) skip the pipeline entirely, saving ~73s per hit.
+The pipeline is dominated by the **elision sub-pipeline** (~66s, 80% of wall time). BFS takes ~17s. No clustering or Cartesian product — a single projection pass covers all projected tags.
 
-Within elision (~219s for 3 non-cached clusters):
+Within elision (~66s):
 
-1. **Concrete kernel proofs** (~110s, 50%) — `_can_elide` enumerates (state, input) pairs per candidate, calling `_step_compiled_kernel` for each. Compiled `_kernel_step` self-time: 26s. Kernel context allocation (`ScanContext.__init__`): 7s.
-2. **Abstract interpreter** (~108s, 49%) — `_pass_abstract` runs provenance analysis per candidate. Hot paths: `_eval_conditions` (35s), `_merge_states` (34s), `_read_names` via `pdg.walk` (29s).
-3. **Cross-cutting interpreter overhead** — `dict.get` 19s (110M calls), `isinstance` 15s (78M calls), abstract value get/set/merge ~15s combined.
+1. **Concrete kernel proofs** (~36s, 54%) — `_can_elide` enumerates (state, input) pairs per candidate, calling `_step_compiled_kernel` for each. Compiled `_kernel_step` self-time: 12s. Kernel context allocation (`ScanContext.__init__`): 2.4s.
+2. **Abstract interpreter** (~30s, 46%) — `_pass_abstract` runs provenance analysis per candidate. Hot paths: `_eval_conditions` (10s), `_merge_states` (9.5s), `_read_names` via `pdg.walk` (8s).
+3. **Cross-cutting interpreter overhead** — `dict.get` 8s (51M calls), `isinstance` 5s (30M calls), abstract value get/set/merge ~5s combined.
 
 ## Invariants to preserve
 

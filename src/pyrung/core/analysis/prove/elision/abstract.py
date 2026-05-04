@@ -1178,7 +1178,10 @@ def _rule_provenance(abstract_reduced: dict[str, tuple[Any, ...]], ctx: _Elision
 
 def _pass_abstract(ctx: _ElisionContext) -> None:
     elider = _ScanLocalStateElider(
-        ctx.program, ctx.graph, ctx.stateful_dims, ctx.nondeterministic_dims,
+        ctx.program,
+        ctx.graph,
+        ctx.stateful_dims,
+        ctx.nondeterministic_dims,
         progress=ctx.progress,
         progress_prefix=ctx.progress_prefix,
     )

@@ -9,7 +9,6 @@ don't-care pruning).
 from __future__ import annotations
 
 import hashlib
-import itertools
 import json
 import time
 from collections import deque
@@ -116,7 +115,7 @@ from .classify import (
 from .classify import (
     _pilot_sweep_domains as _pilot_sweep_domains,
 )
-from .elision import ElisionCache
+from .elision import _elide_scan_local_stateful_dims as _elide_scan_local_stateful_dims
 from .events import (
     _DoneEventSpec,
     _has_pending_hidden_event,
@@ -155,7 +154,6 @@ def _build_explore_context(
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-    elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
     """Build shared verifier context once for prove()/reachable_states()."""
     ctx = _PassContext(
@@ -168,7 +166,6 @@ def _build_explore_context(
         input_groups=input_groups,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
-        elision_cache=elision_cache,
     )
     return _run_pre_bfs_pipeline(ctx)
 
@@ -695,97 +692,6 @@ def _upstream_cone(program: Program, tags: list[str]) -> frozenset[str]:
     return frozenset(cone)
 
 
-def _partition_projection(
-    program: Program,
-    projection: list[str],
-) -> list[list[str]]:
-    """Partition projection tags into independent clusters by dependency overlap.
-
-    Uses simplified forms where available (tighter than raw PDG cones) and
-    falls back to PDG upstream cones for non-resolvable terminals.
-    Independent clusters can be explored via separate BFS passes and their
-    reachable sets combined via Cartesian product.
-    """
-    if len(projection) <= 1:
-        return [list(projection)]
-
-    from pyrung.core.analysis.pdg import TagRole, build_program_graph
-    from pyrung.core.analysis.simplified import simplified_forms
-
-    graph = build_program_graph(program)
-    if any(
-        graph.tag_roles.get(tag_name) == TagRole.INPUT
-        or (
-            (tag := graph.tags.get(tag_name)) is not None
-            and tag.external
-            and tag_name not in graph.writers_of
-        )
-        for tag_name in projection
-    ):
-        return [list(projection)]
-    forms = simplified_forms(program)
-
-    cones: list[frozenset[str]] = []
-    for tag_name in projection:
-        if tag_name in forms:
-            refs = _referenced_tags(forms[tag_name].expr)
-            cones.append(refs | {tag_name})
-        else:
-            cone = graph.upstream_slice(tag_name)
-            cones.append(cone | {tag_name})
-
-    parent = list(range(len(projection)))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for i in range(len(projection)):
-        for j in range(i + 1, len(projection)):
-            if cones[i] & cones[j]:
-                union(i, j)
-
-    groups: dict[int, list[str]] = {}
-    for i, tag_name in enumerate(projection):
-        groups.setdefault(find(i), []).append(tag_name)
-    return list(groups.values())
-
-
-def _cartesian_product(
-    cluster_states: list[frozenset[frozenset[tuple[str, Any]]]],
-    *,
-    progress: Callable[[int, int, float], None] | None = None,
-) -> frozenset[frozenset[tuple[str, Any]]]:
-    """Combine independent cluster reachable sets via Cartesian product."""
-    result: set[frozenset[tuple[str, Any]]] = set()
-    total = 1
-    for states in cluster_states:
-        total *= len(states)
-
-    progress_last_time = time.monotonic()
-    progress_last_states = 0
-    combine_start = progress_last_time
-
-    for states_merged, combo in enumerate(itertools.product(*cluster_states), start=1):
-        merged: frozenset[tuple[str, Any]] = frozenset().union(*combo)
-        result.add(merged)
-        if progress is None:
-            continue
-        now = time.monotonic()
-        if now - progress_last_time >= 5.0 or states_merged - progress_last_states >= 10_000:
-            progress(states_merged, total, now - combine_start)
-            progress_last_time = now
-            progress_last_states = states_merged
-    return frozenset(result)
-
-
 def _partition_batch(
     program: Program,
     compiled_properties: list[
@@ -1028,13 +934,6 @@ class _StderrProgressReporter:
         self.info("BFS started ...", label=label)
         return _BFSProgress(self, label)
 
-    def combine_callback(self) -> Callable[[int, int, float], None]:
-        def _emit(merged: int, total: int, dt: float) -> None:
-            rate = merged / dt if dt > 0 else 0
-            self.info(f"combining clusters | merged={merged:,}/{total:,} | {rate:,.0f} states/sec")
-
-        return _emit
-
 
 class _BFSProgress:
     __slots__ = (
@@ -1094,18 +993,11 @@ def _build_reachable_context(
     *,
     scope: list[str],
     project: tuple[str, ...],
-    seed_tags: list[str],
     input_groups: tuple[tuple[str, ...], ...] = (),
     progress_info: Callable[[str], None] | None = None,
     progress_prefix: Callable[[], str] | None = None,
-    elision_cache: ElisionCache | None = None,
 ) -> _ExploreContext | Intractable:
-    """Build a reachable-states context on the original program.
-
-    ``seed_tags`` is retained for internal call compatibility, but we no longer
-    whole-rung slice the program before running the pre-BFS optimization passes.
-    """
-    del seed_tags
+    """Build a reachable-states context on the original program."""
     from pyrung.circuitpy.codegen import compile_kernel
 
     compiled_kernel = compile_kernel(program, blockless=True)
@@ -1117,7 +1009,6 @@ def _build_reachable_context(
         input_groups=input_groups,
         progress_info=progress_info,
         progress_prefix=progress_prefix,
-        elision_cache=elision_cache,
     )
 
 
@@ -1132,19 +1023,13 @@ def reachable_states(
 ) -> frozenset[frozenset[tuple[str, Any]]] | Intractable:
     """Compute the full reachable state space.
 
-    When no explicit *scope* is given, projection tags are partitioned into
-    independent clusters by dependency analysis (PDG upstream cones refined
-    by simplified Boolean forms).  Each cluster is explored via a separate
-    BFS scoped to its own upstream cone, and the results are combined via
-    Cartesian product — turning one 2^N exploration into several 2^k passes.
-
     Parameters
     ----------
     program : Program
         The compiled ladder logic program.
     scope : list of tag names, optional
         If given, restrict input enumeration to the upstream cone.
-        Disables automatic partitioning.
+        Defaults to the projection tags.
     project : list of tag names, optional
         Tags to project onto. Defaults to terminal tags.
     max_depth : int
@@ -1162,143 +1047,34 @@ def reachable_states(
     elif callable(progress):
         progress_cb = progress
 
-    if scope is not None:
-        if stderr_reporter is not None:
-            stderr_reporter.info(
-                f"preparing reachability slice for {len(project_names):,} projected tag(s)"
-            )
-        effective_scope = sorted(set(scope) | set(project_names))
-        context = _build_reachable_context(
-            program,
-            scope=effective_scope,
-            project=project_names,
-            seed_tags=effective_scope,
-            input_groups=input_groups,
-            progress_info=stderr_reporter.info if stderr_reporter is not None else None,
-            progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
-        )
-        if isinstance(context, Intractable):
-            return context
-        if stderr_reporter is not None:
-            stderr_reporter.report_dimensions(context)
-        bfs_progress = (
-            stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
-        )
-        result = _bfs_explore(  # ty: ignore[assignment]
-            context,
-            project=project_names,
-            max_depth=max_depth,
-            max_states=max_states,
-            progress=bfs_progress,
-        )
-        if stderr_reporter is not None and not isinstance(result, Intractable):
-            stderr_reporter.info(f"reachable states complete | total={len(result):,}")
-        return result  # ty: ignore[invalid-return-type]
-
-    clusters = _partition_projection(program, project_list)
-
-    if len(clusters) == 1:
-        if stderr_reporter is not None:
-            stderr_reporter.info(
-                f"preparing reachability slice for {len(project_names):,} projected tag(s)"
-            )
-        context = _build_reachable_context(
-            program,
-            scope=clusters[0],
-            project=project_names,
-            seed_tags=clusters[0],
-            input_groups=input_groups,
-            progress_info=stderr_reporter.info if stderr_reporter is not None else None,
-            progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
-        )
-        if isinstance(context, Intractable):
-            return context
-        if stderr_reporter is not None:
-            stderr_reporter.report_dimensions(context)
-        bfs_progress = (
-            stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
-        )
-        result = _bfs_explore(  # ty: ignore[assignment]
-            context,
-            project=project_names,
-            max_depth=max_depth,
-            max_states=max_states,
-            progress=bfs_progress,
-        )
-        if stderr_reporter is not None and not isinstance(result, Intractable):
-            stderr_reporter.info(f"reachable states complete | total={len(result):,}")
-        return result  # ty: ignore[invalid-return-type]
-
-    cluster_results: list[frozenset[frozenset[tuple[str, Any]]]] = []
-    combined_so_far = 1
-    elision_cache: ElisionCache = {}
+    effective_scope = sorted(set(scope or project_list) | set(project_names))
     if stderr_reporter is not None:
         stderr_reporter.info(
-            f"partitioned projection into {len(clusters):,} independent cluster(s)"
+            f"preparing reachability slice for {len(project_names):,} projected tag(s)"
         )
-    for cluster_idx, cluster in enumerate(clusters):
-        cluster_project = tuple(cluster)
-        label = f"cluster {cluster_idx + 1}/{len(clusters)}"
-        if stderr_reporter is not None:
-            stderr_reporter.info(
-                f"preparing {len(cluster_project):,} projected tag(s)",
-                label=label,
-            )
-        context = _build_reachable_context(
-            program,
-            scope=cluster,
-            project=cluster_project,
-            seed_tags=cluster,
-            input_groups=input_groups,
-            progress_info=(
-                (lambda message, *, _label=label: stderr_reporter.info(message, label=_label))
-                if stderr_reporter is not None
-                else None
-            ),
-            progress_prefix=(
-                stderr_reporter.prefix_builder(label)
-                if stderr_reporter is not None
-                else None
-            ),
-            elision_cache=elision_cache,
-        )
-        if isinstance(context, Intractable):
-            return context
-        if stderr_reporter is not None:
-            stderr_reporter.report_dimensions(context, label=label)
-        cluster_cb = progress_cb
-        if stderr_reporter is not None:
-            cluster_cb = stderr_reporter.bfs_callback(label)
-        result = _bfs_explore(
-            context,
-            project=cluster_project,
-            max_depth=max_depth,
-            max_states=max_states,
-            progress=cluster_cb,
-        )
-        if isinstance(result, Intractable):
-            return result
-        assert isinstance(result, frozenset)
-        cluster_results.append(result)
-        combined_so_far *= len(result)
-        if stderr_reporter is not None:
-            stderr_reporter.info(
-                f"complete | states={len(result):,} | combined so far={combined_so_far:,}",
-                label=label,
-            )
-
-    combine_progress: Callable[[int, int, float], None] | None = None
+    context = _build_reachable_context(
+        program,
+        scope=effective_scope,
+        project=project_names,
+        input_groups=input_groups,
+        progress_info=stderr_reporter.info if stderr_reporter is not None else None,
+        progress_prefix=stderr_reporter.prefix_builder() if stderr_reporter is not None else None,
+    )
+    if isinstance(context, Intractable):
+        return context
     if stderr_reporter is not None:
-        stderr_reporter.info(
-            f"combining {len(cluster_results):,} cluster state set(s) | "
-            f"expected total={combined_so_far:,}"
-        )
-        combine_progress = stderr_reporter.combine_callback()
-
-    combined = _cartesian_product(cluster_results, progress=combine_progress)
-    if stderr_reporter is not None:
-        stderr_reporter.info(f"reachable states complete | total={len(combined):,}")
-    return combined
+        stderr_reporter.report_dimensions(context)
+    bfs_progress = stderr_reporter.bfs_callback() if stderr_reporter is not None else progress_cb
+    result = _bfs_explore(
+        context,
+        project=project_names,
+        max_depth=max_depth,
+        max_states=max_states,
+        progress=bfs_progress,
+    )
+    if stderr_reporter is not None and not isinstance(result, Intractable):
+        stderr_reporter.info(f"reachable states complete | total={len(result):,}")
+    return result  # ty: ignore[invalid-return-type]
 
 
 def diff_states(

@@ -160,7 +160,7 @@ Quick-reference for what to implement, in priority order. Each item says what it
   If a candidate was never written across pilot scans (`_collect_forced_true_coverage`), its exit is always default. Trivially elidable without full proof. Pre-filter before cone computation.
   *Effort: low.*
 
-- [ ] **Early termination propagation**
+- [NOT IMPORTANT] **Early termination propagation**
   When a candidate fails, mark immediately and exclude from further perturbation in current round. Baseline scans still run but per-candidate budget shrinks.
   *Effort: low.*
 

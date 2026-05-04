@@ -31,7 +31,7 @@ from .classify import (
     _extract_value_domain,
     _pilot_sweep_domains,
 )
-from .elision import ElisionCache, _elide_scan_local_stateful_dims
+from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
 from .expr import _collect_atoms_for_tag, _collect_edge_input_tags, _partition_edge_bearing_inputs
 from .inputs import _detect_exclusive_input_groups, _exclusive_input_group_membership
@@ -141,7 +141,6 @@ class _PassContext:
     input_groups: tuple[tuple[str, ...], ...] = ()
     progress_info: Callable[[str], None] | None = None
     progress_prefix: Callable[[], str] | None = None
-    elision_cache: ElisionCache | None = None
 
     graph: ProgramGraph | None = None
     all_exprs: list[Expr] | None = None
@@ -432,7 +431,6 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
         compiled=ctx.compiled,
         progress=ctx.progress_info,
         progress_prefix=ctx.progress_prefix,
-        elision_cache=ctx.elision_cache,
     )
 
 
