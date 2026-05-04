@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.context import ConditionView, ScanContext
@@ -15,9 +15,9 @@ if TYPE_CHECKING:
     from pyrung.core.tag import ImmediateRef, Tag
 
 
-ConditionTerm: TypeAlias = "Condition | Tag | ImmediateRef"
-ConditionGroup: TypeAlias = "tuple[ConditionTerm, ...] | list[ConditionTerm]"
-ConditionInput: TypeAlias = "ConditionTerm | ConditionGroup"
+type ConditionTerm = Condition | Tag | ImmediateRef
+type ConditionGroup = tuple[ConditionTerm, ...] | list[ConditionTerm]
+type ConditionInput = ConditionTerm | ConditionGroup
 
 
 def _contact_tag(value: Tag | ImmediateRef) -> Tag:

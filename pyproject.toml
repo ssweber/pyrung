@@ -13,7 +13,7 @@ authors = [
 ]
 readme = "README.md"
 license = "MPL-2.0"
-requires-python = ">=3.11,<4.0"
+requires-python = ">=3.12,<4.0"
 dynamic = ["version"]
 
 # https://pypi.org/classifiers/
@@ -141,7 +141,7 @@ ignore = [
 [tool.ty.environment]
 # ty is Astral's extremely fast Python type checker
 # https://docs.astral.sh/ty/
-python-version = "3.11"
+python-version = "3.12"
 root = ["./src", "./tests", "./devtools"]
 
 [tool.ty.src]

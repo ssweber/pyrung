@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import TypeVar
-
 from pyrung.core._source import (
     _capture_source,
 )
@@ -14,10 +12,8 @@ from pyrung.core.condition import (
 )
 from pyrung.core.tag import ImmediateRef, Tag
 
-ConditionType = TypeVar("ConditionType", bound=Condition)
 
-
-def _make_condition(
+def _make_condition[ConditionType: Condition](
     condition_cls: type[ConditionType],
     *args: object,
     source_depth: int = 3,
