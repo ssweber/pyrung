@@ -56,9 +56,11 @@ elif isinstance(result, Counterexample):
 elif isinstance(result, Intractable):
     print(result.reason)  # "unbounded domain on Pressure"
     print(result.tags)    # ["Pressure"] — add choices or min/max
+    for hint in result.hints:
+        print(hint)       # "Pressure: 65536 values (Int, no choices/min/max)"
 ```
 
-`Intractable` means the state space is too large. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+`Intractable` means the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
 
 ### Scoping
 
@@ -157,7 +159,7 @@ The lock projects to tags marked `lock=True` by default — the outputs that def
 pyrung lock my_program --project Running MotorOut StatusLight
 ```
 
-Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`.
+Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`. Tags with `band=` metadata collapse numeric values into categorical labels — see [Bands](#bands--collapsing-numeric-values-into-categories) below.
 
 ### `__lock__` — per-module projection override
 
@@ -172,7 +174,8 @@ __lock__ = {
 
 - `include` adds tags the default misses.
 - `exclude` drops tags the default includes.
-- Both keys are optional. Most programs won't need `__lock__` at all.
+- `group` declares correlated input groups (see below).
+- All keys are optional. Most programs won't need `__lock__` at all.
 - `--project` on the CLI still overrides everything for one-off checks.
 
 Common patterns:
@@ -189,6 +192,43 @@ __lock__ = {
     "include": list(dv.contains("Modbus").tags),
 }
 ```
+
+### Bands — collapsing numeric values into categories
+
+The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
+
+```python
+AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
+```
+
+In the lock file, `AlarmExtent=3` becomes `AlarmExtent="POSITIVE"`. The lock captures *which band* the value falls into, not the exact number — so adding a new alarm source doesn't change the lock file as long as the alarm extent stays positive.
+
+Band predicates:
+
+| Predicate | Matches |
+|-----------|---------|
+| `0` | Exact value 0 |
+| `"*"` | Any value (wildcard) |
+| `">= 100"` | Comparison (supports `==`, `!=`, `>`, `>=`, `<`, `<=`) |
+| `"0..10"` | Inclusive range |
+
+Predicates are checked in declaration order — the first match wins. Use `"*"` as a catch-all last entry.
+
+### Input groups — joint multi-flip inputs
+
+Single-flip BFS only changes one input per successor state. The `group` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
+
+```python
+__lock__ = {
+    "group": {
+        "panel": ["SwitchA", "SwitchB"],
+    },
+}
+```
+
+Also available programmatically via `input_groups=` on `reachable_states()` and `prove()`.
+
+It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
 
 ### Three levels of lock
 
@@ -258,10 +298,14 @@ pyrung lock <module>              # write pyrung.lock
 pyrung lock <module> -o out.lock  # custom output path
 pyrung lock <module> --project Running MotorOut  # explicit projection
 pyrung lock <module> --max-depth 100             # deeper BFS
+pyrung lock <module> --profile out.prof          # write cProfile stats
 
 pyrung check <module>             # diff against pyrung.lock, exit 1 on change
 pyrung check <module> --lock custom.lock         # custom lock path
+pyrung check <module> --profile out.prof         # write cProfile stats
 ```
+
+`--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

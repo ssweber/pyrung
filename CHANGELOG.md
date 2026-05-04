@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 (2026-05-26)
+
+Major overhaul of `prove()` and `reachable_states()`. BFS input enumeration switched from multi-flip (all input combinations per state) to single-flip (one input change at a time), dramatically reducing the successor fan-out. A new pre-BFS elision pipeline proves tags scan-local via abstract interpretation and concrete kernel proofs, removing them from the state space before exploration begins. During BFS, new accumulator absorption collapses timer/counter and progress-tracking tags: threshold vector absorption replaces concrete accumulator values with crossed/uncrossed boolean tuples, and comparison-only absorption does the same for tags observed only through comparisons — both eliminate high-cardinality dimensions without losing reachable states. A blockless compiled kernel mode (~8× faster BFS steps) strips block arrays from the step function when verification doesn't need them, replacing indirect lookups with flat tag-name tuples. Together these changes make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.
 
 ### Breaking changes
 
+- **Python 3.12 minimum** — minimum Python version bumped from 3.11 to 3.12.
 - **Lock file default projection is now `lock=True` tags** — `_default_projection` and `pyrung lock` now project to tags marked `lock=True` (previously terminal Bool tags). `TagMap` auto-stamps `lock=True` on output-mapped tags, so programs using `TagMap` get physical outputs in the projection automatically. Programs without `TagMap` need explicit `lock=True` on output tags or `__lock__ = {"include": [...]}`. Existing lock files will need regeneration with `pyrung lock`.
 - **Lock file omits False values** — reachable state entries now only include tags whose value is True. Each state reads as "what's ON." Empty `{}` means nothing is active. Existing lock files will diff on regeneration but `check_lock` handles both formats transparently.
 
@@ -17,10 +20,18 @@
 - **`TagMap` stamps `external=True` on input-mapped tags** — when a `TagMap` maps a semantic tag to an input bank (`x`, `xd`), the tag is automatically marked `external=True` at construction time. This means `prove()` and `pyrung lock` treat input-mapped tags as nondeterministic without the user needing to declare `external=True` manually. Tags that are `readonly` are not stamped (readonly and external are mutually exclusive).
 - **`TagMap` stamps `lock=True` on output-mapped tags** — when a `TagMap` maps a semantic tag to an output bank (`y`, `yd`), the tag is automatically marked `lock=True` at construction time. Tags with `lock=True` are included in the default lock file projection, so physical outputs are tracked automatically.
 - **`lock` tag flag** — new metadata flag on tags, blocks, UDT fields, and named arrays. Tags with `lock=True` are included in the default `pyrung lock` projection. Unlike the semantic flags (`readonly`, `external`, `final`), `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Click nickname CSV round-trips as `[lock]`.
+- **`band` tag attribute — predicate-based value grouping for lock files** — tags can now carry a `band: BandMap` mapping from label strings to predicates. After `reachable_states()` computes the state set, concrete values matching a band predicate are replaced by the label in the lock file output. Predicates support exact matches (`0`), wildcards (`"*"`), comparisons (`">= 100"`, `"!= 0"`, `"> 0"`), and ranges (`"0..10"`). Purely a lock file reduction — band metadata is not used during BFS exploration. Useful for collapsing numeric outputs into categorical bands so that adding a new alarm source doesn't change the lock file — e.g. `band={"ZERO": 0, "POSITIVE": "> 0"}` turns `AlarmExtent=3` into `AlarmExtent="POSITIVE"`.
+- **`__lock__` `group` key — joint multi-flip input groups** — `__lock__` now accepts a `group` dict mapping group names to lists of tag names. Single-flip BFS normally changes one input at a time; grouped inputs additionally generate multi-flip combinations. Use sparingly — logic that only works when inputs change in the same scan cycle is usually a design problem. Passed through as `input_groups=` on `reachable_states()` and `prove()`.
+- **`Intractable.hints` — dimension diagnostics** — when `prove()` or `reachable_states()` returns `Intractable`, the result now includes a `hints` list with human-readable descriptions of the largest dimensions contributing to the state space explosion. Helps diagnose which tags need `choices` or `min`/`max` metadata.
+- **`--profile` flag on `pyrung lock` / `pyrung check`** — `pyrung lock my_program --profile out.prof` writes cProfile stats to a file. Stats are dumped even on `KeyboardInterrupt`. Analyze with `pstats.Stats` or `uvx snakeviz out.prof`.
+- **`UnpackToBitsInstruction.dest` / `UnpackToWordsInstruction.dest`** — property aliases for the underlying `bit_block` / `word_block` attributes, matching the `dest` naming convention used by all other packing instructions.
+- **Fill station example** — new `examples/fill_station.py` demonstrating Physical annotations, Harness auto-feedback, watchdog timers, and `prove()` fault coverage in a tank fill scenario.
+- **PackML benchmark** — new `examples/packml_bench.py` for profiling `prove()` and `pyrung lock` on an industrial-scale PackML state machine with indirect Click block access.
 
 ### Fixes
 
 - **Build-time validation for undefined string `call()` targets** — `Program` now validates named subroutine calls when program construction finishes, so `call("missing")` fails immediately with a `KeyError` instead of compiling/importing cleanly and only crashing later at scan time. Safe forward references within the same `Program` body still work, and `call(subroutine_func)` keeps its lazy decorator registration behavior.
+- **Mixed-type values in lock file state sorting** — `reachable_states()` now handles states containing mixed types (int, str, bool) when sorting for deterministic lock file output. Previously, comparing labels (from `choices=` resolution) with raw numeric values could raise `TypeError`.
 
 ## v0.7.0 (2026-04-26)
 
