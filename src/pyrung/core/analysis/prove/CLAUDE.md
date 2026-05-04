@@ -21,7 +21,7 @@ make lint          # codespell + ruff + ty
 __init__.py  — Public API (prove, reachable_states, write_lock, check_lock, diff_states)
                BFS loop (_bfs_explore), property compilation, batch partitioning,
                cluster projection with Cartesian product
-passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 10 ordered passes that
+passes.py    — Pre-BFS pass pipeline (_run_pre_bfs_pipeline). 12 ordered passes that
                build the _ExploreContext. Mutable _PassContext accumulates intermediate
                state; freeze() produces the immutable _ExploreContext for BFS.
 classify.py  — Dimension classification and domain inference. Partitions tags into
@@ -39,8 +39,12 @@ kernel.py    — Kernel integration. Snapshot/restore, state key extraction, edg
 expr.py      — Expression tree helpers. Partial evaluation, tag reference collection,
                atom indexing, live-input analysis. Edge-bearing input partition
                (_partition_edge_bearing_inputs) for free-input elision.
-slicer.py    — Whole-rung program slicing. Builds a reduced program containing only
-               rungs in the upstream cone of seed tags.
+inputs.py    — Input-group detection and successor enumeration. _ExclusiveInputGroup
+               identifies Bool input families (e.g. encoder-style one-hot sets) whose
+               multi-hot combos are redundant. _iter_input_assignments builds the
+               cross-product of three independent change dimensions (edge single-flips,
+               encoder-group canonicals, free-input combos) to ensure every combination
+               is explored.
 elision/     — Two-phase state-key elision sub-pipeline.
   __init__.py  — Pipeline orchestration: _ElisionContext, _ElisionPass, _AbstractRule,
                  _run_elision_pipeline, _elide_scan_local_stateful_dims entry point.
@@ -59,6 +63,7 @@ Program
     → build_graph: ProgramGraph + all condition/write-site expressions
     → classify_dimensions: stateful/ND/combinational + value domains
     → pilot_sweep: fallback domain discovery via kernel execution (if classify returned Intractable)
+    → diagnose_unwritten_tags: surface never-written tags as user diagnostics
     → elide_scan_local_state: abstract + concrete proof that tags are WBR
     → compile_kernel: CompiledKernel + stateful/edge tag name tuples
     → collect_done_acc_pairs: Done→Acc mapping from timer/counter instructions
@@ -71,7 +76,7 @@ Program
     → partition ND inputs: edge-bearing (state key) vs free (enumerated only)
   → _ExploreContext (frozen, immutable)
     → _bfs_explore (__init__.py)
-      → per-state: enumerate live inputs (free jointly, others single-flip), step kernel, extract state key
+      → per-state: cross-product three input dimensions (edge single-flips, encoder-group canonicals, free-input combos), step kernel, extract state key
       → hidden events: settle pending timers, jump to threshold crossings
       → property check: evaluate predicates, build counterexample traces
   → Proven | Counterexample | Intractable
@@ -131,11 +136,12 @@ Abstract thresholds (dynamic presets): `_materialize_abstract_threshold_outcome`
 ### Optimizations active during BFS (`_BFSConfig`)
 
 - **live_input_pruning** — skip inputs masked by current state (partial eval)
+- **exclusive_input_grouping** — collapse mutually exclusive Bool input families into canonical assignments
 - **edge_compression** — collapse dead edge prevs to sentinel
 - **hidden_event_jumping** — jump from revisited pending plateaus
 - **pending_settlement** — settle pending timers before evaluating failing properties
 
-All four are on by default. Each has its own cache keyed by stateful prefix + threshold vector (caches are on `_EdgeCompressor` and `_LiveInputCache`).
+All five are on by default. Each has its own cache keyed by stateful prefix + threshold vector (caches are on `_EdgeCompressor` and `_LiveInputCache`).
 
 ## Formal foundations
 
@@ -171,9 +177,10 @@ Within elision (~219s for 3 non-cached clusters):
 ## Testing
 
 Test files:
-- `tests/core/analysis/test_prove.py` — integration tests (28 test classes, ~3200 lines)
+- `tests/core/analysis/test_prove.py` — integration tests (30 test classes, ~3500 lines)
 - `tests/core/analysis/test_prove_passes.py` — pre-BFS pass pipeline unit tests
 - `tests/core/analysis/test_elision_agreement.py` — three-way agreement harness for elision
+- `tests/core/analysis/test_packml_diagnosis.py` — PackML-specific regression tests (cross-product input enumeration, stuck-state diagnosis)
 
 ### Three-way elision agreement (`test_elision_agreement.py`)
 
