@@ -325,11 +325,12 @@ def _iter_input_assignments(
         for name in sorted(live_inputs)
     )
 
-    assignments: list[tuple[tuple[str, Any], ...]] = [stutter]
     stutter_dict = dict(stutter)
 
     seen_encoder_members: set[str] = set()
     seen_encoder_groups: set[int] = set()
+    encoder_diffs: list[dict[str, Any]] = []
+    edge_diffs: list[dict[str, Any]] = []
     for name in sorted(live_inputs):
         group_index = group_by_member.get(name)
         if group_index is not None:
@@ -341,29 +342,40 @@ def _iter_input_assignments(
             current_canonical = tuple((m, stutter_dict.get(m, False)) for m in group.members)
             for canonical in group.canonical_assignments:
                 if canonical != current_canonical:
-                    merged = dict(stutter)
-                    merged.update(canonical)
-                    assignments.append(tuple(sorted(merged.items())))
+                    encoder_diffs.append(dict(canonical))
         elif name in free_inputs:
             pass
         else:
             cur = stutter_dict[name]
             for value in nondeterministic_dims[name]:
                 if value != cur:
-                    merged = dict(stutter)
-                    merged[name] = value
-                    assignments.append(tuple(sorted(merged.items())))
+                    edge_diffs.append({name: value})
 
     live_free = sorted(n for n in free_inputs if n in live_inputs and n not in seen_encoder_members)
+    free_combos: list[dict[str, Any]] = [{}]
     if live_free:
         free_domains = [[(n, v) for v in nondeterministic_dims[n]] for n in live_free]
         for combo in itertools.product(*free_domains):
-            merged = dict(stutter)
-            for pair in combo:
-                merged[pair[0]] = pair[1]
-            entry = tuple(sorted(merged.items()))
-            if entry != stutter:
-                assignments.append(entry)
+            d = dict(combo)
+            if any(d[n] != stutter_dict.get(n) for n in d):
+                free_combos.append(d)
+
+    encoder_combos: list[dict[str, Any]] = [{}] + encoder_diffs
+
+    seen: set[tuple[tuple[str, Any], ...]] = set()
+    assignments: list[tuple[tuple[str, Any], ...]] = []
+    edge_bases = [{}] + edge_diffs
+    for edge_diff in edge_bases:
+        for enc_combo in encoder_combos:
+            for free_combo in free_combos:
+                merged = dict(stutter_dict)
+                merged.update(edge_diff)
+                merged.update(enc_combo)
+                merged.update(free_combo)
+                entry = tuple(sorted(merged.items()))
+                if entry not in seen:
+                    seen.add(entry)
+                    assignments.append(entry)
 
     live_set = set(live_inputs)
     for ig in input_groups:
