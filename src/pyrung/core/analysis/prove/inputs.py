@@ -236,7 +236,7 @@ def _detect_exclusive_input_groups(
         return ()
 
     observed_tags = _observed_tags(project=project, extra_exprs=extra_exprs)
-    node_index_by_key = {
+    node_index_by_key: dict[tuple[str, str | None, int, tuple[int, ...]], int] = {
         (node.scope, node.subroutine, node.rung_index, node.branch_path): idx
         for idx, node in enumerate(graph.rung_nodes)
     }

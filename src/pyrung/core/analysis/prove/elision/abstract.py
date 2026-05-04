@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import product
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph, _extract_tag_names, _implicit_fault_writes
 from pyrung.core.instruction.calc import CalcInstruction
@@ -19,6 +19,7 @@ from ..absorb import _all_write_targets
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
+    from pyrung.core.context import ConditionView, ScanContext
     from pyrung.core.program import Program
     from pyrung.core.rung import Rung
 
@@ -790,7 +791,7 @@ class _TagElisionCheck:
                 if not current.is_const:
                     return _NO_CONST
                 values[name] = current.const
-        ctx = _ExactContext(values)
+        ctx = cast("ScanContext | ConditionView", _ExactContext(values))
         try:
             return all(cond.evaluate(ctx) for cond in conditions)
         except Exception:

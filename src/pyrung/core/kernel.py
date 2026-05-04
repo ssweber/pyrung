@@ -120,6 +120,15 @@ class CompiledKernel:
     indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
         default_factory=dict
     )
+    _tag_template: dict[str, bool | int | float | str] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _blocks_template: dict[str, list[bool | int | float | str]] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _prev_template: dict[str, bool | int | float | str] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         tag_template: dict[str, bool | int | float | str] = {
@@ -146,7 +155,7 @@ class CompiledKernel:
     def create_kernel(self) -> ReplayKernel:
         """Create a fresh ReplayKernel initialized from this compiled program."""
         return ReplayKernel(
-            tag_template=self._tag_template,  # type: ignore[attr-defined]
-            blocks_template=self._blocks_template,  # type: ignore[attr-defined]
-            prev_template=self._prev_template,  # type: ignore[attr-defined]
+            tag_template=self._tag_template,
+            blocks_template=self._blocks_template,
+            prev_template=self._prev_template,
         )

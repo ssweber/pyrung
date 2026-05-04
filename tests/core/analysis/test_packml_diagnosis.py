@@ -48,34 +48,12 @@ class TestPackMLBaseline:
         states = reachable_states(logic, project=["StateCurrent"], max_depth=50)
         assert not isinstance(states, Intractable), f"Intractable: {states}"
         values = {dict(s)["StateCurrent"] for s in states}
-        expected = {2, 15, 4, 3, 6}  # STOPPED, RESETTING, IDLE, STARTING, EXECUTE
+        expected = {"STOPPED", "RESETTING", "IDLE", "STARTING", "EXECUTE"}
         missing = expected - values
         assert not missing, (
-            f"StateCurrent stuck — missing states: "
-            f"{', '.join(f'{v} ({_STATE_LABELS.get(v, "?")})' for v in sorted(missing))}. "
-            f"Reached: {', '.join(f'{v} ({_STATE_LABELS.get(v, "?")})' for v in sorted(values))}"
+            f"StateCurrent stuck ��� missing states: {', '.join(sorted(missing))}. "
+            f"Reached: {', '.join(sorted(values))}"
         )
-
-
-_STATE_LABELS = {
-    1: "CLEARING",
-    2: "STOPPED",
-    3: "STARTING",
-    4: "IDLE",
-    5: "SUSPENDED",
-    6: "EXECUTE",
-    7: "STOPPING",
-    8: "ABORTING",
-    9: "ABORTED",
-    10: "HOLDING",
-    11: "HELD",
-    12: "UNHOLDING",
-    13: "SUSPENDING",
-    14: "UNSUSPENDING",
-    15: "RESETTING",
-    16: "COMPLETING",
-    17: "COMPLETED",
-}
 
 
 # ===================================================================

@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from itertools import product
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import ProgramGraph
 from pyrung.core.kernel import CompiledKernel
@@ -692,7 +692,7 @@ class _ConcreteStateElider:
         cache_key = (tuple(sorted(entry_values.items())), observed)
         cached = self._scan_cache.get(cache_key, _SCAN_CACHE_MISS)
         if cached is not _SCAN_CACHE_MISS:
-            return cached  # type: ignore[return-value]
+            return cast("tuple[Any, ...] | None", cached)
 
         kernel = self._compiled.create_kernel()
         kernel.tags.update(entry_values)

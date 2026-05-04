@@ -504,7 +504,7 @@ class TestProve:
 
         result = prove(logic, ~alarm)
         assert isinstance(result, Counterexample)
-        trace_levels = {step.inputs.get("Level") for step in result.trace} - {None}
+        trace_levels = {v for step in result.trace if (v := step.inputs.get("Level")) is not None}
         assert any(v < 5 for v in trace_levels) or result.trace[0].scans == 0
 
     def test_property_expression_contributes_input_domain(self):
@@ -801,7 +801,8 @@ class TestReachableStates:
                 copy(2, cmd)
 
         states = reachable_states(logic, project=["CmdA", "CmdB", "Cmd"])
-        assert frozenset({("CmdA", True), ("CmdB", True), ("Cmd", 2)}) in states
+        assert isinstance(states, frozenset)
+        assert frozenset({("CmdA", True), ("CmdB", True), ("Cmd", "B")}) in states
 
     def test_exclusive_input_grouping_preserves_reachable_states(self):
         cmd_a = Bool("CmdA", external=True)

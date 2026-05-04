@@ -1072,9 +1072,13 @@ def reachable_states(
         max_states=max_states,
         progress=bfs_progress,
     )
-    if stderr_reporter is not None and not isinstance(result, Intractable):
+    if isinstance(result, Intractable):
+        return result
+    choice_labels = _build_choice_labels(project_list, context.graph.tags)
+    result = _resolve_choice_labels(result, choice_labels)
+    if stderr_reporter is not None:
         stderr_reporter.info(f"reachable states complete | total={len(result):,}")
-    return result  # ty: ignore[invalid-return-type]
+    return result
 
 
 def diff_states(
@@ -1091,6 +1095,26 @@ def _default_projection(program: Program) -> list[str]:
 
     graph = build_program_graph(program)
     return sorted(name for name, tag in graph.tags.items() if getattr(tag, "lock", False))
+
+
+def _resolve_choice_labels(
+    states: frozenset[frozenset[tuple[str, Any]]],
+    choice_labels: dict[str, dict[Any, str]],
+) -> frozenset[frozenset[tuple[str, Any]]]:
+    """Replace raw choice-key values with their human-readable labels."""
+    if not choice_labels:
+        return states
+    resolved: set[frozenset[tuple[str, Any]]] = set()
+    for state in states:
+        new_pairs: list[tuple[str, Any]] = []
+        for name, value in state:
+            tag_labels = choice_labels.get(name)
+            if tag_labels is not None and value in tag_labels:
+                new_pairs.append((name, tag_labels[value]))
+            else:
+                new_pairs.append((name, value))
+        resolved.add(frozenset(new_pairs))
+    return frozenset(resolved)
 
 
 def _states_to_json(
