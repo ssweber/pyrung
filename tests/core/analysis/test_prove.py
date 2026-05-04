@@ -1082,6 +1082,10 @@ class TestLockFile:
         """Projected tags with choices= serialize labels, not raw ints."""
         import json
 
+        from pyrung.core.analysis.prove import (
+            _build_choice_labels,
+            _resolve_choice_labels,
+        )
         from pyrung.core.tag import Tag, TagType
 
         mode_tag = Tag(
@@ -1096,14 +1100,12 @@ class TestLockFile:
                 frozenset({("Mode", 2), ("Active", False)}),
             }
         )
+        tags = {"Mode": mode_tag}
+        choice_labels = _build_choice_labels(["Active", "Mode"], tags)
+        resolved = _resolve_choice_labels(states, choice_labels)
+
         lock_path = tmp_path / "pyrung.lock"
-        write_lock(
-            lock_path,
-            states,
-            ["Active", "Mode"],
-            "hash2",
-            tags={"Mode": mode_tag},
-        )
+        write_lock(lock_path, resolved, ["Active", "Mode"], "hash2")
 
         data = json.loads(lock_path.read_text())
         mode_values = {row.get("Mode") for row in data["reachable"]}
@@ -1111,6 +1113,89 @@ class TestLockFile:
         assert "SLOW" in mode_values
         assert "FAST" in mode_values
         assert 0 not in mode_values
+
+    def test_band_labels_collapse_states(self, tmp_path: Path):
+        """Tags with band= collapse multiple values into labeled bands."""
+        import json
+
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        extent_tag = Tag(
+            name="Extent",
+            type=TagType.INT,
+            band={"ZERO": 0, "POSITIVE": ">0"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Extent", 0), ("Active", True)}),
+                frozenset({("Extent", 1), ("Active", True)}),
+                frozenset({("Extent", 2), ("Active", True)}),
+                frozenset({("Extent", 3), ("Active", True)}),
+            }
+        )
+        tags = {"Extent": extent_tag}
+        band_maps = _build_band_maps(["Active", "Extent"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, resolved, ["Active", "Extent"], "hash3")
+
+        data = json.loads(lock_path.read_text())
+        extent_values = {row.get("Extent") for row in data["reachable"]}
+        assert extent_values == {"ZERO", "POSITIVE"}
+        assert len(data["reachable"]) == 2
+
+    def test_band_range_predicate(self):
+        """Band with range predicates (a..b) works."""
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        level_tag = Tag(
+            name="Level",
+            type=TagType.INT,
+            band={"LOW": "0..2", "HIGH": "3..5"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Level", 0)}),
+                frozenset({("Level", 1)}),
+                frozenset({("Level", 2)}),
+                frozenset({("Level", 3)}),
+                frozenset({("Level", 4)}),
+                frozenset({("Level", 5)}),
+            }
+        )
+        tags = {"Level": level_tag}
+        band_maps = _build_band_maps(["Level"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        level_values = {dict(s)["Level"] for s in resolved}
+        assert level_values == {"LOW", "HIGH"}
+
+    def test_band_wildcard_catchall(self):
+        """Band with '*' catch-all matches unmatched values."""
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        tag = Tag(
+            name="Score",
+            type=TagType.INT,
+            band={"ZERO": 0, "OTHER": "*"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Score", 0)}),
+                frozenset({("Score", 7)}),
+                frozenset({("Score", 99)}),
+            }
+        )
+        tags = {"Score": tag}
+        band_maps = _build_band_maps(["Score"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        score_values = {dict(s)["Score"] for s in resolved}
+        assert score_values == {"ZERO", "OTHER"}
 
 
 # ===================================================================

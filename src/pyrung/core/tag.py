@@ -34,6 +34,9 @@ class TagType(Enum):
 ChoiceKey = int | float | str
 ChoiceMap = dict[ChoiceKey, str]
 
+BandPredicate = int | float | str
+BandMap = dict[str, BandPredicate]
+
 
 def _normalize_default_value(raw: object) -> object:
     """Resolve tag-backed defaults to plain scalar values."""
@@ -140,6 +143,7 @@ class Tag:
     min: int | float | None = None
     max: int | float | None = None
     uom: str | None = None
+    band: BandMap | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "default", _normalize_default_value(self.default))
@@ -666,6 +670,7 @@ class _TagTypeBase(LiveTag):
         min: int | float | None = None,
         max: int | float | None = None,
         uom: str | None = None,
+        band: BandMap | None = None,
     ) -> None:
         # __new__ returns LiveTag and bypasses this initializer.
         return None
@@ -688,6 +693,7 @@ class _TagTypeBase(LiveTag):
         min: int | float | None = None,
         max: int | float | None = None,
         uom: str | None = None,
+        band: BandMap | None = None,
     ) -> LiveTag:
         if retentive is None:
             retentive = cls._default_retentive
@@ -717,6 +723,7 @@ class _TagTypeBase(LiveTag):
             min,
             max,
             uom,
+            band,
         )
 
 

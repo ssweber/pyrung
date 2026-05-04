@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections import deque
 from collections.abc import Callable
@@ -1074,8 +1075,11 @@ def reachable_states(
     )
     if isinstance(result, Intractable):
         return result
+    assert isinstance(result, frozenset)
     choice_labels = _build_choice_labels(project_list, context.graph.tags)
     result = _resolve_choice_labels(result, choice_labels)
+    band_maps = _build_band_maps(project_list, context.graph.tags)
+    result = _resolve_band_labels(result, band_maps)
     if stderr_reporter is not None:
         stderr_reporter.info(f"reachable states complete | total={len(result):,}")
     return result
@@ -1111,6 +1115,89 @@ def _resolve_choice_labels(
             tag_labels = choice_labels.get(name)
             if tag_labels is not None and value in tag_labels:
                 new_pairs.append((name, tag_labels[value]))
+            else:
+                new_pairs.append((name, value))
+        resolved.add(frozenset(new_pairs))
+    return frozenset(resolved)
+
+
+_BAND_CMP_RE = re.compile(r"^(==|!=|>=?|<=?)\s*(-?\d+(?:\.\d+)?)$")
+_BAND_RANGE_RE = re.compile(r"^(-?\d+(?:\.\d+)?)\s*\.\.\s*(-?\d+(?:\.\d+)?)$")
+
+
+def _parse_band_number(s: str) -> int | float:
+    f = float(s)
+    return int(f) if f == int(f) else f
+
+
+def _match_band_predicate(value: Any, predicate: int | float | str) -> bool:
+    if isinstance(predicate, int | float):
+        return value == predicate
+    if not isinstance(predicate, str):
+        return False
+    if predicate == "*":
+        return True
+    if not isinstance(value, int | float):
+        return False
+    m = _BAND_CMP_RE.match(predicate)
+    if m:
+        num = _parse_band_number(m.group(2))
+        op = m.group(1)
+        if op == "==":
+            return value == num
+        if op == "!=":
+            return value != num
+        if op == ">":
+            return value > num
+        if op == ">=":
+            return value >= num
+        if op == "<":
+            return value < num
+        if op == "<=":
+            return value <= num
+    m = _BAND_RANGE_RE.match(predicate)
+    if m:
+        lo = _parse_band_number(m.group(1))
+        hi = _parse_band_number(m.group(2))
+        return lo <= value <= hi
+    return False
+
+
+def _apply_band(value: Any, band: dict[str, Any]) -> str | None:
+    for label, predicate in band.items():
+        if _match_band_predicate(value, predicate):
+            return label
+    return None
+
+
+def _build_band_maps(
+    projection: list[str],
+    tags: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    if tags is None:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for name in projection:
+        tag = tags.get(name)
+        if tag is not None and getattr(tag, "band", None):
+            result[name] = tag.band
+    return result
+
+
+def _resolve_band_labels(
+    states: frozenset[frozenset[tuple[str, Any]]],
+    band_maps: dict[str, dict[str, Any]],
+) -> frozenset[frozenset[tuple[str, Any]]]:
+    if not band_maps:
+        return states
+    resolved: set[frozenset[tuple[str, Any]]] = set()
+    for state in states:
+        new_pairs: list[tuple[str, Any]] = []
+        for name, value in state:
+            bmap = band_maps.get(name)
+            if bmap is not None:
+                label = _apply_band(value, bmap)
+                new_pairs.append((name, label if label is not None else value))
             else:
                 new_pairs.append((name, value))
         resolved.add(frozenset(new_pairs))
@@ -1163,37 +1250,15 @@ def _build_choice_labels(
     return labels
 
 
-def _apply_choice_labels(
-    rows: list[dict[str, Any]],
-    choice_labels: dict[str, dict[Any, str]],
-) -> list[dict[str, Any]]:
-    """Replace raw int values with choice labels where available."""
-    if not choice_labels:
-        return rows
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        new_row: dict[str, Any] = {}
-        for k, v in row.items():
-            tag_labels = choice_labels.get(k)
-            if tag_labels is not None and v in tag_labels:
-                new_row[k] = tag_labels[v]
-            else:
-                new_row[k] = v
-        result.append(new_row)
-    return result
-
-
 def write_lock(
     path: Path,
     states: frozenset[frozenset[tuple[str, Any]]],
     projection: list[str],
     program_hash: str,
     unreachable_examples: list[dict[str, Any]] | None = None,
-    tags: dict[str, Any] | None = None,
 ) -> None:
-    """Write a state-space lock file."""
-    choice_labels = _build_choice_labels(projection, tags)
-    rows = _apply_choice_labels(_states_to_json(states), choice_labels)
+    """Write a state-space lock file (states must already be label-resolved)."""
+    rows = _states_to_json(states)
     data = {
         "version": 1,
         "program_hash": program_hash,

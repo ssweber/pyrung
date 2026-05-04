@@ -157,7 +157,7 @@ ModeConfigIdx = Int("ModeConfigIdx")
 
 AlarmCoil = Block("AlarmCoil", TagType.BOOL, 1, 8, retentive=True)
 AlarmStatus = Block("AlarmStatus", TagType.INT, 1, 8, retentive=True)
-AlarmExtent = Int("AlarmExtent", lock=True)
+AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": ">0"})
 HistorianId = Int("HistorianId")
 HistorianBit = Bool("HistorianBit")
 HistIdIdx = Int("HistIdIdx")
