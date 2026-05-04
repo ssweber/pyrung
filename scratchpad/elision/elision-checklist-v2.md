@@ -103,7 +103,7 @@ Quick-reference for what to implement, in priority order. Each item says what it
   `event_drum` / `time_drum` outputs are constant functions of `current_step` by construction (pattern matrix). Dedicated abstract rule: all outputs → `depends_on_retained={current_step}`, `depends_on_entry=False`.
   *Effort: low.*
 
-- [x] **Init-guard constant detection**
+- [] **Init-guard constant detection**
   Tags written under `~InitDone` (where `InitDone` is write-once, never cleared) (or like values written as system. first_scan) are constants after scan 1. Don't merge with the disabled path. Treat post-init values as `const`.
   *Catches: block slots (dh[], ds[]) contaminating indirect reads with false entry-dependency.*
   *Effort: low-medium.*
