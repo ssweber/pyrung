@@ -33,7 +33,7 @@ build:
 	uv build
 
 bench:
-	uv run pyrung lock examples.packml_bench --profile bench.prof
+	uv run pyrung lock examples.packml_bench -o bench/pyrung.lock --profile bench/bench.prof
 
 # Improved Windows detection
 ifeq ($(OS),Windows_NT)
