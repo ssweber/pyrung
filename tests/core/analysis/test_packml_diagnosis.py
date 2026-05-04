@@ -18,12 +18,11 @@ from pyrung.core import (
     Or,
     Program,
     Rung,
+    call,
     copy,
     latch,
-    fall,
     rise,
     subroutine,
-    call,
 )
 from pyrung.core.analysis.prove import (
     Intractable,
@@ -53,8 +52,8 @@ class TestPackMLBaseline:
         missing = expected - values
         assert not missing, (
             f"StateCurrent stuck — missing states: "
-            f"{', '.join(f'{v} ({_STATE_LABELS.get(v, '?')})' for v in sorted(missing))}. "
-            f"Reached: {', '.join(f'{v} ({_STATE_LABELS.get(v, '?')})' for v in sorted(values))}"
+            f"{', '.join(f'{v} ({_STATE_LABELS.get(v, "?")})' for v in sorted(missing))}. "
+            f"Reached: {', '.join(f'{v} ({_STATE_LABELS.get(v, "?")})' for v in sorted(values))}"
         )
 
 

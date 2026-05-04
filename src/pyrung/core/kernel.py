@@ -134,8 +134,7 @@ class CompiledKernel:
             object.__setattr__(self, "_blocks_template", {})
         else:
             blocks_template: dict[str, list[bool | int | float | str]] = {
-                spec.symbol: [spec.default] * spec.size
-                for spec in self.block_specs.values()
+                spec.symbol: [spec.default] * spec.size for spec in self.block_specs.values()
             }
             object.__setattr__(self, "_blocks_template", blocks_template)
 

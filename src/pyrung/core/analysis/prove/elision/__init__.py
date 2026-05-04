@@ -83,7 +83,9 @@ def _run_elision_pipeline(
 # ---------------------------------------------------------------------------
 
 
-_ElisionCacheKey = tuple[frozenset[tuple[str, tuple[Any, ...]]], frozenset[tuple[str, tuple[Any, ...]]]]
+_ElisionCacheKey = tuple[
+    frozenset[tuple[str, tuple[Any, ...]]], frozenset[tuple[str, tuple[Any, ...]]]
+]
 ElisionCache = dict[_ElisionCacheKey, dict[str, tuple[Any, ...]]]
 
 

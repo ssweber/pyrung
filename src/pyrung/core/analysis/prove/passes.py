@@ -401,7 +401,8 @@ def _pass_diagnose_unwritten_tags(ctx: _PassContext) -> None:
 
     receive_dests = _collect_receive_dest_names(ctx.program)
     missing_external = sorted(
-        name for name in receive_dests
+        name
+        for name in receive_dests
         if name in ctx.graph.tags and not ctx.graph.tags[name].external
     )
 

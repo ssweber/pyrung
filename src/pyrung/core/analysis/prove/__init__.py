@@ -116,6 +116,7 @@ from .classify import (
 from .classify import (
     _pilot_sweep_domains as _pilot_sweep_domains,
 )
+from .elision import ElisionCache
 from .events import (
     _DoneEventSpec,
     _has_pending_hidden_event,
@@ -135,7 +136,6 @@ from .kernel import (
     _snapshot_kernel,
     _step_kernel,
 )
-from .elision import ElisionCache
 from .passes import (
     _DEFAULT_BFS_CONFIG,
     _BFSConfig,
