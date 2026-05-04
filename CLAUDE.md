@@ -40,6 +40,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - `make lint` — codespell, ruff (check + format), ty
 - `make test` — pytest (ALWAYS use this, not `uv run pytest`)
 - Conventional Commits (`feat(core):`, `fix(ladder):`, etc.)
+- `pyrung lock main --profile out.prof` — cProfile pstats dump; analyze with `pstats.Stats` or `uvx snakeviz out.prof`
 
 ### VS Code Extension (`editors/vscode/pyrung-debug/`)
 
@@ -54,7 +55,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 - **Scan cycle** (8 phases): start → apply patch → read inputs → pre-force → execute logic → post-force → write outputs → clock/snapshot
 - **Consumer-driven**: Engine never auto-runs. Consumer calls `step()`, `run()`, `run_for()`, `run_until()`, `scan_steps()`
 - **DSL**: Context managers for readable logic (`with Rung(Button): out(Light)`)
-- **Tags**: Named typed references (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`). No runtime state in tags — all values live in `SystemState.tags`
+- **Tags**: Named typed references (`Bool`, `Int`, `Dint`, `Real`, `Word`, `Char`). No runtime state in tags — all values live in `SystemState.tags`. Optional metadata: `choices`, `min`/`max`, `band` (predicate-based value grouping), `physical`/`link`, flags (`readonly`, `external`, `final`, `public`, `lock`)
 - **Structured tags**: `@udt()` for mixed-type structs, `@named_array()` for single-type interleaved arrays. Both support singleton and counted modes
 - **Blocks**: Named, typed, (typically) 1-indexed arrays for I/O and grouped memory (`Block`, `InputBlock`, `OutputBlock`)
 - **Hardware-agnostic core** with dialect modules layered on top (Click and CircuitPython implemented)
@@ -75,7 +76,7 @@ Click PLCs have no built-in simulator. pyrung lets you test first — write logi
 ### Analysis and Verification
 
 - **`prove(logic, condition)`** — exhaustively checks a property over all reachable states, with counterexample traces when it fails. Same condition syntax as `Rung()`. Returns `Proven`, `Counterexample` (replayable trace), or `Intractable`. Settles pending timers before evaluating, so timer-gated alarm paths don't produce false negatives
-- **Lock file workflow** — `reachable_states()` projects to `public` tags, `write_lock()` / `check_lock()` serialize to JSON. Behavioral diffs show up in PRs
+- **Lock file workflow** — `reachable_states()` projects to `lock=True` tags, `write_lock()` / `check_lock()` serialize to JSON. Choice labels resolved, `band` predicates collapse values to categories (post-BFS reduction only). Behavioral diffs show up in PRs
 - **`plc.dataview`** — chainable query API: `.inputs()`, `.pivots()`, `.terminals()`, `.upstream(tag)`, `.downstream(tag)`, `.physical_inputs()`, `.contains("cmd")`. Also available as `program.dataview()` for static use
 - **`plc.cause(tag)` / `plc.effect(tag)`** — causal chain analysis over scan history. Projected mode (`cause(tag, to=value)`) finds reachable paths or reports blockers. `plc.recovers(tag)` tests reachable clear paths
 - **`plc.query`** — whole-program surveys: `cold_rungs()`, `hot_rungs()`, `stranded_bits()`, `report()` for mergeable `CoverageReport`

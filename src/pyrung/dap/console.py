@@ -469,6 +469,8 @@ def _tag_annotations(detail: Any) -> str:
         flags.append("final")
     if detail.public:
         flags.append("public")
+    if detail.lock:
+        flags.append("lock")
     if flags:
         parts.append(", ".join(flags))
     range_parts = []
@@ -521,6 +523,8 @@ def _field_annotations(f: Any) -> str:
         flags.append("final")
     if f.public:
         flags.append("public")
+    if f.lock:
+        flags.append("lock")
     if flags:
         parts.append(", ".join(flags))
     range_parts = []

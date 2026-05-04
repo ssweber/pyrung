@@ -45,7 +45,9 @@ def test_build_program_graph_extracts_simple_roles() -> None:
     assert len(graph.rung_nodes) == 2
     assert graph.rung_nodes[0].condition_reads == frozenset({"StartButton"})
     assert graph.rung_nodes[0].data_reads == frozenset()
-    assert graph.rung_nodes[0].writes == frozenset({"RunMode"})
+    assert graph.rung_nodes[0].writes == frozenset(
+        {"RunMode", "fault.address_error", "fault.out_of_range"}
+    )
     assert graph.rung_nodes[1].condition_reads == frozenset({"RunMode"})
     assert graph.rung_nodes[1].writes == frozenset({"Conveyor"})
 
@@ -72,10 +74,12 @@ def test_embedded_timer_conditions_and_calc_reads_are_extracted() -> None:
 
     assert node.condition_reads == frozenset({"Enable", "Reset"})
     assert node.data_reads == frozenset({"Preset", "Scale"})
-    assert node.writes == frozenset({"PdgTimer_Acc", "PdgTimer_Done", "Result"})
+    assert node.writes == frozenset(
+        {"PdgTimer_Acc", "PdgTimer_Done", "Result", "fault.division_error", "fault.out_of_range"}
+    )
 
 
-def test_indirect_refs_keep_pointer_as_read_and_block_as_conservative_target() -> None:
+def test_indirect_ref_unbounded_pointer_does_not_expand() -> None:
     ds = Block("DS", TagType.INT, 1, 3)
     index = Int("Index")
     result = Int("Result")
@@ -88,9 +92,47 @@ def test_indirect_refs_keep_pointer_as_read_and_block_as_conservative_target() -
     graph = build_program_graph(prog)
     node = graph.rung_nodes[0]
 
-    assert {"DS1", "DS2", "DS3", "Index"} <= node.data_reads
-    assert {"DS1", "DS2", "DS3", "Result"} <= node.writes
+    assert "Index" in node.data_reads
+    assert "DS1" not in node.data_reads
+    assert "Result" in node.writes
+    assert "DS1" not in node.writes
     assert "Index" not in node.writes
+
+
+def test_indirect_ref_bounded_pointer_expands_to_range() -> None:
+    ds = Block("DS", TagType.INT, 1, 100)
+    index = Int("Index", min=5, max=10)
+    result = Int("Result")
+
+    with Program() as prog:
+        with Rung():
+            copy(ds[index], result)
+            copy(1, ds[index])
+
+    graph = build_program_graph(prog)
+    node = graph.rung_nodes[0]
+
+    assert {"DS5", "DS6", "DS7", "DS8", "DS9", "DS10", "Index"} <= node.data_reads
+    assert {"DS5", "DS6", "DS7", "DS8", "DS9", "DS10", "Result"} <= node.writes
+    assert "DS1" not in node.data_reads
+    assert "DS1" not in node.writes
+    assert "DS100" not in node.writes
+
+
+def test_indirect_ref_choices_pointer_expands_to_choices() -> None:
+    ds = Block("DS", TagType.INT, 1, 100)
+    index = Int("Index", choices={10: "A", 20: "B", 30: "C"})
+
+    with Program() as prog:
+        with Rung():
+            copy(1, ds[index])
+
+    graph = build_program_graph(prog)
+    node = graph.rung_nodes[0]
+
+    assert {"DS10", "DS20", "DS30"} <= node.writes
+    assert "DS1" not in node.writes
+    assert "DS100" not in node.writes
 
 
 def test_def_use_chain_tracks_write_then_next_rung_read() -> None:
@@ -279,6 +321,46 @@ def test_example_program_builds_graph_without_crashing(monkeypatch) -> None:
     assert graph.rung_nodes
     assert graph.tag_roles["StartBtn"] == TagRole.INPUT
     assert graph.tag_roles["Running"] == TagRole.PIVOT
+
+
+def test_build_program_graph_caches_on_program() -> None:
+    start_button = Bool("StartButton")
+    light = Bool("Light")
+
+    with Program() as prog:
+        with Rung(start_button):
+            out(light)
+
+    graph_a = build_program_graph(prog)
+    graph_b = build_program_graph(prog)
+
+    assert graph_a is graph_b
+    assert prog._cached_graph is graph_a
+
+
+def test_pointer_tag_scan_does_not_walk_program_backrefs() -> None:
+    ds = Block("DS", TagType.INT, 1, 10)
+    index = Int("Index", min=1, max=3)
+    result = Int("Result")
+
+    class _Poison:
+        def __getattribute__(self, name: str) -> object:
+            if name == "__dict__":
+                raise RuntimeError("pointer scan should not traverse program backrefs")
+            return object.__getattribute__(self, name)
+
+    with Program() as prog:
+        with Rung():
+            call("worker")
+        with subroutine("worker"):
+            with Rung():
+                copy(ds[index], result)
+
+    prog._poison = _Poison()
+
+    graph = build_program_graph(prog)
+
+    assert graph.pointer_tags == {"Index": ("DS", 1, 10)}
 
 
 def test_walker_uses_declared_instruction_fields_without_unknowns() -> None:

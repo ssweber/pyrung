@@ -56,9 +56,11 @@ elif isinstance(result, Counterexample):
 elif isinstance(result, Intractable):
     print(result.reason)  # "unbounded domain on Pressure"
     print(result.tags)    # ["Pressure"] — add choices or min/max
+    for hint in result.hints:
+        print(hint)       # "Pressure: 65536 values (Int, no choices/min/max)"
 ```
 
-`Intractable` means the state space is too large. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
+`Intractable` means the state space is too large. The `hints` list describes the largest dimensions — which tags are blowing up the state space and why. The fix is usually adding `choices` or `min`/`max` metadata to the unbounded tags — the same metadata you'd declare anyway for Data View dropdowns and static validation.
 
 ### Scoping
 
@@ -76,7 +78,7 @@ The verifier classifies every tag into one of three roles:
 
 - **Combinational** — OTE-only writes, derived from inputs each scan. Not a state dimension.
 - **Stateful** — latch/reset, timer/counter, copy, calc. Tracked in the visited set.
-- **Nondeterministic** — external inputs. Enumerated at each state.
+- **Nondeterministic** — external inputs. Enumerated at each state. `InputBlock` tags (e.g., `x[1]`) are automatically nondeterministic. Semantic tags mapped to input banks via `TagMap` are also auto-detected (see [Click dialect](../dialects/click.md#tagmap--mapping-to-hardware)).
 
 Value domains come from the expression tree: comparison literals in conditions, `choices` metadata, `min`/`max` bounds. A tag compared against `== 1` and `== 2` gets domain `{1, 2, unmatched}` — three values instead of 65K.
 
@@ -151,15 +153,17 @@ pyrung lock my_program        # compute reachable states, write pyrung.lock
 pyrung check my_program       # recompute, diff against pyrung.lock, exit 1 if changed
 ```
 
-The lock projects to terminal tags by default — physical outputs in well-structured ladder. Override with `--project`:
+The lock projects to tags marked `lock=True` by default — the outputs that define your program's observable behavior. Programs using Click `TagMap` get this automatically (output-mapped tags are stamped `lock=True`). Programs without `TagMap` need explicit `lock=True` on output tags, or use `__lock__` or `--project`:
 
 ```bash
 pyrung lock my_program --project Running MotorOut StatusLight
 ```
 
+Tags with `choices=` metadata get their labels in the lock file instead of raw integers — `"FAST"` instead of `2`. Tags with `band=` metadata collapse numeric values into categorical labels — see [Bands](#bands--collapsing-numeric-values-into-categories) below.
+
 ### `__lock__` — per-module projection override
 
-For programs where the terminal default misses something (a pivot that matters behaviorally) or includes something cosmetic, define `__lock__` at module level:
+For programs where the `lock=True` default misses something (a pivot that matters behaviorally) or includes something cosmetic, define `__lock__` at module level:
 
 ```python
 __lock__ = {
@@ -168,9 +172,10 @@ __lock__ = {
 }
 ```
 
-- `include` adds tags the terminal default misses.
-- `exclude` drops tags the terminal default includes.
-- Both keys are optional. Most programs won't need `__lock__` at all.
+- `include` adds tags the default misses.
+- `exclude` drops tags the default includes.
+- `group` declares correlated input groups (see below).
+- All keys are optional. Most programs won't need `__lock__` at all.
 - `--project` on the CLI still overrides everything for one-off checks.
 
 Common patterns:
@@ -188,12 +193,49 @@ __lock__ = {
 }
 ```
 
+### Bands — collapsing numeric values into categories
+
+The `band` attribute maps ranges of concrete values to categorical labels in the lock file output. Band metadata is purely a post-processing reduction — it is not used during BFS exploration or `prove()`:
+
+```python
+AlarmExtent = Int("AlarmExtent", lock=True, band={"ZERO": 0, "POSITIVE": "> 0"})
+```
+
+In the lock file, `AlarmExtent=3` becomes `AlarmExtent="POSITIVE"`. The lock captures *which band* the value falls into, not the exact number — so adding a new alarm source doesn't change the lock file as long as the alarm extent stays positive.
+
+Band predicates:
+
+| Predicate | Matches |
+|-----------|---------|
+| `0` | Exact value 0 |
+| `"*"` | Any value (wildcard) |
+| `">= 100"` | Comparison (supports `==`, `!=`, `>`, `>=`, `<`, `<=`) |
+| `"0..10"` | Inclusive range |
+
+Predicates are checked in declaration order — the first match wins. Use `"*"` as a catch-all last entry.
+
+### Input groups — joint multi-flip inputs
+
+Single-flip BFS only changes one input per successor state. The `group` key in `__lock__` declares groups whose members are additionally explored jointly — the BFS generates multi-flip combinations on top of the normal single-flip successors.
+
+```python
+__lock__ = {
+    "group": {
+        "panel": ["SwitchA", "SwitchB"],
+    },
+}
+```
+
+Also available programmatically via `input_groups=` on `reachable_states()` and `prove()`.
+
+It's generally unwise to ship logic that depends on multiple inputs changing in the exact same scan cycle — real-world I/O doesn't change atomically. If the verifier only finds a property violation via a multi-flip path, that's usually a signal the logic needs fixing, not that single-flip is too conservative.
+
 ### Three levels of lock
 
 **Lock everything** — full state space equality. For purely cosmetic refactoring (renaming tags, reordering rungs that don't interact). Any behavioral change is flagged.
 
 ```python
-states = reachable_states(logic)  # default: terminal tags
+states = reachable_states(logic)  # default: lock=True tags
 ```
 
 **Lock I/O** — project to inputs and terminals only. For restructuring internal logic where pivots can change freely.
@@ -223,13 +265,13 @@ diff   = diff_states(before, after)
 assert not diff.added and not diff.removed  # behavioral equivalence
 ```
 
-In a PR, the lock file diff tells the story:
+In a PR, the lock file diff tells the story. States omit `false` values — each entry reads as "what's ON":
 
 ```diff
   "reachable": [
-    {"Conv_Motor": false, "Running": false},
-    {"Conv_Motor": true,  "Running": true},
-+   {"Conv_Motor": true,  "Running": false}
+    {},
+    {"Conv_Motor": true, "Running": true},
++   {"Conv_Motor": true}
   ]
 ```
 
@@ -256,10 +298,14 @@ pyrung lock <module>              # write pyrung.lock
 pyrung lock <module> -o out.lock  # custom output path
 pyrung lock <module> --project Running MotorOut  # explicit projection
 pyrung lock <module> --max-depth 100             # deeper BFS
+pyrung lock <module> --profile out.prof          # write cProfile stats
 
 pyrung check <module>             # diff against pyrung.lock, exit 1 on change
 pyrung check <module> --lock custom.lock         # custom lock path
+pyrung check <module> --profile out.prof         # write cProfile stats
 ```
+
+`--profile` dumps cProfile stats even on `KeyboardInterrupt`. Analyze with `pstats.Stats("out.prof")` or `uvx snakeviz out.prof`.
 
 The `<module>` argument is a Python module path (e.g., `my_program` or `examples.conveyor`). The module must contain a `Program` instance.
 

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.11 or later
+- Python 3.12 or later
 
 ## Install
 

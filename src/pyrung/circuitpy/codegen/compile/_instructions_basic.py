@@ -35,6 +35,7 @@ from ._core import _get_condition_snapshot, compile_condition
 from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
+    _compile_lvalue,
     _compile_set_out_of_range_fault_body,
     _compile_target_write_lines,
     _compile_value,
@@ -117,12 +118,13 @@ def _compile_call_instruction(
 ) -> list[str]:
     sp = " " * indent
     fn = _subroutine_symbol(instr.subroutine_name)
+    call_expr = f"{fn}(tags, _mem, _prev, dt)" if ctx.blockless else f"{fn}()"
     enabled_literal = _bool_literal(enabled_expr)
     if enabled_literal is False:
         return []
     if enabled_literal is True:
-        return [f"{sp}{fn}()"]
-    return [f"{sp}if {enabled_expr}:", f"{sp}    {fn}()"]
+        return [f"{sp}{call_expr}"]
+    return [f"{sp}if {enabled_expr}:", f"{sp}    {call_expr}"]
 
 
 def _compile_return_instruction(enabled_expr: str, indent: int) -> list[str]:
@@ -141,8 +143,9 @@ def _compile_on_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done = ctx.symbol_for_tag(instr.done_bit)
-    acc = ctx.symbol_for_tag(instr.accumulator)
+    done_write = _compile_lvalue(instr.done_bit, ctx)
+    acc_read = _compile_value(instr.accumulator, ctx)
+    acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
@@ -160,8 +163,8 @@ def _compile_on_delay_instruction(
             [
                 f"{sp}if {reset_expr}:",
                 f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-                f"{' ' * (indent + 4)}{done} = False",
-                f"{' ' * (indent + 4)}{acc} = 0",
+                f"{' ' * (indent + 4)}{done_write} = False",
+                f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
             ]
         )
@@ -173,15 +176,15 @@ def _compile_on_delay_instruction(
         [
             f"{isp}if {enabled_expr}:",
             f'{" " * (inner + 4)}_dt = float(_mem.get("_dt", 0.0))',
-            f"{' ' * (inner + 4)}_acc = int({acc})",
+            f"{' ' * (inner + 4)}_acc = int({acc_read})",
             f"{' ' * (inner + 4)}_dt_units = {unit_expr}",
             f"{' ' * (inner + 4)}_int_units = int(_dt_units)",
             f"{' ' * (inner + 4)}_new_frac = _dt_units - _int_units",
             f"{' ' * (inner + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
             f"{' ' * (inner + 4)}_preset = int({preset})",
             f'{" " * (inner + 4)}_mem["{frac_key}"] = _new_frac',
-            f"{' ' * (inner + 4)}{done} = (_acc >= _preset)",
-            f"{' ' * (inner + 4)}{acc} = _acc",
+            f"{' ' * (inner + 4)}{done_write} = (_acc >= _preset)",
+            f"{' ' * (inner + 4)}{acc_write} = _acc",
         ]
     )
     if not instr.has_reset:
@@ -189,8 +192,8 @@ def _compile_on_delay_instruction(
             [
                 f"{isp}else:",
                 f'{" " * (inner + 4)}_mem["{frac_key}"] = 0.0',
-                f"{' ' * (inner + 4)}{done} = False",
-                f"{' ' * (inner + 4)}{acc} = 0",
+                f"{' ' * (inner + 4)}{done_write} = False",
+                f"{' ' * (inner + 4)}{acc_write} = 0",
             ]
         )
     return lines
@@ -202,8 +205,9 @@ def _compile_off_delay_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done = ctx.symbol_for_tag(instr.done_bit)
-    acc = ctx.symbol_for_tag(instr.accumulator)
+    done_write = _compile_lvalue(instr.done_bit, ctx)
+    acc_read = _compile_value(instr.accumulator, ctx)
+    acc_write = _compile_lvalue(instr.accumulator, ctx)
     frac_key = f"_frac:{instr.accumulator.name}"
     preset = _compile_value(instr.preset, ctx)
     unit_expr = _timer_dt_to_units_expr(instr.unit, "_dt", "_frac")
@@ -214,19 +218,19 @@ def _compile_off_delay_instruction(
         f'{sp}_frac = float(_mem.get("{frac_key}", 0.0))',
         f"{sp}if {enabled_expr}:",
         f'{" " * (indent + 4)}_mem["{frac_key}"] = 0.0',
-        f"{' ' * (indent + 4)}{done} = True",
-        f"{' ' * (indent + 4)}{acc} = 0",
+        f"{' ' * (indent + 4)}{done_write} = True",
+        f"{' ' * (indent + 4)}{acc_write} = 0",
         f"{sp}else:",
         f'{" " * (indent + 4)}_dt = float(_mem.get("_dt", 0.0))',
-        f"{' ' * (indent + 4)}_acc = int({acc})",
+        f"{' ' * (indent + 4)}_acc = int({acc_read})",
         f"{' ' * (indent + 4)}_dt_units = {unit_expr}",
         f"{' ' * (indent + 4)}_int_units = int(_dt_units)",
         f"{' ' * (indent + 4)}_new_frac = _dt_units - _int_units",
         f"{' ' * (indent + 4)}_acc = min(_acc + _int_units, {_INT_MAX})",
         f"{' ' * (indent + 4)}_preset = int({preset})",
         f'{" " * (indent + 4)}_mem["{frac_key}"] = _new_frac',
-        f"{' ' * (indent + 4)}{done} = (_acc < _preset)",
-        f"{' ' * (indent + 4)}{acc} = _acc",
+        f"{' ' * (indent + 4)}{done_write} = (_acc < _preset)",
+        f"{' ' * (indent + 4)}{acc_write} = _acc",
     ]
 
 
@@ -236,8 +240,9 @@ def _compile_count_up_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done = ctx.symbol_for_tag(instr.done_bit)
-    acc = ctx.symbol_for_tag(instr.accumulator)
+    done_write = _compile_lvalue(instr.done_bit, ctx)
+    acc_read = _compile_value(instr.accumulator, ctx)
+    acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset = _compile_value(instr.preset, ctx)
     sp = " " * indent
     lines: list[str] = []
@@ -248,8 +253,8 @@ def _compile_count_up_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done} = False",
-                f"{' ' * (indent + 4)}{acc} = 0",
+                f"{' ' * (indent + 4)}{done_write} = False",
+                f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
             ]
         )
@@ -259,7 +264,7 @@ def _compile_count_up_instruction(
     isp = " " * inner
     lines.extend(
         [
-            f"{' ' * inner}_acc = int({acc})",
+            f"{' ' * inner}_acc = int({acc_read})",
             f"{' ' * inner}_delta = 0",
             f"{isp}if {enabled_expr}:",
             f"{' ' * (inner + 4)}_delta += 1",
@@ -279,8 +284,8 @@ def _compile_count_up_instruction(
         [
             f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc + _delta))",
             f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done} = (_acc >= _preset)",
-            f"{' ' * inner}{acc} = _acc",
+            f"{' ' * inner}{done_write} = (_acc >= _preset)",
+            f"{' ' * inner}{acc_write} = _acc",
         ]
     )
     return lines
@@ -292,8 +297,9 @@ def _compile_count_down_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    done = ctx.symbol_for_tag(instr.done_bit)
-    acc = ctx.symbol_for_tag(instr.accumulator)
+    done_write = _compile_lvalue(instr.done_bit, ctx)
+    acc_read = _compile_value(instr.accumulator, ctx)
+    acc_write = _compile_lvalue(instr.accumulator, ctx)
     preset = _compile_value(instr.preset, ctx)
     sp = " " * indent
     lines: list[str] = []
@@ -304,8 +310,8 @@ def _compile_count_down_instruction(
         lines.extend(
             [
                 f"{sp}if {reset_expr}:",
-                f"{' ' * (indent + 4)}{done} = False",
-                f"{' ' * (indent + 4)}{acc} = 0",
+                f"{' ' * (indent + 4)}{done_write} = False",
+                f"{' ' * (indent + 4)}{acc_write} = 0",
                 f"{sp}else:",
             ]
         )
@@ -315,13 +321,13 @@ def _compile_count_down_instruction(
     isp = " " * inner
     lines.extend(
         [
-            f"{' ' * inner}_acc = int({acc})",
+            f"{' ' * inner}_acc = int({acc_read})",
             f"{isp}if {enabled_expr}:",
             f"{' ' * (inner + 4)}_acc -= 1",
             f"{' ' * inner}_acc = max({_DINT_MIN}, min({_DINT_MAX}, _acc))",
             f"{' ' * inner}_preset = int({preset})",
-            f"{' ' * inner}{done} = (_acc <= -_preset)",
-            f"{' ' * inner}{acc} = _acc",
+            f"{' ' * inner}{done_write} = (_acc <= -_preset)",
+            f"{' ' * inner}{acc_write} = _acc",
         ]
     )
     return lines

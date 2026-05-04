@@ -212,6 +212,30 @@ with Rung(OvenTimer.Done):
     out(AlarmLight)
 ```
 
+### Input inference
+
+When a tag is mapped to an input bank (`x` or `xd`), `TagMap` automatically marks it `external=True`. This tells the verifier that the tag's value comes from outside the ladder — `prove()` and `pyrung lock` will treat it as a nondeterministic input without requiring you to declare `external=True` yourself.
+
+```python
+StartButton = Bool("StartButton")          # external=False initially
+mapping = TagMap({StartButton: x[1]})
+assert StartButton.external                # now True — stamped by TagMap
+```
+
+Tags mapped to output or memory banks (`y`, `c`, `ds`, etc.) are not stamped `external`. Tags that are `readonly` are skipped — `readonly` and `external` are mutually exclusive.
+
+### Output inference
+
+When a tag is mapped to an output bank (`y` or `yd`), `TagMap` automatically marks it `lock=True`. This includes the tag in the default `pyrung lock` projection, so physical outputs are tracked in the lock file without requiring you to declare `lock=True` yourself.
+
+```python
+MotorOut = Bool("MotorOut")                    # lock=False initially
+mapping = TagMap({MotorOut: y[1]})
+assert MotorOut.lock                           # now True — stamped by TagMap
+```
+
+Tags mapped to input or memory banks (`x`, `c`, `ds`, etc.) are not affected.
+
 ### Type validation at map time
 
 `TagMap` validates that logical and hardware data types match:
@@ -249,6 +273,8 @@ The comment field on CSV rows carries block and structure boundaries. Three mark
 | Self-closing | `<Config.timeout:udt />` | Single-row semantic marker |
 
 Bare tags are grouping-only comments: `<Alarms>`, `</Alarms>`, `<Base.field>`, and `<Base.field />` do not reconstruct pyrung semantics. They simply group rows visually, and any inner nicknames import as ordinary standalone tags.
+
+Bracket metadata can appear alongside markers or ordinary comments. It preserves tag flags, choices, range bounds, units, and physical annotations through nickname CSV import/export. For int-backed boolean values in register memory, use the built-in shorthand `[choices=Bool]` instead of spelling out `[choices=False:0|True:1]`.
 
 **Plain blocks** use explicit `:block` markers: `<Alarms:block>` / `</Alarms:block>`. If the logical start differs from the inferred default, export/import uses `<Alarms:block(n)>` or `<Alarms:block(start=n)>`. If a boundary row has a blank nickname, default retentive/default value, and its comment is only the block tag, pyrung treats that row as boundary metadata rather than a slot rename/config override.
 

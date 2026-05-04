@@ -25,6 +25,7 @@ ALL_RULES: frozenset[str] = frozenset(
         "CORE_CONFLICTING_OUTPUT",
         "CORE_FINAL_MULTIPLE_WRITERS",
         "CORE_MISSING_PROFILE",
+        "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
         "CORE_RANGE_VIOLATION",
         "CORE_READONLY_WRITE",
         "CORE_STUCK_HIGH",
@@ -94,6 +95,7 @@ def validate(
     from pyrung.core.validation.duplicate_out import validate_conflicting_outputs
     from pyrung.core.validation.final_writers import validate_final_writers
     from pyrung.core.validation.physical_realism import validate_physical_realism
+    from pyrung.core.validation.pointer_default import validate_pointer_defaults
     from pyrung.core.validation.readonly_write import validate_readonly_writes
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
 
@@ -109,6 +111,9 @@ def validate(
 
     if "CORE_READONLY_WRITE" in active:
         findings.extend(validate_readonly_writes(program).findings)
+
+    if "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START" in active:
+        findings.extend(validate_pointer_defaults(program).findings)
 
     if "CORE_CHOICES_VIOLATION" in active:
         findings.extend(validate_choices(program).findings)

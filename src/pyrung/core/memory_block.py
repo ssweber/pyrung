@@ -45,6 +45,7 @@ class _SlotHints(NamedTuple):
     external: bool
     final: bool
     public: bool
+    lock: bool
     physical: Physical | None = None
     link: str | None = None
     min: int | float | None = None
@@ -103,6 +104,10 @@ class SlotView:
         return self._block._effective_slot_hints(self._addr).public
 
     @property
+    def lock(self) -> bool:
+        return self._block._effective_slot_hints(self._addr).lock
+
+    @property
     def physical(self) -> Physical | None:
         return self._block._effective_slot_hints(self._addr).physical
 
@@ -159,6 +164,10 @@ class SlotView:
         return self._addr in self._block._slot_public_overrides
 
     @property
+    def lock_overridden(self) -> bool:
+        return self._addr in self._block._slot_lock_overrides
+
+    @property
     def physical_overridden(self) -> bool:
         return self._addr in self._block._slot_physical_overrides
 
@@ -190,6 +199,7 @@ class SlotView:
         self._block._slot_external_overrides.pop(self._addr, None)
         self._block._slot_final_overrides.pop(self._addr, None)
         self._block._slot_public_overrides.pop(self._addr, None)
+        self._block._slot_lock_overrides.pop(self._addr, None)
         self._block._slot_physical_overrides.pop(self._addr, None)
         self._block._slot_link_overrides.pop(self._addr, None)
         self._block._slot_min_overrides.pop(self._addr, None)
@@ -308,6 +318,7 @@ class Block:
     _slot_external_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_final_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_public_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
+    _slot_lock_overrides: dict[int, bool] = field(default_factory=dict, repr=False)
     _slot_physical_overrides: dict[int, Physical | None] = field(default_factory=dict, repr=False)
     _slot_link_overrides: dict[int, str | None] = field(default_factory=dict, repr=False)
     _slot_min_overrides: dict[int, int | float | None] = field(default_factory=dict, repr=False)
@@ -324,6 +335,7 @@ class Block:
     _pyrung_field_external: bool = field(default=False, init=False, repr=False)
     _pyrung_field_final: bool = field(default=False, init=False, repr=False)
     _pyrung_field_public: bool = field(default=False, init=False, repr=False)
+    _pyrung_field_lock: bool = field(default=False, init=False, repr=False)
     _pyrung_field_physical: Physical | None = field(default=None, init=False, repr=False)
     _pyrung_field_link: str | None = field(default=None, init=False, repr=False)
     _pyrung_field_min: int | float | None = field(default=None, init=False, repr=False)
@@ -409,6 +421,7 @@ class Block:
                 external=hints.external,
                 final=hints.final,
                 public=hints.public,
+                lock=hints.lock,
                 physical=hints.physical,
                 link=hints.link,
                 min=hints.min,
@@ -429,6 +442,7 @@ class Block:
         external: bool,
         final: bool,
         public: bool,
+        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -446,6 +460,7 @@ class Block:
             external=external,
             final=final,
             public=public,
+            lock=lock,
             physical=physical,
             link=link,
             min=min,
@@ -455,6 +470,8 @@ class Block:
         return self._annotate_tag(tag, addr)
 
     def _annotate_tag(self, tag: LiveTag, addr: int) -> LiveTag:
+        object.__setattr__(tag, "_pyrung_block", self)
+        object.__setattr__(tag, "_pyrung_block_addr", addr)
         runtime = self._pyrung_structure_runtime
         if runtime is None:
             return tag
@@ -516,6 +533,11 @@ class Block:
         else:
             public = self._pyrung_field_public
 
+        if addr in self._slot_lock_overrides:
+            lock = self._slot_lock_overrides[addr]
+        else:
+            lock = self._pyrung_field_lock
+
         if addr in self._slot_physical_overrides:
             physical = self._slot_physical_overrides[addr]
         else:
@@ -542,7 +564,7 @@ class Block:
             uom = self._pyrung_field_uom
 
         return _SlotHints(
-            choices, readonly, external, final, public, physical, link, min_val, max_val, uom
+            choices, readonly, external, final, public, lock, physical, link, min_val, max_val, uom
         )
 
     def _assert_not_materialized(self, addr: int, *, action: str) -> None:
@@ -603,6 +625,7 @@ class Block:
         external: object = UNSET,
         final: object = UNSET,
         public: object = UNSET,
+        lock: object = UNSET,
         physical: object = UNSET,
         link: object = UNSET,
         min: object = UNSET,
@@ -648,6 +671,7 @@ class Block:
             or external is not UNSET
             or final is not UNSET
             or public is not UNSET
+            or lock is not UNSET
             or physical is not UNSET
             or link is not UNSET
             or min is not UNSET
@@ -685,6 +709,8 @@ class Block:
                 self._slot_final_overrides[addr] = bool(final)
             if public is not UNSET:
                 self._slot_public_overrides[addr] = bool(public)
+            if lock is not UNSET:
+                self._slot_lock_overrides[addr] = bool(lock)
             if physical is not UNSET:
                 self._slot_physical_overrides[addr] = cast(Physical | None, physical)
             if link is not UNSET:
@@ -931,6 +957,7 @@ class InputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
+        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -948,6 +975,7 @@ class InputBlock(Block):
             external=external,
             final=final,
             public=public,
+            lock=lock,
             physical=physical,
             link=link,
             min=min,
@@ -1035,6 +1063,7 @@ class OutputBlock(Block):
         external: bool,
         final: bool,
         public: bool,
+        lock: bool,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -1052,6 +1081,7 @@ class OutputBlock(Block):
             external=external,
             final=final,
             public=public,
+            lock=lock,
             physical=physical,
             link=link,
             min=min,

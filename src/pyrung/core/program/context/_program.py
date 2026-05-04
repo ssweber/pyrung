@@ -62,6 +62,8 @@ class Program:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         Program._active = None
+        if exc_type is None:
+            self._validate_call_targets()
 
     def _invalidate_graph_cache(self) -> None:
         self._cached_graph = None
@@ -96,6 +98,49 @@ class Program:
     def _end_subroutine(self) -> None:
         """End subroutine definition."""
         self._current_subroutine = None
+
+    def _iter_call_instructions(self):
+        """Yield all CallInstruction instances in main rungs and subroutines."""
+        from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
+
+        def _from_instructions(instructions: list[Any]):
+            for instruction in instructions:
+                if isinstance(instruction, CallInstruction):
+                    yield instruction
+                if isinstance(instruction, ForLoopInstruction) and hasattr(
+                    instruction, "instructions"
+                ):
+                    yield from _from_instructions(instruction.instructions)
+
+        def _from_rung(rung: RungLogic):
+            yield from _from_instructions(rung._instructions)
+            for branch in rung._branches:
+                yield from _from_rung(branch)
+
+        for rung in self.rungs:
+            yield from _from_rung(rung)
+        for subroutine_rungs in self.subroutines.values():
+            for rung in subroutine_rungs:
+                yield from _from_rung(rung)
+
+    def _validate_call_targets(self) -> None:
+        """Raise if any call() targets refer to undefined subroutines."""
+        for instruction in self._iter_call_instructions():
+            if instruction.subroutine_name in self.subroutines:
+                continue
+
+            location = ""
+            source_file = getattr(instruction, "source_file", None)
+            source_line = getattr(instruction, "source_line", None)
+            if source_file and source_line:
+                location = f" at {source_file}:{source_line}"
+            elif source_line:
+                location = f" at line {source_line}"
+
+            raise KeyError(
+                f"Subroutine '{instruction.subroutine_name}' not defined"
+                f" (referenced by call(){location})"
+            )
 
     def _call_subroutine_ctx(self, name: str, ctx: ScanContext) -> None:
         """Execute a subroutine by name within a ScanContext."""

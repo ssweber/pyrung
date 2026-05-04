@@ -169,7 +169,7 @@ WideSlot = Slot.clone("WideSlot", stride=5)
 BinACounter = Counter.clone("BinACounter", public=True)
 ```
 
-Available flags: `readonly`, `external`, `final`, `public`. See [Tag flags](#tag-flags) for details.
+Available flags: `readonly`, `external`, `final`, `public`, `lock`. See [Tag flags](#tag-flags) for details.
 
 Use case: define a template structure once, clone it for each subsystem.
 
@@ -263,7 +263,7 @@ ds.slot(20, 30).reset()    # Clear all overrides for range 20–30
 
 ## Tag flags
 
-Tags carry metadata flags that control validation and presentation. Three semantic flags are enforced by static validators; one presentation flag controls Data View visibility.
+Tags carry metadata flags that control validation, presentation, and lock file projection. Three semantic flags are enforced by static validators; two metadata flags control presentation and verification.
 
 ### Semantic flags
 
@@ -281,16 +281,19 @@ FilteredVal   = Int("FilteredVal", final=True)         # exactly one writer
 
 Mutual exclusivity: `readonly` + `final` and `readonly` + `external` raise `ValueError` at construction. `external` + `final` is allowed (one ladder writer plus external writers).
 
-### Presentation flag
+### Metadata flags
 
 ```python
 Running = Bool("Running", public=True)         # operator-facing status
 State   = Int("State", choices=SortState, public=True)
+MotorOut = Bool("MotorOut", lock=True)          # tracked in lock file
 ```
 
 **`public`** — part of the intended API surface. Setpoints, mode commands, alarms, key status bits. The VS Code Data View shows a **P** badge and provides a **Public** filter checkbox to hide plumbing tags. No validator consequence.
 
 The absence of `public` means plumbing — not hidden, not forbidden, just not the featured interface. Same convention as Python's `foo` vs `_foo`.
+
+**`lock`** — included in the default `pyrung lock` projection. Tags with `lock=True` define the behavioral contract tracked by the lock file. Unlike the semantic flags, `lock` has no validation constraints and no mutual exclusivity — it can combine freely with any other flag. Programs using Click `TagMap` get this automatically: output-mapped tags are stamped `lock=True` at construction.
 
 ### Flags on structures
 
@@ -323,5 +326,9 @@ All flags round-trip through the Click nickname CSV comment parser using bracket
 [external]
 [final]
 [public]
+[lock]
 [readonly, choices=Off:0|On:1]
+[choices=Bool]
 ```
+
+Use `[choices=Bool]` for int-backed boolean fields stored in Click register memory. It round-trips as the same metadata as `choices={0: "False", 1: "True"}` and replaces the longer `[choices=False:0|True:1]` spelling on export.

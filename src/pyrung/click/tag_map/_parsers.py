@@ -46,6 +46,12 @@ _EXPLICIT_BLOCK_START_RE = re.compile(
 _TAG_META_GROUP_RE = re.compile(r"\[[^\[\]]*\]")
 _CHOICE_LABEL_RE = re.compile(r"^[A-Za-z0-9_ ]+$")
 _CHOICE_VALUE_RE = re.compile(r"^[^:,\|\[\]]+$")
+_BOOL_CHOICE_PRESET: ChoiceMap = {0: "False", 1: "True"}
+_CHOICE_PRESETS: dict[str, ChoiceMap] = {
+    "Bool": _BOOL_CHOICE_PRESET,
+    "bool": _BOOL_CHOICE_PRESET,
+    "BOOL": _BOOL_CHOICE_PRESET,
+}
 
 
 @dataclass(frozen=True)
@@ -55,6 +61,7 @@ class TagMeta:
     external: bool = False
     final: bool = False
     public: bool = False
+    lock: bool = False
     link: str | None = None
     physical: str | None = None
     on_delay: str | None = None
@@ -416,6 +423,8 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     text = raw.strip()
     if text == "":
         raise ValueError("TagMeta choices must not be empty.")
+    if text in _CHOICE_PRESETS:
+        return dict(_CHOICE_PRESETS[text])
 
     choices: ChoiceMap = {}
     for pair in text.split("|"):
@@ -430,7 +439,7 @@ def _parse_tag_meta_choices(raw: str) -> ChoiceMap:
     return choices
 
 
-_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public"})
+_BOOL_FLAG_TOKENS = frozenset({"readonly", "external", "final", "public", "lock"})
 _VALUE_TOKENS = frozenset(
     {"link", "physical", "on_delay", "off_delay", "profile", "system", "min", "max", "uom"}
 )
@@ -516,6 +525,7 @@ def _parse_tag_meta_group(content: str) -> TagMeta | None:
         external=flags.get("external", False),
         final=flags.get("final", False),
         public=flags.get("public", False),
+        lock=flags.get("lock", False),
         link=link,
         physical=physical,
         on_delay=on_delay,
@@ -538,6 +548,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
     external = False
     final = False
     public = False
+    lock = False
     link: str | None = None
     physical: str | None = None
     on_delay: str | None = None
@@ -559,6 +570,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
             external = external or parsed.external
             final = final or parsed.final
             public = public or parsed.public
+            lock = lock or parsed.lock
             if parsed.link is not None:
                 link = parsed.link
             if parsed.physical is not None:
@@ -597,6 +609,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         and not external
         and not final
         and not public
+        and not lock
         and link is None
         and physical is None
         and on_delay is None
@@ -614,6 +627,7 @@ def parse_tag_meta(comment: str) -> tuple[TagMeta | None, str]:
         external=external,
         final=final,
         public=public,
+        lock=lock,
         link=link,
         physical=physical,
         on_delay=on_delay,
@@ -633,6 +647,7 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         and not meta.external
         and not meta.final
         and not meta.public
+        and not meta.lock
         and meta.link is None
         and meta.physical is None
         and meta.on_delay is None
@@ -654,6 +669,8 @@ def format_tag_meta(meta: TagMeta | None) -> str:
         tokens.append("final")
     if meta.public:
         tokens.append("public")
+    if meta.lock:
+        tokens.append("lock")
     if meta.link is not None:
         if _CHOICE_VALUE_RE.fullmatch(meta.link) is None:
             raise ValueError(f"Invalid TagMeta link value {meta.link!r}.")
@@ -687,15 +704,18 @@ def format_tag_meta(meta: TagMeta | None) -> str:
             raise ValueError(f"Invalid TagMeta uom value {meta.uom!r}.")
         tokens.append(f"uom={meta.uom}")
     if meta.choices is not None:
-        pairs: list[str] = []
-        for value, label in meta.choices.items():
-            if _CHOICE_LABEL_RE.fullmatch(label) is None:
-                raise ValueError(f"Invalid TagMeta choice label {label!r}.")
-            value_text = str(value)
-            if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
-                raise ValueError(f"Invalid TagMeta choice value {value!r}.")
-            pairs.append(f"{label}:{value_text}")
-        tokens.append(f"choices={'|'.join(pairs)}")
+        if meta.choices == _BOOL_CHOICE_PRESET:
+            tokens.append("choices=Bool")
+        else:
+            pairs: list[str] = []
+            for value, label in meta.choices.items():
+                if _CHOICE_LABEL_RE.fullmatch(label) is None:
+                    raise ValueError(f"Invalid TagMeta choice label {label!r}.")
+                value_text = str(value)
+                if _CHOICE_VALUE_RE.fullmatch(value_text) is None:
+                    raise ValueError(f"Invalid TagMeta choice value {value!r}.")
+                pairs.append(f"{label}:{value_text}")
+            tokens.append(f"choices={'|'.join(pairs)}")
     return f"[{', '.join(tokens)}]"
 
 

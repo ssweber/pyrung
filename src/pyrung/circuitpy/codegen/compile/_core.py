@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pyrung.circuitpy.codegen._constants import _FAULT_DIVISION_ERROR_TAG
@@ -70,8 +71,10 @@ from pyrung.core.instruction.send_receive import (
     ModbusReceiveInstruction,
     ModbusSendInstruction,
 )
+from pyrung.core.memory_block import BlockRange, IndirectBlockRange, IndirectExprRef, IndirectRef
 from pyrung.core.rung import Rung as LogicRung
 from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.validation.walker import _condition_children
 
 from ._primitives import (
     _calc_store_expr,
@@ -81,6 +84,7 @@ from ._primitives import (
     _compile_indirect_value,
     _compile_set_out_of_range_fault_body,
     _compile_value,
+    _snapshot_tag_symbol,
 )
 
 
@@ -139,65 +143,356 @@ def _collect_helper_conditions(
     return result
 
 
-def compile_condition(cond: Condition, ctx: CodegenContext) -> str:
+@dataclass(frozen=True)
+class _ConditionSnapshotBindings:
+    scalar_symbols: dict[str, str]
+    block_symbols: dict[int, str]
+
+
+def _collect_snapshot_refs(
+    value: Any,
+    ctx: CodegenContext,
+    *,
+    scalar_tags: set[str],
+    block_ids: set[int],
+    seen: set[int],
+) -> None:
+    if value is None or isinstance(value, (bool, int, float, str, bytes, bytearray)):
+        return
+
+    value_id = id(value)
+    if value_id in seen:
+        return
+    seen.add(value_id)
+
+    if isinstance(value, ImmediateRef):
+        _collect_snapshot_refs(
+            value.value,
+            ctx,
+            scalar_tags=scalar_tags,
+            block_ids=block_ids,
+            seen=seen,
+        )
+        return
+
+    if isinstance(value, Tag):
+        block_info = ctx.tag_block_addresses.get(value.name)
+        if block_info is not None:
+            block_ids.add(block_info[0])
+        else:
+            scalar_tags.add(value.name)
+        return
+
+    if isinstance(value, IndirectRef):
+        block_ids.add(id(value.block))
+        _collect_snapshot_refs(
+            value.pointer,
+            ctx,
+            scalar_tags=scalar_tags,
+            block_ids=block_ids,
+            seen=seen,
+        )
+        return
+
+    if isinstance(value, IndirectExprRef):
+        block_ids.add(id(value.block))
+        _collect_snapshot_refs(
+            value.expr,
+            ctx,
+            scalar_tags=scalar_tags,
+            block_ids=block_ids,
+            seen=seen,
+        )
+        return
+
+    if isinstance(value, BlockRange):
+        block_ids.add(id(value.block))
+        return
+
+    if isinstance(value, IndirectBlockRange):
+        block_ids.add(id(value.block))
+        _collect_snapshot_refs(
+            value.start_expr,
+            ctx,
+            scalar_tags=scalar_tags,
+            block_ids=block_ids,
+            seen=seen,
+        )
+        _collect_snapshot_refs(
+            value.end_expr,
+            ctx,
+            scalar_tags=scalar_tags,
+            block_ids=block_ids,
+            seen=seen,
+        )
+        return
+
+    if isinstance(value, Condition):
+        for _, child in _condition_children(value):
+            _collect_snapshot_refs(
+                child,
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+        return
+
+    if isinstance(value, Expression):
+        for key in sorted(vars(value)):
+            if key.startswith("_"):
+                continue
+            _collect_snapshot_refs(
+                getattr(value, key),
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+        return
+
+    if isinstance(value, dict):
+        for key in sorted(value, key=repr):
+            _collect_snapshot_refs(
+                value[key],
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+        return
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            _collect_snapshot_refs(
+                item,
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+
+
+def _collect_rung_snapshot_bindings(
+    rungs: list[LogicRung],
+    ctx: CodegenContext,
+    *,
+    indent: int,
+) -> tuple[list[str], _ConditionSnapshotBindings]:
+    scalar_tags: set[str] = set()
+    block_ids: set[int] = set()
+    seen: set[int] = set()
+
+    def _walk_rung(rung: LogicRung) -> None:
+        for condition in rung._conditions:
+            _collect_snapshot_refs(
+                condition,
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+        for item in rung._execution_items:
+            if isinstance(item, LogicRung):
+                _walk_rung(item)
+
+    for rung in rungs:
+        _walk_rung(rung)
+        for _instr, _field_name, condition in _collect_helper_conditions(rung):
+            _collect_snapshot_refs(
+                condition,
+                ctx,
+                scalar_tags=scalar_tags,
+                block_ids=block_ids,
+                seen=seen,
+            )
+
+    lines: list[str] = []
+    scalar_symbols: dict[str, str] = {}
+    block_symbols: dict[int, str] = {}
+    sp = " " * indent
+
+    for tag_name in sorted(scalar_tags):
+        tag = ctx.referenced_tags.get(tag_name)
+        if tag is None:
+            continue
+        snap_var = f"_{ctx.next_name('cond_snap')}"
+        scalar_symbols[tag_name] = snap_var
+        lines.append(f"{sp}{snap_var} = {_snapshot_tag_symbol(tag, ctx)}")
+
+    for block_id in sorted(block_ids, key=lambda bid: ctx.block_symbols.get(bid, "")):
+        binding = ctx.block_bindings.get(block_id)
+        if binding is None:
+            continue
+        snap_var = f"_{ctx.next_name('cond_block_snap')}"
+        block_symbols[block_id] = snap_var
+        if ctx.blockless:
+            name_symbol = ctx.block_name_tuple_symbol(block_id)
+            default = binding.block._get_tag(binding.start).default
+            lines.append(
+                f"{sp}{snap_var} = [tags.get(_name, {default!r}) for _name in {name_symbol}]"
+            )
+        else:
+            lines.append(f"{sp}{snap_var} = list({ctx.symbol_for_block(binding.block)})")
+
+    return lines, _ConditionSnapshotBindings(
+        scalar_symbols=scalar_symbols,
+        block_symbols=block_symbols,
+    )
+
+
+def compile_condition(
+    cond: Condition,
+    ctx: CodegenContext,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> str:
     """Return a Python boolean expression string."""
+    scalar_snapshots = None
+    block_snapshots = None
+    if condition_snapshot is not None:
+        scalar_snapshots = condition_snapshot.scalar_symbols
+        block_snapshots = condition_snapshot.block_symbols
+
     if isinstance(cond, BitCondition):
-        return f"bool({ctx.symbol_for_tag(cond.tag)})"
+        return (
+            "bool("
+            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            ")"
+        )
     if isinstance(cond, NormallyClosedCondition):
-        return f"(not bool({ctx.symbol_for_tag(cond.tag)}))"
+        return (
+            "(not bool("
+            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            "))"
+        )
     if isinstance(cond, IntTruthyCondition):
-        return f"(int({ctx.symbol_for_tag(cond.tag)}) != 0)"
+        return (
+            "(int("
+            f"{_snapshot_tag_symbol(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            ") != 0)"
+        )
     if isinstance(cond, CompareEq):
-        return f"({_compile_value(cond.tag, ctx)} == {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, CompareNe):
-        return f"({_compile_value(cond.tag, ctx)} != {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, CompareLt):
-        return f"({_compile_value(cond.tag, ctx)} < {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, CompareLe):
-        return f"({_compile_value(cond.tag, ctx)} <= {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, CompareGt):
-        return f"({_compile_value(cond.tag, ctx)} > {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, CompareGe):
-        return f"({_compile_value(cond.tag, ctx)} >= {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_value(cond.tag, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, AllCondition):
-        parts = [compile_condition(child, ctx) for child in cond.conditions]
+        parts = [
+            compile_condition(child, ctx, condition_snapshot=condition_snapshot)
+            for child in cond.conditions
+        ]
         return "(" + " and ".join(parts) + ")" if parts else "True"
     if isinstance(cond, AnyCondition):
-        parts = [compile_condition(child, ctx) for child in cond.conditions]
+        parts = [
+            compile_condition(child, ctx, condition_snapshot=condition_snapshot)
+            for child in cond.conditions
+        ]
         return "(" + " or ".join(parts) + ")" if parts else "False"
     if isinstance(cond, RisingEdgeCondition):
         ctx.mark_helper("_rise")
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_prev")
-        tag_expr = ctx.symbol_for_tag(cond.tag)
+        tag_expr = _snapshot_tag_symbol(
+            cond.tag,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         return f'_rise(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
     if isinstance(cond, FallingEdgeCondition):
         ctx.mark_helper("_fall")
         if ctx._current_function is not None:
             ctx.mark_function_global(ctx._current_function, "_prev")
-        tag_expr = ctx.symbol_for_tag(cond.tag)
+        tag_expr = _snapshot_tag_symbol(
+            cond.tag,
+            ctx,
+            scalar_snapshots=scalar_snapshots,
+            block_snapshots=block_snapshots,
+        )
         return f'_fall(bool({tag_expr}), bool(_prev.get("{_contact_tag_name(cond.tag)}", False)))'
     if isinstance(cond, IndirectCompareEq):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} == {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" == {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, IndirectCompareNe):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} != {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" != {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, IndirectCompareLt):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} < {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" < {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, IndirectCompareLe):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} <= {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" <= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, IndirectCompareGt):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} > {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" > {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, IndirectCompareGe):
-        return f"({_compile_indirect_value(cond.indirect_ref, ctx)} >= {_compile_value(cond.value, ctx)})"
+        return (
+            f"({_compile_indirect_value(cond.indirect_ref, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)}"
+            f" >= {_compile_value(cond.value, ctx, scalar_snapshots=scalar_snapshots, block_snapshots=block_snapshots)})"
+        )
     if isinstance(cond, ExprCompare):
-        return f"({compile_expression(cond.left, ctx)} {cond.symbol} {compile_expression(cond.right, ctx)})"
+        return (
+            f"({compile_expression(cond.left, ctx, condition_snapshot=condition_snapshot)} "
+            f"{cond.symbol} {compile_expression(cond.right, ctx, condition_snapshot=condition_snapshot)})"
+        )
 
     raise NotImplementedError(f"Unsupported condition type: {type(cond).__name__}")
 
 
-def compile_expression(expr: Expression, ctx: CodegenContext) -> str:
+def compile_expression(
+    expr: Expression,
+    ctx: CodegenContext,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> str:
     """Return a Python expression string with explicit parentheses."""
-    return _compile_expression_impl(expr, ctx)
+    scalar_snapshots = None
+    block_snapshots = None
+    if condition_snapshot is not None:
+        scalar_snapshots = condition_snapshot.scalar_symbols
+        block_snapshots = condition_snapshot.block_symbols
+    return _compile_expression_impl(
+        expr,
+        ctx,
+        scalar_snapshots=scalar_snapshots,
+        block_snapshots=block_snapshots,
+    )
 
 
 def _get_condition_snapshot(instr: Any, field_name: str, ctx: CodegenContext) -> str | None:
@@ -309,7 +604,14 @@ def compile_instruction(
     raise NotImplementedError(f"Unsupported instruction type: {type(instr).__name__} at {loc}")
 
 
-def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int = 0) -> list[str]:
+def compile_rung(
+    rung: LogicRung,
+    fn_name: str,
+    ctx: CodegenContext,
+    indent: int = 0,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> list[str]:
     """Compile one rung into Python source lines."""
     previous = ctx._current_function
     ctx.set_current_function(fn_name)
@@ -317,7 +619,15 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
     try:
         rung_id = ctx.next_name("rung")
         enabled_var = f"_{rung_id}_enabled"
-        cond_expr = _compile_condition_group(rung._conditions, ctx)
+        cond_expr = (
+            "True"
+            if ctx.force_rung_enable
+            else _compile_condition_group(
+                rung._conditions,
+                ctx,
+                condition_snapshot=condition_snapshot,
+            )
+        )
         lines = [f"{' ' * indent}{enabled_var} = {cond_expr}"]
 
         helpers = _collect_helper_conditions(rung)
@@ -326,7 +636,11 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
             for instr, field_name, condition in helpers:
                 snap_var = f"_{rung_id}_snap_{snap_idx}"
                 snap_idx += 1
-                expr = compile_condition(condition, ctx)
+                expr = compile_condition(
+                    condition,
+                    ctx,
+                    condition_snapshot=condition_snapshot,
+                )
                 lines.append(f"{' ' * indent}{snap_var} = {expr}")
                 instr_id = id(instr)
                 entry = ctx._helper_condition_snapshots.setdefault(instr_id, {})
@@ -344,6 +658,7 @@ def compile_rung(rung: LogicRung, fn_name: str, ctx: CodegenContext, indent: int
                 ctx=ctx,
                 indent=indent,
                 scope_key=rung_id,
+                condition_snapshot=condition_snapshot,
             )
         )
         return lines
@@ -358,6 +673,8 @@ def _compile_rung_items(
     ctx: CodegenContext,
     indent: int,
     scope_key: str,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
 ) -> list[str]:
     lines: list[str] = []
     branch_vars: dict[int, str] = {}
@@ -366,7 +683,15 @@ def _compile_rung_items(
         if not isinstance(item, LogicRung):
             continue
         local_conditions = item._conditions[item._branch_condition_start :]
-        local_expr = _compile_condition_group(local_conditions, ctx)
+        local_expr = (
+            "True"
+            if ctx.force_rung_enable
+            else _compile_condition_group(
+                local_conditions,
+                ctx,
+                condition_snapshot=condition_snapshot,
+            )
+        )
         branch_var = f"_{scope_key}_branch_{branch_idx}"
         branch_idx += 1
         branch_vars[id(item)] = branch_var
@@ -385,6 +710,7 @@ def _compile_rung_items(
                     ctx=ctx,
                     indent=indent,
                     scope_key=child_scope,
+                    condition_snapshot=condition_snapshot,
                 )
             )
             continue
@@ -392,10 +718,52 @@ def _compile_rung_items(
     return lines
 
 
-def _compile_condition_group(conditions: list[Condition], ctx: CodegenContext) -> str:
+def compile_rungs(
+    rungs: list[LogicRung],
+    fn_name: str,
+    ctx: CodegenContext,
+    indent: int = 0,
+) -> list[str]:
+    """Compile a sequence of top-level rungs, preserving continued() chains."""
+    lines: list[str] = []
+    i = 0
+    while i < len(rungs):
+        chain = [rungs[i]]
+        i += 1
+        while i < len(rungs) and rungs[i]._use_prior_snapshot:
+            chain.append(rungs[i])
+            i += 1
+
+        snapshot_lines, snapshot = _collect_rung_snapshot_bindings(
+            chain,
+            ctx,
+            indent=indent,
+        )
+        lines.extend(snapshot_lines)
+        for rung in chain:
+            lines.extend(
+                compile_rung(
+                    rung,
+                    fn_name,
+                    ctx,
+                    indent=indent,
+                    condition_snapshot=snapshot,
+                )
+            )
+    return lines
+
+
+def _compile_condition_group(
+    conditions: list[Condition],
+    ctx: CodegenContext,
+    *,
+    condition_snapshot: _ConditionSnapshotBindings | None = None,
+) -> str:
     if not conditions:
         return "True"
-    parts = [compile_condition(cond, ctx) for cond in conditions]
+    parts = [
+        compile_condition(cond, ctx, condition_snapshot=condition_snapshot) for cond in conditions
+    ]
     return " and ".join(parts)
 
 
@@ -437,7 +805,7 @@ def _compile_calc_instruction(
     if range_cond and fault_body != ["pass"]:
         enabled_body.append(f"if {range_cond}:")
         enabled_body.extend(f"    {line}" for line in fault_body)
-    enabled_body.append(f"{ctx.symbol_for_tag(instr.dest)} = {store_expr}")
+    enabled_body.extend(_compile_assignment_lines(instr.dest, store_expr, ctx, indent=0))
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
 
 
@@ -524,13 +892,12 @@ def _compile_for_loop_instruction(
     indent: int,
 ) -> list[str]:
     count_expr = _compile_value(instr.count, ctx)
-    idx_symbol = ctx.symbol_for_tag(instr.idx_tag)
     disabled_children = _compile_instruction_list(instr.instructions, "False", ctx, indent=0)
     enabled_children = _compile_instruction_list(instr.instructions, "True", ctx, indent=0)
     body = [
         f"_iterations = max(0, int({count_expr}))",
         "for _for_i in range(_iterations):",
-        f"    {idx_symbol} = _for_i",
+        *_indent_body(_compile_assignment_lines(instr.idx_tag, "_for_i", ctx, indent=0), 4),
         *_indent_body(enabled_children, 4),
     ]
     return _compile_guarded_instruction(

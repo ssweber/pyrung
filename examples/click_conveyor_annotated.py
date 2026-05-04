@@ -14,6 +14,7 @@ import os
 from typing import Any, cast
 
 from pyrung import (
+    PLC,
     And,
     Bool,
     Counter,
@@ -22,7 +23,6 @@ from pyrung import (
     Int,
     Or,
     Physical,
-    PLC,
     Rung,
     Timer,
     branch,

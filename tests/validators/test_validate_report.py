@@ -171,6 +171,7 @@ class TestValidationReport:
             "CORE_CONFLICTING_OUTPUT",
             "CORE_FINAL_MULTIPLE_WRITERS",
             "CORE_MISSING_PROFILE",
+            "CORE_POINTER_DEFAULT_BEFORE_BLOCK_START",
             "CORE_RANGE_VIOLATION",
             "CORE_READONLY_WRITE",
             "CORE_STUCK_HIGH",

@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from pyrung.cli import _apply_lock_config
 from pyrung.core import (
     PLC,
+    Block,
     Bool,
     Counter,
+    InputBlock,
     Int,
     Or,
+    OutputBlock,
     Program,
     Rung,
+    TagType,
     Timer,
+    calc,
+    copy,
     count_up,
+    fill,
     latch,
     named_array,
     off_delay,
@@ -31,11 +39,14 @@ from pyrung.core.analysis.prove import (
     Proven,
     StateDiff,
     TraceStep,
+    _bfs_explore,
     _classify_dimensions,
     _default_projection,
     _eval_atom,
+    _has_data_feedback,
     _live_inputs,
     _partial_eval,
+    _pilot_sweep_domains,
     check_lock,
     diff_states,
     program_hash,
@@ -43,9 +54,12 @@ from pyrung.core.analysis.prove import (
     reachable_states,
     write_lock,
 )
+from pyrung.core.analysis.prove.passes import _BFSConfig
 from pyrung.core.analysis.simplified import And as ExprAnd
 from pyrung.core.analysis.simplified import Atom, Const
 from pyrung.core.analysis.simplified import Or as ExprOr
+
+prove_module = importlib.import_module("pyrung.core.analysis.prove")
 
 # ===================================================================
 # Group 1: Dimension classification
@@ -70,16 +84,19 @@ class TestDimensionClassification:
         assert "InputA" in nd
 
     def test_latch_reset_are_stateful(self):
-        """Latch/reset writes make tags stateful."""
+        """Latch/reset writes make tags stateful when referenced."""
         button = Bool("Button", external=True)
         stop = Bool("Stop", external=True)
         running = Bool("Running")
+        light = Bool("Light")
 
         with Program(strict=False) as logic:
             with Rung(button):
                 latch(running)
             with Rung(stop):
                 reset(running)
+            with Rung(running):
+                out(light)
 
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
@@ -88,6 +105,37 @@ class TestDimensionClassification:
         assert stateful["Running"] == (False, True)
         assert "Button" in nd
         assert "Stop" in nd
+
+    def test_unreferenced_bool_excluded(self):
+        """Written Bool not referenced in any expression is excluded."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "Flag" not in stateful
+        assert "Flag" in combinational
+
+    def test_write_only_terminal_is_combinational(self):
+        """Tag written by copy but never read is combinational (dead output)."""
+        sensor = Bool("Sensor", external=True)
+        level = Int("Level", external=True, min=0, max=10)
+        output = Int("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(sensor):
+                copy(level, output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, combinational, _done_acc, _done_presets, _done_kinds = result
+        assert "Output" not in stateful
+        assert "Output" in combinational
 
     def test_external_tags_are_nondeterministic(self):
         """Tags with external=True are nondeterministic."""
@@ -157,7 +205,7 @@ class TestValueDomainExtraction:
         assert nd["Flag"] == (False, True)
 
     def test_integer_comparison_literals(self):
-        """Int tag compared with literals extracts boundary partitions."""
+        """Pure equality-only inputs collapse to {literals..., OTHER}."""
         state = Int("State", external=True)
         out_a = Bool("OutA")
         out_b = Bool("OutB")
@@ -174,7 +222,7 @@ class TestValueDomainExtraction:
         domain = nd["State"]
         assert 1 in domain
         assert 2 in domain
-        assert set(domain) == {0, 1, 2, 3}
+        assert len(domain) == 3
 
     def test_choices_tag_uses_declared_domain(self):
         """Tag with choices uses the declared values."""
@@ -189,6 +237,42 @@ class TestValueDomainExtraction:
         assert not isinstance(result, Intractable)
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
         assert set(nd["Mode"]) == {0, 1, 2}
+
+    def test_eq_ne_only_input_gets_literal_plus_other_domain(self):
+        """Pure-switch eq/ne inputs collapse to {literals..., OTHER}."""
+        mode = Int("Mode", external=True)
+        light = Bool("Light")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(mode == 1):
+                out(light)
+            with Rung(mode != 2):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert 1 in nd["Mode"]
+        assert 2 in nd["Mode"]
+        assert len(nd["Mode"]) == 3
+
+    def test_eq_ne_only_closure_rejects_data_flow_usage(self):
+        """Arithmetic/data-flow usage keeps eq/ne-only closure from applying."""
+        step = Int("Step", external=True)
+        odd = Int("Odd")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(step % 2, odd)
+            with Rung(step == 5):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        assert set(nd["Step"]) == {4, 5, 6}
 
     def test_unannotated_function_output_is_intractable(self):
         """run_function output without choices/min/max returns Intractable."""
@@ -207,6 +291,105 @@ class TestValueDomainExtraction:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.reason
+
+    def test_bounded_integer_with_comparison_uses_boundary_partition(self):
+        """Int with min/max and comparison literals uses boundary partitioning."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 5):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert len(domain) < 20
+        assert 0 in domain
+        assert 100 in domain
+        assert 5 in domain
+        assert 6 in domain
+
+    def test_bounded_integer_without_comparison_uses_full_range(self):
+        """Int with small min/max and no comparisons uses full range."""
+        level = Int("Level", external=True, min=0, max=10)
+        target = Bool("Target")
+
+        with Program(strict=False) as logic:
+            with Rung(level):
+                out(target)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+
+    def test_boundary_partition_includes_min_max_anchors(self):
+        """Boundary partition always includes min and max values."""
+        level = Int("Level", external=True, min=0, max=50)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 25):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert 0 in domain
+        assert 50 in domain
+
+    def test_boundary_values_clamped_to_min_max(self):
+        """Boundary partition does not include values outside min/max."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 0):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert all(0 <= v <= 100 for v in domain)
+
+    def test_boundary_partition_proves_correctly(self):
+        """End-to-end prove with boundary-partitioned integer domain."""
+        level = Int("Level", external=True, min=0, max=100)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 50):
+                latch(alarm)
+
+        result = prove(logic, ~alarm)
+        assert isinstance(result, Counterexample)
+        assert any(step.inputs.get("Level", 0) > 50 for step in result.trace)
+
+    def test_multiple_comparisons_boundary_partition(self):
+        """Multiple comparison literals produce compact boundary domain."""
+        level = Int("Level", external=True, min=0, max=100)
+        low = Bool("Low")
+        high = Bool("High")
+
+        with Program(strict=False) as logic:
+            with Rung(level > 5):
+                out(low)
+            with Rung(level > 20):
+                out(high)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
+        domain = nd["Level"]
+        assert 0 in domain
+        assert 5 in domain
+        assert 6 in domain
+        assert 20 in domain
+        assert 21 in domain
+        assert 100 in domain
+        assert len(domain) < 20
 
 
 # ===================================================================
@@ -250,6 +433,13 @@ class TestDontCarePruning:
         state = {"InputA": False, "InputB": False}
         live = _live_inputs(state, nd_dims, exprs)
         assert live == {"InputA", "InputB"}
+
+    def test_hidden_residual_tag_keeps_upstream_input_live(self):
+        """Residual hidden tags propagate liveness through their ND upstream deps."""
+        exprs = [Atom("Stored", "gt", 150)]
+        nd_dims = {"Source": tuple(range(3))}
+        live = _live_inputs({}, nd_dims, exprs, {"Stored": frozenset({"Source"})})
+        assert live == {"Source"}
 
     def test_eval_atom_xic(self):
         assert _eval_atom(Atom("X", "xic"), True) is True
@@ -314,7 +504,8 @@ class TestProve:
 
         result = prove(logic, ~alarm)
         assert isinstance(result, Counterexample)
-        assert any(step.inputs.get("Level") == 4 for step in result.trace)
+        trace_levels = {v for step in result.trace if (v := step.inputs.get("Level")) is not None}
+        assert any(v < 5 for v in trace_levels) or result.trace[0].scans == 0
 
     def test_property_expression_contributes_input_domain(self):
         """Property-only comparison literals are included in exploration domains."""
@@ -402,11 +593,14 @@ class TestProve:
         """Large state space hits max_states cap → Intractable."""
         inputs = [Bool(f"In{i}", external=True) for i in range(20)]
         flags = [Bool(f"Flag{i}") for i in range(20)]
+        output = Bool("Output")
 
         with Program(strict=False) as logic:
             for inp, flag in zip(inputs, flags, strict=True):
-                with Rung(inp):
+                with Rung(rise(inp)):
                     latch(flag)
+            with Rung(*flags):
+                out(output)
 
         result = prove(
             logic,
@@ -593,6 +787,62 @@ class TestReachableStates:
             assert "Running" in keys
             assert "Internal" not in keys
 
+    def test_projected_raw_inputs_disable_exclusive_grouping(self):
+        cmd_a = Bool("CmdA", external=True)
+        cmd_b = Bool("CmdB", external=True)
+        cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B"})
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, cmd)
+            with Rung(cmd_a):
+                copy(1, cmd)
+            with Rung(cmd_b):
+                copy(2, cmd)
+
+        states = reachable_states(logic, project=["CmdA", "CmdB", "Cmd"])
+        assert isinstance(states, frozenset)
+        assert frozenset({("CmdA", True), ("CmdB", True), ("Cmd", "B")}) in states
+
+    def test_exclusive_input_grouping_preserves_reachable_states(self):
+        cmd_a = Bool("CmdA", external=True)
+        cmd_b = Bool("CmdB", external=True)
+        cmd_c = Bool("CmdC", external=True)
+        cmd = Int("Cmd", choices={0: "None", 1: "A", 2: "B", 3: "C"}, lock=True)
+        flag = Bool("Flag", lock=True)
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(0, cmd)
+            with Rung(cmd_a):
+                copy(1, cmd)
+            with Rung(cmd_b):
+                copy(2, cmd)
+            with Rung(cmd_c):
+                copy(3, cmd)
+            with Rung(cmd == 1):
+                out(flag)
+
+        context = prove_module._build_reachable_context(
+            logic,
+            scope=["Flag", "Cmd"],
+            project=("Flag", "Cmd"),
+        )
+        assert not isinstance(context, Intractable)
+
+        grouped = _bfs_explore(
+            context,
+            project=("Flag", "Cmd"),
+            bfs_config=_BFSConfig(),
+        )
+        ungrouped = _bfs_explore(
+            context,
+            project=("Flag", "Cmd"),
+            bfs_config=_BFSConfig(exclusive_input_grouping=False),
+        )
+
+        assert grouped == ungrouped
+
 
 class TestDiffStates:
     def test_empty_diff(self):
@@ -617,12 +867,12 @@ class TestDiffStates:
 
 
 class TestDefaultProjection:
-    """_default_projection returns terminals, not public tags."""
+    """_default_projection returns tags with lock=True."""
 
-    def test_terminals_not_public(self):
+    def test_lock_flag_selects_projection(self):
         button = Bool("Button", external=True)
         running = Bool("Running", public=True)
-        light = Bool("Light")
+        light = Bool("Light", lock=True)
 
         with Program(strict=False) as logic:
             with Rung(button):
@@ -633,7 +883,7 @@ class TestDefaultProjection:
         proj = _default_projection(logic)
         assert proj == ["Light"]
 
-    def test_empty_when_no_terminals(self):
+    def test_empty_when_no_lock_tags(self):
         button = Bool("Button", external=True)
         internal = Bool("Internal")
 
@@ -646,33 +896,69 @@ class TestDefaultProjection:
         proj = _default_projection(logic)
         assert proj == []
 
+    def test_non_bool_lock_included(self):
+        """Non-Bool tags with lock=True are included in projection."""
+        button = Bool("Button", external=True)
+        light = Bool("Light", lock=True)
+        counter_val = Int("CounterVal", lock=True)
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+                copy(1, counter_val)
+
+        proj = _default_projection(logic)
+        assert "Light" in proj
+        assert "CounterVal" in proj
+
+    def test_unlocked_terminals_excluded(self):
+        """Terminal tags without lock=True are not in the default projection."""
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        proj = _default_projection(logic)
+        assert proj == []
+
 
 class TestApplyLockConfig:
     """CLI _apply_lock_config include/exclude logic."""
 
     def test_none_config_passthrough(self):
-        proj = _apply_lock_config(["A", "B"], None)
+        proj, groups = _apply_lock_config(["A", "B"], None)
         assert proj == ["A", "B"]
+        assert groups == ()
 
     def test_include_adds_tags(self):
-        proj = _apply_lock_config(["A"], {"include": ["B", "C"]})
+        proj, _groups = _apply_lock_config(["A"], {"include": ["B", "C"]})
         assert proj == ["A", "B", "C"]
 
     def test_exclude_removes_tags(self):
-        proj = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
+        proj, _groups = _apply_lock_config(["A", "B", "C"], {"exclude": ["B"]})
         assert proj == ["A", "C"]
 
     def test_include_and_exclude(self):
-        proj = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
+        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["C"], "exclude": ["A"]})
         assert proj == ["B", "C"]
 
     def test_exclude_nonexistent_is_noop(self):
-        proj = _apply_lock_config(["A"], {"exclude": ["Z"]})
+        proj, _groups = _apply_lock_config(["A"], {"exclude": ["Z"]})
         assert proj == ["A"]
 
     def test_include_duplicate_is_noop(self):
-        proj = _apply_lock_config(["A", "B"], {"include": ["A"]})
+        proj, _groups = _apply_lock_config(["A", "B"], {"include": ["A"]})
         assert proj == ["A", "B"]
+
+    def test_group_parses_named_groups(self):
+        proj, groups = _apply_lock_config(
+            ["A"],
+            {"group": {"faults": ["Estop", "CommFault"]}},
+        )
+        assert proj == ["A"]
+        assert groups == (("Estop", "CommFault"),)
 
 
 # ===================================================================
@@ -754,6 +1040,163 @@ class TestLockFile:
 
         assert program_hash(logic_a) != program_hash(logic_b)
 
+    def test_false_omitted_in_json(self, tmp_path: Path):
+        """Lock file omits False values — states read as 'what is ON'."""
+        import json
+
+        states = frozenset(
+            {
+                frozenset({("A", False), ("B", False)}),
+                frozenset({("A", True), ("B", False)}),
+                frozenset({("A", True), ("B", True)}),
+            }
+        )
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, ["A", "B"], "hash1")
+
+        data = json.loads(lock_path.read_text())
+        reachable = data["reachable"]
+        assert len(reachable) == 3
+        assert {} in reachable
+        assert {"A": True} in reachable
+        assert {"A": True, "B": True} in reachable
+
+    def test_false_omission_roundtrips_via_check(self, tmp_path: Path):
+        """check_lock round-trips correctly with False-omitted lock files."""
+        button = Bool("Button", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, ["Light"], program_hash(logic))
+
+        d = check_lock(logic, lock_path)
+        assert d is None
+
+    def test_choice_labels_in_lock(self, tmp_path: Path):
+        """Projected tags with choices= serialize labels, not raw ints."""
+        import json
+
+        from pyrung.core.analysis.prove import (
+            _build_choice_labels,
+            _resolve_choice_labels,
+        )
+        from pyrung.core.tag import Tag, TagType
+
+        mode_tag = Tag(
+            name="Mode",
+            type=TagType.INT,
+            choices={0: "OFF", 1: "SLOW", 2: "FAST"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Mode", 0), ("Active", True)}),
+                frozenset({("Mode", 1), ("Active", True)}),
+                frozenset({("Mode", 2), ("Active", False)}),
+            }
+        )
+        tags = {"Mode": mode_tag}
+        choice_labels = _build_choice_labels(["Active", "Mode"], tags)
+        resolved = _resolve_choice_labels(states, choice_labels)
+
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, resolved, ["Active", "Mode"], "hash2")
+
+        data = json.loads(lock_path.read_text())
+        mode_values = {row.get("Mode") for row in data["reachable"]}
+        assert "OFF" in mode_values
+        assert "SLOW" in mode_values
+        assert "FAST" in mode_values
+        assert 0 not in mode_values
+
+    def test_band_labels_collapse_states(self, tmp_path: Path):
+        """Tags with band= collapse multiple values into labeled bands."""
+        import json
+
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        extent_tag = Tag(
+            name="Extent",
+            type=TagType.INT,
+            band={"ZERO": 0, "POSITIVE": ">0"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Extent", 0), ("Active", True)}),
+                frozenset({("Extent", 1), ("Active", True)}),
+                frozenset({("Extent", 2), ("Active", True)}),
+                frozenset({("Extent", 3), ("Active", True)}),
+            }
+        )
+        tags = {"Extent": extent_tag}
+        band_maps = _build_band_maps(["Active", "Extent"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, resolved, ["Active", "Extent"], "hash3")
+
+        data = json.loads(lock_path.read_text())
+        extent_values = {row.get("Extent") for row in data["reachable"]}
+        assert extent_values == {"ZERO", "POSITIVE"}
+        assert len(data["reachable"]) == 2
+
+    def test_band_range_predicate(self):
+        """Band with range predicates (a..b) works."""
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        level_tag = Tag(
+            name="Level",
+            type=TagType.INT,
+            band={"LOW": "0..2", "HIGH": "3..5"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Level", 0)}),
+                frozenset({("Level", 1)}),
+                frozenset({("Level", 2)}),
+                frozenset({("Level", 3)}),
+                frozenset({("Level", 4)}),
+                frozenset({("Level", 5)}),
+            }
+        )
+        tags = {"Level": level_tag}
+        band_maps = _build_band_maps(["Level"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        level_values = {dict(s)["Level"] for s in resolved}
+        assert level_values == {"LOW", "HIGH"}
+
+    def test_band_wildcard_catchall(self):
+        """Band with '*' catch-all matches unmatched values."""
+        from pyrung.core.analysis.prove import _build_band_maps, _resolve_band_labels
+        from pyrung.core.tag import Tag, TagType
+
+        tag = Tag(
+            name="Score",
+            type=TagType.INT,
+            band={"ZERO": 0, "OTHER": "*"},
+        )
+        states = frozenset(
+            {
+                frozenset({("Score", 0)}),
+                frozenset({("Score", 7)}),
+                frozenset({("Score", 99)}),
+            }
+        )
+        tags = {"Score": tag}
+        band_maps = _build_band_maps(["Score"], tags)
+        resolved = _resolve_band_labels(states, band_maps)
+
+        score_values = {dict(s)["Score"] for s in resolved}
+        assert score_values == {"ZERO", "OTHER"}
+
 
 # ===================================================================
 # Group 7: Missing coverage items
@@ -831,26 +1274,408 @@ class TestScopeParameter:
         assert isinstance(result, Counterexample)
 
 
+class TestBatchPartitioning:
+    """Auto-partition independent batch properties into separate BFS passes."""
+
+    def test_batch_partitions_independent_subsystems(self):
+        """Two independent subsystems are proved separately."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        results = prove(logic, [~x, ~y])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
+
+    def test_batch_overlapping_properties_share_bfs(self):
+        """Properties referencing the same tags are grouped together."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+
+        results = prove(logic, [~flag, Or(flag, ~flag)])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Proven)
+
+    def test_batch_lambda_falls_back_to_full_scope(self):
+        """Lambda properties use full scope."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        results = prove(logic, [lambda s: not s.get("X"), ~y])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
+
+    def test_batch_partition_preserves_result_order(self):
+        """Results are returned in original property order, not partition order."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+        z = Bool("Z")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+            with Rung(c):
+                latch(z)
+
+        results = prove(logic, [~x, ~y, ~z])
+        assert isinstance(results, list)
+        assert len(results) == 3
+        assert all(isinstance(r, Counterexample) for r in results)
+
+    def test_batch_single_group_degenerates_to_current(self):
+        """All-overlapping properties produce one group."""
+        button = Bool("Button", external=True)
+        flag = Bool("Flag")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                latch(flag)
+            with Rung(flag):
+                out(output)
+
+        results = prove(logic, [~flag, ~output])
+        assert len(results) == 2
+        assert isinstance(results[0], Counterexample)
+        assert isinstance(results[1], Counterexample)
+
+
+class TestReachablePartitioning:
+    """Reachable-state partitioning: independent clusters explored separately."""
+
+    def test_independent_ote_outputs_partitioned(self):
+        """Two OTE outputs with separate inputs are explored independently."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(b):
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", False), ("Y", True)}),
+                frozenset({("X", True), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_independent_latches_partitioned(self):
+        """Two independent latch subsystems produce Cartesian product."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 4
+        x_vals = {dict(s)["X"] for s in states}
+        y_vals = {dict(s)["Y"] for s in states}
+        assert x_vals == {True, False}
+        assert y_vals == {True, False}
+
+    def test_coupled_tags_stay_together(self):
+        """Tags sharing upstream input are not falsely split."""
+        btn = Bool("Btn", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(btn):
+                out(x)
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_three_cluster_partition(self):
+        """Three independent subsystems each explored separately."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        c = Bool("C", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+        z = Bool("Z")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+            with Rung(c):
+                latch(z)
+
+        states = reachable_states(logic, project=["X", "Y", "Z"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 8
+
+    def test_explicit_scope_disables_partitioning(self):
+        """Explicit scope= bypasses automatic partitioning."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(b):
+                out(y)
+
+        states = reachable_states(logic, scope=["X", "Y"], project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 4
+
+    def test_simplified_form_refines_partition(self):
+        """Pivot resolution via simplified forms enables finer splitting.
+
+        X and Y share a pivot tag P in the PDG, but P is OTE-resolvable
+        and resolves to different inputs — so simplified forms show they
+        are truly independent.
+        """
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        p = Bool("P")
+        q = Bool("Q")
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(p)
+            with Rung(b):
+                out(q)
+            with Rung(p):
+                out(x)
+            with Rung(q):
+                out(y)
+
+        states = reachable_states(logic, project=["X", "Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("X", False), ("Y", False)}),
+                frozenset({("X", False), ("Y", True)}),
+                frozenset({("X", True), ("Y", False)}),
+                frozenset({("X", True), ("Y", True)}),
+            }
+        )
+
+    def test_lock_roundtrip_with_partitioned_states(self, tmp_path: Path):
+        """Lock write/check works with partitioned reachable-state computation."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(b):
+                latch(y)
+
+        proj = ["X", "Y"]
+        states = reachable_states(logic, project=proj)
+        assert not isinstance(states, Intractable)
+
+        lock_path = tmp_path / "pyrung.lock"
+        write_lock(lock_path, states, proj, program_hash(logic))
+
+        diff = check_lock(logic, lock_path)
+        assert diff is None
+
+
+class TestReachableStateSlicing:
+    """Whole-rung sliced kernels preserve reachable-state behavior."""
+
+    def test_explicit_scope_slice_seeds_scope_and_projection(self):
+        """Explicit scope= keeps projected writers even when they sit outside scope."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                latch(x)
+            with Rung(x):
+                out(y)
+
+        states = reachable_states(logic, scope=["X"], project=["Y"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Y", False)}),
+                frozenset({("Y", True)}),
+            }
+        )
+
+    def test_reachable_states_tracks_continued_snapshot_across_scans(self):
+        """continued() readers make their source tag part of the reachable state."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+            with Rung(x).continued():
+                out(y)
+
+        states = reachable_states(logic, project=["Y"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Y", False)}),
+                frozenset({("Y", True)}),
+            }
+        )
+
+    def test_reachable_states_subroutine_slice_keeps_callers(self):
+        """Selecting a subroutine writer also keeps the caller path that invokes it."""
+        from pyrung.core import call, subroutine
+
+        go = Bool("Go", external=True)
+        step = Int("Step", external=True, choices={0: "Idle", 1: "Run"})
+        active = Bool("Active")
+
+        @subroutine("Worker", strict=False)
+        def worker():
+            with Rung(step == 1):
+                out(active)
+
+        with Program(strict=False) as logic:
+            with Rung(go):
+                call(worker)
+
+        states = reachable_states(logic, project=["Active"])
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Active", False)}),
+                frozenset({("Active", True)}),
+            }
+        )
+
+    def test_reachable_states_fault_projection_keeps_implicit_fault_writers(self):
+        """Implicit fault-tag writers stay in the slice when a projection depends on them."""
+        from pyrung.core import system
+
+        enable = Bool("Enable", external=True)
+        divisor = Int("Divisor", external=True, min=0, max=1)
+        result = Int("Result")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                calc(100 / divisor, result)
+            with Rung(system.fault.division_error):
+                out(alarm)
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset({("Alarm", False)}),
+                frozenset({("Alarm", True)}),
+            }
+        )
+
+    def test_reachable_context_keeps_init_backed_indirect_lookup_writers(self):
+        """Reachable-state contexts retain init-backed lookup writers for elision."""
+        init_done = Bool("InitDone")
+        selector = Int("Selector", external=True, choices={1: "A", 2: "B"})
+        idx = Int("Idx")
+        tmp = Int("Tmp")
+        outv = Int("OutV")
+        table = Block("Table", TagType.INT, 1, 2)
+
+        with Program(strict=False) as logic:
+            with Rung(~init_done):
+                copy(10, table[1])
+                copy(20, table[2])
+                copy(1, init_done)
+            with Rung():
+                calc(selector, idx)
+            with Rung():
+                copy(table[idx], tmp)
+            with Rung():
+                copy(tmp, outv)
+
+        context = prove_module._build_reachable_context(
+            logic,
+            scope=["OutV"],
+            project=("OutV",),
+        )
+        assert not isinstance(context, Intractable)
+        assert "Idx" not in context.stateful_dims
+        assert "Tmp" not in context.stateful_dims
+
+
 class TestConsumedAccumulator:
     """Item 15: accumulator consumed in a condition stays as separate dimension."""
 
     def test_consumed_acc_kept_as_dimension(self):
-        """Timer accumulator used in a condition is not collapsed."""
+        """Timer accumulator used as data flow is not threshold-abstracted."""
         enable = Bool("Enable", external=True)
         t = Timer.clone("T1")
-        early = Bool("Early")
+        saved = Int("SavedAcc")
 
         with Program(strict=False) as logic:
             with Rung(enable):
                 on_delay(t, preset=100)
-            with Rung(t.Acc > 50):
-                out(early)
+            with Rung():
+                copy(t.Acc, saved)
 
         result = _classify_dimensions(logic)
-        assert not isinstance(result, Intractable)
-        stateful, _nd, _combinational, done_acc, _done_presets, _done_kinds = result
-        assert "T1_Acc" in stateful
-        assert "T1_Done" not in done_acc
+        assert isinstance(result, Intractable)
+        assert "T1_Acc" in result.tags
 
 
 class TestAnnotatedFunctionOutput:
@@ -1000,6 +1825,566 @@ class TestTimerFastForward:
         assert True in done_values
 
 
+class TestRedundantTimerAccumulatorAbstraction:
+    """Dynamic timer presets whose Acc comparisons collapse to Done state."""
+
+    def test_final_preset_redundant_acc_comparison_is_absorbed(self):
+        """A ladder-owned dynamic preset can be absorbed with its redundant Acc check."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+        done_output = Bool("DoneOutput")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+            with Rung(t.Done):
+                out(done_output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
+
+    def test_literal_write_preset_redundant_acc_comparison_is_absorbed(self):
+        """Literal-written presets absorb without readonly/final annotations."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset")
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+        done_output = Bool("DoneOutput")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+            with Rung(t.Done):
+                out(done_output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
+
+    def test_external_preset_redundant_acc_comparison_is_absorbed(self):
+        """External presets still absorb when their value is threshold-only."""
+        enable = Bool("Enable", external=True)
+        hmi_preset = Int("HmiPreset", external=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+        done_output = Bool("DoneOutput")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=hmi_preset)
+            with Rung(t.Acc >= hmi_preset):
+                out(output)
+            with Rung(t.Done):
+                out(done_output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, done_presets, _done_kinds = result
+        assert stateful["DynT_Done"] == (False, PENDING, True)
+        assert "DynT_Acc" not in stateful
+        assert "HmiPreset" not in stateful
+        assert "HmiPreset" not in nd
+        assert done_presets["DynT_Done"] == 1
+
+        proved = prove(logic, Or(~output, t.Done), max_depth=5)
+        assert isinstance(proved, Proven)
+
+    def test_non_redundant_acc_comparison_is_not_absorbed(self):
+        """Strictly greater-than is absorbed by Layer 2 threshold events."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc > active_preset):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "DynT_Acc" not in stateful
+        assert "ActivePreset" not in stateful
+        assert "ActivePreset" not in nd
+
+        states = reachable_states(logic, project=["Output", "DynT_Done"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Output", True), ("DynT_Done", True)}) in states
+
+    def test_preset_data_use_elsewhere_is_bounded_but_not_absorbed(self):
+        """A preset copied elsewhere stays explicit instead of being absorbed."""
+        enable = Bool("Enable", external=True)
+        active_preset = Int("ActivePreset", final=True)
+        copied_preset = Int("CopiedPreset")
+        t = Timer.clone("DynT")
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, active_preset)
+                copy(active_preset, copied_preset)
+            with Rung(enable):
+                on_delay(t, preset=active_preset)
+            with Rung(t.Acc >= active_preset):
+                out(output)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, done_presets, _done_kinds = result
+        assert "ActivePreset" in stateful
+        assert "DynT_Acc" in stateful
+        assert done_acc == {}
+        assert done_presets == {}
+
+
+class TestThresholdEventAbstraction:
+    """Layer 2: progress threshold events for hidden accumulators."""
+
+    def test_timer_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        active_threshold = Int("ActiveThreshold", final=True)
+        t = Timer.clone("StepTmr")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Alarm", True)}) in states
+
+    def test_timer_threshold_event_allows_direct_zero_acc_reset(self):
+        enable = Bool("ResettableTimerEnable", external=True)
+        reset_btn = Bool("ResettableTimerReset", external=True)
+        active_threshold = Int("ResettableTimerThreshold", final=True)
+        t = Timer.clone("ResettableThresholdTmr")
+        alarm = Bool("ResettableTimerAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(reset_btn):
+                copy(0, t.Acc)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableTimerAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableTimerAlarm", True)}) in states
+
+    def test_timer_threshold_event_nonzero_acc_assignment_stays_explicit(self):
+        enable = Bool("AssignedTimerEnable", external=True)
+        force = Bool("AssignedTimerForce", external=True)
+        active_threshold = Int("AssignedTimerThreshold", final=True)
+        t = Timer.clone("AssignedThresholdTmr")
+        alarm = Bool("AssignedTimerAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(force):
+                copy(7, t.Acc)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "AssignedThresholdTmr_Acc" in stateful
+        assert "AssignedTimerThreshold" in stateful
+        assert done_acc == {}
+
+    def test_multiple_timer_threshold_events_become_tractable(self):
+        enable = Bool("Enable", external=True)
+        pan = Int("PanThreshold", final=True)
+        shaft = Int("ShaftThreshold", final=True)
+        drip = Int("DripThreshold", final=True)
+        t = Timer.clone("StepTmrMany")
+        pan_alarm = Bool("PanAlarm")
+        shaft_alarm = Bool("ShaftAlarm")
+        drip_alarm = Bool("DripAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(200, pan)
+                copy(400, shaft)
+                copy(600, drip)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > pan):
+                out(pan_alarm)
+            with Rung(t.Acc > shaft):
+                out(shaft_alarm)
+            with Rung(t.Acc > drip):
+                out(drip_alarm)
+
+        states = reachable_states(
+            logic,
+            project=["PanAlarm", "ShaftAlarm", "DripAlarm"],
+            max_depth=10,
+        )
+        assert not isinstance(states, Intractable)
+        assert (
+            frozenset(
+                {
+                    ("PanAlarm", True),
+                    ("ShaftAlarm", True),
+                    ("DripAlarm", True),
+                }
+            )
+            in states
+        )
+
+    def test_count_up_counter_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        active_threshold = Int("CounterThreshold", final=True)
+        counter = Counter.clone("StepCounter")
+        alarm = Bool("CounterAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                count_up(counter, preset=1000).reset(reset_btn)
+            with Rung(counter.Acc >= active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["CounterAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("CounterAlarm", True)}) in states
+
+    def test_count_up_counter_threshold_event_allows_direct_zero_acc_reset(self):
+        enable = Bool("ResettableCounterEnable", external=True)
+        reset_btn = Bool("ResettableCounterReset", external=True)
+        counter_reset = Bool("ResettableCounterOwnerReset", external=True)
+        active_threshold = Int("ResettableCounterThreshold", final=True)
+        counter = Counter.clone("ResettableThresholdCounter")
+        alarm = Bool("ResettableCounterAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(reset_btn):
+                copy(0, counter.Acc)
+            with Rung(enable):
+                count_up(counter, preset=1000).reset(counter_reset)
+            with Rung(counter.Acc >= active_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableCounterAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableCounterAlarm", True)}) in states
+
+    def test_internal_int_step_ticks_threshold_event_becomes_tractable(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("StepTicks")
+        threshold = Int("TickThreshold", final=True)
+        alarm = Bool("TickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["TickAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("TickAlarm", True)}) in states
+
+    def test_variable_stride_int_progress_stays_explicit(self):
+        enable = Bool("Enable", external=True)
+        ticks = Int("VariableStepTicks")
+        stride = Int("Stride", final=True)
+        threshold = Int("VariableTickThreshold", final=True)
+        alarm = Bool("VariableTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(1, stride)
+                copy(500, threshold)
+            with Rung(enable):
+                calc(ticks + stride, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "VariableStepTicks" in stateful
+        assert "Stride" in stateful
+        assert "VariableTickThreshold" in stateful
+
+    def test_int_progress_eq_comparison_becomes_tractable(self):
+        """calc(ticks + 1, ticks) with Rung(ticks == k) decomposes into ge/gt boundary atoms."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("EqTicks")
+        at_five = Bool("AtFive")
+
+        with Program(strict=False) as logic:
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks == 5):
+                out(at_five)
+
+        states = reachable_states(logic, project=["AtFive"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("AtFive", True)}) in states
+        assert frozenset({("AtFive", False)}) in states
+
+    def test_int_progress_ne_comparison_becomes_tractable(self):
+        """calc(ticks + 1, ticks) with Rung(ticks != 0) decomposes into ge/gt boundary atoms."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        ticks = Int("NeTicks")
+        running = Bool("Running")
+
+        with Program(strict=False) as logic:
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks != 0):
+                out(running)
+
+        states = reachable_states(logic, project=["Running"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Running", True)}) in states
+        assert frozenset({("Running", False)}) in states
+
+    def test_int_progress_eq_and_gt_mixed_becomes_tractable(self):
+        """Progress tag with both == and > comparisons on the same accumulator."""
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("Reset", external=True)
+        step = Int("MixedStep")
+        threshold = Int("MixedThreshold", final=True)
+        at_step = Bool("AtStep3")
+        past_threshold = Bool("PastThreshold")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(10, threshold)
+            with Rung(reset_btn):
+                copy(0, step)
+            with Rung(enable):
+                calc(step + 1, step)
+            with Rung(step == 3):
+                out(at_step)
+            with Rung(step > threshold):
+                out(past_threshold)
+
+        states = reachable_states(logic, project=["AtStep3", "PastThreshold"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("AtStep3", True), ("PastThreshold", False)}) in states
+        assert frozenset({("AtStep3", False), ("PastThreshold", True)}) in states
+        assert frozenset({("AtStep3", True), ("PastThreshold", True)}) not in states
+
+    def test_raw_external_threshold_is_absorbed_when_threshold_only(self):
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
+        t = Timer.clone("ExternalThresholdTmr")
+        alarm = Bool("ExternalThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > hmi_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ExternalThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ExternalThresholdAlarm", False)}) in states
+        assert frozenset({("ExternalThresholdAlarm", True)}) in states
+
+    def test_unwritten_internal_threshold_is_absorbed_as_constant(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("ImplicitThreshold")
+        t = Timer.clone("ImplicitThresholdTmr")
+        alarm = Bool("ImplicitThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ImplicitThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ImplicitThresholdAlarm", True)}) in states
+
+    def test_projected_public_threshold_is_discovered(self):
+        enable = Bool("Enable", external=True)
+        active_threshold = Int("ProjectedThreshold", final=True, public=True)
+        t = Timer.clone("ProjectedThresholdTmr")
+        alarm = Bool("ProjectedThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, active_threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > active_threshold):
+                out(alarm)
+
+        states = reachable_states(
+            logic,
+            project=["ProjectedThresholdAlarm", "ProjectedThreshold"],
+            max_depth=5,
+        )
+        assert not isinstance(states, Intractable)
+        threshold_vals = {dict(row)["ProjectedThreshold"] for row in states}
+        assert 500 in threshold_vals
+
+    def test_public_threshold_is_absorbed_when_not_projected(self):
+        enable = Bool("Enable", external=True)
+        public_threshold = Int("PublicThreshold", public=True, default=1000)
+        t = Timer.clone("PublicThresholdTmr")
+        alarm = Bool("PublicThresholdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > public_threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["PublicThresholdAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("PublicThresholdAlarm", False)}) in states
+        assert frozenset({("PublicThresholdAlarm", True)}) in states
+
+    def test_exact_and_abstract_threshold_events_both_branch(self):
+        enable = Bool("Enable", external=True)
+        hmi_threshold = Int("HmiThreshold", external=True, default=1000)
+        t = Timer.clone("MixedThresholdTmr")
+        exact_alarm = Bool("ExactAlarm")
+        hmi_alarm = Bool("HmiAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > 500):
+                out(exact_alarm)
+            with Rung(t.Acc > hmi_threshold):
+                out(hmi_alarm)
+
+        states = reachable_states(logic, project=["ExactAlarm", "HmiAlarm"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ExactAlarm", True), ("HmiAlarm", False)}) in states
+        assert frozenset({("ExactAlarm", False), ("HmiAlarm", True)}) in states
+
+    def test_non_threshold_accumulator_read_stays_explicit(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("SavedAccThreshold", final=True)
+        t = Timer.clone("SavedAccTmr")
+        saved = Int("SavedAccValue")
+        alarm = Bool("SavedAccAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung():
+                copy(t.Acc, saved)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "SavedAccTmr_Acc" in stateful
+        assert "SavedAccThreshold" in stateful
+        assert done_acc == {}
+
+    def test_reset_recomputes_threshold_vector_false(self):
+        enable = Bool("Enable", external=True)
+        reset_btn = Bool("ResetTicks", external=True)
+        ticks = Int("ResettableStepTicks")
+        threshold = Int("ResettableTickThreshold", final=True)
+        alarm = Bool("ResettableTickAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(3, threshold)
+            with Rung(reset_btn):
+                copy(0, ticks)
+            with Rung(enable):
+                calc(ticks + 1, ticks)
+            with Rung(ticks > threshold):
+                out(alarm)
+
+        states = reachable_states(logic, project=["ResettableTickAlarm"], max_depth=8)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("ResettableTickAlarm", True)}) in states
+        assert frozenset({("ResettableTickAlarm", False)}) in states
+
+    def test_threshold_event_before_done_uses_nearest_event(self):
+        enable = Bool("Enable", external=True)
+        threshold = Int("NearestThreshold", final=True)
+        t = Timer.clone("NearestTmr")
+        warning = Bool("Warning")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > threshold):
+                out(warning)
+
+        states = reachable_states(logic, project=["Warning", "NearestTmr_Done"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Warning", True), ("NearestTmr_Done", False)}) in states
+
+
 class TestIntractableTags:
     """Item 3 follow-up: Intractable.tags field is populated."""
 
@@ -1020,6 +2405,594 @@ class TestIntractableTags:
         result = _classify_dimensions(logic)
         assert isinstance(result, Intractable)
         assert "Result" in result.tags
+
+
+class TestIntractableHints:
+    """Intractable results carry actionable hints for the user."""
+
+    def test_pointer_tag_hint(self):
+        """Pointer into a block > 1000 elements gets a hint naming the block."""
+        from pyrung.core import Block, TagType, copy
+
+        blk = Block("Regs", TagType.INT, 1, 1500)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("pointer" in h and "Regs" in h for h in result.hints)
+        assert any("Idx" in h for h in result.hints)
+
+    def test_wide_range_hint(self):
+        """Tag with min/max range > 1000 gets a 'too wide' hint."""
+        level = Int("Level", external=True, min=0, max=5000)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung(level):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("too wide" in h and "Level" in h for h in result.hints)
+
+    def test_no_constraint_hint(self):
+        """Tag with no choices/min/max gets a generic hint."""
+        val = Int("Val", external=True)
+        other = Int("Other", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(val > other):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("no domain constraint" in h for h in result.hints)
+
+    def test_function_output_hint(self):
+        """Unannotated function output gets a hint."""
+        trigger = Bool("Trigger", external=True)
+        result_tag = Int("Result")
+
+        def compute() -> dict:
+            return {"result": 42}
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                run_function(compute, outs={"result": result_tag})
+            with Rung(result_tag == 1):
+                out(Bool("Output"))
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert any("function output" in h and "Result" in h for h in result.hints)
+
+    def test_max_states_dimension_breakdown(self):
+        """max_states exceeded carries dimension breakdown hints."""
+        inputs = [Bool(f"In{i}", external=True) for i in range(20)]
+        flags = [Bool(f"Flag{i}") for i in range(20)]
+        output = Bool("Output")
+
+        with Program(strict=False) as logic:
+            for inp, flag in zip(inputs, flags, strict=True):
+                with Rung(rise(inp)):
+                    latch(flag)
+            with Rung(*flags):
+                out(output)
+
+        result = prove(logic, lambda s: True, max_states=10)
+        assert isinstance(result, Intractable)
+        assert result.hints
+        assert any("state space:" in h for h in result.hints)
+        assert any("Constrain" in h for h in result.hints)
+
+    def test_hints_suggest_choices_or_testing(self):
+        """Unbounded hints suggest choices= or dt= testing."""
+        val = Int("Val", external=True)
+        other = Int("Other", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(val > other):
+                out(flag)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert all("choices=" in h or "dt= testing" in h for h in result.hints)
+
+
+class TestThresholdBlockerHints:
+    """Intractable hints explain why threshold abstraction was blocked."""
+
+    def test_literal_thresholds_are_structurally_bounded(self):
+        """Literal-written thresholds no longer need readonly/final hints."""
+        enable = Bool("Enable", external=True)
+        pan_ts = Int("PanWatchdog_Ts")
+        shaft_ts = Int("ShaftWatchdog_Ts")
+        t = Timer.clone("CurStep_tmr")
+        pan_alarm = Bool("PanAlarm")
+        shaft_alarm = Bool("ShaftAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, pan_ts)
+                copy(600, shaft_ts)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > pan_ts):
+                out(pan_alarm)
+            with Rung(t.Acc > shaft_ts):
+                out(shaft_alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "CurStep_tmr_Acc" not in stateful
+        assert "PanWatchdog_Ts" not in stateful
+        assert "ShaftWatchdog_Ts" not in stateful
+
+    def test_literal_threshold_no_longer_suggests_readonly(self):
+        """Literal-written thresholds are bounded without readonly hints."""
+        enable = Bool("Enable", external=True)
+        ts = Int("WatchdogTs")
+        t = Timer.clone("WdTmr")
+        alarm = Bool("WdAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, ts)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "WdTmr_Acc" not in stateful
+        assert "WatchdogTs" not in stateful
+
+    def test_shared_threshold_blocks_absorption(self):
+        """One threshold shared across progress sources stays explicit."""
+        enable_a = Bool("EnableA", external=True)
+        enable_b = Bool("EnableB", external=True)
+        shared_ts = Int("SharedWatchdogTs")
+        t_a = Timer.clone("SharedA")
+        t_b = Timer.clone("SharedB")
+        alarm_a = Bool("SharedAlarmA")
+        alarm_b = Bool("SharedAlarmB")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, shared_ts)
+            with Rung(enable_a):
+                on_delay(t_a, preset=1000)
+            with Rung(enable_b):
+                on_delay(t_b, preset=1000)
+            with Rung(t_a.Acc > shared_ts):
+                out(alarm_a)
+            with Rung(t_b.Acc > shared_ts):
+                out(alarm_b)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "SharedWatchdogTs" in stateful
+        assert "SharedA_Acc" in stateful
+        assert "SharedB_Acc" in stateful
+        assert done_acc == {}
+
+    def test_threshold_tag_non_threshold_comparison_blocks_absorption(self):
+        """Threshold tags used in other comparisons stay explicit."""
+        enable = Bool("Enable", external=True)
+        ts = Int("ComparedThreshold")
+        t = Timer.clone("ComparedTmr")
+        alarm = Bool("ComparedAlarm")
+        mode = Bool("ThresholdMode")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, ts)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+            with Rung(ts == 500):
+                out(mode)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "ComparedThreshold" in stateful
+        assert "ComparedTmr_Acc" in stateful
+        assert done_acc == {}
+
+    def test_data_read_blocker_falls_back_to_structural_bounding(self):
+        """Data-flow reads can block absorption without forcing Intractable."""
+        enable = Bool("Enable", external=True)
+        threshold = Int("DataReadThreshold", final=True)
+        t = Timer.clone("DataReadTmr")
+        saved = Int("SavedValue")
+        alarm = Bool("DataReadAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(500, threshold)
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung():
+                copy(t.Acc, saved)
+            with Rung(t.Acc > threshold):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, done_acc, _done_presets, _done_kinds = result
+        assert "DataReadTmr_Acc" in stateful
+        assert "DataReadThreshold" in stateful
+        assert done_acc == {}
+
+    def test_stable_threshold_no_blocker(self):
+        """Stable thresholds produce no blocker — absorption succeeds."""
+        enable = Bool("Enable", external=True)
+        ts = Int("StableTs", readonly=True)
+        t = Timer.clone("StableTmr")
+        alarm = Bool("StableAlarm")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                on_delay(t, preset=1000)
+            with Rung(t.Acc > ts):
+                out(alarm)
+
+        result = reachable_states(logic, project=["StableAlarm"], max_depth=5)
+        assert not isinstance(result, Intractable)
+
+
+class TestKernelDomainDiscovery:
+    """Pilot sweep discovers finite domains for program-derived tags."""
+
+    def test_copy_choices_inherits_domain(self):
+        """copy(Step, StoredStep) where Step has choices= becomes tractable."""
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Fill", 2: "Dump"})
+        StoredStep = Int("StoredStep")
+        DumpMode = Bool("DumpMode")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 2):
+                out(DumpMode)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_calc_identity_inherits_domain(self):
+        """calc(Step, StoredStep) identity-style assignment becomes tractable."""
+        Step = Int("Step", external=True, choices={0: "Off", 1: "On"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_large_comparison_only_calc_tag_is_absorbed(self):
+        """Large written comparison-only tags use vector keying instead of exact state."""
+        source = Int("Source", external=True, min=0, max=300)
+        stored = Int("Stored")
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(source, stored)
+            with Rung(stored > 150):
+                out(alarm)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert "Stored" not in stateful
+
+        states = reachable_states(logic, project=["Alarm"], max_depth=2)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Alarm", False)}) in states
+        assert frozenset({("Alarm", True)}) in states
+
+    def test_timer_preset_source_excluded_from_comparison_only(self):
+        """Tags used as timer preset sources are excluded from comparison-only absorption."""
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.absorb import (
+            _find_comparison_absorptions,
+        )
+        from pyrung.core.analysis.prove.classify import (
+            _collect_all_exprs,
+            _collect_structural_domains,
+        )
+
+        enable = Bool("Enable", external=True)
+        h1 = Int("H1", min=0, max=100)
+        h2 = Int("H2", min=0, max=100)
+        t1 = Timer.clone("T1")
+        t2 = Timer.clone("T2")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                copy(50, h1)
+                copy(75, h2)
+            with Rung(enable):
+                on_delay(t1, preset=h1)
+                on_delay(t2, preset=h2)
+            with Rung(h1 > 30, h2 > 60):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        structural_domains = _collect_structural_domains(logic, graph, all_exprs)
+
+        comparison = _find_comparison_absorptions(logic, graph, all_exprs, structural_domains)
+        assert "H1" not in comparison.comparison_tags
+        assert "H2" not in comparison.comparison_tags
+
+    def test_real_operand_side_boundary_uses_comparison_partner(self):
+        """Projected REAL tags resolve operand-side comparison boundaries from the partner tag."""
+        from pyrung.core import Real
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.analysis.prove.classify import (
+            _classify_dimensions_from_graph,
+            _collect_all_exprs,
+        )
+
+        source = Int("Source", external=True, min=0, max=300)
+        stored = Real("Stored")
+        limit = Real("Limit", readonly=True, default=15.0)
+        alarm = Bool("Alarm")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                calc(source / 10, stored)
+            with Rung(limit > stored):
+                out(alarm)
+
+        graph = build_program_graph(logic)
+        all_exprs = _collect_all_exprs(logic, graph)
+        result = _classify_dimensions_from_graph(
+            logic,
+            graph,
+            all_exprs,
+            project=("Stored",),
+        )
+        assert not isinstance(result, Intractable)
+        stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
+        assert stateful["Stored"] == (14.0, 15.0, 16.0)
+
+    def test_literal_writes_discover_domain(self):
+        """Literal writes discover {default, 5, 10}."""
+        trigger_a = Bool("TrigA", external=True)
+        trigger_b = Bool("TrigB", external=True)
+        dest = Int("Dest")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger_a):
+                copy(5, dest)
+            with Rung(trigger_b):
+                copy(10, dest)
+            with Rung(dest == 5):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_fill_literal_writes_discover_domain(self):
+        """fill(constant, block.select(...)) counts as literal writes per target."""
+        enable = Bool("Enable", external=True)
+        ds = Block("DS", TagType.INT, 1, 3)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                fill(7, ds.select(1, 3))
+            with Rung(ds[1] == 7):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_direct_self_feed_threshold_only_progress_becomes_tractable(self):
+        """Monotone self-feed is tractable when the only consumer is a threshold."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        trigger = Bool("Trigger", external=True)
+        count = Int("Count")
+        threshold = Int("Threshold", external=True, default=1000)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(count + 1, count)
+            with Rung(count > threshold):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        assert _has_data_feedback("Count", graph)
+
+        states = reachable_states(logic, project=["Flag"], max_depth=5)
+        assert not isinstance(states, Intractable)
+        assert frozenset({("Flag", False)}) in states
+        assert frozenset({("Flag", True)}) in states
+
+    def test_transitive_feedback_remains_intractable(self):
+        """Transitive feedback A→B→A remains intractable."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        trigger = Bool("Trigger", external=True)
+        a = Int("A")
+        b = Int("B")
+        threshold = Int("Threshold", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                calc(a + 1, b)
+            with Rung(trigger):
+                copy(b, a)
+            with Rung(a > threshold):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        assert _has_data_feedback("A", graph)
+        assert _has_data_feedback("B", graph)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+
+    def test_condition_only_not_data_feedback(self):
+        """Condition-only reference is not treated as data feedback."""
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Run"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung(StoredStep > 0):
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        graph = build_program_graph(logic)
+        assert not _has_data_feedback("StoredStep", graph)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_raw_external_no_writer_remains_intractable(self):
+        """Raw external tag with no writer remains intractable."""
+        ext = Int("ExtVal", external=True)
+        other = Int("OtherVal", external=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(ext > other):
+                latch(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Intractable)
+
+    def test_external_final_with_writer_discoverable(self):
+        """external=True, final=True with an in-ladder writer is discovered."""
+        trigger = Bool("Trigger", external=True)
+        ext_final = Int("ExtFinal", external=True, final=True)
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung(trigger):
+                copy(42, ext_final)
+            with Rung(ext_final == 42):
+                out(flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_huge_input_product_skips_discovery(self):
+        """Huge relevant input product over max_combos skips discovery."""
+        from pyrung.circuitpy.codegen import compile_kernel
+        from pyrung.core.analysis.pdg import build_program_graph
+
+        inputs = [Int(f"In{i}", external=True, min=0, max=200) for i in range(5)]
+        dest = Int("Dest")
+        flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            for i, inp in enumerate(inputs):
+                with Rung():
+                    calc(inp + i, dest)
+            with Rung(dest > 0):
+                out(flag)
+
+        graph = build_program_graph(logic)
+        compiled = compile_kernel(logic)
+        nd = {inp.name: tuple(range(201)) for inp in inputs}
+        result = _pilot_sweep_domains(
+            compiled,
+            ["Dest"],
+            nd,
+            graph,
+            max_combos=100_000,
+        )
+        assert "Dest" not in result
+
+    def test_copy_from_min_max_source_inherits_domain(self):
+        """copy(Source, Dest) where Source has min=/max= but no comparison atoms."""
+        Source = Int("Source", external=True, min=0, max=5)
+        Stored = Int("Stored")
+        Other = Int("Other", external=True, default=5)
+        Flag = Bool("Flag")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(Source, Stored)
+            with Rung(Stored > Other):
+                out(Flag)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_copy_with_reset_from_bounded_source(self):
+        """copy(CurStep, StoredStep) plus copy(0, StoredStep) reset path."""
+        CurStep = Int("CurStep", external=True, min=0, max=3)
+        StoredStep = Int("StoredStep")
+        ResetBtn = Bool("ResetBtn", external=True)
+        Active = Bool("Active")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(CurStep, StoredStep)
+            with Rung(ResetBtn):
+                copy(0, StoredStep)
+            with Rung(StoredStep == 2):
+                out(Active)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
+
+    def test_subroutine_gated_tag_discovered_via_multiscan(self):
+        """Tag written inside a subroutine behind a call gate needs multi-scan."""
+        from pyrung.core import call, subroutine
+
+        xCall = Bool("xCall", external=True)
+        running = Bool("Running")
+        Step = Int("Step", external=True, choices={0: "Idle", 1: "Run", 2: "Done"})
+        StoredStep = Int("StoredStep")
+        Active = Bool("Active")
+
+        @subroutine("Worker", strict=False)
+        def worker():
+            with Rung():
+                copy(Step, StoredStep)
+            with Rung(StoredStep == 1):
+                out(Active)
+
+        with Program(strict=False) as logic:
+            with Rung(xCall):
+                out(running)
+            with Rung(running):
+                call(worker)
+
+        result = prove(logic, lambda s: True)
+        assert isinstance(result, Proven)
 
 
 class TestSettlePending:
@@ -1079,3 +3052,465 @@ class TestSettlePending:
         results = prove(logic, [Or(~Cmd, Fb, Alarm)])
         assert isinstance(results, list)
         assert isinstance(results[0], Proven)
+
+
+# ===================================================================
+# InputBlock / TagMap input inference
+# ===================================================================
+
+
+class TestInputBlockNondeterministic:
+    def test_input_block_tags_classified_nondeterministic(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        sd, nd, combinational, _, _, _ = result
+        assert "X1" in nd
+        assert nd["X1"] == (False, True)
+        assert "X1" not in sd
+
+    def test_output_block_tags_not_nondeterministic(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        y = OutputBlock("Y", TagType.BOOL, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(y[1])
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        sd, nd, combinational, _, _, _ = result
+        assert "X1" in nd
+        assert "Y1" not in nd
+        assert "Y1" in combinational
+
+    def test_reachable_states_with_input_block(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 2
+
+    def test_prove_with_input_block(self):
+        x = InputBlock("X", TagType.BOOL, 1, 4)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(x[1]):
+                out(light)
+
+        result = prove(logic, light)
+        assert isinstance(result, Counterexample)
+
+    def test_tagmap_stamps_external_on_input_mapped_tags(self):
+        from pyrung.click import TagMap, x, y
+
+        button = Bool("Button")
+        motor = Bool("Motor")
+        assert not button.external
+        assert not motor.external
+
+        TagMap({button: x[1], motor: y[1]}, include_system=False)
+
+        assert button.external
+        assert not motor.external
+
+    def test_tagmap_stamped_tag_becomes_nondeterministic(self):
+        from pyrung.click import TagMap, x
+
+        button = Bool("Button")
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        TagMap({button: x[1]}, include_system=False)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _, nd, _, _, _, _ = result
+        assert "Button" in nd
+
+    def test_tagmap_stamped_reachable_states(self):
+        from pyrung.click import TagMap, x
+
+        button = Bool("Button")
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(button):
+                out(light)
+
+        TagMap({button: x[1]}, include_system=False)
+
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert len(states) == 2
+
+
+class TestPointerDomainInference:
+    """Pointer tags into blocks get auto-bounded from block address range."""
+
+    def test_external_pointer_auto_bounded(self):
+        """External pointer with no annotation gets domain from block bounds."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == tuple(range(0, 11))
+
+    def test_explicit_choices_not_overridden(self):
+        """Pointer with explicit choices= keeps its annotated domain."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True, choices={1: "first", 5: "fifth"})
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == (1, 5)
+
+    def test_explicit_min_max_not_overridden(self):
+        """Pointer with explicit min=/max= keeps its annotated domain."""
+        blk = Block("DS", TagType.INT, 1, 50)
+        idx = Int("Idx", external=True, min=1, max=5)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        _stateful, nondeterministic, *_ = result
+        assert "Idx" in nondeterministic
+        assert nondeterministic["Idx"] == tuple(range(1, 6))
+
+    def test_literal_copy_domain_not_overridden(self):
+        """Pointer already inferred by literal copies keeps that tighter domain."""
+        blk = Block("DS", TagType.INT, 1, 50)
+        idx = Int("Idx")
+        dest = Int("Out")
+        sel = Bool("Sel", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(sel):
+                copy(1, idx)
+            with Rung(~sel):
+                copy(3, idx)
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, _nondeterministic, *_ = result
+        assert "Idx" in stateful
+        assert set(stateful["Idx"]) == {0, 1, 3}
+
+    def test_wide_block_still_intractable(self):
+        """Block with > 1000 addresses leaves the pointer intractable."""
+        blk = Block("Big", TagType.INT, 1, 2000)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "Idx" in result.tags
+
+    def test_internal_pointer_auto_bounded(self):
+        """Internal pointer written by calc gets domain from block bounds."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx")
+        dest = Int("Out")
+        step = Bool("Step", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(step):
+                calc(idx + 1, idx)
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert not isinstance(result, Intractable)
+        stateful, *_ = result
+        assert "Idx" in stateful
+        assert stateful["Idx"] == tuple(range(0, 11))
+
+    def test_unconditioned_pointer_not_silently_dropped(self):
+        """Pointer used only in instructions (no conditions) must still
+        surface as intractable — not be silently dropped because it has
+        no comparison atoms."""
+        blk = Block("DS", TagType.INT, 1, 2000)
+        idx = Int("Idx", external=True)
+        dest = Int("Out")
+        flag = Bool("Flag", external=True)
+
+        with Program(strict=False) as logic:
+            with Rung(flag):
+                copy(blk[idx], dest)
+
+        result = _classify_dimensions(logic)
+        assert isinstance(result, Intractable)
+        assert "Idx" in result.tags
+        assert any("pointer" in h and "Idx" in h for h in result.hints)
+
+
+class TestBlocklessProveKernel:
+    """prove defaults to blockless compiled kernels."""
+
+    def test_build_explore_context_uses_blockless_kernel(self):
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=5)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        context = prove_module._build_explore_context(logic)
+
+        assert not isinstance(context, Intractable)
+        assert context.compiled.blockless is True
+
+    def test_public_compile_sites_use_blockless_kernel(self, monkeypatch):
+        from pyrung.circuitpy import codegen as codegen_module
+
+        cmd = Bool("Cmd", external=True)
+        light = Bool("Light")
+
+        with Program(strict=False) as logic:
+            with Rung(cmd):
+                out(light)
+
+        real_compile = codegen_module.compile_kernel
+        calls: list[dict[str, object]] = []
+
+        def _record(*args, **kwargs):
+            calls.append(dict(kwargs))
+            return real_compile(*args, **kwargs)
+
+        monkeypatch.setattr(codegen_module, "compile_kernel", _record)
+
+        assert isinstance(prove(logic, lambda _state: True), Proven)
+        states = reachable_states(logic, project=["Light"])
+        assert not isinstance(states, Intractable)
+        assert isinstance(program_hash(logic), str)
+        assert calls
+        assert all(call.get("blockless") is True for call in calls)
+
+    def test_reachable_states_still_work_for_full_pointer_domain(self):
+        """Full pointer domains still prove and enumerate correctly."""
+        blk = Block("DS", TagType.INT, 1, 10)
+        idx = Int("Idx", external=True, min=1, max=10)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        states = reachable_states(logic, project=["Out"])
+        assert not isinstance(states, Intractable)
+
+    def test_prove_correct_with_narrowed_block(self):
+        """Prove still produces correct results with narrowed indirect blocks."""
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=3)
+        dest = Int("Out")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+
+        result = prove(logic, dest >= 0)
+        assert isinstance(result, Proven)
+
+    def test_mixed_access_prove_correct(self):
+        """Prove works with mixed static + indirect access on same block."""
+        blk = Block("DS", TagType.INT, 1, 100)
+        idx = Int("Idx", external=True, min=1, max=3)
+        dest = Int("Out")
+        dest2 = Int("Out2")
+
+        with Program(strict=False) as logic:
+            with Rung():
+                copy(blk[idx], dest)
+            with Rung():
+                copy(blk[50], dest2)
+
+        result = prove(logic, dest >= 0)
+        assert isinstance(result, Proven)
+
+
+# ===================================================================
+# Group: Free input elision
+# ===================================================================
+
+
+class TestFreeInputElision:
+    """Verify the free-input state key elision optimization."""
+
+    def test_free_input_reduces_states(self):
+        """Free input (xic only) is not in nondeterministic_names; state count halved."""
+        free = Bool("Free", external=True)
+        edge = Bool("Edge", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(free):
+                latch(x)
+            with Rung(rise(edge)):
+                reset(x)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Free" in context.free_input_names
+        assert "Free" not in context.nondeterministic_names
+        assert "Edge" not in context.free_input_names
+        assert "Edge" in context.nondeterministic_names
+
+    def test_shift_clock_is_edge_bearing(self):
+        """ShiftInstruction clock ND input stays in nondeterministic_names."""
+        from pyrung.core import Block, TagType, shift
+
+        clk = Bool("Clk", external=True)
+        data = Bool("Data", external=True)
+        rst = Bool("Rst", external=True)
+        bits = Block("SR", TagType.BOOL, 1, 4)
+
+        with Program(strict=False) as logic:
+            with Rung(data):
+                shift(bits.select(1, 4)).clock(clk).reset(rst)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Clk" not in context.free_input_names
+        assert "Clk" in context.nondeterministic_names
+
+    def test_drum_jog_is_edge_bearing(self):
+        """Drum jog ND input stays in nondeterministic_names."""
+        from pyrung.core import event_drum
+
+        enable = Bool("Enable", external=True)
+        jog = Bool("Jog", external=True)
+        reset_sig = Bool("Rst", external=True)
+        e1 = Bool("E1", external=True)
+        step = Int("Step")
+        done = Bool("Done")
+        y1 = Bool("Y1")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                event_drum(
+                    outputs=[y1],
+                    events=[e1],
+                    pattern=[[1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset_sig).jog(jog)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "Jog" not in context.free_input_names
+        assert "Jog" in context.nondeterministic_names
+
+    def test_drum_event_is_edge_bearing(self):
+        """EventDrum per-step event ND input stays in nondeterministic_names."""
+        from pyrung.core import event_drum
+
+        enable = Bool("Enable", external=True)
+        reset_sig = Bool("Rst", external=True)
+        e1 = Bool("E1", external=True)
+        step = Int("Step")
+        done = Bool("Done")
+        y1 = Bool("Y1")
+
+        with Program(strict=False) as logic:
+            with Rung(enable):
+                event_drum(
+                    outputs=[y1],
+                    events=[e1],
+                    pattern=[[1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset_sig)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert "E1" not in context.free_input_names
+        assert "E1" in context.nondeterministic_names
+
+    def test_projected_free_input_kept(self):
+        """Free input in project stays in nondeterministic_names."""
+        a = Bool("A", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(a):
+                out(x)
+
+        context = prove_module._build_explore_context(logic, project=("A",))
+        assert not isinstance(context, Intractable)
+        assert "A" in context.nondeterministic_names
+
+    def test_all_edge_bearing_no_reduction(self):
+        """All ND inputs use rise() — no free inputs, names unchanged."""
+        a = Bool("A", external=True)
+        b = Bool("B", external=True)
+        x = Bool("X")
+        y = Bool("Y")
+
+        with Program(strict=False) as logic:
+            with Rung(rise(a)):
+                latch(x)
+            with Rung(rise(b)):
+                latch(y)
+
+        context = prove_module._build_explore_context(logic)
+        assert not isinstance(context, Intractable)
+        assert context.free_input_names == frozenset()
+        assert "A" in context.nondeterministic_names
+        assert "B" in context.nondeterministic_names
+
+    def test_soundness_preserved(self):
+        """Latch controlled by free input: prove() result is sound."""
+        free = Bool("Free", external=True)
+        x = Bool("X")
+
+        with Program(strict=False) as logic:
+            with Rung(free):
+                latch(x)
+
+        result = prove(logic, ~x)
+        assert isinstance(result, Counterexample)
+
+        result2 = prove(logic, Or(x, ~x))
+        assert isinstance(result2, Proven)

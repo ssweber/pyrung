@@ -19,15 +19,15 @@ from pyrung.core import (
     Timer,
     TimeUnit,
     any_of,
+    calc,
     call,
     copy,
     latch,
-    calc,
+    named_array,
     on_delay,
     reset,
     return_early,
     subroutine,
-    named_array,
 )
 
 """

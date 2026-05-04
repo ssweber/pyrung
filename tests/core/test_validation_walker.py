@@ -106,11 +106,17 @@ class TestIndirectRef:
         assert src.value_kind == "indirect_ref"
         assert src.metadata["block_name"] == "DD"
         assert src.metadata["pointer_name"] == "Index"
+        assert src.metadata["block_start"] == 1
+        assert src.metadata["block_end"] == 100
+        assert src.metadata["pointer_default"] == 0
 
         dest = _first(facts, "instruction.dest")
         assert dest.value_kind == "indirect_ref"
         assert dest.metadata["block_name"] == "DD"
         assert dest.metadata["pointer_name"] == "Dst"
+        assert dest.metadata["block_start"] == 1
+        assert dest.metadata["block_end"] == 100
+        assert dest.metadata["pointer_default"] == 0
 
 
 # ---------------------------------------------------------------------------

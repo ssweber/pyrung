@@ -8,6 +8,7 @@ from ._core import (
     compile_expression,
     compile_instruction,
     compile_rung,
+    compile_rungs,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "compile_expression",
     "compile_instruction",
     "compile_rung",
+    "compile_rungs",
 ]

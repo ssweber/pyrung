@@ -88,6 +88,7 @@ class Field:
     external: bool | None = None
     final: bool | None = None
     public: bool | None = None
+    lock: bool | None = None
     physical: Physical | None = None
     link: str | None = None
     min: int | float | None = None
@@ -104,6 +105,7 @@ class Field:
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
@@ -119,6 +121,7 @@ class Field:
             external,
             final,
             public,
+            lock,
             physical,
             link,
             min,
@@ -147,6 +150,7 @@ class _FieldSpec:
     external: bool = False
     final: bool = False
     public: bool = False
+    lock: bool = False
     physical: Physical | None = None
     link: str | None = None
     min: int | float | None = None
@@ -281,6 +285,7 @@ class _StructRuntime:
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         kind: Literal["udt", "named_array"] = "udt",
     ):
         _validate_name(name)
@@ -294,6 +299,7 @@ class _StructRuntime:
         self.external = bool(external)
         self.final = bool(final)
         self.public = bool(public)
+        self.lock = bool(lock)
         self._structure_kind = kind
         self._pyrung_click_bg_color: str | None = None
         self._original_field_specs = field_specs
@@ -327,6 +333,7 @@ class _StructRuntime:
             block._pyrung_field_external = field_spec.external
             block._pyrung_field_final = field_spec.final
             block._pyrung_field_public = field_spec.public
+            block._pyrung_field_lock = field_spec.lock
             block._pyrung_field_physical = field_spec.physical
             block._pyrung_field_link = field_spec.link
             block._pyrung_field_min = field_spec.min
@@ -343,6 +350,7 @@ class _StructRuntime:
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _StructRuntime:
         """Create a copy of this structure with a different base name."""
         return _StructRuntime(
@@ -354,6 +362,7 @@ class _StructRuntime:
             external=self.external if external is None else external,
             final=self.final if final is None else final,
             public=self.public if public is None else public,
+            lock=self.lock if lock is None else lock,
             kind=self._structure_kind,
         )
 
@@ -369,6 +378,7 @@ class _StructRuntime:
                 external=spec.external,
                 final=spec.final,
                 public=spec.public,
+                lock=spec.lock,
                 physical=spec.physical,
                 link=spec.link,
                 min=spec.min,
@@ -419,6 +429,7 @@ class _DoneAccRuntime(_StructRuntime):
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _DoneAccRuntime:
         return _DoneAccRuntime(
             name=name,
@@ -429,6 +440,7 @@ class _DoneAccRuntime(_StructRuntime):
             external=self.external if external is None else external,
             final=self.final if final is None else final,
             public=self.public if public is None else public,
+            lock=self.lock if lock is None else lock,
             kind=self._structure_kind,
         )
 
@@ -449,6 +461,7 @@ class _NamedArrayRuntime(_StructRuntime):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
     ):
         _validate_stride(stride)
         if stride < len(field_specs):
@@ -468,6 +481,7 @@ class _NamedArrayRuntime(_StructRuntime):
             external=external,
             final=final,
             public=public,
+            lock=lock,
             kind="named_array",
         )
 
@@ -481,6 +495,7 @@ class _NamedArrayRuntime(_StructRuntime):
         external: bool | None = None,
         final: bool | None = None,
         public: bool | None = None,
+        lock: bool | None = None,
     ) -> _NamedArrayRuntime:
         """Create a copy of this named array with a different base name."""
         return _NamedArrayRuntime(
@@ -494,6 +509,7 @@ class _NamedArrayRuntime(_StructRuntime):
             external=self.external if external is None else external,
             final=self.final if final is None else final,
             public=self.public if public is None else public,
+            lock=self.lock if lock is None else lock,
         )
 
     def hardware_span(self, hw_start: int) -> tuple[int, int]:
@@ -574,6 +590,7 @@ def udt(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> Callable[[type[Any]], _StructRuntime]:
     """Decorator that builds a mixed-type structured runtime from annotations."""
     _validate_count(count)
@@ -582,7 +599,7 @@ def udt(
         name = cls.__name__
         _validate_name(name)
         field_specs = _parse_udt_fields(
-            cls, readonly=readonly, external=external, final=final, public=public
+            cls, readonly=readonly, external=external, final=final, public=public, lock=lock
         )
         return _StructRuntime(
             name=name,
@@ -593,6 +610,7 @@ def udt(
             external=external,
             final=final,
             public=public,
+            lock=lock,
         )
 
     return _decorator
@@ -608,6 +626,7 @@ def named_array(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> Callable[[type[Any]], _NamedArrayRuntime]:
     """Decorator that builds a single-type, instance-interleaved structured runtime."""
     _validate_count(count)
@@ -618,7 +637,13 @@ def named_array(
         name = cls.__name__
         _validate_name(name)
         field_specs = _parse_named_array_fields(
-            cls, resolved_type, readonly=readonly, external=external, final=final, public=public
+            cls,
+            resolved_type,
+            readonly=readonly,
+            external=external,
+            final=final,
+            public=public,
+            lock=lock,
         )
         return _NamedArrayRuntime(
             name=name,
@@ -631,6 +656,7 @@ def named_array(
             external=external,
             final=final,
             public=public,
+            lock=lock,
         )
 
     return _decorator
@@ -643,6 +669,7 @@ def _parse_udt_fields(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     if not isinstance(annotations, dict):
@@ -676,6 +703,7 @@ def _parse_udt_fields(
                 external=external,
                 final=final,
                 public=public,
+                lock=lock,
             )
         )
     return tuple(parsed)
@@ -689,6 +717,7 @@ def _parse_named_array_fields(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> tuple[_FieldSpec, ...]:
     annotations = getattr(cls, "__annotations__", {})
     classvar_names: set[str] = set()
@@ -713,6 +742,7 @@ def _parse_named_array_fields(
                 external=external,
                 final=final,
                 public=public,
+                lock=lock,
             )
         )
 
@@ -758,6 +788,7 @@ def _build_field_spec(
     external: bool = False,
     final: bool = False,
     public: bool = False,
+    lock: bool = False,
 ) -> _FieldSpec:
     retentive: bool | None = None
     default_spec = raw_default
@@ -766,6 +797,7 @@ def _build_field_spec(
     field_external = bool(external)
     field_final = bool(final)
     field_public = bool(public)
+    field_lock = bool(lock)
 
     field_physical: Physical | None = None
     field_link: str | None = None
@@ -799,6 +831,8 @@ def _build_field_spec(
             field_final = bool(raw_default.final)
         if raw_default.public is not None:
             field_public = bool(raw_default.public)
+        if raw_default.lock is not None:
+            field_lock = bool(raw_default.lock)
         field_physical = raw_default.physical
         field_link = raw_default.link
         field_min = raw_default.min
@@ -819,6 +853,7 @@ def _build_field_spec(
         external=field_external,
         final=field_final,
         public=field_public,
+        lock=field_lock,
         physical=field_physical,
         link=field_link,
         min=field_min,

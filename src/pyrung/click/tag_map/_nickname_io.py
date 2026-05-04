@@ -43,6 +43,7 @@ def _tag_meta_from_hints(
     external: object = False,
     final: object = False,
     public: object = False,
+    lock: object = False,
     physical: object = None,
     link: object = None,
     min: object = None,
@@ -54,6 +55,7 @@ def _tag_meta_from_hints(
     e = bool(external)
     f = bool(final)
     p = bool(public)
+    lk = bool(lock)
     physical_obj = cast(Physical | None, physical)
     link_text = cast(str | None, link)
     physical_name: str | None = None
@@ -74,6 +76,7 @@ def _tag_meta_from_hints(
         and not e
         and not f
         and not p
+        and not lk
         and physical_obj is None
         and link_text is None
         and min is None
@@ -87,6 +90,7 @@ def _tag_meta_from_hints(
         external=e,
         final=f,
         public=p,
+        lock=lk,
         physical=physical_name,
         link=link_text,
         on_delay=on_delay,
@@ -276,6 +280,7 @@ def tag_map_from_nickname_file(
             external = tag_meta.external if tag_meta is not None else False
             final = tag_meta.final if tag_meta is not None else False
             public = tag_meta.public if tag_meta is not None else False
+            lock = tag_meta.lock if tag_meta is not None else False
             physical = physical_for_meta(
                 tag_meta,
                 owner_name=physical_owner_name(logical_block, sv.name),
@@ -292,6 +297,7 @@ def tag_map_from_nickname_file(
             external_changed = external != sv.external
             final_changed = final != sv.final
             public_changed = public != sv.public
+            lock_changed = lock != sv.lock
             physical_changed = physical != sv.physical
             link_changed = link != sv.link
             min_changed = min_val != sv.min
@@ -306,6 +312,7 @@ def tag_map_from_nickname_file(
                 or external_changed
                 or final_changed
                 or public_changed
+                or lock_changed
                 or physical_changed
                 or link_changed
                 or min_changed
@@ -329,6 +336,8 @@ def tag_map_from_nickname_file(
                     slot_kw["final"] = final
                 if public_changed:
                     slot_kw["public"] = public
+                if lock_changed:
+                    slot_kw["lock"] = lock
                 if physical_changed:
                     slot_kw["physical"] = physical
                 if link_changed:
@@ -608,6 +617,7 @@ def tag_map_from_nickname_file(
                     external = tag_meta.external if tag_meta is not None else False
                     final = tag_meta.final if tag_meta is not None else False
                     public = tag_meta.public if tag_meta is not None else False
+                    lock = tag_meta.lock if tag_meta is not None else False
                     physical = physical_for_meta(
                         tag_meta,
                         owner_name=physical_owner_name(block, sv.name),
@@ -624,6 +634,7 @@ def tag_map_from_nickname_file(
                     external_changed = external != sv.external
                     final_changed = final != sv.final
                     public_changed = public != sv.public
+                    lock_changed = lock != sv.lock
                     physical_changed = physical != sv.physical
                     link_changed = link != sv.link
                     min_changed = min_val != sv.min
@@ -638,6 +649,7 @@ def tag_map_from_nickname_file(
                         or external_changed
                         or final_changed
                         or public_changed
+                        or lock_changed
                         or physical_changed
                         or link_changed
                         or min_changed
@@ -661,6 +673,8 @@ def tag_map_from_nickname_file(
                             slot_kw["final"] = final
                         if public_changed:
                             slot_kw["public"] = public
+                        if lock_changed:
+                            slot_kw["lock"] = lock
                         if physical_changed:
                             slot_kw["physical"] = physical
                         if link_changed:
@@ -785,6 +799,7 @@ def tag_map_from_nickname_file(
             external=tag_meta.external if tag_meta is not None else False,
             final=tag_meta.final if tag_meta is not None else False,
             public=tag_meta.public if tag_meta is not None else False,
+            lock=tag_meta.lock if tag_meta is not None else False,
             physical=physical_for_meta(tag_meta, owner_name=row.nickname),
             link=tag_meta.link if tag_meta is not None else None,
             min=tag_meta.min if tag_meta is not None else None,
@@ -841,6 +856,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
             external=getattr(entry.logical, "external", False),
             final=getattr(entry.logical, "final", False),
             public=getattr(entry.logical, "public", False),
+            lock=getattr(entry.logical, "lock", False),
             physical=getattr(entry.logical, "physical", None),
             link=getattr(entry.logical, "link", None),
             min=getattr(entry.logical, "min", None),
@@ -896,6 +912,7 @@ def write_tag_map_to_nickname_file(self, path: str | Path) -> int:
                 external=slot.external,
                 final=slot.final,
                 public=slot.public,
+                lock=slot.lock,
                 physical=slot.physical,
                 link=slot.link,
                 min=slot.min,

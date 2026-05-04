@@ -223,6 +223,8 @@ class TagMap:
                 self._system_alias_forward[slot.click_nickname] = entry
                 self._system_read_only[slot.logical.name] = slot.read_only
 
+        self._stamp_input_externals()
+        self._stamp_output_locks()
         self._populate_programmatic_structures()
         self._freeze_entries()
         self._refresh_nickname_validation()
@@ -628,6 +630,40 @@ class TagMap:
         if runtime is None or kind not in {"udt", "named_array"} or not isinstance(name, str):
             return None
         return cast(str, kind), name, runtime
+
+    def _stamp_input_externals(self) -> None:
+        """Mark logical tags mapped to input banks as external."""
+        from pyrung.core.memory_block import InputBlock
+        from pyrung.core.tag import InputTag
+
+        for entry in self._tag_entries:
+            if (
+                isinstance(entry.hardware, InputTag)
+                and not entry.logical.external
+                and not entry.logical.readonly
+            ):
+                object.__setattr__(entry.logical, "external", True)
+        for entry in self._block_entries:
+            if isinstance(entry.hardware.block, InputBlock):
+                for addr in entry.logical_addresses:
+                    tag = entry.logical[addr]
+                    if not tag.external and not tag.readonly:
+                        object.__setattr__(tag, "external", True)
+
+    def _stamp_output_locks(self) -> None:
+        """Mark logical tags mapped to output banks as lock."""
+        from pyrung.core.memory_block import OutputBlock
+        from pyrung.core.tag import OutputTag
+
+        for entry in self._tag_entries:
+            if isinstance(entry.hardware, OutputTag) and not entry.logical.lock:
+                object.__setattr__(entry.logical, "lock", True)
+        for entry in self._block_entries:
+            if isinstance(entry.hardware.block, OutputBlock):
+                for addr in entry.logical_addresses:
+                    tag = entry.logical[addr]
+                    if not tag.lock:
+                        object.__setattr__(tag, "lock", True)
 
     def _populate_programmatic_structures(self) -> None:
         structures: dict[str, StructuredImport] = {}

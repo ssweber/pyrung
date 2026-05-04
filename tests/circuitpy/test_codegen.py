@@ -736,6 +736,67 @@ class TestInstructionCoverage:
         compiled = compile_kernel(prog)
         assert compiled.referenced_tags["State"].default == 0
 
+    def test_compile_kernel_blockless_static_block_access_uses_tags(self):
+        ds = Block("DS", TagType.INT, 1, 4)
+        out_tag = Int("Out")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(ds[3], out_tag)
+                copy(7, ds[4])
+
+        compiled = compile_kernel(prog, blockless=True)
+
+        assert compiled.blockless is True
+        assert "tags.get('DS3', 0)" in compiled.source
+        assert "tags['DS4'] = " in compiled.source
+        assert " = blocks[" not in compiled.source
+
+    def test_compile_kernel_blockless_indirect_access_uses_name_tuples(self):
+        ds = Block("DS", TagType.INT, 1, 4)
+        idx = Int("Idx", external=True, min=1, max=4)
+        out_tag = Int("Out")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                copy(ds[idx], out_tag)
+                copy(9, ds[idx])
+
+        compiled = compile_kernel(prog, blockless=True)
+        block_symbol = next(iter(compiled.indirect_block_info))
+        helper_name = f"_resolve_index_{block_symbol.lstrip('_') or block_symbol}"
+        names_symbol = f"{block_symbol}_names"
+
+        assert compiled.blockless is True
+        assert f"{names_symbol} = (" in compiled.source
+        assert f"tags.get({names_symbol}[{helper_name}(int(" in compiled.source
+        assert f"tags[{names_symbol}[{helper_name}(int(" in compiled.source
+        assert " = blocks[" not in compiled.source
+
+    def test_compile_kernel_blockless_range_ops_use_tag_name_sequences(self):
+        ds = Block("DS", TagType.INT, 1, 4)
+        bits = Block("C", TagType.BOOL, 1, 4)
+        result = Int("Result")
+        found = Bool("Found")
+        clock = Bool("Clock")
+        reset_cmd = Bool("Reset")
+
+        with Program(strict=False) as prog:
+            with Rung():
+                fill(3, ds.select(1, 3))
+                search(ds.select(1, 3) >= 3, result=result, found=found)
+                shift(bits.select(1, 3)).clock(clock).reset(reset_cmd)
+
+        compiled = compile_kernel(prog, blockless=True)
+
+        assert compiled.blockless is True
+        assert "('DS1', 'DS2', 'DS3')" in compiled.source
+        assert "for _dst_idx in _fill" in compiled.source
+        assert "tags[_dst_idx] =" in compiled.source
+        assert "tags.get(_search" in compiled.source
+        assert "_prev_values = [bool(tags.get(_idx, False)) for _idx in _shift" in compiled.source
+        assert " = blocks[" not in compiled.source
+
     def test_function_call_subroutine_and_return_emit(self):
         hw = P1AM()
         hw.slot(1, "P1-08SIM")

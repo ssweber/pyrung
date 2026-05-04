@@ -75,6 +75,9 @@ _FAULT_DIVISION_ERROR_TAG = "fault.division_error"
 _FAULT_OUT_OF_RANGE_TAG = "fault.out_of_range"
 
 
+_FAULT_ADDRESS_ERROR_TAG = "fault.address_error"
+
+
 _SYS_MODE_RUN_TAG = "sys.mode_run"
 
 

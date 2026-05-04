@@ -190,6 +190,14 @@ class UnpackToBitsInstruction(OneShotMixin, Instruction):
         self.source = source
         self.bit_block = bit_block
 
+    @property
+    def dest(self) -> Any:
+        return self.bit_block
+
+    @dest.setter
+    def dest(self, value: Any) -> None:
+        self.bit_block = value
+
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         from pyrung.core.tag import TagType
@@ -240,6 +248,14 @@ class UnpackToWordsInstruction(OneShotMixin, Instruction):
         OneShotMixin.__init__(self, oneshot)
         self.source = source
         self.word_block = word_block
+
+    @property
+    def dest(self) -> Any:
+        return self.word_block
+
+    @dest.setter
+    def dest(self, value: Any) -> None:
+        self.word_block = value
 
     @guard_oneshot_execution
     def execute(self, ctx: ScanContext, enabled: bool) -> None:

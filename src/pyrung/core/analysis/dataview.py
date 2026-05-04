@@ -21,6 +21,7 @@ class TagDetail:
     external: bool = False
     final: bool = False
     public: bool = False
+    lock: bool = False
     physical: str | None = None
     link: str | None = None
     min: int | float | None = None
@@ -54,6 +55,7 @@ class StructureFieldInfo:
     external: bool = False
     final: bool = False
     public: bool = False
+    lock: bool = False
     physical: str | None = None
     link: str | None = None
     min: int | float | None = None
@@ -360,6 +362,7 @@ class DataView:
                 external=tag.external,
                 final=tag.final,
                 public=tag.public,
+                lock=tag.lock,
                 physical=physical_name,
                 link=tag.link,
                 min=tag.min,
@@ -414,6 +417,7 @@ class DataView:
                         external=getattr(block, "_pyrung_field_external", False),
                         final=getattr(block, "_pyrung_field_final", False),
                         public=getattr(block, "_pyrung_field_public", False),
+                        lock=getattr(block, "_pyrung_field_lock", False),
                         physical=phys.name if phys is not None else None,
                         link=getattr(block, "_pyrung_field_link", None),
                         min=getattr(block, "_pyrung_field_min", None),

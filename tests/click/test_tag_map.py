@@ -330,6 +330,22 @@ def test_tag_meta_parser_round_trips_valid_metadata():
     assert format_tag_meta(meta) == "[readonly, choices=IDLE:0|RUN:1]"
 
 
+def test_tag_meta_parser_accepts_bool_choice_preset():
+    meta, remaining = parse_tag_meta("[choices=Bool] Enabled flag")
+
+    assert meta == TagMeta(choices={0: "False", 1: "True"})
+    assert remaining == "Enabled flag"
+    assert format_tag_meta(meta) == "[choices=Bool]"
+
+
+def test_tag_meta_parser_formats_verbose_bool_choices_as_preset():
+    meta, remaining = parse_tag_meta("[choices=False:0|True:1] Enabled flag")
+
+    assert meta == TagMeta(choices={0: "False", 1: "True"})
+    assert remaining == "Enabled flag"
+    assert format_tag_meta(meta) == "[choices=Bool]"
+
+
 def test_tag_meta_parser_round_trips_range_metadata():
     meta, remaining = parse_tag_meta("[min=0,max=100,uom=psi] Pressure")
 
@@ -446,6 +462,23 @@ def test_nickname_file_round_trip_preserves_range_tag_meta(tmp_path):
     assert restored_tag.min == 0
     assert restored_tag.max == 100
     assert restored_tag.uom == "psi"
+
+
+def test_nickname_file_emits_bool_choice_preset_for_int_boolean_tags(tmp_path):
+    enabled = Tag("Enabled", TagType.INT, choices={0: "False", 1: "True"})
+    mapping = TagMap({enabled: ds[501]})
+
+    path = tmp_path / "int_bool_meta.csv"
+    mapping.to_nickname_file(path)
+    rows = pyclickplc.read_csv(path)
+    record = rows[get_addr_key("DS", 501)]
+
+    assert record.comment == "[choices=Bool]"
+
+    restored = TagMap.from_nickname_file(path)
+    restored_tag = restored.tags()[0].logical
+    assert restored_tag.type == TagType.INT
+    assert restored_tag.choices == {0: "False", 1: "True"}
 
 
 def test_nickname_file_round_trip_preserves_physical_tag_meta(tmp_path):
@@ -2251,3 +2284,99 @@ def test_tags_from_plc_data_includes_system_tags():
     result = mapping.tags_from_plc_data(data)
 
     assert "_PLC_Mode" in result or len(result) == 1
+
+
+# ===================================================================
+# Input-mapped tags stamped external
+# ===================================================================
+
+
+def test_stamp_external_standalone_tags():
+    from pyrung.click import y
+    from pyrung.core import Int
+
+    button = Bool("Button")
+    motor = Bool("Motor")
+    speed = Int("Speed")
+
+    TagMap({button: x[1], motor: y[1], speed: ds[1]})
+
+    assert button.external
+    assert not motor.external
+    assert not speed.external
+
+
+def test_stamp_external_block_range():
+    from pyrung.click import y
+
+    sensors = Block("Sensor", TagType.BOOL, 1, 4)
+    outputs = Block("Out", TagType.BOOL, 1, 4)
+
+    TagMap(
+        {sensors: x.select(1, 4), outputs: y.select(1, 4)},
+        include_system=False,
+    )
+
+    assert all(sensors[i].external for i in range(1, 5))
+    assert all(not outputs[i].external for i in range(1, 5))
+
+
+def test_stamp_external_noop_when_already_external():
+    button = Bool("Button", external=True)
+    TagMap({button: x[1]}, include_system=False)
+    assert button.external
+
+
+def test_no_stamp_for_non_input():
+    motor = Bool("Motor")
+    TagMap({motor: c[1]}, include_system=False)
+    assert not motor.external
+
+
+# ===================================================================
+# Output-mapped tags stamped lock
+# ===================================================================
+
+
+def test_stamp_lock_standalone_tags():
+    from pyrung.click import y
+    from pyrung.core import Int
+
+    button = Bool("Button")
+    motor = Bool("Motor")
+    speed = Int("Speed")
+
+    TagMap({button: x[1], motor: y[1], speed: ds[1]})
+
+    assert not button.lock
+    assert motor.lock
+    assert not speed.lock
+
+
+def test_stamp_lock_block_range():
+    from pyrung.click import y
+
+    sensors = Block("Sensor", TagType.BOOL, 1, 4)
+    outputs = Block("Out", TagType.BOOL, 1, 4)
+
+    TagMap(
+        {sensors: x.select(1, 4), outputs: y.select(1, 4)},
+        include_system=False,
+    )
+
+    assert all(not sensors[i].lock for i in range(1, 5))
+    assert all(outputs[i].lock for i in range(1, 5))
+
+
+def test_stamp_lock_noop_when_already_lock():
+    motor = Bool("Motor", lock=True)
+    from pyrung.click import y
+
+    TagMap({motor: y[1]}, include_system=False)
+    assert motor.lock
+
+
+def test_no_lock_stamp_for_non_output():
+    button = Bool("Button")
+    TagMap({button: x[1]}, include_system=False)
+    assert not button.lock

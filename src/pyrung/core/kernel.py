@@ -33,6 +33,7 @@ class BlockSpec:
     default: bool | int | float | str
     tag_type: TagType
     tag_names: tuple[str, ...]
+    tag_indices: tuple[int, ...] | None = None
 
 
 class ReplayKernel:
@@ -47,20 +48,16 @@ class ReplayKernel:
     def __init__(
         self,
         *,
-        referenced_tags: dict[str, Tag],
-        block_specs: dict[str, BlockSpec],
-        edge_tags: set[str],
+        tag_template: dict[str, bool | int | float | str],
+        blocks_template: dict[str, list[bool | int | float | str]],
+        prev_template: dict[str, bool | int | float | str],
     ) -> None:
-        self.tags: dict[str, bool | int | float | str] = {
-            name: tag.default for name, tag in referenced_tags.items()
-        }
+        self.tags: dict[str, bool | int | float | str] = dict(tag_template)
         self.blocks: dict[str, list[bool | int | float | str]] = {
-            spec.symbol: [spec.default] * spec.size for spec in block_specs.values()
+            k: list(v) for k, v in blocks_template.items()
         }
         self.memory: dict[str, Any] = {}
-        self.prev: dict[str, bool | int | float | str] = {
-            name: referenced_tags[name].default for name in edge_tags
-        }
+        self.prev: dict[str, bool | int | float | str] = dict(prev_template)
         self.scan_id: int = 0
         self.timestamp: float = 0.0
 
@@ -72,15 +69,17 @@ class ReplayKernel:
     def load_block_from_tags(self, spec: BlockSpec) -> None:
         """Populate a block array from the corresponding tag values."""
         arr = self.blocks[spec.symbol]
-        for i, name in enumerate(spec.tag_names):
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
             if name in self.tags:
-                arr[i] = self.tags[name]
+                arr[idx] = self.tags[name]
 
     def flush_block_to_tags(self, spec: BlockSpec) -> None:
         """Write block array values back to the tag dict."""
         arr = self.blocks[spec.symbol]
-        for i, name in enumerate(spec.tag_names):
-            self.tags[name] = arr[i]
+        indices = spec.tag_indices or range(len(spec.tag_names))
+        for idx, name in zip(indices, spec.tag_names, strict=True):
+            self.tags[name] = arr[idx]
 
     def capture_prev(self, edge_tags: set[str]) -> None:
         """Snapshot current tag values into prev for edge detection."""
@@ -116,11 +115,47 @@ class CompiledKernel:
     block_specs: dict[str, BlockSpec] = field(default_factory=dict)
     edge_tags: set[str] = field(default_factory=set)
     source: str = ""
+    blockless: bool = False
+    has_io_gaps: bool = False
+    indirect_block_info: dict[str, tuple[str, int, int, frozenset[int]]] = field(
+        default_factory=dict
+    )
+    _tag_template: dict[str, bool | int | float | str] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _blocks_template: dict[str, list[bool | int | float | str]] = field(
+        init=False, repr=False, default_factory=dict
+    )
+    _prev_template: dict[str, bool | int | float | str] = field(
+        init=False, repr=False, default_factory=dict
+    )
+
+    def __post_init__(self) -> None:
+        tag_template: dict[str, bool | int | float | str] = {
+            name: tag.default for name, tag in self.referenced_tags.items()
+        }
+        for spec in self.block_specs.values():
+            for name in spec.tag_names:
+                tag_template.setdefault(name, spec.default)
+        object.__setattr__(self, "_tag_template", tag_template)
+
+        if self.blockless:
+            object.__setattr__(self, "_blocks_template", {})
+        else:
+            blocks_template: dict[str, list[bool | int | float | str]] = {
+                spec.symbol: [spec.default] * spec.size for spec in self.block_specs.values()
+            }
+            object.__setattr__(self, "_blocks_template", blocks_template)
+
+        prev_template: dict[str, bool | int | float | str] = {
+            name: self.referenced_tags[name].default for name in self.edge_tags
+        }
+        object.__setattr__(self, "_prev_template", prev_template)
 
     def create_kernel(self) -> ReplayKernel:
         """Create a fresh ReplayKernel initialized from this compiled program."""
         return ReplayKernel(
-            referenced_tags=self.referenced_tags,
-            block_specs=self.block_specs,
-            edge_tags=self.edge_tags,
+            tag_template=self._tag_template,
+            blocks_template=self._blocks_template,
+            prev_template=self._prev_template,
         )

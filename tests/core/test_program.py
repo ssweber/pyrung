@@ -1857,25 +1857,29 @@ class TestSubroutineAndCall:
 
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_call_undefined_subroutine_raises_error(self):
-        """Calling undefined subroutine raises error at runtime."""
-        import pytest
-
+    def test_call_undefined_subroutine_raises_during_program_build(self):
+        """Calling undefined subroutine raises error when Program exits."""
         from pyrung.core.program import Program, Rung, call, out
 
         Button = Bool("Button")
         Light = Bool("Light")
 
-        with Program() as logic:
-            with Rung(Button):
-                out(Light)
-                call("nonexistent")
-
-        runner = PLC(logic)
-        runner.patch({"Button": True, "Light": False})
-
         with pytest.raises(KeyError, match="nonexistent"):
-            runner.step()
+            with Program():
+                with Rung(Button):
+                    out(Light)
+                    call("nonexistent")
+
+    def test_call_undefined_subroutine_error_includes_call_site(self):
+        """Missing subroutine errors include call() source location when available."""
+        from pyrung.core.program import Program, Rung, call
+
+        Button = Bool("Button")
+
+        with pytest.raises(KeyError, match=r"test_program\.py:\d+"):
+            with Program():
+                with Rung(Button):
+                    call("nonexistent")
 
     def test_subroutine_not_executed_directly(self):
         """Subroutine rungs are not executed in main scan unless called."""
@@ -1981,6 +1985,21 @@ class TestSubroutineAndCall:
             with Program():
                 with Rung(Run):
                     return_early()
+
+    def test_missing_subroutine_call_inside_subroutine_raises_during_program_build(self):
+        """Undefined nested call() targets are caught before execution."""
+        from pyrung.core.program import Program, Rung, call, subroutine
+
+        Run = Bool("Run")
+
+        with pytest.raises(KeyError, match="callee"):
+            with Program():
+                with Rung(Run):
+                    call("caller")
+
+                with subroutine("caller"):
+                    with Rung():
+                        call("callee")
 
 
 class TestSubroutineDecorator:
@@ -2146,6 +2165,23 @@ class TestSubroutineDecorator:
         runner.step()
 
         assert runner.current_state.tags["SubLight"] is True
+
+    def test_decorator_subroutine_called_by_string_raises_during_program_build(self):
+        """Decorated subroutine is inert until call(func), so call('name') fails early."""
+        from pyrung.core.program import Program, Rung, call, out, subroutine
+
+        Button = Bool("Button")
+        SubLight = Bool("SubLight")
+
+        @subroutine("my_sub")
+        def my_sub():
+            with Rung():
+                out(SubLight)
+
+        with pytest.raises(KeyError, match="my_sub"):
+            with Program():
+                with Rung(Button):
+                    call("my_sub")
 
     def test_decorator_and_context_manager_coexist(self):
         """Decorator and context-manager subroutines can coexist."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -68,9 +69,12 @@ def _cmd_lock(args: argparse.Namespace) -> None:
 
     if args.project:
         projection = args.project
+        input_groups: tuple[tuple[str, ...], ...] = ()
     else:
         lock_config = getattr(mod, "__lock__", None)
-        projection = _apply_lock_config(_default_projection_names(program), lock_config)
+        projection, input_groups = _apply_lock_config(
+            _default_projection_names(program), lock_config
+        )
         print(f"Projecting to: {', '.join(projection)}", file=sys.stderr)
 
     states = reachable_states(
@@ -78,9 +82,13 @@ def _cmd_lock(args: argparse.Namespace) -> None:
         project=projection,
         max_depth=args.max_depth,
         max_states=args.max_states,
+        progress=True,
+        input_groups=input_groups,
     )
     if isinstance(states, Intractable):
         print(f"Intractable: {states.reason}", file=sys.stderr)
+        for hint in states.hints:
+            print(hint, file=sys.stderr)
         raise SystemExit(1)
 
     write_lock(lock_path, states, projection, program_hash(program))
@@ -102,6 +110,7 @@ def _cmd_check(args: argparse.Namespace) -> None:
         lock_path,
         max_depth=args.max_depth,
         max_states=args.max_states,
+        progress=True,
     )
     if diff is None:
         print("OK — program matches lock file")
@@ -120,13 +129,21 @@ def _default_projection_names(program) -> list[str]:
     return _default_projection(program)
 
 
-def _apply_lock_config(projection: list[str], lock_config: dict | None) -> list[str]:
+def _apply_lock_config(
+    projection: list[str], lock_config: dict | None
+) -> tuple[list[str], tuple[tuple[str, ...], ...]]:
     if lock_config is None:
-        return projection
+        return projection, ()
     tags = set(projection)
     tags.update(lock_config.get("include", ()))
     tags -= set(lock_config.get("exclude", ()))
-    return sorted(tags)
+    raw_groups = lock_config.get("group", {})
+    input_groups: list[tuple[str, ...]] = []
+    if isinstance(raw_groups, dict):
+        for members in raw_groups.values():
+            if isinstance(members, (list, tuple)) and len(members) >= 2:
+                input_groups.append(tuple(members))
+    return sorted(tags), tuple(input_groups)
 
 
 def _cmd_dap(_args: argparse.Namespace) -> None:
@@ -140,6 +157,30 @@ def _cmd_live(_args: argparse.Namespace) -> None:
 
     sys.argv = ["pyrung live", *_args.rest]
     live_main()
+
+
+def _run_with_optional_profile(
+    args: argparse.Namespace, func: Callable[[argparse.Namespace], None]
+) -> None:
+    profile_path = getattr(args, "profile", None)
+    if not profile_path:
+        func(args)
+        return
+
+    import cProfile
+
+    p = Path(profile_path).absolute()
+    if p.suffix != ".prof":
+        p = p.with_suffix(p.suffix + ".prof")
+    out_path = str(p)
+    profiler = cProfile.Profile()
+    try:
+        profiler.enable()
+        func(args)
+    finally:
+        profiler.disable()
+        profiler.dump_stats(out_path)
+        print(f"Wrote profile {out_path}", file=sys.stderr)
 
 
 def main() -> None:
@@ -156,6 +197,10 @@ def main() -> None:
     lock_p.add_argument("--project", nargs="*", help="Tags to project onto")
     lock_p.add_argument("--max-depth", type=int, default=50)
     lock_p.add_argument("--max-states", type=int, default=100_000)
+    lock_p.add_argument(
+        "--profile",
+        help="Write cProfile stats to FILE; dumped even if interrupted",
+    )
     lock_p.set_defaults(func=_cmd_lock)
 
     # -- check --
@@ -164,6 +209,10 @@ def main() -> None:
     check_p.add_argument("--lock", default="pyrung.lock", help="Lock file path")
     check_p.add_argument("--max-depth", type=int, default=50)
     check_p.add_argument("--max-states", type=int, default=100_000)
+    check_p.add_argument(
+        "--profile",
+        help="Write cProfile stats to FILE; dumped even if interrupted",
+    )
     check_p.set_defaults(func=_cmd_check)
 
     # -- dap --
@@ -179,4 +228,4 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         raise SystemExit(1)
-    args.func(args)
+    _run_with_optional_profile(args, args.func)

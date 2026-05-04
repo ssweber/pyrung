@@ -18,6 +18,9 @@ class TagType(Enum):
 ChoiceKey = int | float | str
 ChoiceMap = dict[ChoiceKey, str]
 
+BandPredicate = int | float | str
+BandMap = dict[str, BandPredicate]
+
 class MappingEntry:
     source: Tag | Block
     target: Tag | BlockRange
@@ -34,11 +37,13 @@ class Tag:
     external: bool
     final: bool
     public: bool
+    lock: bool
     physical: Physical | None
     link: str | None
     min: int | float | None
     max: int | float | None
     uom: str | None
+    band: BandMap | None
     _pyrung_structure_runtime: Any | None
     _pyrung_structure_kind: Literal["udt", "named_array"] | None
     _pyrung_structure_name: str | None
@@ -57,11 +62,13 @@ class Tag:
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
         max: int | float | None = None,
         uom: str | None = None,
+        band: BandMap | None = None,
     ) -> None: ...
     def __hash__(self) -> int: ...
     def __eq__(self, other: object) -> Condition: ...  # ty: ignore[invalid-method-override]
@@ -142,11 +149,13 @@ class _TagTypeBase(LiveTag):
         external: bool = False,
         final: bool = False,
         public: bool = False,
+        lock: bool = False,
         physical: Physical | None = None,
         link: str | None = None,
         min: int | float | None = None,
         max: int | float | None = None,
         uom: str | None = None,
+        band: BandMap | None = None,
     ) -> LiveTag: ...
 
 class Bool(_TagTypeBase): ...

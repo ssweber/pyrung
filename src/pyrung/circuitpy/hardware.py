@@ -8,7 +8,7 @@ pyrung :class:`~pyrung.core.memory_block.InputBlock` and
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 if TYPE_CHECKING:
     from pyrung.circuitpy.validation import CircuitPyValidationReport, ValidationMode
@@ -23,7 +23,7 @@ from pyrung.core.memory_block import InputBlock, OutputBlock
 MAX_SLOTS: Final[int] = 15
 """Maximum number of I/O module slots on the P1AM-200 base unit."""
 
-InputModuleName: TypeAlias = Literal[
+type InputModuleName = Literal[
     "P1-08ND-TTL",
     "P1-08ND3",
     "P1-08NA",
@@ -43,7 +43,7 @@ InputModuleName: TypeAlias = Literal[
     "P1-08ADL-2",
 ]
 
-OutputModuleName: TypeAlias = Literal[
+type OutputModuleName = Literal[
     "P1-04TRS",
     "P1-08TA",
     "P1-08TRS",
@@ -59,7 +59,7 @@ OutputModuleName: TypeAlias = Literal[
     "P1-08DAL-2",
 ]
 
-ComboModuleName: TypeAlias = Literal[
+type ComboModuleName = Literal[
     "P1-16CDR",
     "P1-15CDD1",
     "P1-15CDD2",
@@ -67,7 +67,7 @@ ComboModuleName: TypeAlias = Literal[
     "P1-4ADL2DAL-2",
 ]
 
-SlotValue: TypeAlias = InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]
+type SlotValue = InputBlock | OutputBlock | tuple[InputBlock, OutputBlock]
 
 
 def _make_formatter(prefix: str) -> Callable[[str, int], str]:

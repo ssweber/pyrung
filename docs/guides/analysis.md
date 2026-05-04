@@ -458,11 +458,14 @@ Unknown codes raise `ValueError`.
 | `CORE_STUCK_HIGH` | Tag is latched but never reset anywhere in the program. |
 | `CORE_STUCK_LOW` | Tag is reset but never latched anywhere in the program. |
 | `CORE_READONLY_WRITE` | Write instruction targets a `readonly=True` tag. |
+| `CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` | Exact indirect dereference like `DS[Ptr]` where `Ptr` defaults below the block start address. Most often this means a 1-based block is being indexed by a tag that still has the implicit `default=0`. |
 | `CORE_CHOICES_VIOLATION` | Literal-value write to a tag whose `choices` key set doesn't include that value. |
 | `CORE_FINAL_MULTIPLE_WRITERS` | More than one write site for a `final=True` tag — no mutual-exclusivity exemption. |
 | `CORE_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
 | `CORE_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
 | `CORE_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
+
+`CORE_POINTER_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.
 
 The physical-realism rules (`CORE_RANGE_VIOLATION`, `CORE_MISSING_PROFILE`, `CORE_ANTITOGGLE`) accept a `dt` parameter forwarded from `validate()`:
 

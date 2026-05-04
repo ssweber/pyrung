@@ -34,7 +34,7 @@ from pyrung.circuitpy.codegen._util import (
     _ret_types_literal,
     _subroutine_symbol,
 )
-from pyrung.circuitpy.codegen.compile import compile_rung
+from pyrung.circuitpy.codegen.compile import compile_rungs
 from pyrung.circuitpy.codegen.compile._primitives import _load_cast_expr
 from pyrung.circuitpy.codegen.context import CodegenContext
 from pyrung.circuitpy.codegen.render_modbus import (
@@ -373,7 +373,9 @@ def _render_code(ctx: CodegenContext, *, has_runtime: bool = False) -> str:
 
     # 7) SD mount + load memory startup call
     lines.append(_section("Retentive memory (SD card)"))
-    ret_globals = [ctx.symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())]
+    ret_globals = sorted(
+        {ctx.global_symbol_for_tag(tag) for _, tag in sorted(ctx.retentive_tags.items())}
+    )
     snapshot_globals = ["_ret_snapshot", "_ret_last_save_ts"]
     load_globals = ", ".join(
         ret_globals + ["_sd_write_status", "_sd_error", "_sd_error_code"] + snapshot_globals
@@ -910,9 +912,7 @@ def _render_subroutine_functions(ctx: CodegenContext) -> list[str]:
         fn_name = _subroutine_symbol(sub_name)
         ctx.function_globals[fn_name] = set()
         ctx.set_current_function(fn_name)
-        body: list[str] = []
-        for rung in ctx.program.subroutines[sub_name]:
-            body.extend(compile_rung(rung, fn_name, ctx, indent=4))
+        body = compile_rungs(ctx.program.subroutines[sub_name], fn_name, ctx, indent=4)
         ctx.set_current_function(None)
         globals_line = _global_line(ctx.globals_for_function(fn_name), indent=4)
         lines.append(f"def {fn_name}():")
@@ -930,9 +930,7 @@ def _render_main_function(ctx: CodegenContext) -> list[str]:
     fn_name = "_run_main_rungs"
     ctx.function_globals[fn_name] = set()
     ctx.set_current_function(fn_name)
-    body: list[str] = []
-    for rung in ctx.program.rungs:
-        body.extend(compile_rung(rung, fn_name, ctx, indent=4))
+    body = compile_rungs(ctx.program.rungs, fn_name, ctx, indent=4)
     ctx.set_current_function(None)
 
     lines = [f"def {fn_name}():"]

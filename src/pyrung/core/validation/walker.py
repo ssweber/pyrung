@@ -196,7 +196,13 @@ def _classify_value(
             "indirect_ref",
             type(obj).__name__,
             f"IndirectRef({obj.block.name}[{obj.pointer.name}])",
-            {"block_name": obj.block.name, "pointer_name": obj.pointer.name},
+            {
+                "block_name": obj.block.name,
+                "pointer_name": obj.pointer.name,
+                "block_start": obj.block.start,
+                "block_end": obj.block.end,
+                "pointer_default": obj.pointer.default,
+            },
         )
 
     # 4. Expression
