@@ -1126,7 +1126,7 @@ def _states_to_json(
     Bool projections, keeping each state entry as "what's ON."
     """
     rows = [dict(sorted((k, v) for k, v in s if v is not False)) for s in states]
-    rows.sort(key=lambda d: tuple(sorted(d.items())))
+    rows.sort(key=lambda d: tuple((k, str(v)) for k, v in sorted(d.items())))
     return rows
 
 
