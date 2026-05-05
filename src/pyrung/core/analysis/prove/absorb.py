@@ -891,7 +891,7 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     return kinds
 
 
-def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
+def _acc_has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
     """True when a progress accumulator has only owner/reset-safe writes."""
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
@@ -1018,7 +1018,7 @@ def _find_threshold_absorptions(
             continue
 
         if kind != _PROGRESS_KIND_INT_UP:
-            if not _has_only_owner_writes(program, acc_name, kind):
+            if not _acc_has_only_owner_writes(program, acc_name, kind):
                 blockers.append(
                     _ThresholdBlocker(
                         acc_name,
