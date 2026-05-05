@@ -272,7 +272,7 @@ class TestValueDomainExtraction:
         result = _classify_dimensions(logic)
         assert not isinstance(result, Intractable)
         _stateful, nd, _combinational, _done_acc, _done_presets, _done_kinds = result
-        assert set(nd["Step"]) == {4, 5, 6}
+        assert set(nd["Step"]) == {0, 4, 5, 6}
 
     def test_unannotated_function_output_is_intractable(self):
         """run_function output without choices/min/max returns Intractable."""
@@ -865,9 +865,7 @@ class TestReachableStates:
             with Rung(running, watchdog_tmr.Done, button):
                 latch(too_late)
 
-        states = reachable_states(
-            logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60
-        )
+        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60)
         assert not isinstance(states, Intractable)
         # Exactly four states: idle + one of three mutually exclusive outcomes
         assert states == frozenset(
@@ -904,24 +902,14 @@ class TestReachableStates:
             with Rung(running, limit_ctr.Done, trigger):
                 latch(too_many)
 
-        states = reachable_states(
-            logic, project=["TooFew", "JustRight", "TooMany"], max_depth=60
-        )
+        states = reachable_states(logic, project=["TooFew", "JustRight", "TooMany"], max_depth=60)
         assert not isinstance(states, Intractable)
         assert states == frozenset(
             {
-                frozenset(
-                    {("TooFew", False), ("JustRight", False), ("TooMany", False)}
-                ),
-                frozenset(
-                    {("TooFew", True), ("JustRight", False), ("TooMany", False)}
-                ),
-                frozenset(
-                    {("TooFew", False), ("JustRight", True), ("TooMany", False)}
-                ),
-                frozenset(
-                    {("TooFew", False), ("JustRight", False), ("TooMany", True)}
-                ),
+                frozenset({("TooFew", False), ("JustRight", False), ("TooMany", False)}),
+                frozenset({("TooFew", True), ("JustRight", False), ("TooMany", False)}),
+                frozenset({("TooFew", False), ("JustRight", True), ("TooMany", False)}),
+                frozenset({("TooFew", False), ("JustRight", False), ("TooMany", True)}),
             }
         )
 
@@ -947,9 +935,7 @@ class TestReachableStates:
             with Rung(running, watchdog_tmr.Done, button):
                 latch(too_late)
 
-        states = reachable_states(
-            logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60
-        )
+        states = reachable_states(logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60)
         assert not isinstance(states, Intractable)
         expected = frozenset(
             {
@@ -2893,7 +2879,7 @@ class TestKernelDomainDiscovery:
         )
         assert not isinstance(result, Intractable)
         stateful, _nd, _comb, _done_acc, _done_presets, _done_kinds = result
-        assert stateful["Stored"] == (14.0, 15.0, 16.0)
+        assert stateful["Stored"] == (0.0, 14.0, 15.0, 16.0)
 
     def test_literal_writes_discover_domain(self):
         """Literal writes discover {default, 5, 10}."""

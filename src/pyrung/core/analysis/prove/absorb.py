@@ -468,11 +468,25 @@ def _threshold_atom_for_progress(
             return [_ThresholdAtomSpec(acc_name, atom.operand, atom.form, mode)]
         return []
 
+    if atom.tag == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GE if atom.form == "lt" else _THRESHOLD_FORM_GT
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
+        return []
+
     if atom.operand == acc_name and atom.form in {"lt", "le"}:
         mode = _threshold_mode(atom.tag, graph)
         if mode is None:
             return []
         form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GE if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GT
         return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
 
     if atom.form in {"eq", "ne"}:
@@ -647,17 +661,23 @@ def _diagnose_unstable_atom(
     if atom.tag == acc_name and atom.form in {
         _THRESHOLD_FORM_GT,
         _THRESHOLD_FORM_GE,
+        "lt",
+        "le",
         "eq",
         "ne",
     }:
         threshold = atom.operand
-    elif atom.operand == acc_name and atom.form in {"lt", "le", "eq", "ne"}:
+    elif atom.operand == acc_name and atom.form in {
+        "lt",
+        "le",
+        _THRESHOLD_FORM_GT,
+        _THRESHOLD_FORM_GE,
+        "eq",
+        "ne",
+    }:
         threshold = atom.tag
     else:
-        return (
-            "compared as below-threshold"
-            " — only upward-crossing (Acc > T, Acc >= T) can be abstracted"
-        )
+        return "non-comparison form — only comparison atoms can be abstracted"
 
     if _is_numeric_literal(threshold):
         return None

@@ -106,7 +106,7 @@ Domain inference stack (from most to least specific):
 3. `min=`/`max=` metadata → integer range (capped at 1000)
 4. Literal-write mining (`_collect_literal_write_domains`) → values from copy(literal, tag)
 5. Structural propagation (`_collect_structural_domains`) → fixed-point over write graph
-6. Expression partition (`_extract_value_domain`) → comparison literals ± 1
+6. Expression partition (`_extract_value_domain`) → comparison literals ± 1 + tag default
 7. eq/ne enum closure → `{literals..., OTHER}` for tags only tested for equality
 8. Pilot sweep (`_pilot_sweep_domains`) → forward simulation fallback
 
@@ -118,7 +118,7 @@ The core principle: a threshold's concrete value is irrelevant to reachability i
 
 Three absorption paths:
 1. **Redundant Acc absorption** — Acc only compared against Done-triggering boundary. Acc + preset tag both removed; synthetic preset=1. Gate: exclusivity only.
-2. **Threshold vector absorption** — progress accumulator with upward-crossing comparisons. Concrete value replaced by crossed/uncrossed boolean vector. Gate: exclusivity + owner-only writes.
+2. **Threshold vector absorption** — progress accumulator with threshold comparisons (both upward-crossing like `Acc >= T` and below-threshold like `Acc < T`; below-threshold normalizes to the same crossing boundary). Concrete value replaced by crossed/uncrossed boolean vector. Gate: exclusivity + owner-only writes.
 3. **Comparison-only absorption** — written tags observed only through comparisons. Concrete value replaced by comparison outcome vector. Gate: domain > 16 values, exclusivity, not projected.
 
 ### Hidden-event scheduling (`events.py`)

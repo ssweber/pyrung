@@ -637,6 +637,8 @@ def _extract_value_domain(
         if isinstance(lit, (int, float)):
             partitioned.add(lit - 1)
             partitioned.add(lit + 1)
+    if isinstance(tag.default, (int, float)) and not isinstance(tag.default, bool):
+        partitioned.add(tag.default)
     if tag.min is not None:
         partitioned = {v for v in partitioned if v >= tag.min}
     if tag.max is not None:
