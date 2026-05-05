@@ -40,9 +40,9 @@ from .context import (
     Subroutine,
     SubroutineFunc,
     branch,
-    rung,
     comment,
     forloop,
+    rung,
     subroutine,
 )
 from .decorators import program
