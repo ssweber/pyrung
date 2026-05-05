@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### New features
+
+- **`rung` lowercase alias** — `rung` is now the preferred spelling for the DSL context manager. `Rung` still works but new code and docs will use `rung`. Reads like a language keyword rather than a class constructor.
+
 ## v0.8.0 (2026-05-26)
 
 Major overhaul of `prove()` and `reachable_states()`. BFS input enumeration switched from multi-flip (all input combinations per state) to single-flip (one input change at a time), dramatically reducing the successor fan-out. A new pre-BFS elision pipeline proves tags scan-local via abstract interpretation and concrete kernel proofs, removing them from the state space before exploration begins. During BFS, new accumulator absorption collapses timer/counter and progress-tracking tags: threshold vector absorption replaces concrete accumulator values with crossed/uncrossed boolean tuples, and comparison-only absorption does the same for tags observed only through comparisons — both eliminate high-cardinality dimensions without losing reachable states. A blockless compiled kernel mode (~8× faster BFS steps) strips block arrays from the step function when verification doesn't need them, replacing indirect lookups with flat tag-name tuples. Together these changes make `pyrung lock` practical on industrial-scale programs that previously hit `Intractable`.

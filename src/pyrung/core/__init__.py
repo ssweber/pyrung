@@ -62,6 +62,7 @@ from pyrung.core.program import (
     Program,
     Rung,
     SubroutineFunc,
+    rung,
     blockcopy,
     branch,
     calc,
@@ -187,6 +188,7 @@ __all__ = [
     # Program structure
     "Program",
     "Rung",
+    "rung",
     "SubroutineFunc",
     "ForLoop",
     "ForbiddenControlFlowError",
