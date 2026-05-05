@@ -211,6 +211,13 @@ def _progress_delta_and_current(
     before: _KernelSnapshot,
     kernel: ReplayKernel,
 ) -> tuple[float, float] | None:
+    """Return per-scan progress in the same normalized space as threshold vectors.
+
+    ``count_down`` is the easy case to get wrong: raw ``Acc`` becomes more
+    negative as progress advances, but threshold vectors and event scheduling
+    both reason in monotone progress coordinates, so this function reports
+    ``current = -Acc`` and compares against ``-threshold`` downstream.
+    """
     acc_before = int(before.tags.get(acc_name, 0) or 0)
     acc_after = int(kernel.tags.get(acc_name, 0) or 0)
 

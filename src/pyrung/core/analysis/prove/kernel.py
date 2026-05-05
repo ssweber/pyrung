@@ -298,6 +298,22 @@ def _threshold_crossed(
     threshold: int | float | str,
     form: str,
 ) -> bool:
+    """Return the threshold-vector bit for one progress comparison.
+
+    The vector bit and the hidden-event scheduler must use the same
+    coordinate system:
+
+    Kind         Raw Acc path         Normalized current   Compare against
+    count_up     0, 1, 2, 3, ...      Acc                  T
+    count_down   0, -1, -2, -3, ...   -Acc                 -T
+    on_delay     0, dt, 2dt, ...      Acc / elapsed        T
+    off_delay    0, dt, 2dt, ...      Acc / elapsed        T
+
+    Example: ``count_down`` with ``Acc < -3`` stays uncrossed at
+    ``0, -1, -2, -3`` and becomes crossed at ``-4``.  If this function
+    ever drifts from ``events._progress_delta_and_current()``, hidden-event
+    jumps can stop scheduling reachable intermediate states.
+    """
     acc_value = kernel.tags.get(acc_name)
     threshold_value = _threshold_value(kernel, threshold)
     if acc_value is None or threshold_value is None:

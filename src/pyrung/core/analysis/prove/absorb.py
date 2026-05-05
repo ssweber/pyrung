@@ -118,7 +118,22 @@ def _collect_done_acc_pairs(program: Program) -> _DoneAccInfo:
 
 
 def _done_acc_state(kind: str, done_val: Any, acc_val: Any) -> bool | str:
-    """Derive the three-valued timer/counter state from Done and Acc."""
+    """Derive the three-valued timer/counter state from Done and Acc.
+
+    The verifier collapses concrete ``(Done, Acc)`` pairs into one of
+    ``False``, ``PENDING``, or ``True``:
+
+    Kind                     Done   Acc != 0   Abstract state
+    on_delay / count_up      False  False      False
+    on_delay / count_up      False  True       PENDING
+    on_delay / count_up      True   *          True
+    count_down               False  False      False
+    count_down               False  True       PENDING
+    count_down               True   *          True
+    off_delay                False  *          False
+    off_delay                True   True       PENDING
+    off_delay                True   False      True
+    """
     acc_nonzero = bool(acc_val and acc_val != 0)
     if kind == _DONE_KIND_OFF_DELAY:
         if done_val and acc_nonzero:
