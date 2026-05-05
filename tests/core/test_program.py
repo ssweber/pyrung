@@ -1898,10 +1898,8 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(SubLight)
 
-        runner = runner_factory(
-            logic,
-            initial_state=SystemState().with_tags({"Light": False, "SubLight": False}),
-        )
+        runner = runner_factory(logic)
+        assert runner.current_state.tags["SubLight"] is False
         runner.patch({"Light": False, "SubLight": False})
         runner.step()
 

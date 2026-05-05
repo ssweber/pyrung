@@ -1580,6 +1580,12 @@ class PLC:
         for rung in self._logic:
             for tag in _iter_referenced_tags(rung):
                 self._register_known_tag(tag)
+        if self._program is None:
+            return
+        for subroutine_rungs in self._program.subroutines.values():
+            for rung in subroutine_rungs:
+                for tag in _iter_referenced_tags(rung):
+                    self._register_known_tag(tag)
 
     def _register_known_tag(self, tag: Tag) -> None:
         if tag.name in SYSTEM_TAGS_BY_NAME:
