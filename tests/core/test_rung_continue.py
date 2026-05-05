@@ -3,7 +3,6 @@
 import pytest
 
 from pyrung.core import (
-    PLC,
     Bool,
     Int,
     Program,
@@ -213,7 +212,7 @@ class TestContinueRuntimeValidation:
 class TestContinueSubroutineBoundary:
     """Subroutine boundaries fence the condition snapshot."""
 
-    def test_subroutine_does_not_leak_snapshot(self):
+    def test_subroutine_does_not_leak_snapshot(self, runner_factory):
         """A continued() rung in a subroutine cannot see the caller's snapshot."""
         from pyrung.core import call, subroutine
 
@@ -233,14 +232,14 @@ class TestContinueSubroutineBoundary:
                 # which is valid structurally. But the snapshot should come
                 # from the subroutine's own first rung, not the caller.
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "X": False, "Y": False})
         runner.step()
 
         assert runner.current_state.tags["X"] is True
         assert runner.current_state.tags["Y"] is True
 
-    def test_continue_in_subroutine_uses_subroutine_snapshot(self):
+    def test_continue_in_subroutine_uses_subroutine_snapshot(self, runner_factory):
         """continued() in a subroutine reuses the subroutine's own prior rung snapshot."""
         from pyrung.core import call, subroutine
 
@@ -262,7 +261,7 @@ class TestContinueSubroutineBoundary:
                 with Rung(Counter == 0).continued():
                     out(Y)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "Counter": 0, "X": False, "Y": False})
         runner.step()
 
@@ -274,7 +273,7 @@ class TestContinueSubroutineBoundary:
 class TestContinueInstructionConditions:
     """Instruction helper conditions inherit the continued snapshot too."""
 
-    def test_continued_rung_instruction_helper_uses_original_snapshot(self):
+    def test_continued_rung_instruction_helper_uses_original_snapshot(self, runner_factory):
         Enable = Bool("Enable")
         ResetBtn = Bool("ResetBtn")
 
@@ -284,7 +283,7 @@ class TestContinueInstructionConditions:
             with Rung(Enable).continued():
                 on_delay(Timer[1], preset=100).reset(ResetBtn)
 
-        runner = PLC(logic, dt=0.010)
+        runner = runner_factory(logic, dt=0.010)
         runner.patch({"Enable": True, "ResetBtn": False})
         runner.step()
 

@@ -22,7 +22,7 @@ Counter2 = Counter.clone("Counter2")
 Counter3 = Counter.clone("Counter3")
 
 
-def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
+def test_count_up_down_and_reset_accept_variadic_grouped_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     down_a = Bool("DownA")
     down_b = Bool("DownB")
@@ -33,7 +33,7 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
         with Rung(enable):
             count_up(Counter[1], preset=10).down(down_a, down_b).reset(reset_a, reset_b)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Enable": True,
@@ -60,7 +60,7 @@ def test_count_up_down_and_reset_accept_variadic_grouped_conditions() -> None:
     assert runner.current_state.tags["Counter_Done"] is False
 
 
-def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
+def test_shift_clock_and_reset_accept_variadic_grouped_conditions(runner_factory) -> None:
     data = Bool("Data")
     clock_a = Bool("ClockA")
     clock_b = Bool("ClockB")
@@ -72,7 +72,7 @@ def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
         with Rung(data):
             shift(bits.select(1, 3)).clock(clock_a, clock_b).reset(reset_a, reset_b)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Data": True,
@@ -103,7 +103,7 @@ def test_shift_clock_and_reset_accept_variadic_grouped_conditions() -> None:
     assert runner.current_state.tags["C3"] is False
 
 
-def test_on_delay_reset_accepts_variadic_conditions() -> None:
+def test_on_delay_reset_accepts_variadic_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset_a = Bool("ResetA")
     reset_b = Bool("ResetB")
@@ -112,7 +112,7 @@ def test_on_delay_reset_accepts_variadic_conditions() -> None:
         with Rung(enable):
             on_delay(Timer[1], preset=100).reset(reset_a, reset_b)
 
-    runner = PLC(logic, dt=0.1)
+    runner = runner_factory(logic, dt=0.1)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
     runner.step()
     assert runner.current_state.tags["Timer_Acc"] == 100
@@ -127,7 +127,7 @@ def test_on_delay_reset_accepts_variadic_conditions() -> None:
     assert runner.current_state.tags["Timer_Done"] is False
 
 
-def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
+def test_count_down_reset_accepts_variadic_grouped_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset_a = Bool("ResetA")
     reset_b = Bool("ResetB")
@@ -136,7 +136,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
         with Rung(enable):
             count_down(Counter2, preset=5).reset(reset_a, reset_b)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "ResetA": False, "ResetB": False})
     runner.step()
     assert runner.current_state.tags["Counter2_Acc"] == -1
@@ -151,7 +151,7 @@ def test_count_down_reset_accepts_variadic_grouped_conditions() -> None:
     assert runner.current_state.tags["Counter2_Done"] is False
 
 
-def test_event_drum_reset_and_jog_accept_variadic_conditions() -> None:
+def test_event_drum_reset_and_jog_accept_variadic_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset_a = Bool("ResetA")
     reset_b = Bool("ResetB")
@@ -174,7 +174,7 @@ def test_event_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 completion_flag=done,
             ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Enable": True,
@@ -206,7 +206,7 @@ def test_event_drum_reset_and_jog_accept_variadic_conditions() -> None:
     assert runner.current_state.tags["Step"] == 1
 
 
-def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
+def test_time_drum_reset_and_jog_accept_variadic_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset_a = Bool("ResetA")
     reset_b = Bool("ResetB")
@@ -229,7 +229,7 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
                 completion_flag=done,
             ).reset(reset_a, reset_b).jog(jog_a, jog_b)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Enable": True,
@@ -259,7 +259,7 @@ def test_time_drum_reset_and_jog_accept_variadic_conditions() -> None:
     assert runner.current_state.tags["Step"] == 1
 
 
-def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
+def test_event_drum_jump_accepts_variadic_grouped_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump_a = Bool("JumpA")
@@ -281,7 +281,7 @@ def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump_a, jump_b, step=2)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Enable": True,
@@ -304,7 +304,7 @@ def test_event_drum_jump_accepts_variadic_grouped_conditions() -> None:
     assert runner.current_state.tags["Step"] == 2
 
 
-def test_time_drum_jump_accepts_variadic_grouped_conditions() -> None:
+def test_time_drum_jump_accepts_variadic_grouped_conditions(runner_factory) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
     jump_a = Bool("JumpA")
@@ -326,7 +326,7 @@ def test_time_drum_jump_accepts_variadic_grouped_conditions() -> None:
                 completion_flag=done,
             ).reset(reset).jump(jump_a, jump_b, step=2)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch(
         {
             "Enable": True,
@@ -372,19 +372,23 @@ def test_runner_when_and_run_until_accept_variadic_grouped_conditions() -> None:
     assert result.scan_id == 4
 
 
-def test_single_condition_forms_remain_supported() -> None:
+def test_single_condition_forms_remain_supported_for_program_backed_instructions(
+    runner_factory,
+) -> None:
     enable = Bool("Enable")
     reset = Bool("Reset")
-    fault = Bool("Fault")
-
     with Program() as logic:
         with Rung(enable):
             count_down(Counter3, preset=5).reset(reset)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Reset": False})
     runner.step()
     assert runner.current_state.tags["Counter3_Acc"] == -1
+
+
+def test_single_condition_forms_remain_supported_for_runner_controls() -> None:
+    fault = Bool("Fault")
 
     runner2 = PLC(logic=[])
     runner2.when(fault).pause()

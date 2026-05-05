@@ -1029,7 +1029,7 @@ class TestClickPrebuiltProgramIntegration:
 class TestPLCIntegration:
     """Test full integration with PLC."""
 
-    def test_runner_executes_program(self):
+    def test_runner_executes_program(self, runner_factory):
         """PLC evaluates program logic each scan."""
         from pyrung.core.program import Program, Rung, out
 
@@ -1040,7 +1040,7 @@ class TestPLCIntegration:
             with Rung(Button):
                 out(Light)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": False, "Light": False})
         runner.step()  # Apply initial state
 
@@ -1059,7 +1059,7 @@ class TestPLCIntegration:
 
         assert runner.current_state.tags["Light"] is False
 
-    def test_runner_with_latch_reset_circuit(self):
+    def test_runner_with_latch_reset_circuit(self, runner_factory):
         """Classic start/stop latch circuit."""
         from pyrung.core.program import Program, Rung, latch, reset
 
@@ -1076,7 +1076,7 @@ class TestPLCIntegration:
             with Rung(StopButton):
                 reset(MotorRunning)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"StartButton": False, "StopButton": False, "MotorRunning": False})
         runner.step()
 
@@ -1097,7 +1097,7 @@ class TestPLCIntegration:
         runner.step()
         assert runner.current_state.tags["MotorRunning"] is False
 
-    def test_runner_with_step_sequencer(self):
+    def test_runner_with_step_sequencer(self, runner_factory):
         """Simple step sequencer using copy."""
         from pyrung.core.program import Program, Rung, copy, out
 
@@ -1119,7 +1119,7 @@ class TestPLCIntegration:
             with Rung(NextButton, Step == 0):
                 copy(1, Step, oneshot=True)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "NextButton": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1149,7 +1149,7 @@ class TestPLCIntegration:
 class TestBranch:
     """Test branch() for parallel paths within a rung."""
 
-    def test_branch_executes_when_parent_and_branch_conditions_true(self):
+    def test_branch_executes_when_parent_and_branch_conditions_true(self, runner_factory):
         """Branch executes when parent rung AND branch conditions are true."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1164,14 +1164,14 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": True, "Light1": False, "Light2": False})
         runner.step()
 
         assert runner.current_state.tags["Light1"] is True
         assert runner.current_state.tags["Light2"] is True
 
-    def test_branch_not_executed_when_parent_false(self):
+    def test_branch_not_executed_when_parent_false(self, runner_factory):
         """Branch does not execute when parent rung condition is false."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1186,7 +1186,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 1, "AutoMode": True, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1194,7 +1194,7 @@ class TestBranch:
         assert runner.current_state.tags["Light1"] is False
         assert runner.current_state.tags["Light2"] is False
 
-    def test_branch_not_executed_when_branch_condition_false(self):
+    def test_branch_not_executed_when_branch_condition_false(self, runner_factory):
         """Branch does not execute when branch condition is false."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1209,7 +1209,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1217,7 +1217,7 @@ class TestBranch:
         assert runner.current_state.tags["Light1"] is True
         assert runner.current_state.tags["Light2"] is False
 
-    def test_branch_with_copy_oneshot(self):
+    def test_branch_with_copy_oneshot(self, runner_factory):
         """Branch can contain copy with oneshot."""
         from pyrung.core.program import Program, Rung, branch, copy, out
 
@@ -1231,7 +1231,7 @@ class TestBranch:
                 with branch(AutoMode):
                     copy(1, Step, oneshot=True)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": True, "Light": False})
         runner.step()
 
@@ -1242,7 +1242,7 @@ class TestBranch:
         runner.step()
         assert runner.current_state.tags["Light"] is False  # Rung false now
 
-    def test_branch_enable_is_snapshotted_before_item_execution(self):
+    def test_branch_enable_is_snapshotted_before_item_execution(self, runner_factory):
         """Branch enable is computed before item execution and applied for this whole rung scan."""
         from pyrung.core.program import Program, Rung, branch, copy, out
 
@@ -1260,7 +1260,7 @@ class TestBranch:
                 with branch(AutoMode):
                     out(Light2)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": False, "Light1": False, "Light2": False})
         runner.step()
 
@@ -1272,7 +1272,7 @@ class TestBranch:
         runner.step()
         assert runner.current_state.tags["Light2"] is True
 
-    def test_branch_outside_rung_raises_error(self):
+    def test_branch_outside_rung_raises_error(self, runner_factory):
         """branch() outside Rung context raises RuntimeError."""
         import pytest
 
@@ -1285,7 +1285,7 @@ class TestBranch:
                 with branch():  # No parent rung!
                     out(Light)
 
-    def test_multiple_branches_in_rung(self):
+    def test_multiple_branches_in_rung(self, runner_factory):
         """Multiple branches can exist in a single rung."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1304,7 +1304,7 @@ class TestBranch:
                 with branch(Mode2):
                     out(Light3)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {
                 "Step": 0,
@@ -1321,7 +1321,7 @@ class TestBranch:
         assert runner.current_state.tags["Light2"] is True
         assert runner.current_state.tags["Light3"] is False
 
-    def test_branch_get_combined_condition_includes_parent_and_branch(self):
+    def test_branch_get_combined_condition_includes_parent_and_branch(self, runner_factory):
         """Branch's _get_combined_condition() should include parent AND branch conditions."""
         from pyrsistent import pmap
 
@@ -1365,7 +1365,7 @@ class TestBranch:
             evaluate_condition(captured_condition, state(Step=1, Mode=False)) is False
         )  # Both false
 
-    def test_branch_effects_apply_before_later_call_in_same_rung(self):
+    def test_branch_effects_apply_before_later_call_in_same_rung(self, runner_factory):
         """Branch side effects apply before later same-rung instructions in source order."""
         from pyrung.core.program import Program, Rung, branch, call, copy, out, subroutine
 
@@ -1385,7 +1385,7 @@ class TestBranch:
                     copy(1, Step, oneshot=True)
                 call("sub")
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Step": 0, "AutoMode": True, "BranchDone": False, "SubLight": False})
         runner.step()
 
@@ -1397,7 +1397,7 @@ class TestBranch:
 class TestNestedBranches:
     """Test nested branch (branch inside branch) support."""
 
-    def test_2_deep_nesting_all_conditions_true(self):
+    def test_2_deep_nesting_all_conditions_true(self, runner_factory):
         """Nested branch executes when rung, parent branch, and nested branch are all true."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1416,7 +1416,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": True})
         runner.step()
 
@@ -1424,7 +1424,7 @@ class TestNestedBranches:
         assert runner.current_state.tags["Y"] is True
         assert runner.current_state.tags["Z"] is True
 
-    def test_2_deep_nesting_inner_false(self):
+    def test_2_deep_nesting_inner_false(self, runner_factory):
         """Inner nested branch does not execute when its condition is false."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1443,7 +1443,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": False})
         runner.step()
 
@@ -1451,7 +1451,7 @@ class TestNestedBranches:
         assert runner.current_state.tags["Y"] is True
         assert runner.current_state.tags["Z"] is False
 
-    def test_2_deep_nesting_middle_false_disables_inner(self):
+    def test_2_deep_nesting_middle_false_disables_inner(self, runner_factory):
         """When middle branch is false, nested branch also does not execute."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1470,7 +1470,7 @@ class TestNestedBranches:
                     with branch(C):
                         out(Z)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": False, "C": True})
         runner.step()
 
@@ -1478,7 +1478,7 @@ class TestNestedBranches:
         assert runner.current_state.tags["Y"] is False
         assert runner.current_state.tags["Z"] is False
 
-    def test_3_deep_nesting(self):
+    def test_3_deep_nesting(self, runner_factory):
         """Three levels of branch nesting works correctly."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1501,7 +1501,7 @@ class TestNestedBranches:
                         with branch(D):
                             out(W)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": True, "D": True})
         runner.step()
 
@@ -1519,7 +1519,7 @@ class TestNestedBranches:
         assert runner.current_state.tags["Z"] is True
         assert runner.current_state.tags["W"] is False
 
-    def test_instruction_interleaving_preserved_with_nesting(self):
+    def test_instruction_interleaving_preserved_with_nesting(self, runner_factory):
         """Instructions execute in source order regardless of nesting depth.
 
         Structure:
@@ -1561,7 +1561,7 @@ class TestNestedBranches:
                 copy(Trace * 10 + Order, Trace)
                 copy(5, Order)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": True, "Order": 0, "Trace": 0})
         runner.step()
 
@@ -1570,7 +1570,7 @@ class TestNestedBranches:
         # Trace accumulates: 1, then 12, then 123, then 1234 (each *10 + current Order)
         assert runner.current_state.tags["Trace"] == 1234
 
-    def test_nested_branch_conditions_see_rung_entry_snapshot(self):
+    def test_nested_branch_conditions_see_rung_entry_snapshot(self, runner_factory):
         """All branch conditions at every nesting depth evaluate against the
         same frozen snapshot taken at rung entry — not the live mutable state."""
         from pyrung.core.program import Program, Rung, branch, copy, out
@@ -1589,7 +1589,7 @@ class TestNestedBranches:
                     with branch(Flag):
                         out(Light)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "Flag": False, "Light": False})
         runner.step()
 
@@ -1603,7 +1603,7 @@ class TestNestedBranches:
         runner.step()
         assert runner.current_state.tags["Light"] is True
 
-    def test_snapshot_applies_across_all_nesting_levels(self):
+    def test_snapshot_applies_across_all_nesting_levels(self, runner_factory):
         """Even a deeply nested branch's condition sees the rung-entry state,
         not mutations from parent-level instructions."""
         from pyrung.core.program import Program, Rung, branch, copy, out
@@ -1625,7 +1625,7 @@ class TestNestedBranches:
                         # Deep was False at rung entry — should not fire
                         out(Bool("L2"))
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "Flag": False, "Deep": False})
         runner.step()
 
@@ -1639,7 +1639,7 @@ class TestNestedBranches:
         assert runner.current_state.tags.get("L1", False) is True
         assert runner.current_state.tags.get("L2", False) is True
 
-    def test_sibling_branches_at_nested_level(self):
+    def test_sibling_branches_at_nested_level(self, runner_factory):
         """Multiple sibling branches inside a parent branch work independently."""
         from pyrung.core.program import Program, Rung, branch, out
 
@@ -1660,7 +1660,7 @@ class TestNestedBranches:
                     with branch(C2):
                         out(Z)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C1": True, "C2": False})
         runner.step()
 
@@ -1668,7 +1668,7 @@ class TestNestedBranches:
         assert runner.current_state.tags["Y"] is True
         assert runner.current_state.tags["Z"] is False
 
-    def test_nested_branch_combined_condition(self):
+    def test_nested_branch_combined_condition(self, runner_factory):
         """A nested branch's combined condition ANDs rung + parent branch + own condition."""
         from pyrsistent import pmap
 
@@ -1705,7 +1705,7 @@ class TestNestedBranches:
         assert evaluate_condition(captured, state(A=True, B=False, C=True)) is False
         assert evaluate_condition(captured, state(A=True, B=True, C=False)) is False
 
-    def test_nested_branch_instructions_interleave_with_parent(self):
+    def test_nested_branch_instructions_interleave_with_parent(self, runner_factory):
         """Instructions in a nested branch between two parent instructions
         execute in that source order."""
         from pyrung.core.program import Program, Rung, branch, copy
@@ -1723,14 +1723,16 @@ class TestNestedBranches:
                         copy(V + 1, V)  # nested: V = 11
                 copy(V * 2, V)  # parent: V = 22
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": True, "V": 0})
         runner.step()
 
         # 10 -> 11 -> 22
         assert runner.current_state.tags["V"] == 22
 
-    def test_nested_branch_disabled_skips_instructions_but_continues_parent(self):
+    def test_nested_branch_disabled_skips_instructions_but_continues_parent(
+        self, runner_factory
+    ):
         """When a nested branch is disabled, its instructions are skipped
         but parent instructions after it still execute."""
         from pyrung.core.program import Program, Rung, branch, copy
@@ -1748,7 +1750,7 @@ class TestNestedBranches:
                         copy(99, V)  # skipped — C is false
                 copy(V + 1, V)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"A": True, "B": True, "C": False, "V": 0})
         runner.step()
 
@@ -1759,7 +1761,7 @@ class TestNestedBranches:
 class TestSubroutineAndCall:
     """Test subroutine() and call() for modular program structure."""
 
-    def test_subroutine_name_rejects_double_quote(self):
+    def test_subroutine_name_rejects_double_quote(self, runner_factory):
         from pyrung.core.program import Program, subroutine
 
         with Program():
@@ -1767,7 +1769,7 @@ class TestSubroutineAndCall:
                 with subroutine('bad"name'):
                     pass
 
-    def test_call_rejects_subroutine_name_with_double_quote(self):
+    def test_call_rejects_subroutine_name_with_double_quote(self, runner_factory):
         from pyrung.core.program import Program, Rung, call
 
         Button = Bool("Button")
@@ -1777,7 +1779,7 @@ class TestSubroutineAndCall:
                 with Rung(Button):
                     call('bad"name')
 
-    def test_subroutine_defined_and_called(self):
+    def test_subroutine_defined_and_called(self, runner_factory):
         """Subroutine is defined and executed when called."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -1794,14 +1796,14 @@ class TestSubroutineAndCall:
                 with Rung():  # Unconditional
                     out(SubLight)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "Light": False, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_subroutine_not_called_when_rung_false(self):
+    def test_subroutine_not_called_when_rung_false(self, runner_factory):
         """Subroutine is not executed when calling rung is false."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -1818,14 +1820,14 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(SubLight)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": False, "Light": False, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["Light"] is False
         assert runner.current_state.tags["SubLight"] is False
 
-    def test_subroutine_with_conditional_rung(self):
+    def test_subroutine_with_conditional_rung(self, runner_factory):
         """Subroutine rungs have their own conditions."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -1843,7 +1845,7 @@ class TestSubroutineAndCall:
                 with Rung(Step == 1):  # Only executes when Step==1
                     out(SubLight)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "Step": 0, "Light": False, "SubLight": False})
         runner.step()
 
@@ -1857,7 +1859,7 @@ class TestSubroutineAndCall:
 
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_call_undefined_subroutine_raises_during_program_build(self):
+    def test_call_undefined_subroutine_raises_during_program_build(self, runner_factory):
         """Calling undefined subroutine raises error when Program exits."""
         from pyrung.core.program import Program, Rung, call, out
 
@@ -1870,7 +1872,7 @@ class TestSubroutineAndCall:
                     out(Light)
                     call("nonexistent")
 
-    def test_call_undefined_subroutine_error_includes_call_site(self):
+    def test_call_undefined_subroutine_error_includes_call_site(self, runner_factory):
         """Missing subroutine errors include call() source location when available."""
         from pyrung.core.program import Program, Rung, call
 
@@ -1881,7 +1883,7 @@ class TestSubroutineAndCall:
                 with Rung(Button):
                     call("nonexistent")
 
-    def test_subroutine_not_executed_directly(self):
+    def test_subroutine_not_executed_directly(self, runner_factory):
         """Subroutine rungs are not executed in main scan unless called."""
         from pyrung.core.program import Program, Rung, out, subroutine
 
@@ -1896,7 +1898,10 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(SubLight)
 
-        runner = PLC(logic)
+        runner = runner_factory(
+            logic,
+            initial_state=SystemState().with_tags({"Light": False, "SubLight": False}),
+        )
         runner.patch({"Light": False, "SubLight": False})
         runner.step()
 
@@ -1904,7 +1909,7 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is False
 
-    def test_return_early_exits_subroutine_early(self):
+    def test_return_early_exits_subroutine_early(self, runner_factory):
         """return_early() exits subroutine immediately and skips remaining rungs."""
         from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
 
@@ -1926,7 +1931,7 @@ class TestSubroutineAndCall:
                 with Rung():
                     out(Third)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Run": True, "First": False, "Second": False, "Third": False})
         runner.step()
 
@@ -1934,7 +1939,7 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["Second"] is False
         assert runner.current_state.tags["Third"] is False
 
-    def test_return_early_only_exits_current_subroutine(self):
+    def test_return_early_only_exits_current_subroutine(self, runner_factory):
         """return_early() in a nested call should not abort the caller subroutine."""
         from pyrung.core.program import Program, Rung, call, out, return_early, subroutine
 
@@ -1958,7 +1963,7 @@ class TestSubroutineAndCall:
                     return_early()
                     out(CalleeAfter)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch(
             {
                 "Run": True,
@@ -1973,7 +1978,7 @@ class TestSubroutineAndCall:
         assert runner.current_state.tags["CalleeBefore"] is True
         assert runner.current_state.tags["CalleeAfter"] is False
 
-    def test_return_early_outside_subroutine_raises(self):
+    def test_return_early_outside_subroutine_raises(self, runner_factory):
         """return_early() is only valid while defining a subroutine."""
         import pytest
 
@@ -1986,7 +1991,9 @@ class TestSubroutineAndCall:
                 with Rung(Run):
                     return_early()
 
-    def test_missing_subroutine_call_inside_subroutine_raises_during_program_build(self):
+    def test_missing_subroutine_call_inside_subroutine_raises_during_program_build(
+        self, runner_factory
+    ):
         """Undefined nested call() targets are caught before execution."""
         from pyrung.core.program import Program, Rung, call, subroutine
 
@@ -2005,7 +2012,7 @@ class TestSubroutineAndCall:
 class TestSubroutineDecorator:
     """Test @subroutine('name') decorator syntax."""
 
-    def test_decorator_subroutine_name_rejects_double_quote(self):
+    def test_decorator_subroutine_name_rejects_double_quote(self, runner_factory):
         from pyrung.core.program import Rung, out, subroutine
 
         Light = Bool("Light")
@@ -2017,7 +2024,7 @@ class TestSubroutineDecorator:
                 with Rung():
                     out(Light)
 
-    def test_decorator_subroutine_defined_and_called(self):
+    def test_decorator_subroutine_defined_and_called(self, runner_factory):
         """Decorated subroutine is auto-registered and executed when called."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2035,14 +2042,14 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(init_sequence)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "Light": False, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_decorator_subroutine_not_executed_directly(self):
+    def test_decorator_subroutine_not_executed_directly(self, runner_factory):
         """Decorated subroutine rungs are not in the main scan."""
         from pyrung.core.program import Program, Rung, out, subroutine
 
@@ -2059,14 +2066,14 @@ class TestSubroutineDecorator:
                 out(Light)
 
         # Subroutine was never call()'d, so not registered
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Light": False, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["Light"] is True
         assert runner.current_state.tags["SubLight"] is False
 
-    def test_decorator_subroutine_not_called_when_rung_false(self):
+    def test_decorator_subroutine_not_called_when_rung_false(self, runner_factory):
         """Decorated subroutine is not executed when calling rung is false."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2084,14 +2091,14 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(my_sub)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": False, "Light": False, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["Light"] is False
         assert runner.current_state.tags["SubLight"] is False
 
-    def test_decorator_subroutine_with_conditional_rung(self):
+    def test_decorator_subroutine_with_conditional_rung(self, runner_factory):
         """Decorated subroutine rungs have their own conditions."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2110,7 +2117,7 @@ class TestSubroutineDecorator:
                 out(Light)
                 call(my_sub)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "Step": 0, "Light": False, "SubLight": False})
         runner.step()
 
@@ -2122,7 +2129,7 @@ class TestSubroutineDecorator:
 
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_decorator_outside_program_raises(self):
+    def test_decorator_outside_program_raises(self, runner_factory):
         """call() with decorated subroutine outside Program raises error."""
         import pytest
 
@@ -2140,7 +2147,7 @@ class TestSubroutineDecorator:
             with Rung(Button):
                 call(my_sub)
 
-    def test_decorator_with_program_decorator(self):
+    def test_decorator_with_program_decorator(self, runner_factory):
         """@subroutine works with @program decorator."""
         from pyrung.core.program import Program, Rung, call, out, program, subroutine
 
@@ -2160,13 +2167,15 @@ class TestSubroutineDecorator:
         assert isinstance(my_logic, Program)
         assert "init" in my_logic.subroutines
 
-        runner = PLC(my_logic)
+        runner = runner_factory(my_logic)
         runner.patch({"Button": True, "SubLight": False})
         runner.step()
 
         assert runner.current_state.tags["SubLight"] is True
 
-    def test_decorator_subroutine_called_by_string_raises_during_program_build(self):
+    def test_decorator_subroutine_called_by_string_raises_during_program_build(
+        self, runner_factory
+    ):
         """Decorated subroutine is inert until call(func), so call('name') fails early."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2183,7 +2192,7 @@ class TestSubroutineDecorator:
                 with Rung(Button):
                     call("my_sub")
 
-    def test_decorator_and_context_manager_coexist(self):
+    def test_decorator_and_context_manager_coexist(self, runner_factory):
         """Decorator and context-manager subroutines can coexist."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2205,14 +2214,14 @@ class TestSubroutineDecorator:
                 with Rung():
                     out(Light2)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "Light1": False, "Light2": False})
         runner.step()
 
         assert runner.current_state.tags["Light1"] is True
         assert runner.current_state.tags["Light2"] is True
 
-    def test_call_accepts_string_subroutine_name(self):
+    def test_call_accepts_string_subroutine_name(self, runner_factory):
         """Existing string-based call() API is unchanged."""
         from pyrung.core.program import Program, Rung, call, out, subroutine
 
@@ -2227,7 +2236,7 @@ class TestSubroutineDecorator:
                 with Rung():
                     out(SubLight)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.patch({"Button": True, "SubLight": False})
         runner.step()
 
