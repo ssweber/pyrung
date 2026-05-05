@@ -298,7 +298,7 @@ def _is_acc_done_redundant(
     atoms: list[Atom],
 ) -> bool:
     """True when every accumulator atom is representable by Done/Pending/True."""
-    if kind == _DONE_KIND_COUNT_DOWN or not atoms:
+    if not atoms:
         return False
     return all(
         _atom_matches_acc_preset_boundary(atom, acc_name, preset_match_values) for atom in atoms
@@ -452,16 +452,72 @@ def _threshold_mode(
     return _THRESHOLD_MODE_ABSTRACT
 
 
+def _threshold_atom_for_descending_progress(
+    atom: Atom,
+    acc_name: str,
+    graph: ProgramGraph,
+) -> list[_ThresholdAtomSpec]:
+    """Normalize threshold atoms for progress measured as ``-Acc``."""
+    if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GE if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GT
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
+        return []
+
+    if atom.tag == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.operand, graph)
+        if mode is not None:
+            form = _THRESHOLD_FORM_GT if atom.form == "lt" else _THRESHOLD_FORM_GE
+            return [_ThresholdAtomSpec(acc_name, atom.operand, form, mode)]
+        return []
+
+    if atom.operand == acc_name and atom.form in {"lt", "le"}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GE if atom.form == "lt" else _THRESHOLD_FORM_GT
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.operand == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
+        mode = _threshold_mode(atom.tag, graph)
+        if mode is None:
+            return []
+        form = _THRESHOLD_FORM_GT if atom.form == _THRESHOLD_FORM_GT else _THRESHOLD_FORM_GE
+        return [_ThresholdAtomSpec(acc_name, atom.tag, form, mode)]
+
+    if atom.form in {"eq", "ne"}:
+        if atom.tag == acc_name:
+            threshold = atom.operand
+        elif atom.operand == acc_name:
+            threshold = atom.tag
+        else:
+            return []
+        mode = _threshold_mode(threshold, graph)
+        if mode is None:
+            return []
+        return [
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GE, mode),
+            _ThresholdAtomSpec(acc_name, threshold, _THRESHOLD_FORM_GT, mode),
+        ]
+
+    return []
+
+
 def _threshold_atom_for_progress(
     atom: Atom,
     acc_name: str,
     graph: ProgramGraph,
+    kind: str,
 ) -> list[_ThresholdAtomSpec]:
     """Normalize supported Progress/Threshold comparison atoms.
 
     For eq/ne, decomposes into two boundary atoms (ge k, gt k) that
     partition the accumulator into {<k, =k, >k}.
     """
+    if kind == _DONE_KIND_COUNT_DOWN:
+        return _threshold_atom_for_descending_progress(atom, acc_name, graph)
+
     if atom.tag == acc_name and atom.form in {_THRESHOLD_FORM_GT, _THRESHOLD_FORM_GE}:
         mode = _threshold_mode(atom.operand, graph)
         if mode is not None:
@@ -786,7 +842,7 @@ def _is_zero_copy_to_tag(instr: Any, tag_name: str) -> bool:
 
 def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
     """Find instruction-owned progress accumulators and recognized int counters."""
-    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -800,9 +856,12 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
         elif isinstance(instr, OffDelayInstruction):
             acc_name = instr.accumulator.name
             kind = _DONE_KIND_OFF_DELAY
-        elif isinstance(instr, CountUpInstruction) and instr.down_condition is None:
+        elif isinstance(instr, CountUpInstruction):
             acc_name = instr.accumulator.name
             kind = _DONE_KIND_COUNT_UP
+        elif isinstance(instr, CountDownInstruction):
+            acc_name = instr.accumulator.name
+            kind = _DONE_KIND_COUNT_DOWN
         else:
             continue
 
@@ -819,7 +878,7 @@ def _collect_progress_source_kinds(program: Program) -> dict[str, str]:
 
 def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
     """True when a progress accumulator has only owner/reset-safe writes."""
-    from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
     from pyrung.core.validation._common import walk_instructions
 
@@ -837,13 +896,18 @@ def _has_only_owner_writes(program: Program, acc_name: str, kind: str) -> bool:
             is_owner = (
                 isinstance(instr, CountUpInstruction)
                 and instr.accumulator.name == acc_name
-                and instr.down_condition is None
+            )
+        elif kind == _DONE_KIND_COUNT_DOWN:
+            is_owner = (
+                isinstance(instr, CountDownInstruction)
+                and instr.accumulator.name == acc_name
             )
         if not is_owner:
             if kind in {
                 _DONE_KIND_ON_DELAY,
                 _DONE_KIND_OFF_DELAY,
                 _DONE_KIND_COUNT_UP,
+                _DONE_KIND_COUNT_DOWN,
             } and _is_zero_copy_to_tag(instr, acc_name):
                 continue
             return False
@@ -917,7 +981,7 @@ def _find_threshold_absorptions(
         atom_reasons: list[str] = []
         blocked = False
         for atom in atoms:
-            specs = _threshold_atom_for_progress(atom, acc_name, graph)
+            specs = _threshold_atom_for_progress(atom, acc_name, graph, kind)
             if not specs:
                 reason = _diagnose_unstable_atom(atom, acc_name, graph)
                 if reason:
@@ -1010,7 +1074,8 @@ def _find_threshold_absorptions(
         for threshold_name in threshold_names:
             threshold_atoms = _collect_atoms_for_tag(all_exprs, threshold_name)
             if not all(
-                _threshold_atom_for_progress(atom, acc_name, graph) for atom in threshold_atoms
+                _threshold_atom_for_progress(atom, acc_name, graph, vector.kind)
+                for atom in threshold_atoms
             ):
                 forbidden_reasons.append(
                     f"{threshold_name}: also used in non-threshold comparisons"

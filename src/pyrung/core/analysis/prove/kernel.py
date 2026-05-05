@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, _condition_to_expr
 from pyrung.core.kernel import CompiledKernel, ReplayKernel
 
-from .absorb import _THRESHOLD_FORM_GT, _done_acc_state
+from .absorb import _DONE_KIND_COUNT_DOWN, _THRESHOLD_FORM_GT, _done_acc_state
 from .expr import _has_edge_atom, _live_inputs, _partial_eval
 
 if TYPE_CHECKING:
@@ -293,6 +293,7 @@ def _threshold_value(kernel: ReplayKernel, threshold: int | float | str) -> Any:
 
 def _threshold_crossed(
     kernel: ReplayKernel,
+    kind: str,
     acc_name: str,
     threshold: int | float | str,
     form: str,
@@ -301,6 +302,9 @@ def _threshold_crossed(
     threshold_value = _threshold_value(kernel, threshold)
     if acc_value is None or threshold_value is None:
         return False
+    if kind == _DONE_KIND_COUNT_DOWN:
+        acc_value = -acc_value
+        threshold_value = -threshold_value
     if form == _THRESHOLD_FORM_GT:
         return acc_value > threshold_value
     return acc_value >= threshold_value
@@ -314,7 +318,7 @@ def _threshold_vector_key(
     for spec in specs:
         result.append(
             tuple(
-                _threshold_crossed(kernel, spec.acc_name, atom.threshold, atom.form)
+                _threshold_crossed(kernel, spec.kind, spec.acc_name, atom.threshold, atom.form)
                 for atom in spec.atoms
             )
         )

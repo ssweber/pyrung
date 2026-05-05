@@ -910,6 +910,10 @@ def _classify_dimensions_from_graph(
         if not is_written:
             continue
 
+        if tag_name in done_acc:
+            stateful[tag_name] = (False, PENDING, True)
+            continue
+
         if tag_name not in graph.readers_of:
             combinational.add(tag_name)
             continue
@@ -920,10 +924,6 @@ def _classify_dimensions_from_graph(
             graph,
         ):
             combinational.add(tag_name)
-            continue
-
-        if tag_name in done_acc:
-            stateful[tag_name] = (False, PENDING, True)
             continue
 
         if tag_name in done_acc_info.pairs.values() and tag_name in consumed_accs:

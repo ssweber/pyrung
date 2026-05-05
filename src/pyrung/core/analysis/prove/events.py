@@ -10,6 +10,7 @@ from pyrung.core.kernel import ReplayKernel
 
 from . import PENDING
 from .absorb import (
+    _DONE_KIND_COUNT_DOWN,
     _DONE_KIND_COUNT_UP,
     _DONE_KIND_OFF_DELAY,
     _DONE_KIND_ON_DELAY,
@@ -221,6 +222,11 @@ def _progress_delta_and_current(
     if kind in {_DONE_KIND_COUNT_UP, _PROGRESS_KIND_INT_UP}:
         return float(acc_after - acc_before), float(acc_after)
 
+    if kind == _DONE_KIND_COUNT_DOWN:
+        delta = float(acc_before - acc_after)
+        current = float(-acc_after)
+        return delta, current
+
     return None
 
 
@@ -242,6 +248,9 @@ def _scans_until_threshold_event(
         return None
 
     threshold = float(threshold_value)
+    if spec.kind == _DONE_KIND_COUNT_DOWN:
+        threshold = -threshold
+
     if spec.form == _THRESHOLD_FORM_GE:
         if current >= threshold:
             return 1
@@ -418,7 +427,7 @@ def _materialize_abstract_threshold_outcome(
     skipped_scans = max(scans - 1, 0)
     _advance_hidden_progress(spec.kind, spec.acc_name, skipped_scans, before_snap, kernel)
     _step_kernel(context, kernel)
-    if not _threshold_crossed(kernel, spec.acc_name, spec.threshold, spec.form):
+    if not _threshold_crossed(kernel, spec.kind, spec.acc_name, spec.threshold, spec.form):
         return None
     return _HiddenEventOutcome(
         snapshot=_snapshot_kernel(kernel),
