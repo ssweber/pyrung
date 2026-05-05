@@ -540,6 +540,19 @@ def _bfs_explore(
                 # Slow path: process alternate outcomes from hidden events.
                 # Build input_dict only here (needed for traces / parent_map).
                 input_dict: dict[str, Any] = dict(input_assignment)
+
+                # Capture base post-step projection before processing jumps.
+                # The base state is a valid reachable snapshot even when jump
+                # destinations diverge (e.g. a latch fires mid-step, killing
+                # the timer that the jump tried to settle).
+                if project is not None:
+                    base_projected = _projected_tuple(kernel, project)
+                    base_outcome = (new_key, base_projected)
+                    assert seen_outcomes is not None
+                    if base_outcome not in seen_outcomes:
+                        seen_outcomes.add(base_outcome)
+                        projected_rows.add(base_projected)
+
                 seen_branch_keys: set[tuple[Any, ...]] = set()
                 for branch_snapshot, branch_key, branch_additional_scans in alt_outcomes:
                     if branch_key in seen_branch_keys:

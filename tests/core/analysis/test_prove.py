@@ -843,6 +843,129 @@ class TestReachableStates:
 
         assert grouped == ungrouped
 
+    def test_reaction_time_window_all_outcomes_reachable(self):
+        """Three-outcome timing window: TooSoon / Perfect / TooLate are each reachable."""
+        button = Bool("Button", external=True)
+        running = Bool("Running")
+        too_soon = Bool("TooSoon", lock=True)
+        perfect = Bool("Perfect", lock=True)
+        too_late = Bool("TooLate", lock=True)
+        done_tmr = Timer.clone("DoneTmr")
+        watchdog_tmr = Timer.clone("WatchdogTmr")
+
+        with Program(strict=False) as logic:
+            with Rung(~too_soon, ~perfect, ~too_late):
+                out(running)
+                on_delay(done_tmr, preset=1000)
+                on_delay(watchdog_tmr, preset=2000)
+            with Rung(running, ~done_tmr.Done, button):
+                latch(too_soon)
+            with Rung(running, done_tmr.Done, ~watchdog_tmr.Done, button):
+                latch(perfect)
+            with Rung(running, watchdog_tmr.Done, button):
+                latch(too_late)
+
+        states = reachable_states(
+            logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60
+        )
+        assert not isinstance(states, Intractable)
+        # Exactly four states: idle + one of three mutually exclusive outcomes
+        assert states == frozenset(
+            {
+                frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", False)}),
+                frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", False)}),
+                frozenset({("TooSoon", False), ("Perfect", True), ("TooLate", False)}),
+                frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", True)}),
+            }
+        )
+
+    def test_reaction_time_window_counters(self):
+        """Counter variant: three mutually exclusive count thresholds."""
+        trigger = Bool("Trigger", external=True)
+        running = Bool("Running")
+        too_few = Bool("TooFew", lock=True)
+        just_right = Bool("JustRight", lock=True)
+        too_many = Bool("TooMany", lock=True)
+        ready_ctr = Counter.clone("ReadyCtr")
+        limit_ctr = Counter.clone("LimitCtr")
+        never = Bool("Never")
+
+        with Program(strict=False) as logic:
+            with Rung(~too_few, ~just_right, ~too_many):
+                out(running)
+            with Rung(running):
+                count_up(ready_ctr, preset=3).reset(never)
+            with Rung(running):
+                count_up(limit_ctr, preset=5).reset(never)
+            with Rung(running, ~ready_ctr.Done, trigger):
+                latch(too_few)
+            with Rung(running, ready_ctr.Done, ~limit_ctr.Done, trigger):
+                latch(just_right)
+            with Rung(running, limit_ctr.Done, trigger):
+                latch(too_many)
+
+        states = reachable_states(
+            logic, project=["TooFew", "JustRight", "TooMany"], max_depth=60
+        )
+        assert not isinstance(states, Intractable)
+        assert states == frozenset(
+            {
+                frozenset(
+                    {("TooFew", False), ("JustRight", False), ("TooMany", False)}
+                ),
+                frozenset(
+                    {("TooFew", True), ("JustRight", False), ("TooMany", False)}
+                ),
+                frozenset(
+                    {("TooFew", False), ("JustRight", True), ("TooMany", False)}
+                ),
+                frozenset(
+                    {("TooFew", False), ("JustRight", False), ("TooMany", True)}
+                ),
+            }
+        )
+
+    @__import__("pytest").mark.xfail(
+        reason="Acc threshold absorption elides DoneTmr_Done from state key, "
+        "collapsing TooSoon/Perfect windows",
+        strict=True,
+    )
+    def test_reaction_time_window_acc_threshold(self):
+        """Same pattern using Acc < preset instead of ~Done — currently lost by absorption."""
+        button = Bool("Button", external=True)
+        running = Bool("Running")
+        too_soon = Bool("TooSoon", lock=True)
+        perfect = Bool("Perfect", lock=True)
+        too_late = Bool("TooLate", lock=True)
+        done_tmr = Timer.clone("DoneTmr")
+        watchdog_tmr = Timer.clone("WatchdogTmr")
+
+        with Program(strict=False) as logic:
+            with Rung(~too_soon, ~perfect, ~too_late):
+                out(running)
+                on_delay(done_tmr, preset=1000)
+                on_delay(watchdog_tmr, preset=2000)
+            with Rung(running, done_tmr.Acc < 1000, button):
+                latch(too_soon)
+            with Rung(running, done_tmr.Done, ~watchdog_tmr.Done, button):
+                latch(perfect)
+            with Rung(running, watchdog_tmr.Done, button):
+                latch(too_late)
+
+        states = reachable_states(
+            logic, project=["TooSoon", "Perfect", "TooLate"], max_depth=60
+        )
+        assert not isinstance(states, Intractable)
+        expected = frozenset(
+            {
+                frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", False)}),
+                frozenset({("TooSoon", True), ("Perfect", False), ("TooLate", False)}),
+                frozenset({("TooSoon", False), ("Perfect", True), ("TooLate", False)}),
+                frozenset({("TooSoon", False), ("Perfect", False), ("TooLate", True)}),
+            }
+        )
+        assert expected <= states
+
 
 class TestDiffStates:
     def test_empty_diff(self):
