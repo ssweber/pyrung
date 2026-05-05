@@ -82,7 +82,7 @@ def test_set_battery_present_updates_resolved_value():
     assert _resolved(runner, system.sys.battery_present.name) is True
 
 
-def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode():
+def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode(runner_factory):
     first_scan_latched = Bool("FirstScanLatched")
     clock_value = Bool("ScanClockValue")
     fixed_mode_value = Bool("FixedModeValue")
@@ -95,7 +95,7 @@ def test_derived_points_always_on_first_scan_scan_clock_and_fixed_mode():
         with Rung():
             copy(system.sys.fixed_scan_mode, fixed_mode_value)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     runner.step()
     assert runner.current_state.tags["FirstScanLatched"] is True
@@ -148,14 +148,14 @@ def test_scan_counter_wraps_at_32768():
     assert _resolved(runner, system.sys.scan_counter.name) == 1
 
 
-def test_scan_clock_toggle_derived_edge_rise():
+def test_scan_clock_toggle_derived_edge_rise(runner_factory):
     flag = Bool("Flag")
 
     with Program() as program:
         with Rung(rise(system.sys.scan_clock_toggle)):
             latch(flag)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     runner.step()  # scan 1: toggle=False, no rise
     assert runner.current_state.tags.get("Flag") is not True
@@ -164,14 +164,14 @@ def test_scan_clock_toggle_derived_edge_rise():
     assert runner.current_state.tags["Flag"] is True
 
 
-def test_scan_clock_toggle_derived_edge_fall():
+def test_scan_clock_toggle_derived_edge_fall(runner_factory):
     flag = Bool("Flag")
 
     with Program() as program:
         with Rung(fall(system.sys.scan_clock_toggle)):
             latch(flag)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     runner.step()  # scan 1: toggle=False, no fall
     assert runner.current_state.tags.get("Flag") is not True
@@ -183,7 +183,7 @@ def test_scan_clock_toggle_derived_edge_fall():
     assert runner.current_state.tags["Flag"] is True
 
 
-def test_scan_clock_toggle_derived_edge_alternates():
+def test_scan_clock_toggle_derived_edge_alternates(runner_factory):
     rise_count = Int("RiseCount")
     fall_count = Int("FallCount")
 
@@ -193,7 +193,7 @@ def test_scan_clock_toggle_derived_edge_alternates():
         with Rung(fall(system.sys.scan_clock_toggle)):
             calc(fall_count + 1, fall_count)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     for _ in range(10):
         runner.step()
@@ -320,11 +320,11 @@ def test_rtc_values_are_not_stored_in_state_memory():
     assert "_sys.rtc.offset" not in runner.current_state.memory
 
 
-def test_read_only_system_points_reject_logic_and_patch_writes():
+def test_read_only_system_points_reject_logic_and_patch_writes(runner_factory):
     with Program() as program:
         with Rung():
             out(system.sys.always_on)
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.step()
@@ -333,11 +333,11 @@ def test_read_only_system_points_reject_logic_and_patch_writes():
         runner.patch({system.sys.always_on.name: False})
 
 
-def test_storage_sd_read_only_status_points_reject_logic_patch_and_force():
+def test_storage_sd_read_only_status_points_reject_logic_patch_and_force(runner_factory):
     with Program() as program:
         with Rung():
             out(system.storage.sd.ready)
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
 
     with pytest.raises(ValueError, match="read-only system point"):
         runner.step()
@@ -381,7 +381,7 @@ def test_storage_sd_commands_auto_clear_and_pulse_write_status():
     assert _resolved(runner, system.storage.sd.write_status.name) is False
 
 
-def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
+def test_fault_division_error_auto_clears_next_scan_when_not_retriggered(runner_factory):
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -391,7 +391,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             calc(A / B, Result, oneshot=True)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 100, "B": 0})
     runner.step()
     assert runner.current_state.tags["Result"] == 0
@@ -401,7 +401,7 @@ def test_fault_division_error_auto_clears_next_scan_when_not_retriggered():
     assert runner.current_state.tags[system.fault.division_error.name] is False
 
 
-def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered():
+def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered(runner_factory):
     A = Int("A")
     B = Int("B")
     Result = Int("Result")
@@ -411,7 +411,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
         with Rung(Enable):
             calc(A + B, Result, oneshot=True)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
     runner.patch({"Enable": True, "A": 30000, "B": 30000})
     runner.step()
     assert runner.current_state.tags["Result"] == -5536
@@ -421,7 +421,7 @@ def test_fault_out_of_range_from_math_auto_clears_next_scan_when_not_retriggered
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
+def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered(runner_factory):
     CH = Block("CH", TagType.CHAR, 1, 10)
     Dest = Int("Dest")
     Enable = Bool("Enable")
@@ -430,7 +430,7 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             copy(CH[1], Dest, oneshot=True, convert=to_value)
 
-    runner = PLC(logic=program)
+    runner = runner_factory(program)
     runner.patch({"Enable": True, "CH1": "A"})
     runner.step()
     assert runner.current_state.tags[system.fault.out_of_range.name] is True
@@ -439,7 +439,10 @@ def test_fault_out_of_range_auto_clears_next_scan_when_not_retriggered():
     assert runner.current_state.tags[system.fault.out_of_range.name] is False
 
 
-def test_fault_address_error_auto_clears_next_scan_when_not_retriggered():
+def test_fault_address_error_auto_clears_next_scan_when_not_retriggered(
+    runner_factory,
+    runner_backend,
+):
     DS = Block("DS", TagType.INT, 1, 10)
     CH = Block("CH", TagType.CHAR, 1, 10)
     Pointer = Int("Pointer")
@@ -449,7 +452,13 @@ def test_fault_address_error_auto_clears_next_scan_when_not_retriggered():
         with Rung(Enable):
             copy(DS[Pointer], CH[1], oneshot=True, convert=to_binary)
 
-    runner = PLC(logic=program)
+    if runner_backend != "interpreted":
+        pytest.xfail(
+            "compiled backend currently sets fault.out_of_range in addition to "
+            "fault.address_error for indirect to_binary address faults"
+        )
+
+    runner = runner_factory(program)
     runner.patch({"Enable": True, "Pointer": 999})
     runner.step()
     assert runner.current_state.tags[system.fault.address_error.name] is True

@@ -3,7 +3,6 @@
 import pytest
 
 from pyrung.core import (
-    PLC,
     Block,
     Bool,
     Int,
@@ -108,7 +107,7 @@ def test_branch_inside_forloop_is_rejected():
                         pass
 
 
-def test_forloop_rung_false_resets_coils_and_child_oneshot():
+def test_forloop_rung_false_resets_coils_and_child_oneshot(runner_factory):
     enable = Bool("Enable")
     light = Bool("Light")
     counter = Int("Counter")
@@ -119,7 +118,7 @@ def test_forloop_rung_false_resets_coils_and_child_oneshot():
                 out(light)
                 copy(counter + 1, counter, oneshot=True)
 
-    runner = PLC(logic)
+    runner = runner_factory(logic)
     runner.patch({"Enable": True, "Light": False, "Counter": 0})
 
     runner.step()

@@ -367,9 +367,9 @@ class TestTagInvertOperator:
 class TestTagDefaultSeeding:
     """Tag defaults must be seeded into initial SystemState."""
 
-    def test_bool_default_true_in_initial_state(self):
+    def test_bool_default_true_in_initial_state(self, runner_factory):
         """Bool(default=True) should appear in state at construction."""
-        from pyrung import PLC, Bool, Program, Rung, reset
+        from pyrung import Bool, Program, Rung, reset
 
         StopBtn = Bool("StopBtn", default=True)
         Running = Bool("Running")
@@ -378,12 +378,12 @@ class TestTagDefaultSeeding:
             with Rung(~StopBtn):
                 reset(Running)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         assert runner.current_state.tags["StopBtn"] is True
 
-    def test_bool_default_true_condition_agrees_with_value(self):
+    def test_bool_default_true_condition_agrees_with_value(self, runner_factory):
         """~Bool(default=True) should evaluate False — condition must agree with .value."""
-        from pyrung import PLC, Bool, Program, Rung, out
+        from pyrung import Bool, Program, Rung, out
 
         Flag = Bool("Flag", default=True)
         Result = Bool("Result")
@@ -392,14 +392,14 @@ class TestTagDefaultSeeding:
             with Rung(~Flag):
                 out(Result)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         runner.step()
         # ~Flag is NormallyClosed: True when Flag is off. Flag is True, so condition is False.
         assert runner.current_state.tags["Result"] is False
 
-    def test_standard_defaults_also_seeded(self):
+    def test_standard_defaults_also_seeded(self, runner_factory):
         """Even tags with standard defaults (Bool=False) should be in state."""
-        from pyrung import PLC, Bool, Int, Program, Rung, out
+        from pyrung import Bool, Int, Program, Rung, out
 
         X = Bool("X")
         Y = Int("Y")
@@ -408,15 +408,15 @@ class TestTagDefaultSeeding:
             with Rung(X):
                 out(Y)
 
-        runner = PLC(logic)
+        runner = runner_factory(logic)
         assert "X" in runner.current_state.tags
         assert runner.current_state.tags["X"] is False
         assert "Y" in runner.current_state.tags
         assert runner.current_state.tags["Y"] == 0
 
-    def test_initial_state_not_overwritten_by_defaults(self):
+    def test_initial_state_not_overwritten_by_defaults(self, runner_factory):
         """User-provided initial_state values take precedence over tag defaults."""
-        from pyrung import PLC, Bool, Program, Rung, out
+        from pyrung import Bool, Program, Rung, out
         from pyrung.core.state import SystemState
 
         X = Bool("X")  # default=False
@@ -426,7 +426,7 @@ class TestTagDefaultSeeding:
                 out(Bool("Out"))
 
         state = SystemState().with_tags({"X": True})
-        runner = PLC(logic, initial_state=state)
+        runner = runner_factory(logic, initial_state=state)
         assert runner.current_state.tags["X"] is True
 
     def test_named_array_symbol_default_normalizes_to_scalar(self):

@@ -7,6 +7,14 @@ import time
 
 import pytest
 
+from pyrung.core import Program
+
+
+def _empty_program() -> Program:
+    with Program(strict=False) as logic:
+        pass
+    return logic
+
 
 class TestTimeModeEnum:
     """Test TimeMode enum definition."""
@@ -35,31 +43,25 @@ class TestFixedStepMode:
 
         assert runner.time_mode == TimeMode.FIXED_STEP
 
-    def test_set_fixed_step_with_dt(self):
+    def test_set_fixed_step_with_dt(self, runner_factory):
         """Can set FIXED_STEP mode with specific dt."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[], dt=0.05)
+        runner = runner_factory(_empty_program(), dt=0.05)
 
         runner.step()
 
         assert runner.simulation_time == pytest.approx(0.05)
 
-    def test_fixed_step_accumulates(self):
+    def test_fixed_step_accumulates(self, runner_factory):
         """Fixed step time accumulates predictably."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[], dt=0.1)
+        runner = runner_factory(_empty_program(), dt=0.1)
 
         runner.run(cycles=10)
 
         assert runner.simulation_time == pytest.approx(1.0)
 
-    def test_fixed_step_ignores_wall_clock(self):
+    def test_fixed_step_ignores_wall_clock(self, runner_factory):
         """Fixed step doesn't care about actual elapsed time."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[], dt=0.001)
+        runner = runner_factory(_empty_program(), dt=0.001)
 
         # Even if wall clock is slower, simulation time is deterministic
         runner.run(cycles=1000)
@@ -105,11 +107,9 @@ class TestTimeModeValidation:
         with pytest.raises(ValueError, match="Cannot specify dt="):
             PLC(logic=[], dt=0.05, realtime=True)
 
-    def test_default_dt_is_10ms(self):
+    def test_default_dt_is_10ms(self, runner_factory):
         """Default dt is 0.010 (10 ms)."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[])
+        runner = runner_factory(_empty_program())
         runner.step()
         assert runner.simulation_time == pytest.approx(0.010)
 
@@ -117,11 +117,9 @@ class TestTimeModeValidation:
 class TestRunFor:
     """Test run_for() - run until simulation time advances."""
 
-    def test_run_for_seconds_fixed_step(self):
+    def test_run_for_seconds_fixed_step(self, runner_factory):
         """run_for() runs until simulation clock advances at least N seconds."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[], dt=0.1)
+        runner = runner_factory(_empty_program(), dt=0.1)
 
         runner.run_for(seconds=1.0)
 
@@ -130,11 +128,9 @@ class TestRunFor:
         assert runner.simulation_time >= 1.0
         assert runner.current_state.scan_id == 11
 
-    def test_run_for_partial_cycle(self):
+    def test_run_for_partial_cycle(self, runner_factory):
         """run_for() stops at cycle boundary, may overshoot slightly."""
-        from pyrung.core import PLC
-
-        runner = PLC(logic=[], dt=0.3)
+        runner = runner_factory(_empty_program(), dt=0.3)
 
         runner.run_for(seconds=1.0)
 

@@ -76,9 +76,12 @@ class _RunnerPair:
         self._compiled.battery_present = value
         assert self._interpreted.battery_present == self._compiled.battery_present
 
-    def patch(self, updates: dict[str, Any]) -> None:
-        self._interpreted.patch(updates)
-        self._compiled.patch(updates)
+    def patch(
+        self,
+        tags: dict[str, Any] | dict[Any, Any],
+    ) -> None:
+        self._interpreted.patch(tags)
+        self._compiled.patch(tags)
 
     def force(self, tag: str | Any, value: bool | int | float | str) -> None:
         self._interpreted.force(tag, value)
