@@ -7,23 +7,26 @@ from pyrung.twin import assert_all_passed, case, run
 
 
 def prove_memory_is_immediate(slot):
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(42, slot.Scratch)
         copy(slot.Scratch, slot.Result1)
+        copy(1, slot.Fired)
 
 
 def prove_source_order(slot):
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(10, slot.Result1)
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(20, slot.Result2)
+        copy(1, slot.Fired)
 
 
 def prove_global_mutation(slot):
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(99, slot.Scratch)
-    with Rung(slot.Cmd != 0):
+    with Rung(slot.Cmd != 0, slot.Fired == 0):
         copy(slot.Scratch, slot.Result1)
+        copy(1, slot.Fired)
 
 
 cases = [
